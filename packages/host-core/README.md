@@ -73,6 +73,35 @@ VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
 through is `src/ports/secret-key.ts`.
 
+VC-555 completes `src/session-runtime/` (`@volli/host-core/session-runtime`
+and `/*`), and moves the agent runtime wiring, agent tools, Session environment
+and tokens, Pi sidecar/tool-output cleanup, harness installation and login-shell
+PATH helpers. `src/mcp/`, `src/codemode/`, `src/web/`, `src/decision/` and the
+model sign-in service are exported as `@volli/host-core/<cluster>/*`;
+`verb-input` is exported directly. IPC adapters and their integration tests,
+Web Access's legacy `safeStorage` migration, and Pi tests that compose desktop
+secret services stay in desktop.
+
+`host.runtimeServices` holds staged constructors for model access, decisions,
+MCP, Web Access and model sign-in. Desktop invokes them in its original boot
+order, so legacy web keys migrate before any store reads them, and sign-in
+keeps the same Pi collection as the runtime. Session locations take `events`
+and `dataDir`, using that same event bus and user-data directory for worktree
+materialization and publication; they never import desktop's broadcast adapter.
+The retained
+`createDesktop*` names are compatibility names, not Electron dependencies.
+
+Code Mode's worker and `quickjs.wasm` paths still come from the host's injected
+app/resources directories, never the moved module's directory. Desktop keeps
+its packaging dependencies and `asarUnpack` entries. The moved sandbox test
+copies the real packages into the flat unpacked layout and runs a program;
+CI also checks both files in the unsigned packaged app before core e2e.
+
+MCP credentials retain their standalone mode-0600 `mcp-credentials.json` file
+and format. They do not use `SecretStore`; changing that storage would not be a
+pure move. Pi's secret-wait publisher type is exported by `secrets`, and its
+turn-attachment type lives in `session-runtime/turn-attachments`.
+
 ## Ports
 
 A port is what host-core asks of the process hosting it. Each port lives in

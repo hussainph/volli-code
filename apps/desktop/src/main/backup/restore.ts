@@ -36,7 +36,7 @@ import {
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,
   transcriptReferenceForId,
-} from "../session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/transcript-artifacts";
 import {
   BLOB_PREFIX,
   readBackupBundle,

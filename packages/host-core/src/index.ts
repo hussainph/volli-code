@@ -22,6 +22,7 @@ import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime"
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
+import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
@@ -98,6 +99,8 @@ export interface HostCore extends HostSessionServices {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
+  /** Staged construction, called in the host's existing boot order. */
+  readonly runtimeServices: HostRuntimeServices;
   /** The client's capabilities, or one that refuses each readably when there is none. */
   readonly client: ClientCapabilityPort;
   /**
@@ -146,13 +149,21 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     databaseFailure = classifyDbOpenFailure(error);
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
+  const client = clientCapabilities(ports.client);
+  const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
   return {
     worktrees: createWorktreeRuntime(ports, options),
     dataDir: options.dataDir,
     dbPath,
     database,
-    client: clientCapabilities(ports.client),
+    client,
     databaseFailure,
-    ...createHostSessionServices(database.ok ? database.db : null, ports),
+    ...sessionServices,
+    runtimeServices: createHostRuntimeServices(
+      database.ok ? database.db : null,
+      sessionServices.sessionEngine,
+      { client },
+      { dbPath },
+    ),
   };
 }

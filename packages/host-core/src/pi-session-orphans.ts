@@ -25,7 +25,7 @@ import type {
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimReport,
   PiSessionOrphanSkipped,
-} from "../ipc/contract";
+} from "@volli/shared";
 import { PI_ADAPTER_ID } from "./session-runtime/pi-adapter";
 
 const HEADER_LIMIT_BYTES = 64 * 1024;

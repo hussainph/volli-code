@@ -37,7 +37,7 @@ import type {
   DecisionModelScope,
   DecisionModelSettingsView,
   DecisionModelTestView,
-} from "../../ipc/contract";
+} from "@volli/shared";
 import { getProjectById, updateProjectDecisionModel } from "@volli/host-core/db/projects-repo";
 import {
   readGlobalDecisionModel,

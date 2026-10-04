@@ -31,7 +31,7 @@ import { openTestDb, testProject, testSession, testTicket } from "@volli/host-co
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ctx: TestDb;
 

@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { autoTitleFromKickoff, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
 import type { Project, SessionOrigin, Ticket, TicketEventActor } from "@volli/shared";
 
-import type { SessionStartedNotice } from "../../ipc/contract";
+import type { SessionStartedNotice } from "@volli/shared";
 import { getTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";

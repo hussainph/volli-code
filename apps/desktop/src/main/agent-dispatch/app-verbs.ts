@@ -34,9 +34,9 @@ import type {
 } from "@volli/shared";
 
 import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import { readWorkspaceEnvironment } from "../session-env";
-import { readModelAccessDefaults } from "../session-runtime/model-access-preferences";
-import { PI_TOOLS } from "../session-runtime/pi-adapter";
+import { readWorkspaceEnvironment } from "@volli/host-core/session-env";
+import { readModelAccessDefaults } from "@volli/host-core/session-runtime/model-access-preferences";
+import { PI_TOOLS } from "@volli/host-core/session-runtime/pi-adapter";
 import { composeProjectBrief, composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";

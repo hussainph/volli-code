@@ -24,7 +24,7 @@ import { afterAll, describe, expect, it } from "vite-plus/test";
 
 import { codeModeSandboxAssets, type CodeModeSandboxLocation } from "./sandbox-assets";
 
-const DESKTOP_DIRECTORY = join(import.meta.dirname, "..", "..", "..");
+const DESKTOP_DIRECTORY = join(import.meta.dirname, "..", "..", "..", "..", "apps", "desktop");
 
 const tempDirs: string[] = [];
 afterAll(() => {

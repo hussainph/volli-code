@@ -36,15 +36,8 @@ import { materializeBlobs } from "@volli/host-core/blob-materialize";
 import { readBlob } from "@volli/host-core/blob-store";
 import { getBlob, listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 
-export interface TurnAttachments {
-  /**
-   * A line per attached file naming where it landed, appended to the prompt.
-   * Empty when the turn carried no files.
-   */
-  note: string;
-  /** Images to hand the model as content for this turn only. */
-  images: RuntimeImageInput[];
-}
+import type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";
+export type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";
 
 const EMPTY: TurnAttachments = { note: "", images: [] };
 

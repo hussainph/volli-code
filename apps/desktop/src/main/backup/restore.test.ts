@@ -29,14 +29,14 @@ import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
-} from "../session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/transcript-artifacts";
 import {
   fileSecretKey,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,
   SecretStore,
 } from "@volli/host-core/secrets";
-import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 import { createBackupBundle } from "./bundle";
 import { RESTORE_CREDENTIALS, restoreBackupBundle } from "./restore";
 import { createFixtureProfile } from "./test-fixture";

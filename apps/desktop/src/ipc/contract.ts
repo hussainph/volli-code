@@ -11,6 +11,42 @@
 // It lives in the app rather than in @volli/shared because a transport catalog
 // is knowledge of Electron, and that package is pure domain code.
 
+import type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanInventory,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
+export type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanCandidate,
+  PiSessionOrphanSkipped,
+  PiSessionOrphanInventory,
+  PiSessionOrphanKept,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
+
+import type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
+export type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessKeyState,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
+
 import type { ExternalAppId } from "../external-app-ids";
 import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
 
@@ -71,7 +107,6 @@ import type {
   McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
-  DecisionModelCatalogEntry,
   DecisionModelSetting,
   DeliberateMoveChoice,
   ModelSelection,
@@ -581,12 +616,6 @@ export interface WorktreeOrphanCleanupInput {
 /** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
 export interface WorktreeOrphanDeleteInput {
   path: string;
-}
-
-/** The explicit Pi cleanup names only items from one main-owned inventory. */
-export interface PiSessionOrphanReclaimInput {
-  scanRevision: string;
-  itemIds: string[];
 }
 
 /** A reap names only processes from one main-owned scan revision (VC-341). */
@@ -1569,48 +1598,6 @@ export interface VolliModelAccessIpcContract {
 
 export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
 
-/** The attempt id every later message about one sign-in is correlated by. */
-export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
-
-/** Which search provider this profile brings, if any. `off` is the default. */
-export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
-
-/**
- * The providers that authenticate with a key a person pastes.
- *
- * Named apart from {@link WebAccessProvider} because carrying a credential is
- * what decides most of this surface: a keyed provider has a secret row, a key
- * state to report, and a "replace stored key" affordance, while SearXNG has an
- * address and `off` has neither.
- */
-export type KeyedWebAccessProvider = "brave" | "exa";
-
-/**
- * What the renderer may know about a stored API key: that there is one, or that
- * there is none.
- *
- * A state rather than the value, and there is no third member that carries one.
- * There was a third member — "unreadable", for a key the OS keychain would no
- * longer open — until the keys stopped being keychain material. A key the
- * profile holds is a key it can read.
- */
-export type WebAccessKeyState = "absent" | "present";
-
-/** The whole of what Settings is told about Web Access. */
-export interface WebAccessSettingsView {
-  provider: WebAccessProvider;
-  /** The normalized instance URL a person configured, or null. Never a secret. */
-  searxngUrl: string | null;
-  /**
-   * What is stored for each keyed provider, and never what it is.
-   *
-   * One entry per provider rather than one for the selected one, because the
-   * rows are independent: configuring Exa does not discard a Brave key, and a
-   * person switching back should not be asked to paste one they already gave.
-   */
-  keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
-}
-
 export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;
 
 /**
@@ -1664,35 +1651,13 @@ export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
 
 // ---- decision models (VC-478) ---------------------------------------------
 
-/**
- * Everything Settings is told about decision models, for one page.
- *
- * `project` is present when the page asked about a project: its override, or
- * `null` when it inherits. `catalog` is every cloud classifier Pi offers, each
- * with whether this profile has signed in to its provider — the only
- * credential fact the renderer is given, and a state rather than a value.
- */
-export interface DecisionModelSettingsView {
-  global: DecisionModelSetting;
-  project?: DecisionModelSetting | null;
-  catalog: readonly DecisionModelCatalogEntry[];
-}
-
 export type DecisionModelResult = Result<{
   settings: DecisionModelSettingsView;
   /** The project row as the write left it, when the write was a project's. */
   project?: Project;
 }>;
 
-/** What a connection test found, end to end: one small question asked for real. */
-export type DecisionModelTestView =
-  | { ok: true; elapsedMs: number; probability: number }
-  | { ok: false; elapsedMs: number; message: string };
-
 export type DecisionModelTestResult = Result<{ test: DecisionModelTestView }>;
-
-/** Which setting a write changes: the app-wide one, or one project's override. */
-export type DecisionModelScope = { scope: "global" } | { scope: "project"; projectId: string };
 
 /**
  * The decision model setting (VC-478), on its own door.
@@ -2940,18 +2905,6 @@ export interface TicketMovedNotice {
 }
 
 /**
- * Result types below travel as typed discriminated unions rather than
- * thrown errors: `ipcMain.handle` rejections serialize into useless
- * strings across the IPC boundary, and every failure must be surfaceable
- * in the UI.
- *
- * {@link Result} is the shared shape every one of them had by hand: a success
- * carrying payload `T`, or a failure carrying an `error` string. Bare
- * `Result` (no payload) is a plain ok/error ack.
- */
-export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
-
-/**
  * The app-owned database actions. `undefined` reads its size; neither action
  * accepts a renderer-supplied path.
  */
@@ -3446,50 +3399,6 @@ export type WorktreeTrimResult = Result<{ report: WorktreeTrimSweepReport }>;
 
 /** The trim settings — returned by `volli:worktree-trim-settings-get`/`-set`. */
 export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings }>;
-
-/** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */
-export interface PiSessionOrphanCandidate {
-  itemId: string;
-  path: string;
-  sessionId: string;
-  sizeBytes: number;
-}
-
-/** A jsonl-shaped entry the scanner refused to treat as a deletion candidate. */
-export interface PiSessionOrphanSkipped {
-  path: string;
-  reason: string;
-}
-
-/** The exact proposal displayed before Pi cleanup can be confirmed. */
-export interface PiSessionOrphanInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: PiSessionOrphanCandidate[];
-  candidateCount: number;
-  /** What removing every candidate frees: the sidecars and the saved tool output beside them. */
-  candidateBytes: number;
-  skipped: PiSessionOrphanSkipped[];
-  /**
-   * Long tool results saved across every Session (VC-469): how much there is
-   * now, and the bound past which the oldest are removed first.
-   */
-  toolOutput: { files: number; bytes: number; limitBytes: number };
-}
-
-/** One reviewed candidate main kept after its mandatory pre-unlink re-check. */
-export interface PiSessionOrphanKept {
-  candidate: PiSessionOrphanCandidate;
-  reason: string;
-}
-
-/** What one explicit Pi cleanup actually did. */
-export interface PiSessionOrphanReclaimReport {
-  removed: PiSessionOrphanCandidate[];
-  kept: PiSessionOrphanKept[];
-  removedCount: number;
-  removedBytes: number;
-}
 
 export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
 export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;

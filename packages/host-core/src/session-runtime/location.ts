@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
 import type { Session } from "@volli/shared";
 
-import { broadcastDataChanged } from "../broadcast";
+import type { HostEventBus } from "../ports";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { getTicket } from "@volli/host-core/db/tickets-repo";
 import {
@@ -12,7 +12,7 @@ import {
   ensure,
   UNDER_DELETION_REFUSAL,
 } from "@volli/host-core/worktree";
-import { worktreeDeps } from "../worktree-host";
+import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
 
@@ -59,6 +59,8 @@ async function withStartLease<T>(directory: string, work: () => Promise<T>): Pro
 
 export function createDesktopSessionLocationResolver(
   db: Database.Database,
+  ports: { events: HostEventBus },
+  options: { dataDir: string },
 ): SessionLocationResolver {
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
@@ -80,7 +82,7 @@ export function createDesktopSessionLocationResolver(
     // durable event, and a cleanup must not be able to take the directory
     // between it succeeding and the binding existing.
     return withStartLease(ticket.worktreePath ?? project.path, async () => {
-      const outcome = await ensure(worktreeDeps(db), ticket.id);
+      const outcome = await ensure(worktreeDeps(db, ports, options), ticket.id);
       if (!outcome.ok) {
         // The path is the whole diagnosis when it is a stale stamp pointing at a
         // checkout somebody deleted, so it is named whenever the ticket has one.
@@ -95,7 +97,11 @@ export function createDesktopSessionLocationResolver(
       // targeting the terminal uses, so the booting ticket's own rail refreshes
       // promptly.
       if (created || restamped) {
-        broadcastDataChanged({ ticketId: ticket.id, projectId: project.id, kind: "worktree" });
+        ports.events.publish("data-changed", {
+          ticketId: ticket.id,
+          projectId: project.id,
+          kind: "worktree",
+        });
       }
       return { directory: identity.worktreePath, venue: LOCAL };
     });

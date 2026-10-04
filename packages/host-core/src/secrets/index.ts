@@ -19,6 +19,7 @@ export {
   type FileSecretKeyOptions,
 } from "./file-key";
 export { pendingNoticeSecretStart } from "./pending-notice-secret";
+export type { SecretWaitPublisher } from "./wait-publisher";
 export {
   isSecretName,
   SecretStore,
