@@ -16,8 +16,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
+import type { ConnectivityPort } from "@volli/agent-runtime";
 import { openVolliDb } from "./db";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
+import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
+import type { PowerPort } from "./ports/power";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
@@ -30,6 +33,7 @@ import {
   type HostSessionServices,
 } from "./session-services";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
+export * from "./ports";
 export type { DbOpenFailure } from "./db-open-failure";
 
 export {
@@ -45,8 +49,26 @@ export {
  */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
 
-/** What host-core asks of the process hosting it. */
-export interface HostCorePorts extends HostSessionPorts {}
+/**
+ * What host-core asks of the process hosting it. The README's "Ports" section
+ * is the vocabulary; `src/ports/` holds each port and its headless answer.
+ */
+export interface HostCorePorts extends HostSessionPorts {
+  /** Sleep and wake. A host that never sleeps passes `NO_POWER_EVENTS`. */
+  power: PowerPort;
+  /**
+   * The network, for the Agent Runtime's retry policy. Desktop builds it from
+   * Electron's `net` and {@link HostCorePorts.power}; a headless host passes
+   * `ALWAYS_ONLINE` from `@volli/agent-runtime`.
+   */
+  connectivity: ConnectivityPort;
+  /**
+   * What only a person's machine can do: open a link, reveal a file, the
+   * clipboard, menus. Absent on a headless host, where every request is
+   * refused with a `ClientCapabilityUnavailableError`.
+   */
+  client?: ClientCapabilityPort;
+}
 
 /** How this host behaves. No defaults for policy: every host states it. */
 export interface HostCoreOptions {
@@ -74,6 +96,8 @@ export interface HostCore extends HostSessionServices {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
+  /** The client's capabilities, or one that refuses each readably when there is none. */
+  readonly client: ClientCapabilityPort;
   /**
    * Why the database did not open, typed for routing (VC-602): `null` when it
    * opened. `database.error` is the sentence every degraded surface answers
@@ -124,6 +148,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     dataDir: options.dataDir,
     dbPath,
     database,
+    client: clientCapabilities(ports.client),
     databaseFailure,
     ...createHostSessionServices(database.ok ? database.db : null, ports),
   };

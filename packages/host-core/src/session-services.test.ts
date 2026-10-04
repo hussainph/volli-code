@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { insertProject } from "./db/projects-repo";
 import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
+import type { AttentionDeliveryPort } from "./ports/attention";
+import type { HostEventBus, HostEventMap } from "./ports/events";
 import {
   createHostSessionServices,
   type HostSessionPorts,
@@ -18,13 +20,21 @@ afterEach(() => {
 function ports() {
   return {
     log: { error: vi.fn(), warn: vi.fn() },
-    publishSessionActivity: vi.fn<HostSessionPorts["publishSessionActivity"]>(),
-    publishDataChanged: vi.fn<HostSessionPorts["publishDataChanged"]>(),
-    deliverNotification: vi.fn<HostSessionPorts["deliverNotification"]>(),
-    focusedSessionIds: vi.fn(() => new Set<string>()),
+    events: { publish: vi.fn<HostEventBus["publish"]>() },
+    attention: {
+      deliver: vi.fn<AttentionDeliveryPort["deliver"]>(() => ({ delivered: true })),
+      focusedSessionIds: vi.fn(() => new Set<string>()),
+    },
     listOpenNativeBindings: vi.fn(() => [{ attachmentId: "live-binding" }]),
     observeScheduledResume: vi.fn<HostSessionPorts["observeScheduledResume"]>(),
   } satisfies HostSessionPorts;
+}
+
+/** The `session-activity` notices published so far, in order. */
+function activity(sinks: ReturnType<typeof ports>) {
+  return sinks.events.publish.mock.calls.flatMap(([topic, payload]) =>
+    topic === "session-activity" ? [payload as HostEventMap["session-activity"]] : [],
+  );
 }
 
 async function seeded() {
@@ -39,8 +49,8 @@ async function seeded() {
   sinks.observeScheduledResume.mockImplementation(() => {
     order.push("observe");
   });
-  sinks.publishSessionActivity.mockImplementation(() => {
-    order.push("publish");
+  sinks.events.publish.mockImplementation((topic) => {
+    if (topic === "session-activity") order.push("publish");
   });
   const created = await engine.createSession({
     commandId: "create-1",
@@ -62,8 +72,9 @@ describe("host Session composition", () => {
     const sinks = ports();
     services = createHostSessionServices(null, sinks);
     expect(Object.values(services)).toEqual([null, null, null, null, null, null]);
-    expect(sinks.focusedSessionIds).not.toHaveBeenCalled();
-    expect(sinks.deliverNotification).not.toHaveBeenCalled();
+    expect(sinks.attention.focusedSessionIds).not.toHaveBeenCalled();
+    expect(sinks.attention.deliver).not.toHaveBeenCalled();
+    expect(sinks.events.publish).not.toHaveBeenCalled();
   });
 
   it("announces committed facts before folding and publishing, with one transaction writer", async () => {
@@ -75,7 +86,8 @@ describe("host Session composition", () => {
     expect(sinks.observeScheduledResume).toHaveBeenCalledWith(
       expect.objectContaining({ session: expect.objectContaining({ id: sessionId }) }),
     );
-    expect(sinks.publishSessionActivity).toHaveBeenCalledWith(
+    expect(sinks.events.publish).toHaveBeenCalledWith(
+      "session-activity",
       expect.objectContaining({
         projectId: "project",
         row: expect.objectContaining({
@@ -100,16 +112,16 @@ describe("host Session composition", () => {
       lastActivityAt: 4000,
     });
     expect(readSessionUnread(ctx.db, sessionId)).toEqual({ unreadSince: 4000 });
-    expect(sinks.focusedSessionIds).toHaveBeenCalled();
+    expect(sinks.attention.focusedSessionIds).toHaveBeenCalled();
 
-    sinks.publishSessionActivity.mockClear();
+    sinks.events.publish.mockClear();
     services.sessionReadWatch!.observeFocused(new Set([sessionId]));
-    await vi.waitFor(() => expect(sinks.publishSessionActivity).toHaveBeenCalledOnce());
-    expect(sinks.publishSessionActivity.mock.calls[0]?.[0].row.read).toBeUndefined();
+    await vi.waitFor(() => expect(activity(sinks)).toHaveLength(1));
+    expect(activity(sinks)[0]?.row.read).toBeUndefined();
     expect(readSessionUnread(ctx.db, sessionId)).toEqual({ unreadSince: null });
     expect(sinks.listOpenNativeBindings).toHaveBeenCalled();
     services.sessionReadWatch!.observeFocused(new Set([sessionId]));
-    expect(sinks.publishSessionActivity).toHaveBeenCalledOnce();
+    expect(activity(sinks)).toHaveLength(1);
 
     writeSessionUnread(ctx.db, sessionId, 5000);
     const failure = new Error("read unavailable");

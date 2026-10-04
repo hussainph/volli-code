@@ -87,6 +87,7 @@ export * from "./session-peek";
 export * from "./session-need";
 export * from "./notification-preferences";
 export * from "./notification-catalog";
+export * from "./host-events";
 export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";

@@ -282,6 +282,11 @@ export type NotificationRequest = {
   };
 }[NotificationProducer];
 
+/** Why an alert was not posted, or that it was. */
+export type NotificationOutcome =
+  | { delivered: true }
+  | { delivered: false; reason: "muted" | "unsupported" | "focused-target" | "failed" };
+
 /**
  * The one thing in a Session a person is being sent to — the open question, or
  * the failure that stopped it.

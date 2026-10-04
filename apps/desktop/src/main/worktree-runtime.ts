@@ -6,14 +6,14 @@
  * orphans) — build their deps HERE so phases always reach the renderer no
  * matter which entrypoint moved them.
  */
-import { app, BrowserWindow } from "electron";
+import { app } from "electron";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import type { VolliIpcEvent, WorktreePhaseEvent } from "../ipc/contract";
 
 import { blobsRoot } from "./blob-store";
+import { windowEventBus } from "./broadcast";
 import {
   createOrphanCleanupEngine,
   runGitCapturing,
@@ -24,12 +24,7 @@ import type { OrphanCleanupEngine, WorktreeDeps, WorktreePhase } from "./worktre
 
 /** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
 function broadcastPhase(ticketId: string, phase: WorktreePhase): void {
-  const payload: WorktreePhaseEvent = { ticketId, phase };
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.webContents.isDestroyed()) {
-      window.webContents.send("volli:worktree-phase" satisfies VolliIpcEvent, payload);
-    }
-  }
+  windowEventBus.publish("worktree-phase", { ticketId, phase });
 }
 
 /**

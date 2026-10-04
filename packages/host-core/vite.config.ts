@@ -16,6 +16,10 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // The ports every moved service asks its host through (VC-554), and
+        // what a headless host answers with: a refusal that reads wrong is
+        // what a person on a server sees instead of their link opening.
+        "src/ports/*.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a
@@ -41,10 +45,10 @@ export default defineConfig({
         // The downgrade guard (VC-602): a branch read wrong either opens a
         // database this build cannot use or locks a person out of their own.
         "src/db/schema-compatibility.ts",
-        // The headless secret key (VC-559): every branch is a refusal that
-        // stands between a person's credentials and another user, a lost key
-        // or a silent re-key, and none of it shows anywhere until it is wrong.
-        "src/ports/secret-key.ts",
+        // The headless secret key (VC-559), beside its port under src/ports:
+        // every branch is a refusal that stands between a person's credentials
+        // and another user, a lost key or a silent re-key, and none of it shows
+        // anywhere until it is wrong.
         "src/secrets/file-key.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },

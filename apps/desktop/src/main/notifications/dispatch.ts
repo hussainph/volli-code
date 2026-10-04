@@ -50,10 +50,12 @@ import {
   type NotificationPreferences,
   type NotificationProducer,
   type NotificationTarget,
+  type NotificationOutcome,
   type NotificationRequest,
 } from "@volli/shared";
 
 export type {
+  NotificationOutcome,
   NotificationProducerTargets,
   TargetedNotificationProducer,
   NotificationRequest,
@@ -104,11 +106,6 @@ export interface NotificationDispatchPorts {
   /** Diagnostics seam. Defaults to `console.warn`. */
   onError?: (error: unknown) => void;
 }
-
-/** Why an alert was not posted, or that it was. */
-export type NotificationOutcome =
-  | { delivered: true }
-  | { delivered: false; reason: "muted" | "unsupported" | "focused-target" | "failed" };
 
 export interface NotificationDispatcher {
   /** Posts one alert, or explains why it did not. Never throws. */
