@@ -11,8 +11,8 @@ import {
   testTicket,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "../session-control";
-import { insertSession } from "../session-control/test-support";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 
 let db: TestDb;
 afterEach(() => db?.cleanup());

@@ -56,7 +56,7 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
   createCheckpointFailureReporter,
   createSqliteSessionLedger,
-} from "../../../src/main/session-control";
+} from "@volli/host-core/session-control";
 import {
   createPiRuntimeHost,
   type PiRuntimeContext,
@@ -228,7 +228,7 @@ function fixedLocations(directory: string): SessionLocationResolver {
   return { resolve: at, prepare: at, reaffirm: async () => undefined };
 }
 
-/** The desktop engine's host yield (`session-control/index.ts`), which is private there. */
+/** The host engine's yield (`packages/host-core/src/session-control/index.ts`), which is private there. */
 function yieldToMainProcess(): Promise<void> {
   return new Promise<void>((resolvePromise) => {
     setImmediate(resolvePromise);

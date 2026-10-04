@@ -78,9 +78,11 @@ export function openVolliDb(
             "The local database failed its integrity check. Restore from the last backup that checks clean.",
           );
         }
-        // The downgrade guard, on the read-only handle: a refusal leaves the
-        // file exactly as it was — no writable handle, no WAL checkpoint, no
-        // migration safety copy.
+        // The downgrade guard, on the read-only handle. A refusal opens no
+        // writable handle, checkpoints nothing and takes no safety copy: the
+        // db file and its WAL stay byte-identical; `-shm`, an index with no
+        // data, may be created or reset by SQLite's read-only reader, exactly
+        // as the preflight above already does.
         compatibility = checkSchemaCompatibility(check, SCHEMA_HEAD);
       } finally {
         check.close();

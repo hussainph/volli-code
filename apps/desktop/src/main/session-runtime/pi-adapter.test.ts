@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { dirname, join } from "node:path";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 import { closeStaleAttachments } from "./boot-recovery";
 import { randomUUID } from "node:crypto";

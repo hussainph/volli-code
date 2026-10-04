@@ -9,7 +9,7 @@ import {
   logTransactionViolation,
   throwTransactionViolation,
 } from "./index";
-import type { HostCore } from "./index";
+import type { HostCore, HostCorePorts } from "./index";
 import Database from "better-sqlite3";
 import { SCHEMA_HEAD } from "./db/migrations";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
@@ -17,7 +17,10 @@ import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 const dirs: string[] = [];
 const opened: HostCore[] = [];
 afterEach(() => {
-  for (const core of opened.splice(0)) if (core.database.ok) core.database.db.close();
+  for (const core of opened.splice(0)) {
+    core.sessionActivityWatch?.stop();
+    if (core.database.ok) core.database.db.close();
+  }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function dataDir(): string {
@@ -25,10 +28,28 @@ function dataDir(): string {
   dirs.push(dir);
   return dir;
 }
-function compose(...args: Parameters<typeof createHostCore>): HostCore {
-  const core = createHostCore(...args);
+function compose(
+  ports: { log: Pick<Console, "error"> },
+  options: Parameters<typeof createHostCore>[1],
+): HostCore {
+  const core = createHostCore(
+    { ...sessionPorts(), ...ports, log: { warn: vi.fn(), ...ports.log } },
+    options,
+  );
   opened.push(core);
   return core;
+}
+
+function sessionPorts(): HostCorePorts {
+  return {
+    log: { error: vi.fn(), warn: vi.fn() },
+    publishSessionActivity: vi.fn(),
+    publishDataChanged: vi.fn(),
+    deliverNotification: vi.fn(),
+    focusedSessionIds: () => new Set(),
+    listOpenNativeBindings: () => [],
+    observeScheduledResume: vi.fn(),
+  };
 }
 
 describe("createHostCore", () => {
@@ -65,6 +86,9 @@ describe("createHostCore", () => {
     expect(core.dbPath).toBe(databasePath);
     expect(core.database.ok).toBe(true);
     expect(core.databaseFailure).toBeNull();
+    expect(core.sessionEngine).not.toBeNull();
+    expect(core.sessionLedger).not.toBeNull();
+    expect(core.hostNoticeOutbox).not.toBeNull();
   });
 
   it("installs the transaction-ownership handler the host chose", () => {
@@ -116,6 +140,11 @@ describe("createHostCore", () => {
       error: expect.stringContaining("damaged header") as unknown,
     });
     expect(core.databaseFailure).toEqual({ kind: "other" });
+    expect(core.sessionEngine).toBeNull();
+    expect(core.sessionWakeBus).toBeNull();
+    expect(core.sessionReadWatch).toBeNull();
+    expect(core.sessionLedger).toBeNull();
+    expect(core.hostNoticeOutbox).toBeNull();
     expect(log.error).toHaveBeenCalledWith(
       "[volli] failed to open database:",
       expect.stringContaining("damaged header"),
@@ -129,6 +158,7 @@ describe("createHostCore", () => {
       { dataDir: root, onTransactionViolation: throwTransactionViolation, devDiagnostics: false },
     );
     if (!seed.database.ok) throw new Error(seed.database.error);
+    seed.sessionActivityWatch?.stop();
     seed.database.db.close();
     opened.pop();
     const stamp = new Database(seed.dbPath);

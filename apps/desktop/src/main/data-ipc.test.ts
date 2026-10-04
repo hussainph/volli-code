@@ -219,8 +219,8 @@ vi.mock("./worktree", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
-import { insertSession } from "./session-control/test-support";
+import { createDesktopSessionEngine, watchSessionActivity } from "@volli/host-core/session-control";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { recordAutomationRun } from "@volli/host-core/db/automations-repo";
 import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";

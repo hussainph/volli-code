@@ -358,7 +358,12 @@ function NewerVersionActions({ gateway }: { gateway: RecoveryGateway }) {
       ) : phase === "error" ? (
         <Notice tone="error" title="Couldn't check for updates." actions={downloadLink} announce />
       ) : check === "done" && phase === "idle" ? (
-        <Notice title="No newer version on this update channel." actions={downloadLink} announce />
+        <Notice
+          title="No newer version on this update channel."
+          detail="This database needs a newer Volli. If you switched from Canary, reinstall Canary from the download page, or wait for a newer release here."
+          actions={downloadLink}
+          announce
+        />
       ) : null}
       {failure === null ? null : <Notice tone="error" title={failure} announce />}
     </section>

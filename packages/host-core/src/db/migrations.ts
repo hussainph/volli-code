@@ -2421,26 +2421,49 @@ END;
  * up a database that has run it, without harm to either build?**
  *
  * Yes (the default, leave `raisesMinReader` off):
- *  - a new table older builds never touch, a new index;
+ *  - a new table older builds never touch, a new performance (non-UNIQUE)
+ *    index;
  *  - a new nullable column, or one with a default that older inserts satisfy;
  *  - a trigger or constraint that every older write still satisfies;
  *  - AND the newer build tolerates what an older build leaves behind: rows it
  *    inserts without the new column, a new table it does not maintain, and a
  *    backup bundle stamped with ITS head that omits the new tables and
  *    columns (a newer build restores that bundle by migrating it up, so the
- *    new data must be expendable or rebuilt on open).
+ *    new data must be expendable or rebuilt on open);
+ *  - AND the newer build HEALS what an older build leaves behind, not merely
+ *    survives it. An older build on the compatible path writes rows into the
+ *    tables you did not change, and no migration will ever see them:
+ *    `user_version` never rewinds, so your backfill and your CREATE TABLE ran
+ *    once, before those rows existed. Anything derived (a projection, a
+ *    counter, a closure mark, a backfilled column) must be recomputed at read
+ *    time, or rebuilt on open by code that ships with your migration, or be
+ *    expendable. A one-shot migration backfill is not healing. If an older
+ *    build's action should have produced an append-only ledger row that
+ *    cannot be reconstructed, healing is impossible: raise the floor.
  *
  * No (set `raisesMinReader: true`):
  *  - dropping or renaming a table or column an older build reads or writes;
  *  - a NOT NULL column without a default on a table older builds insert into;
  *  - a CHECK, foreign key or trigger that an older build's writes can break;
+ *  - a UNIQUE index or constraint (including a partial or collation-sensitive
+ *    one, like 046's NOCASE label index) over columns an older build writes:
+ *    its INSERTs and UPDATEs can collide and fail;
+ *  - a foreign key, cascade, or any path by which an older build's DELETE (or
+ *    `INSERT OR REPLACE`, which deletes first) silently discards the newer
+ *    schema's rows;
  *  - changing what an existing column, `app_state` value or JSON payload means,
  *    or a value older builds parse strictly (Session Events are exempt: they
  *    are tolerant on read by rule);
  *  - moving data so an older build reads half of it, or writes where the newer
  *    build no longer looks;
- *  - new state a newer build must never find empty after restoring an older
- *    build's backup, such as epoch or fence history (`host-identity.md`).
+ *  - new state a newer build must never find empty, after restoring an older
+ *    build's backup or live while an older build runs, such as epoch or fence
+ *    history (`host-identity.md`).
+ *
+ * Expand → switch → contract keeps older writers compatible: in the expand
+ * phase, trigger-synced dual writes are the preferred way to keep an older
+ * writer's rows flowing into the new shape, and the contract step that drops
+ * the old shape is the one that raises the floor.
  *
  * When unsure, raise it: a refusal names itself and the remedy, while a wrong
  * "compatible" corrupts silently. `app_state` and its

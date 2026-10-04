@@ -270,8 +270,10 @@ describe("openVolliDb against a database's schema version (VC-602)", () => {
       expect(refusal.minReaderVersion).toBe(floor === "not-a-version" ? null : newer);
       expect(sha256(dbPath)).toBe(before);
       expect(migrationCopies(dbPath)).toEqual([]);
-      // Only the open mutex and SQLite's read-only sidecars may appear; a WAL
-      // sidecar, if any, carries no frames.
+      // The invariant: the db file and its WAL are byte-identical; `-shm`, an
+      // index with no data, may be created or reset by SQLite's read-only
+      // reader. Only the open mutex and those sidecars may appear, and a WAL
+      // the reader created carries no frames.
       const added = readdirSync(join(dbPath, ".."))
         .filter((name) => !namesBefore.has(name))
         .toSorted();

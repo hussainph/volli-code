@@ -43,7 +43,7 @@ import {
   getSession,
   insertSession,
   setActiveHarnessId,
-} from "./session-control/test-support";
+} from "@volli/host-core/session-control/test-support";
 import {
   getTicket,
   insertTicket,
@@ -59,7 +59,7 @@ import {
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";

@@ -3320,7 +3320,7 @@ export interface SessionPeekContentInput {
  * What a peek card draws, or `null` for a Session the ledger no longer has.
  *
  * A pull with no subscription behind it: hovering a row must not adopt a
- * Session or open a stream (see `main/session-control/peek-content.ts`).
+ * Session or open a stream (see `packages/host-core/src/session-control/peek-content.ts`).
  */
 export type SessionPeekContentResult = Result<{ content: SessionPeekContent | null }>;
 

@@ -5,8 +5,8 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { createSqliteSessionLedger } from "../session-control";
-import { terminalNativeReference } from "../session-control";
+import { createSqliteSessionLedger } from "@volli/host-core/session-control";
+import { terminalNativeReference } from "@volli/host-core/session-control";
 import { resolveScope } from "./scope";
 
 let ctx: TestDb;

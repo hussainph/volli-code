@@ -224,6 +224,20 @@ function fakePorts(
 }
 
 describe("createSessionConcurrencyEnvReader", () => {
+  it("uses the host clock and default TTL when no options are supplied", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    try {
+      const listAttachedSessions = vi.fn(async () => [liveTerminal("a")]);
+      const reader = createSessionConcurrencyEnvReader(fakePorts(listAttachedSessions));
+      await reader({ environment: {}, cores: 8 });
+      clock.mockReturnValue(6001);
+      await reader({ environment: {}, cores: 8 });
+      expect(listAttachedSessions).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("counts the Sessions of every project on the machine, from one read", async () => {
     // The narrow read is unscoped by design: load is a fact about the machine,
     // so Sessions from two projects arrive together and are counted together.

@@ -354,6 +354,9 @@ describe("BootErrorPanel", () => {
     expect(buttonLabelled("Checking…").disabled).toBe(true);
     await act(async () => main.updates.push(updaterState({ phase: "idle" })));
     expect(text()).toContain("No newer version on this update channel.");
+    expect(text()).toContain(
+      "This database needs a newer Volli. If you switched from Canary, reinstall Canary from the download page, or wait for a newer release here.",
+    );
     expect(downloadLink()?.target).toBe("_blank");
   });
 

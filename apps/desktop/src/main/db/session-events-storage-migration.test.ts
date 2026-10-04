@@ -9,7 +9,7 @@ import {
   FIXTURE_NATIVE_USAGE_EVENT_ID,
   type FixtureProfile,
 } from "../backup/test-fixture";
-import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { migrate } from "@volli/host-core/db/migrations";
 import { computeSessionStorageContentDigest } from "@volli/host-core/db/session-storage-digest";
 

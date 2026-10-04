@@ -13,15 +13,15 @@ import {
 import { sessionHostNoticeMetadata } from "@volli/shared";
 import { readHostNotice } from "@volli/session-presentation";
 import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { createSessionWakeBus } from "../session-wake";
+import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
+import { createSessionWakeBus } from "@volli/host-core/session-wake";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { buildBackupDataDocument } from "../backup/data-document";
 import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
-import { createSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
+import { createSqliteHostNoticeOutbox } from "@volli/host-core/session-runtime/sqlite-host-notice-outbox";
 import type { HostNoticeDelivery } from "./host-notice-delivery";
 
 let db: TestDb | undefined;

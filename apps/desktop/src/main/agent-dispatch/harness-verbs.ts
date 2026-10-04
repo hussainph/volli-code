@@ -47,7 +47,7 @@ import {
   readTerminalAttachmentDetail,
   terminalNativeReference,
   terminalSessionRecord,
-} from "../session-control";
+} from "@volli/host-core/session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";

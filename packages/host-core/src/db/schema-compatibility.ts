@@ -15,6 +15,8 @@
  *    opens it, runs no migration, and never lowers `user_version`.
  *  - head <  the floor: the build refuses with
  *    {@link DatabaseFromNewerVersionError} before anything writes to the file.
+ *    The db file and its WAL stay byte-identical; `-shm`, an index with no
+ *    data, may be created or reset by SQLite's read-only reader.
  *
  * Only a migration that breaks older readers raises the floor
  * (`raisesMinReader: true` in `migrations.ts`, where the rule for authors is

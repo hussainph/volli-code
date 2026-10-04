@@ -25,10 +25,7 @@ afterEach(() => {
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
-// Each case walks a fresh database through 55 migrations and then the full
-// safety-copy publication: 3–4.5s alone on CI's Linux host lane, so the 5s
-// default timed out under load (PR #723). The budget is stated, not implied.
-describe("migration backup publication failure recovery", { timeout: 30_000 }, () => {
+describe("migration backup publication failure recovery", () => {
   it.each(["base", "sidecar", "publish", "rollback"])(
     "preserves recovery bytes if %s rename fails",
     (failure) => {
@@ -92,5 +89,8 @@ describe("migration backup publication failure recovery", { timeout: 30_000 }, (
         db.close();
       }
     },
+    // Real migrations plus recovery retries took 4.6s on main's Linux coverage
+    // lane before the Session suites moved here; allow their shared-runner load.
+    15_000,
   );
 });

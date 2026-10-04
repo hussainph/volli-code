@@ -37,7 +37,7 @@ import { broadcastDataChanged } from "../broadcast";
 import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
-import type { SessionConcurrencyEnvReader } from "../session-concurrency";
+import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
@@ -63,7 +63,7 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
   type TerminalAttachmentDetail,
-} from "../session-control";
+} from "@volli/host-core/session-control";
 import { resolveScope } from "./scope";
 import type { SessionScope } from "./scope";
 

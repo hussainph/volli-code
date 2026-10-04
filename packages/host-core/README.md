@@ -6,10 +6,13 @@ Electron main today, `apps/hostd` next. Both call `createHostCore` and wire
 what it returns. Electron main keeps only window-only work.
 
 ```ts
-import { createHostCore, throwTransactionViolation } from "@volli/host-core";
+import { createHostCore, throwTransactionViolation, type HostCorePorts } from "@volli/host-core";
+
+// The host supplies its event sinks, notifications, focus and runtime readers.
+declare const ports: HostCorePorts;
 
 const host = createHostCore(
-  { log: console }, // ports: what host-core asks of its process
+  ports, // what host-core asks of its process
   {
     // options: how this host behaves
     dataDir: "/var/lib/volli",
@@ -31,9 +34,10 @@ if (!host.database.ok) console.error(host.database.error);
   - **Options** are policy: data directory, overrides, handler choices. Policy
     has no defaults; every host states it. `userData` is the `dataDir`
     option, and `app.isPackaged` decisions are options.
-  - **Ports** are what host-core asks its process to do: log, and (in later
-    slices) broadcast to windows or deliver a notification. Desktop passes
-    Electron-backed ports; `hostd` passes its own.
+  - **Ports** are what host-core asks its process to do: log, publish Session
+    activity and data-change notices, deliver notifications, query focused
+    Sessions and live runtime bindings, and observe scheduled resumes. Desktop
+    passes Electron-backed adapters; `hostd` passes its own.
 - **Composition stays thin in the host.** `apps/desktop/src/main/index.ts`
   resolves Electron facts (`app.getPath("userData")`, `app.isPackaged`,
   `VOLLI_DB_PATH` in dev), calls `createHostCore`, and wires the result
@@ -48,8 +52,34 @@ if (!host.database.ok) console.error(host.database.error);
 | `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
 | `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
 
-The Session ledger, gate (`session-control/`) and Session engine wiring follow
-in VC-612.
+VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
+`@volli/host-core/session-control/*`), `src/session-wake.ts`,
+`src/session-concurrency.ts` and the outbox/resumption adapters under
+`src/session-runtime/` (`@volli/host-core/session-runtime/*`).
+
+### Session composition
+
+`createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
+`sessionReadWatch`, `sessionActivityWatch` and `sessionEngine`. They are all
+`null` when the database is degraded. The outbox shares the engine's one
+transaction writer. The wake bus decorates the engine inside the activity
+watch: committed facts fan out before a listing row becomes dirty. Resumption
+history, unattended Run notifications and read receipts observe in their
+original order, before the row is built.
+
+`HostCorePorts` extends `HostSessionPorts`. Its adapters are captured, not
+called during construction, so desktop can bind notifications and the runtime
+after the database is known. Desktop wires `onFocusedSessionsChanged` to the
+returned read watch, and supplies the runtime-dependent scheduled-resume
+observer after the runtime exists. `createDesktopSessionEngine` retains its
+name for existing callers but is now the single engine construction site in
+host-core; host composition passes the shared ledger into it.
+
+Coverage entries for the activity/read/peek watches and concurrency budget
+move with their tests at the unchanged 100% thresholds. `db/export.ts` remains
+in desktop's gate: its test still composes the desktop delegation store. The
+cross-ledger transaction test and full host-notice integration test also stay
+in desktop until their remaining desktop dependencies move.
 
 ### Persistence
 

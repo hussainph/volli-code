@@ -24,8 +24,8 @@ import {
   testSession,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "./session-control";
-import { insertSession } from "./session-control/test-support";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;

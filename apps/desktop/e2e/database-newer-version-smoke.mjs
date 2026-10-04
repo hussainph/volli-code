@@ -10,7 +10,9 @@
  *  - incompatible: `user_version` and `min_reader_version` both above the
  *    head. The app must show the named "newer version of Volli" recovery
  *    screen, offer update / restore an older backup / quit, and leave the
- *    database file byte-identical through launch, listing and quit.
+ *    database file and its WAL byte-identical through launch, listing and
+ *    quit. `-shm`, an index with no data, may be created or reset by
+ *    SQLite's read-only reader, so it is not hashed.
  *  - compatible: `user_version` above the head, `min_reader_version` at the
  *    head. The app must boot normally, run no migration (no safety copy) and
  *    never lower `user_version`.
@@ -162,7 +164,10 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Every durable database file: the base and any WAL. SHM is SQLite's lock cache. */
+/**
+ * Every durable database file: the base and any WAL with frames. `-shm` is an
+ * index with no data that SQLite's read-only reader may create or reset.
+ */
 async function durableHashes(config) {
   const hashes = new Map();
   for (const suffix of ["", "-wal"]) {

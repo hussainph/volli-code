@@ -9,9 +9,9 @@
  * ask its host to do comes in as {@link HostCorePorts}. Nothing in this
  * package imports `electron` (`scripts/check-host-electron-imports.mjs`).
  *
- * This first slice (VC-553) owns persistence: opening and migrating the
- * SQLite database and the transaction-ownership guard. The repos live under
- * `@volli/host-core/db/*`. See README.md for how later slices move a cluster.
+ * Persistence (VC-553) and Session composition (VC-612) live here. The repos
+ * and ledger are exported under `db/*` and `session-control/*`. See README.md
+ * for how later slices move a cluster.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,7 +24,12 @@ import {
   describeDbOpenFailure,
 } from "./db-open-failure";
 import type { DbOpenFailure } from "./db-open-failure";
-
+import {
+  createHostSessionServices,
+  type HostSessionPorts,
+  type HostSessionServices,
+} from "./session-services";
+export type { HostSessionPorts, HostSessionServices } from "./session-services";
 export type { DbOpenFailure } from "./db-open-failure";
 
 export {
@@ -41,10 +46,7 @@ export {
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
 
 /** What host-core asks of the process hosting it. */
-export interface HostCorePorts {
-  /** Where host-core reports what no caller is waiting on. Desktop passes `console`. */
-  readonly log: Pick<Console, "error">;
-}
+export interface HostCorePorts extends HostSessionPorts {}
 
 /** How this host behaves. No defaults for policy: every host states it. */
 export interface HostCoreOptions {
@@ -68,7 +70,7 @@ export interface HostCoreOptions {
   readonly devDiagnostics: boolean;
 }
 
-export interface HostCore {
+export interface HostCore extends HostSessionServices {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
@@ -87,8 +89,8 @@ export function defaultDatabasePath(dataDir: string): string {
 }
 
 /**
- * Opens (creating and migrating if needed) the host's database and installs
- * the transaction-ownership guard with the handler the host chose.
+ * Opens (creating and migrating if needed) the host's database, installs
+ * the transaction-ownership guard, and composes its Session services.
  *
  * Never throws for a database that will not open: the failure is classified
  * once, logged through `ports.log`, and returned as `{ ok: false, error }`.
@@ -118,5 +120,11 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     databaseFailure = classifyDbOpenFailure(error);
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
-  return { dataDir: options.dataDir, dbPath, database, databaseFailure };
+  return {
+    dataDir: options.dataDir,
+    dbPath,
+    database,
+    databaseFailure,
+    ...createHostSessionServices(database.ok ? database.db : null, ports),
+  };
 }
