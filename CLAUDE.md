@@ -62,6 +62,15 @@ The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs ho
 - Search with `rg` (ripgrep), not `grep -r` or `find -exec grep`. It honours `.gitignore`, so `node_modules/`, `coverage/` and build output stay out of results; `grep -r` drags generated coverage HTML back in as if it were source. `rg --files -g <glob>` replaces `find`, and `-uu` is the deliberate opt-in to ignored files. Where `command -v rg` finds nothing, fall back to `git grep -n` (tracked files only, so the same exclusions), or to `grep -rn --exclude-dir={node_modules,coverage,dist,out,.git}` outside a repository.
 - CI: every PR runs Linux `Check + Build`, the desktop Vitest suite as `Test (desktop i/4)` shards, `Coverage (desktop)` (merges the shards and enforces the thresholds), `Test (packages)`, and the macOS desktop smoke lanes; **`CI gate` is the one check that sums them**, and all must be green before shipping. **Desktop e2e smokes DO run in CI** — core e2e and the rest (sharded three ways, four-at-a-time) start together. The lane GLOBS `apps/desktop/e2e/*-smoke.mjs` and subtracts explicit credential/legacy exclusions plus measured quarantines in `apps/desktop/scripts/run-smokes.mjs`, so **a smoke you add runs in the same PR with no registration step**. A person can run the same thing on a dev Mac: `node apps/desktop/scripts/run-smokes.mjs` (add `--tier core` for core e2e, `--list` to see the selection). PRs touching only prose/website/docs skip the desktop lanes. `act pull_request --container-architecture linux/amd64` mirrors the Linux jobs locally, for a person debugging the workflow — not a pre-PR step. The Pi smokes stay local-only — they drive a live model turn, so they are structurally credential-gated and need `pnpm smoke:pi` with a display and a real `~/.pi/agent/auth.json`.
 
+## Linux host boundary
+
+`Test (packages)` is the plain-Node Linux host lane, pinned by `.nvmrc`; new host
+packages must provide `test:coverage`. `Check + Build` enforces zero Electron
+imports across all packages and hostd, including transitive relative imports.
+`Build (host container)` is path-filtered and required by `CI gate` when selected.
+Host development image, native ABI isolation and inventory commands:
+`docs/development/host-linux.md`.
+
 ## CI is the gate
 
 CI owns the full suite, every coverage threshold and the gating desktop smoke lanes. Local runs catch your own mistakes fast; they do not repeat CI.

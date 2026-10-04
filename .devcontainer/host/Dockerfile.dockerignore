@@ -1,0 +1,4 @@
+# The dev image contains tools, never source, dependency stores or credentials.
+**
+!.nvmrc
+!package.json
