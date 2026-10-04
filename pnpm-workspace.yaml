@@ -3,7 +3,7 @@ packages:
   - packages/*
 
 # Hard-fail `pnpm install` when the running Node is outside the root
-# `engines.node` pin (^24.13.0). Without this, an install under a stray older
+# `engines.node` pin (^24.15.0). Without this, an install under a stray older
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
 # succeeds and quietly builds native modules against the wrong ABI — the
 # desktop app then boots into a dead database with sign-in greyed out (VC-76).

@@ -102,9 +102,9 @@ libraries support it without installing another browser in every dev image.
 
 The previous 24.13.0 `.nvmrc` pin could not install the current dependency graph:
 jsdom 30.0.1 requires Node ^24.15.0 in the 24.x line, and `engineStrict` rejects
-older versions. The host lane/image therefore use 24.15.0, within the unchanged
-root `engines.node` range. Do not infer compatibility from that caret range's
-lower bound alone; the host lane's exact-version install checks the full graph.
+older versions. The host lane/image therefore use 24.15.0, and the root
+`engines.node` floor is ^24.15.0 too. The host lane's exact-version install
+checks the full graph rather than inferring compatibility from the caret range.
 
 When bumping Node, update `.nvmrc`, the Dockerfile's tag and multi-arch digest
 together; the image build catches drift. A root `packageManager` bump also

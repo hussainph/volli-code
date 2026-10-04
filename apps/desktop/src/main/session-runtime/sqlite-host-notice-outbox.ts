@@ -1,7 +1,7 @@
 /**
- * Main's host-notice storage adapter. It MUST share the Session writer's
- * transaction queue: a separate queue on the same SQLite connection could
- * resolve put() inside an unrelated uncommitted transaction (or roll it back).
+ * Main's host-notice storage adapter. All access MUST use the Session writer's
+ * synchronous transaction: no callback may yield while SQLite is in a
+ * transaction, and put() resolves only after commit.
  * No raw shell output reaches this adapter; producers hand it a complete,
  * sanitized HostNotice, including its already-minted envelope nonce.
  */
