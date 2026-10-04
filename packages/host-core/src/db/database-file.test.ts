@@ -77,7 +77,7 @@ import {
   swapInStagedProfile,
 } from "./database-file";
 import type { DatabaseFileStep } from "./database-file";
-import { migrate } from "./migrations";
+import { migrate, SCHEMA_HEAD } from "./migrations";
 import { recoveryPendingPath } from "./recovery-pending";
 import {
   DatabaseFromNewerVersionError,
@@ -815,6 +815,88 @@ describe("publishRollbackPoint", () => {
         db.close();
       }
       expect(existsSync(pending)).toBe(false);
+    },
+  );
+
+  // `quick_check` checks B-tree structure, not that an index agrees with its
+  // table. A live file whose index lost a row passes it, opens, and silently
+  // misses that row on an indexed lookup: the pending copy may be the only
+  // intact database, so deleting it needs a full integrity check.
+  it.each([55, SCHEMA_HEAD])(
+    "keeps a pending copy when the live index disagrees with its table (schema %i)",
+    (version) => {
+      const root = tempDir("index-corrupt");
+      const dbPath = join(root, "volli.db");
+      const seed = openRawDb(dbPath);
+      try {
+        seed.pragma("journal_mode = WAL");
+        migrate(seed, dbPath, { toVersion: version });
+        setProbe(seed, "retained");
+        seed.pragma("wal_checkpoint(TRUNCATE)");
+        expect(() =>
+          publishRollbackPoint(seed, dbPath, version, {
+            faults: (step) => {
+              if (step === "rollback-point:publish") throw new Error("injected publish failure");
+            },
+          }),
+        ).toThrow(/could not preserve and publish/);
+      } finally {
+        seed.close();
+      }
+      const pending = join(
+        root,
+        readdirSync(root).find((name) => /\.pending-[\da-f-]+$/.test(name)) as string,
+      );
+      const pendingBytes = readFileSync(pending);
+
+      // Rewrite the probe's key in the app_state primary-key index leaf to
+      // another of the same length and sort position: structure intact,
+      // index content wrong.
+      const reader = new Database(dbPath, { readonly: true });
+      const { rootpage } = reader
+        .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'sqlite_autoindex_app_state_1'")
+        .get() as { rootpage: number };
+      const pageSize = reader.pragma("page_size", { simple: true }) as number;
+      reader.close();
+      const bytes = readFileSync(dbPath);
+      const page = (rootpage - 1) * pageSize;
+      expect(bytes[page]).toBe(10); // an index leaf
+      const at = bytes.subarray(page, page + pageSize).indexOf(PROBE);
+      expect(at).toBeGreaterThanOrEqual(0);
+      bytes.write(`${PROBE.slice(0, -1)}f`, page + at);
+      writeFileSync(dbPath, bytes);
+      const check = new Database(dbPath, { readonly: true });
+      try {
+        expect(check.pragma("quick_check", { simple: true })).toBe("ok");
+        expect(check.pragma("integrity_check", { simple: true })).not.toBe("ok");
+      } finally {
+        check.close();
+      }
+
+      vi.mocked(console.info).mockClear();
+      vi.mocked(console.warn).mockClear();
+      // The boot goes on, as it would without the copy: quick_check passes.
+      const db = openVolliDb(dbPath);
+      db.close();
+      // The copy survives byte-identical, and the warning names it.
+      expect(readFileSync(pending).equals(pendingBytes)).toBe(true);
+      expect(vi.mocked(console.warn).mock.calls.flat().join(" ")).toContain(pending);
+      expect(vi.mocked(console.info).mock.calls).toContainEqual([
+        expect.any(String),
+        expect.objectContaining({
+          action: "checked-live",
+          check: "integrity_check",
+          clean: false,
+          durationMs: expect.any(Number) as unknown,
+        }),
+      ]);
+      const copy = new Database(pending, { readonly: true });
+      try {
+        expect(copy.pragma("integrity_check", { simple: true })).toBe("ok");
+        expect(readProbe(copy)).toBe("retained");
+      } finally {
+        copy.close();
+      }
     },
   );
 

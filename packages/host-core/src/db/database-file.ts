@@ -186,6 +186,33 @@ function checksClean(db: Database.Database): boolean {
   return rows.length === 1 && rows[0]?.quick_check === "ok";
 }
 
+/**
+ * A full `integrity_check`, timed and logged: on a large profile it can take
+ * tens of seconds, so it runs only before deleting pending copies, which only
+ * an interrupted rollback-point publish leaves. Anything but exactly `ok`,
+ * including a throw, is not clean.
+ */
+function checksFullyClean(db: Database.Database, dbPath: string): boolean {
+  const started = performance.now();
+  let clean = false;
+  let error: unknown;
+  try {
+    const rows = db.pragma("integrity_check") as { integrity_check: string }[];
+    clean = rows.length === 1 && rows[0]?.integrity_check === "ok";
+  } catch (caught) {
+    error = caught;
+  }
+  console.info(BACKUP_RETENTION_LOG_PREFIX, {
+    action: "checked-live",
+    check: "integrity_check",
+    name: basename(dbPath),
+    clean,
+    durationMs: Math.round(performance.now() - started),
+    ...(error === undefined ? {} : { error }),
+  });
+  return clean;
+}
+
 export function assertDatabaseHeader(dbPath: string): void {
   // SQLite can update SHM even on a read-only handle. Reject a broken header
   // without invoking SQLite, preserving malformed sidecars as raw evidence.
@@ -226,8 +253,17 @@ function stagedSchemaVersion(path: string): number {
  * for writing. A read-only handle cannot checkpoint/delete a damaged WAL on
  * close or overwrite a clean migration safety copy before recovery becomes
  * available.
+ *
+ * With `fullCheck` (only when pending copies would be deleted on its word),
+ * also runs a full `integrity_check`, which `quick_check` is not: it checks
+ * that every index agrees with its table. `fullyClean` is its verdict; a
+ * failure there does not refuse the boot, since the routine preflight never
+ * asked it, but it keeps the pending copies.
  */
-function preflight(dbPath: string): SchemaCompatibility {
+function preflight(
+  dbPath: string,
+  fullCheck: boolean,
+): { compatibility: SchemaCompatibility; fullyClean: boolean | undefined } {
   assertDatabaseHeader(dbPath);
   const check = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
@@ -241,7 +277,8 @@ function preflight(dbPath: string): SchemaCompatibility {
     // file and its WAL stay byte-identical; `-shm`, an index with no data, may
     // be created or reset by SQLite's read-only reader, exactly as the
     // preflight above already does.
-    return checkSchemaCompatibility(check, SCHEMA_HEAD);
+    const compatibility = checkSchemaCompatibility(check, SCHEMA_HEAD);
+    return { compatibility, fullyClean: fullCheck ? checksFullyClean(check, dbPath) : undefined };
   } finally {
     check.close();
   }
@@ -271,10 +308,12 @@ function preflight(dbPath: string): SchemaCompatibility {
  * swap had not finished filling.
  *
  * Removes the unpublished copies a dead migration attempt left behind only
- * once the live file exists and passes the preflight. If it is missing or
- * fails, they are kept and the refusal names them: one may be the only intact
- * copy of the database, and a missing live file beside one is never a first
- * run.
+ * once the live file exists, passes the preflight and passes a full
+ * `integrity_check` (run only when such copies exist). If it is missing or
+ * fails the preflight, they are kept and the refusal names them: one may be
+ * the only intact copy of the database, and a missing live file beside one is
+ * never a first run. If only the full check fails, the boot goes on as it
+ * would without them, and they are kept and named in a warning.
  *
  * The parent directory must already exist; the host creates it (and catches
  * everything this throws) before calling in, since that's also where the
@@ -300,13 +339,14 @@ export function openVolliDb(
     // Under the lock no rollback point is being published: any pending copy
     // is from an attempt that died before it could publish. It may still be
     // the only intact copy of the database, so it is only listed here, and
-    // removed below once the live file has passed its preflight.
+    // removed below once the live file has passed a full integrity check.
     if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
     const abandoned = options.allowPendingRecovery ? [] : abandonedRollbackCopies(dbPath);
     let compatibility: SchemaCompatibility | undefined;
+    let fullyClean: boolean | undefined;
     if (exists(dbPath)) {
       try {
-        compatibility = preflight(dbPath);
+        ({ compatibility, fullyClean } = preflight(dbPath, abandoned.length > 0));
       } catch (error) {
         throw keepingAbandonedCopies(error, abandoned);
       }
@@ -317,9 +357,17 @@ export function openVolliDb(
         `The local database is missing, but an unpublished safety copy of it was kept: ${abandoned.join(", ")}. Nothing was created. Recover the database from that copy before starting Volli again.`,
       );
     }
-    // The live database exists and checks clean: the pending copies are
-    // redundant now, and never recovery candidates.
-    removeAbandonedRollbackCopies(abandoned);
+    if (fullyClean === true) {
+      // The live database exists and passes a full integrity check: the
+      // pending copies are redundant now, and never recovery candidates.
+      removeAbandonedRollbackCopies(abandoned);
+    } else if (abandoned.length > 0) {
+      // Usable enough to open, as on any boot, but not proven whole: a
+      // pending copy may be the only intact database. Leave it for a person.
+      console.warn(
+        `${BACKUP_RETENTION_LOG_PREFIX} The local database did not pass a full integrity check, so the unpublished safety copies beside it were kept: ${abandoned.join(", ")}. Recover from them if data is missing.`,
+      );
+    }
     const db = new Database(dbPath);
     try {
       db.pragma("journal_mode = WAL");
@@ -527,8 +575,8 @@ function undoPreservation(backupPath: string, family: PreservedFamily): void {
  * migration it protected never ran. Such a copy (up to a full database in
  * size) is never a recovery candidate, but it may be the only intact copy of
  * the database left, so this only lists them; {@link openVolliDb} removes
- * them once the live database has passed its preflight, and names them in
- * any refusal otherwise. A `.corrupt` quarantine is evidence, and is never
+ * them once the live database has passed a full integrity check, and names
+ * them in any refusal or warning otherwise. A `.corrupt` quarantine is evidence, and is never
  * listed.
  */
 function abandonedRollbackCopies(dbPath: string): string[] {
@@ -552,7 +600,7 @@ function abandonedRollbackCopies(dbPath: string): string[] {
   return found;
 }
 
-/** Only after the live database has passed its preflight: see {@link abandonedRollbackCopies}. */
+/** Only after the live database has passed a full integrity check: see {@link abandonedRollbackCopies}. */
 function removeAbandonedRollbackCopies(paths: readonly string[]): void {
   for (const path of paths) {
     try {
