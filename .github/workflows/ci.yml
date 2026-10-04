@@ -102,6 +102,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
+      host-container: ${{ steps.filter.outputs.host-container }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -122,14 +123,16 @@ jobs:
           # Anything not a PR (push to main, manual dispatch) runs the lanes.
           if [[ "$EVENT" != "pull_request" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
-            echo "event is $EVENT — running desktop lanes"
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "event is $EVENT — running all conditional lanes"
             exit 0
           fi
 
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           if [[ -z "$changed" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
-            echo "no diff resolved — running desktop lanes (fail safe)"
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "no diff resolved — running all conditional lanes (fail safe)"
             exit 0
           fi
 
@@ -149,6 +152,15 @@ jobs:
           else
             echo "desktop=false" >> "$GITHUB_OUTPUT"
             echo "-> prose/website only; skipping desktop smoke lanes"
+          fi
+
+          # Container inputs and host code. Workflow edits run it too, so the
+          # job and gate are exercised on the PR changing their own definition.
+          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
+          if echo "$changed" | grep -qE "$host"; then
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "host-container=false" >> "$GITHUB_OUTPUT"
           fi
 
   # Every gate that is not a test suite: format/lint, the licence and
@@ -200,6 +212,12 @@ jobs:
       # invisible in a diff, which is why it is a step and not a convention.
       - name: Check excluded dependencies
         run: vp run check:excluded-dependencies
+
+      - name: Check host Electron boundary and CI gate policy
+        run: |
+          node scripts/check-host-electron-imports.mjs --self-test
+          node scripts/check-host-electron-imports.mjs
+          node --test scripts/ci-host-lane.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
@@ -478,6 +496,10 @@ jobs:
   # in this job. And `--filter` cannot be combined with `-r`. A new package
   # under apps/ or packages/ is picked up with no edit here; one without a
   # `test:coverage` script is skipped, as `-r` skipped apps/docs.
+  # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
+  # covers session-engine, session-rpc, agent-runtime and shared; host-protocol,
+  # host-core and apps/hostd join automatically when added with test:coverage.
+  # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
   test-packages:
     name: Test (packages)
     runs-on: ubuntu-24.04
@@ -491,7 +513,8 @@ jobs:
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
         with:
-          node-version-file: package.json
+          # Exact host/container pin, rather than the root engines caret range.
+          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -501,6 +524,32 @@ jobs:
           vp run
           --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
           test:coverage --maxWorkers=$(nproc)
+
+  host-container:
+    name: Build (host container)
+    needs: changes
+    if: needs.changes.outputs.host-container == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # No registry login, image push or repo dependencies: just the dev tools.
+      # Build asserts Node matches .nvmrc and resolves pnpm from package.json.
+      - name: Build Linux host development image
+        run: docker build --file .devcontainer/host/Dockerfile --tag volli-host-dev .
+
+      - name: Verify tools as the non-root development user
+        run: |
+          docker run --rm volli-host-dev sh -ec '
+            node --version; pnpm --version; git --version
+            test "$(id -u)" -ne 0
+            test "$(node -p "process.versions.node")" = "$(cat /opt/volli-toolchain/.nvmrc)"
+            test "$(pnpm --version)" = "$(node -p "require(\"/opt/volli-toolchain/package.json\").packageManager.split(\"@\")[1]")"
+          '
 
   # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
   # theming, plus the macOS-only licence assertions. It runs BESIDE the shard
@@ -658,20 +707,33 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [changes, check, test-desktop, coverage-desktop, test-packages, smoke-boot, smoke-rest]
+    needs:
+      [
+        changes,
+        check,
+        test-desktop,
+        coverage-desktop,
+        test-packages,
+        host-container,
+        smoke-boot,
+        smoke-rest,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every lane to pass or to skip by its own condition
+        id: require-lanes
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
+          HOST_CONTAINER_REQUIRED: ${{ needs.changes.outputs.host-container }}
           SCOPE: ${{ needs.changes.result }}
           CHECK: ${{ needs.check.result }}
           TEST_DESKTOP: ${{ needs.test-desktop.result }}
           COVERAGE_DESKTOP: ${{ needs.coverage-desktop.result }}
           TEST_PACKAGES: ${{ needs.test-packages.result }}
+          HOST_CONTAINER: ${{ needs.host-container.result }}
           SMOKE_BOOT: ${{ needs.smoke-boot.result }}
           SMOKE_REST: ${{ needs.smoke-rest.result }}
         run: |
@@ -686,10 +748,21 @@ jobs:
             fi
           }
 
-          # Mirrors the `if:` on each smoke job. Anything the path gate did not
-          # clear to skip must have run and passed.
+          # Only literal false permits a path-filtered skip. Missing/invalid
+          # outputs fail closed, even if every conditional lane was skipped.
+          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED"; do
+            if [[ "$flag" != "true" && "$flag" != "false" ]]; then
+              echo "::error::invalid Scope output '$flag'"
+              status=1
+            fi
+          done
+
+          # Mirrors each conditional job's `if:`. Failed and cancelled are
+          # NEVER acceptable, including when a lane should have skipped.
           boot=skipped
           rest=skipped
+          container=skipped
+          if [[ "$HOST_CONTAINER_REQUIRED" == "true" ]]; then container=success; fi
           if [[ "$DESKTOP" == "true" ]]; then
             boot=success
             if [[ "$EVENT" == "pull_request" ]]; then rest=success; fi
@@ -700,6 +773,7 @@ jobs:
           expect "Test (desktop shards)" "$TEST_DESKTOP" success
           expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
           expect "Test (packages)" "$TEST_PACKAGES" success
+          expect "Build (host container)" "$HOST_CONTAINER" "$container"
           expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
           expect "Smoke (shards)" "$SMOKE_REST" "$rest"
           exit "$status"
