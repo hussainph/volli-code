@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import type { SecretKeyPort } from "@volli/host-core/secrets";
+import type { SecretKeyPort } from "@volli/host-core/ports";
 
 interface Keychain {
   isEncryptionAvailable(): boolean;
