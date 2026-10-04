@@ -241,7 +241,7 @@ describe("SqliteSessionLedger", () => {
     ).resolves.toEqual([]);
   });
 
-  it("serializes async transactions and rolls a failed transaction back", async () => {
+  it("finishes transactions synchronously and rolls a failed transaction back", async () => {
     const { ledger, control, projectId } = setup();
     const created = await control.createSession({
       commandId: "create",
@@ -252,19 +252,16 @@ describe("SqliteSessionLedger", () => {
       title: "One",
       provenance,
     });
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const first = ledger.transaction(async (tx) => {
+    const order: string[] = [];
+    const first = ledger.transaction((tx) => {
       expect(tx.getSession(created.session.id)?.id).toBe(created.session.id);
-      await gate;
+      order.push("first");
     });
     const second = ledger.transaction((tx) => {
       expect(tx.getSession(created.session.id)?.id).toBe(created.session.id);
+      order.push("second");
     });
-    await Promise.resolve();
-    release?.();
+    expect(order).toEqual(["first", "second"]);
     await Promise.all([first, second]);
 
     await expect(

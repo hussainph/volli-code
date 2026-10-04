@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import Database from "better-sqlite3";
 import { openVolliDb } from "./index";
 import { beginDatabaseRecovery } from "./recovery-pending";
+import { throwTransactionViolation } from "./transaction-gate";
 
 let dir: string | undefined;
 
@@ -16,6 +17,35 @@ afterEach(() => {
 });
 
 describe("openVolliDb read tuning (VC-355)", () => {
+  it("installs the strict runtime ownership guard only after sole-owner migrations", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-ownership-"));
+    const db = openVolliDb(join(dir, "volli.db"), {
+      onTransactionViolation: throwTransactionViolation,
+    });
+    try {
+      expect(() => db.prepare("/* cached control */ BEGIN").run()).toThrow("transaction ownership");
+      expect(db.inTransaction).toBe(false);
+      expect(() => db.transaction(() => db.exec("SELECT 1"))()).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("defaults to a logging-only guard for standalone/production opens", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-ownership-"));
+    const db = openVolliDb(join(dir, "volli.db"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() => db.exec("BEGIN")).not.toThrow();
+      expect(db.inTransaction).toBe(true);
+      expect(log).toHaveBeenCalled();
+      db.exec("ROLLBACK");
+    } finally {
+      log.mockRestore();
+      db.close();
+    }
+  });
+
   it("applies the read-tuning pragmas and bounds the WAL", () => {
     dir = mkdtempSync(join(tmpdir(), "volli-db-tuning-"));
     const db = openVolliDb(join(dir, "volli.db"));

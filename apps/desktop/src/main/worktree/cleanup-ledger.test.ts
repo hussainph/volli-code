@@ -155,7 +155,7 @@ describe("SqliteOrphanCleanupLedger", () => {
   it("rolls back a transaction that throws, leaving no half-written command", async () => {
     const ledger = new SqliteOrphanCleanupLedger(ctx.db);
     await expect(
-      ledger.transaction(async (tx) => {
+      ledger.transaction((tx) => {
         tx.insertCommand({
           id: "cmd-x",
           intent: {

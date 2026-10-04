@@ -16,14 +16,12 @@ import type {
   ColumnAutomationOrder,
   PromptResource,
   ResolvedAutomationModel,
+  Synchronous,
   TicketStatus,
   ValidAutomationRuntime,
 } from "@volli/shared";
 
 import { sessionCreateCommandId } from "../session-runtime/sessions";
-
-/** A value a durable host may answer synchronously today or asynchronously later. */
-type Awaitable<T> = T | Promise<T>;
 
 export interface AutomationCommand {
   id: string;
@@ -275,26 +273,26 @@ export interface AutomationRunDelivery {
 
 /** The storage port. It is intentionally free of Electron and SQLite types. */
 export interface AutomationLedgerTransaction {
-  getCommand(commandId: string): Awaitable<AutomationCommand | null>;
-  insertCommand(command: AutomationCommand): Awaitable<void>;
-  appendEvent(event: AutomationEvent): Awaitable<void>;
-  listReceipts(commandId: string): Awaitable<readonly StoredAutomationReceipt[]>;
-  appendReceipt(receipt: StoredAutomationReceipt): Awaitable<void>;
+  getCommand(commandId: string): AutomationCommand | null;
+  insertCommand(command: AutomationCommand): void;
+  appendEvent(event: AutomationEvent): void;
+  listReceipts(commandId: string): readonly StoredAutomationReceipt[];
+  appendReceipt(receipt: StoredAutomationReceipt): void;
 
-  getAutomation(automationId: string): Awaitable<Automation | null>;
-  insertAutomation(automation: Automation): Awaitable<void>;
-  updateAutomation(automation: Automation): Awaitable<void>;
-  deleteAutomation(automationId: string): Awaitable<boolean>;
+  getAutomation(automationId: string): Automation | null;
+  insertAutomation(automation: Automation): void;
+  updateAutomation(automation: Automation): void;
+  deleteAutomation(automationId: string): boolean;
 
   /** The machine-local projection of "switched on here" — `enablement.ts` owns its storage. */
-  enabledAutomationIds(): Awaitable<readonly string[]>;
+  enabledAutomationIds(): readonly string[];
   /** Replaces that set whole, inside the same transaction as the event that decided it. */
-  putEnabledAutomationIds(ids: readonly string[], recordedAt: number): Awaitable<readonly string[]>;
+  putEnabledAutomationIds(ids: readonly string[], recordedAt: number): readonly string[];
 
   /** The other machine-local projection: which Automation each of a project's columns arms. */
-  columnArmings(projectId: string): Awaitable<readonly ColumnArming[]>;
+  columnArmings(projectId: string): readonly ColumnArming[];
   /** And the third: the rank each of a project's columns gives its Offered list. */
-  columnOrders(projectId: string): Awaitable<readonly ColumnAutomationOrder[]>;
+  columnOrders(projectId: string): readonly ColumnAutomationOrder[];
   /**
    * Writes one column's rank and answers with the project's whole new set,
    * inside the same transaction as the event that decided it. An empty list is
@@ -303,7 +301,7 @@ export interface AutomationLedgerTransaction {
   putColumnOrder(
     input: { projectId: string; status: TicketStatus; rankedAutomationIds: readonly string[] },
     recordedAt: number,
-  ): Awaitable<readonly ColumnAutomationOrder[]>;
+  ): readonly ColumnAutomationOrder[];
   /**
    * Arms one column, or disarms it with `automationId: null`, and answers with
    * the project's whole new set. Called inside the same transaction as the
@@ -312,34 +310,34 @@ export interface AutomationLedgerTransaction {
   putColumnArming(
     input: { projectId: string; status: TicketStatus; automationId: string | null },
     recordedAt: number,
-  ): Awaitable<readonly ColumnArming[]>;
+  ): readonly ColumnArming[];
 
   /** Records one Skipped occurrence, inside the transaction that evented it. */
-  insertSkippedOccurrence(skip: AutomationSkippedOccurrence): Awaitable<void>;
+  insertSkippedOccurrence(skip: AutomationSkippedOccurrence): void;
 
   /** Indexes an accepted Run's stable Session-create intent before mint begins. */
   insertRunSessionMintIntent(input: {
     automationCommandId: string;
     sessionCreateCommandId: string;
     recordedAt: number;
-  }): Awaitable<void>;
+  }): void;
 
-  getRun(runId: string): Awaitable<AutomationRun | null>;
-  insertRun(run: AutomationRun): Awaitable<void>;
-  getDelivery(runId: string): Awaitable<AutomationRunDelivery | null>;
-  insertDelivery(delivery: AutomationRunDelivery): Awaitable<void>;
-  markDeliveryDelivered(runId: string, deliveredAt: number): Awaitable<void>;
+  getRun(runId: string): AutomationRun | null;
+  insertRun(run: AutomationRun): void;
+  getDelivery(runId: string): AutomationRunDelivery | null;
+  insertDelivery(delivery: AutomationRunDelivery): void;
+  markDeliveryDelivered(runId: string, deliveredAt: number): void;
 
   /** Every accepted Run not yet terminal, used to resume a crash window. */
-  listRecoverableRunPlans(): Awaitable<readonly AutomationRunPlan[]>;
+  listRecoverableRunPlans(): readonly AutomationRunPlan[];
   /** Durable first-message intents not yet acknowledged by the Session runtime. */
-  listPendingDeliveriesForSession(sessionId: string): Awaitable<readonly AutomationRunDelivery[]>;
+  listPendingDeliveriesForSession(sessionId: string): readonly AutomationRunDelivery[];
   /** All pending first-message intents, used by process-start recovery. */
-  listPendingDeliveries(): Awaitable<readonly AutomationRunDelivery[]>;
+  listPendingDeliveries(): readonly AutomationRunDelivery[];
 }
 
 export interface AutomationLedger {
-  transaction<T>(work: (transaction: AutomationLedgerTransaction) => Awaitable<T>): Promise<T>;
+  transaction<T>(work: (transaction: AutomationLedgerTransaction) => Synchronous<T>): Promise<T>;
 }
 
 export interface AutomationEnginePorts {
@@ -495,22 +493,19 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     result,
     recordedAt,
   });
-  async function recordReceipt(
-    tx: AutomationLedgerTransaction,
-    stored: StoredAutomationReceipt,
-  ): Promise<void> {
-    await tx.appendReceipt(stored);
-    await tx.appendEvent(
+  function recordReceipt(tx: AutomationLedgerTransaction, stored: StoredAutomationReceipt): void {
+    tx.appendReceipt(stored);
+    tx.appendEvent(
       event(stored.commandId, "command.receipt.recorded", { receipt: stored }, stored.recordedAt),
     );
   }
 
-  async function existingCommand(
+  function existingCommand(
     tx: AutomationLedgerTransaction,
     commandId: string,
     intent: AutomationCommandIntent,
-  ): Promise<AutomationCommand | null> {
-    const existing = await tx.getCommand(commandId);
+  ): AutomationCommand | null {
+    const existing = tx.getCommand(commandId);
     if (existing === null) return null;
     if (!sameJson(readIntent(existing.intent), readIntent(intent))) {
       throw new AutomationEngineConflictError(
@@ -520,13 +515,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     return existing;
   }
 
-  async function replay<T>(
+  function replay<T>(
     tx: AutomationLedgerTransaction,
     commandId: string,
     expected: AutomationReceiptResult["kind"],
     select: (result: AutomationReceiptResult) => T | null,
-  ): Promise<AutomationCommandOutcome<T>> {
-    const receipts = await tx.listReceipts(commandId);
+  ): AutomationCommandOutcome<T> {
+    const receipts = tx.listReceipts(commandId);
     const latest = receipts.at(-1);
     if (latest === undefined) {
       throw new AutomationEngineConflictError(
@@ -567,8 +562,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         trigger: input.trigger,
         runtime: input.runtime,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.created", (result) =>
             result.kind === "automation.created" ? result.automation : null,
@@ -586,17 +581,17 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           createdAt: now,
           updatedAt: now,
         };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
-        await tx.appendEvent(event(command.id, "automation.created", { automation }, now));
-        await tx.insertAutomation(automation);
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.appendEvent(event(command.id, "automation.created", { automation }, now));
+        tx.insertAutomation(automation);
         const completed = receipt(
           command.id,
           "completed",
           { kind: "automation.created", automation },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: automation, receipt: publicReceipt(completed) };
       });
     },
@@ -610,8 +605,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         trigger: input.trigger,
         runtime: input.runtime,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.updated", (result) =>
             result.kind === "automation.updated" ? result.automation : null,
@@ -619,9 +614,9 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
-        const prior = await tx.getAutomation(input.automationId);
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        const prior = tx.getAutomation(input.automationId);
         if (prior === null) {
           const rejected = receipt(
             command.id,
@@ -629,7 +624,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             { kind: "automation.not-found", automationId: input.automationId },
             now,
           );
-          await recordReceipt(tx, rejected);
+          recordReceipt(tx, rejected);
           return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
         }
         const automation: Automation = {
@@ -640,15 +635,15 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           runtime: input.runtime,
           updatedAt: now,
         };
-        await tx.appendEvent(event(command.id, "automation.updated", { automation }, now));
-        await tx.updateAutomation(automation);
+        tx.appendEvent(event(command.id, "automation.updated", { automation }, now));
+        tx.updateAutomation(automation);
         const completed = receipt(
           command.id,
           "completed",
           { kind: "automation.updated", automation },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: automation, receipt: publicReceipt(completed) };
       });
     },
@@ -658,8 +653,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         kind: "automation.delete",
         automationId: input.automationId,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.deleted", (result) =>
             result.kind === "automation.deleted" ? undefined : null,
@@ -667,9 +662,9 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
-        const prior = await tx.getAutomation(input.automationId);
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        const prior = tx.getAutomation(input.automationId);
         if (prior === null) {
           const rejected = receipt(
             command.id,
@@ -677,13 +672,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             { kind: "automation.not-found", automationId: input.automationId },
             now,
           );
-          await recordReceipt(tx, rejected);
+          recordReceipt(tx, rejected);
           return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
         }
-        await tx.appendEvent(
+        tx.appendEvent(
           event(command.id, "automation.deleted", { automationId: input.automationId }, now),
         );
-        const deleted = await tx.deleteAutomation(input.automationId);
+        const deleted = tx.deleteAutomation(input.automationId);
         if (!deleted) {
           throw new AutomationEngineConflictError(
             `Automation ${input.automationId} disappeared while deleting`,
@@ -695,7 +690,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           { kind: "automation.deleted", automationId: input.automationId },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: undefined, receipt: publicReceipt(completed) };
       });
     },
@@ -706,8 +701,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         automationId: input.automationId,
         enabled: input.enabled,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.enablement.set", (result) =>
             result.kind === "automation.enablement.set" ? result.enabledAutomationIds : null,
@@ -715,13 +710,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
         // The switch names a record, so a record that is gone cannot hold one:
         // the same refusal update and delete give, with the same receipt to
         // replay. It also keeps the stored set from collecting ids for
         // Automations nothing lists.
-        const target = await tx.getAutomation(input.automationId);
+        const target = tx.getAutomation(input.automationId);
         if (target === null) {
           const rejected = receipt(
             command.id,
@@ -729,14 +724,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             { kind: "automation.not-found", automationId: input.automationId },
             now,
           );
-          await recordReceipt(tx, rejected);
+          recordReceipt(tx, rejected);
           return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
         }
-        const current = new Set(await tx.enabledAutomationIds());
+        const current = new Set(tx.enabledAutomationIds());
         if (input.enabled) current.add(input.automationId);
         else current.delete(input.automationId);
         const enabledAutomationIds = [...current].toSorted();
-        await tx.appendEvent(
+        tx.appendEvent(
           event(
             command.id,
             "automation.enablement.changed",
@@ -744,7 +739,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             now,
           ),
         );
-        await tx.putEnabledAutomationIds(enabledAutomationIds, now);
+        tx.putEnabledAutomationIds(enabledAutomationIds, now);
         const completed = receipt(
           command.id,
           "completed",
@@ -756,13 +751,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: enabledAutomationIds, receipt: publicReceipt(completed) };
       });
     },
 
     async enabledAutomationIds() {
-      return ports.ledger.transaction(async (tx) => [...(await tx.enabledAutomationIds())]);
+      return ports.ledger.transaction((tx) => [...tx.enabledAutomationIds()]);
     },
 
     async setColumnArming(input) {
@@ -772,8 +767,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         status: input.status,
         automationId: input.automationId,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.arming.set", (result) =>
             result.kind === "automation.arming.set" ? result.armings : null,
@@ -781,14 +776,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
         // Arming names a record, so a record that is gone cannot be armed: the
         // same refusal and the same replayable receipt the switch gives. A
         // disarm names none and therefore skips this — emptying a column is
         // valid however little is left to point at.
         if (input.automationId !== null) {
-          const target = await tx.getAutomation(input.automationId);
+          const target = tx.getAutomation(input.automationId);
           if (target === null) {
             const rejected = receipt(
               command.id,
@@ -796,7 +791,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
               { kind: "automation.not-found", automationId: input.automationId },
               now,
             );
-            await recordReceipt(tx, rejected);
+            recordReceipt(tx, rejected);
             return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
           }
         }
@@ -806,16 +801,16 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         // history and the row can never disagree about what a column arms: they
         // are the same value, and one COMMIT decides whether both happened.
         const armings = [
-          ...(await tx.putColumnArming(
+          ...tx.putColumnArming(
             {
               projectId: input.projectId,
               status: input.status,
               automationId: input.automationId,
             },
             now,
-          )),
+          ),
         ];
-        await tx.appendEvent(
+        tx.appendEvent(
           event(
             command.id,
             "automation.arming.changed",
@@ -840,13 +835,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: armings, receipt: publicReceipt(completed) };
       });
     },
 
     async columnArmings(projectId) {
-      return ports.ledger.transaction(async (tx) => [...(await tx.columnArmings(projectId))]);
+      return ports.ledger.transaction((tx) => [...tx.columnArmings(projectId)]);
     },
 
     async setColumnOrder(input) {
@@ -856,8 +851,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         status: input.status,
         rankedAutomationIds: input.rankedAutomationIds,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.column-order.set", (result) =>
             result.kind === "automation.column-order.set" ? result.orders : null,
@@ -865,8 +860,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
         // No record guard, unlike arming: a rank is a LIST and it is
         // stale-tolerant by construction — an id naming an Automation this
         // column no longer offers is filtered out on every read
@@ -874,20 +869,20 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         // because one id in it went stale would make a lane un-arrangeable
         // until someone found the row that had moved.
         const orders = [
-          ...(await tx.putColumnOrder(
+          ...tx.putColumnOrder(
             {
               projectId: input.projectId,
               status: input.status,
               rankedAutomationIds: input.rankedAutomationIds,
             },
             now,
-          )),
+          ),
         ];
         const rankedAutomationIds = [...input.rankedAutomationIds];
         // The projection's own answer is what both the event and the receipt
         // quote, exactly as the arming's does: one COMMIT decides whether the
         // row and the history of the row both happened.
-        await tx.appendEvent(
+        tx.appendEvent(
           event(
             command.id,
             "automation.column-order.changed",
@@ -912,13 +907,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: orders, receipt: publicReceipt(completed) };
       });
     },
 
     async columnOrders(projectId) {
-      return ports.ledger.transaction(async (tx) => [...(await tx.columnOrders(projectId))]);
+      return ports.ledger.transaction((tx) => [...tx.columnOrders(projectId)]);
     },
 
     async recordSkip(input) {
@@ -926,8 +921,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         kind: "automation.record-skip",
         skip: input.skip,
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await existingCommand(tx, input.commandId, intent);
+      return ports.ledger.transaction((tx) => {
+        const existing = existingCommand(tx, input.commandId, intent);
         if (existing !== null) {
           return replay(tx, input.commandId, "automation.skip.recorded", (result) =>
             result.kind === "automation.skip.recorded" ? result.skip : null,
@@ -935,13 +930,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
         const now = ports.now();
         const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
         // A skip names a record, so a record that is gone cannot have missed
         // anything: the same refusal and the same replayable receipt every other
         // write gives. It also keeps the projection's foreign key satisfiable —
         // a skip offers "Run now", and there would be nothing left to run.
-        const target = await tx.getAutomation(input.skip.automationId);
+        const target = tx.getAutomation(input.skip.automationId);
         if (target === null) {
           const rejected = receipt(
             command.id,
@@ -949,7 +944,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             { kind: "automation.not-found", automationId: input.skip.automationId },
             now,
           );
-          await recordReceipt(tx, rejected);
+          recordReceipt(tx, rejected);
           return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
         }
         const skip: AutomationSkippedOccurrence = {
@@ -962,15 +957,15 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           reason: input.skip.reason,
           recordedAt: now,
         };
-        await tx.appendEvent(event(command.id, "automation.skip.recorded", { skip }, now));
-        await tx.insertSkippedOccurrence(skip);
+        tx.appendEvent(event(command.id, "automation.skip.recorded", { skip }, now));
+        tx.insertSkippedOccurrence(skip);
         const completed = receipt(
           command.id,
           "completed",
           { kind: "automation.skip.recorded", skip },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: skip, receipt: publicReceipt(completed) };
       });
     },
@@ -995,11 +990,11 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         messageCommandId: ports.nextId(),
         messageId: ports.nextId(),
       });
-      return ports.ledger.transaction(async (tx) => {
+      return ports.ledger.transaction((tx) => {
         // First find a replay by command id. It must outrank the Ticket guard:
         // a network retry of the accepted Run is the same Run, not a second
         // contender that happens to see itself in flight.
-        const existing = await tx.getCommand(input.commandId);
+        const existing = tx.getCommand(input.commandId);
         if (existing !== null) {
           if (existing.intent.kind !== "automation.run") {
             throw new AutomationEngineConflictError(
@@ -1029,7 +1024,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
               `Automation command ${input.commandId} was already accepted with different intent`,
             );
           }
-          const latest = (await tx.listReceipts(input.commandId)).at(-1);
+          const latest = tx.listReceipts(input.commandId).at(-1);
           if (latest === undefined) {
             throw new AutomationEngineConflictError(
               `Automation Run command ${input.commandId} has no durable receipt`,
@@ -1054,7 +1049,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           }
           return { ok: true, value: plan, receipt: publicReceipt(latest), replayed: true };
         }
-        const pending = await tx.listRecoverableRunPlans();
+        const pending = tx.listRecoverableRunPlans();
         if (pending.some((plan) => sameRunTarget(plan, input))) {
           const now = ports.now();
           const plan = draftPlan();
@@ -1063,8 +1058,8 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             intent: { kind: "automation.run", plan },
             createdAt: now,
           };
-          await tx.insertCommand(command);
-          await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+          tx.insertCommand(command);
+          tx.appendEvent(event(command.id, "command.recorded", { command }, now));
           const rejected = receipt(
             command.id,
             "rejected",
@@ -1075,7 +1070,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             },
             now,
           );
-          await recordReceipt(tx, rejected);
+          recordReceipt(tx, rejected);
           return {
             ok: false,
             code: "RUN_IN_FLIGHT",
@@ -1091,13 +1086,13 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           intent: { kind: "automation.run", plan },
           createdAt: now,
         };
-        await tx.insertCommand(command);
-        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
-        await tx.appendEvent(event(command.id, "automation.run.accepted", { plan }, now));
+        tx.insertCommand(command);
+        tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        tx.appendEvent(event(command.id, "automation.run.accepted", { plan }, now));
         // Project Runs have no Ticket event to carry their launch actor. Index
         // the exact command `sessions.create` will persist, in this same
         // accepted-plan transaction and before the host can begin minting.
-        await tx.insertRunSessionMintIntent({
+        tx.insertRunSessionMintIntent({
           automationCommandId: command.id,
           sessionCreateCommandId: sessionCreateCommandId(plan.sessionOperationId),
           recordedAt: now,
@@ -1108,21 +1103,21 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           { kind: "automation.run.accepted", plan },
           now,
         );
-        await recordReceipt(tx, accepted);
+        recordReceipt(tx, accepted);
         return { ok: true, value: plan, receipt: publicReceipt(accepted) };
       });
     },
 
     async completeRun(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const command = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const command = tx.getCommand(input.commandId);
         if (command === null || command.intent.kind !== "automation.run") {
           throw new AutomationEngineConflictError(
             `Automation Run command ${input.commandId} was not accepted`,
           );
         }
         const plan = readRunPlan(command.intent.plan);
-        const existing = await tx.getRun(plan.runId);
+        const existing = tx.getRun(plan.runId);
         if (existing !== null) {
           if (
             existing.sessionId !== input.sessionId ||
@@ -1134,12 +1129,12 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
               `Automation Run ${plan.runId} was already completed with different Session evidence`,
             );
           }
-          const replayed = await replay(tx, command.id, "automation.run.completed", (result) =>
+          const replayed = replay(tx, command.id, "automation.run.completed", (result) =>
             result.kind === "automation.run.completed" ? result.run : null,
           );
           return replayed;
         }
-        const receipts = await tx.listReceipts(command.id);
+        const receipts = tx.listReceipts(command.id);
         const terminal = terminalReceipt(receipts);
         if (terminal?.result.kind === "automation.run.rejected") {
           return {
@@ -1174,29 +1169,29 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           createdAt: now,
           deliveredAt: null,
         };
-        await tx.appendEvent(event(command.id, "automation.run.completed", { run, delivery }, now));
-        await tx.insertRun(run);
-        await tx.insertDelivery(delivery);
+        tx.appendEvent(event(command.id, "automation.run.completed", { run, delivery }, now));
+        tx.insertRun(run);
+        tx.insertDelivery(delivery);
         const completed = receipt(
           command.id,
           "completed",
           { kind: "automation.run.completed", run },
           now,
         );
-        await recordReceipt(tx, completed);
+        recordReceipt(tx, completed);
         return { ok: true, value: run, receipt: publicReceipt(completed) };
       });
     },
 
     async rejectRun(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const command = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const command = tx.getCommand(input.commandId);
         if (command === null || command.intent.kind !== "automation.run") {
           throw new AutomationEngineConflictError(
             `Automation Run command ${input.commandId} was not accepted`,
           );
         }
-        const receipts = await tx.listReceipts(command.id);
+        const receipts = tx.listReceipts(command.id);
         const terminal = terminalReceipt(receipts);
         if (terminal !== null) {
           if (terminal.result.kind === "automation.run.rejected") {
@@ -1218,7 +1213,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           );
         }
         const now = ports.now();
-        await tx.appendEvent(
+        tx.appendEvent(
           event(
             command.id,
             "automation.run.rejected",
@@ -1232,7 +1227,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           { kind: "automation.run.rejected", code: input.code, error: input.error },
           now,
         );
-        await recordReceipt(tx, rejected);
+        recordReceipt(tx, rejected);
         return {
           ok: false,
           code: input.code,
@@ -1243,12 +1238,12 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async hasCommand(commandId) {
-      return ports.ledger.transaction(async (tx) => (await tx.getCommand(commandId)) !== null);
+      return ports.ledger.transaction((tx) => tx.getCommand(commandId) !== null);
     },
 
     async runPlan(commandId) {
-      return ports.ledger.transaction(async (tx) => {
-        const command = await tx.getCommand(commandId);
+      return ports.ledger.transaction((tx) => {
+        const command = tx.getCommand(commandId);
         if (command === null) return null;
         if (command.intent.kind !== "automation.run") {
           throw new AutomationEngineConflictError(
@@ -1260,15 +1255,15 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async replayRun(commandId) {
-      return ports.ledger.transaction(async (tx) => {
-        const command = await tx.getCommand(commandId);
+      return ports.ledger.transaction((tx) => {
+        const command = tx.getCommand(commandId);
         if (command === null) return null;
         if (command.intent.kind !== "automation.run") {
           throw new AutomationEngineConflictError(
             `Automation command ${commandId} was already used for ${command.intent.kind}`,
           );
         }
-        const latest = (await tx.listReceipts(command.id)).at(-1);
+        const latest = tx.listReceipts(command.id).at(-1);
         if (latest === undefined) {
           throw new AutomationEngineConflictError(
             `Automation Run command ${command.id} has no durable receipt`,
@@ -1306,9 +1301,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async recoverableRunPlans() {
-      return ports.ledger.transaction(async (tx) =>
-        (await tx.listRecoverableRunPlans()).map(readRunPlan),
-      );
+      return ports.ledger.transaction((tx) => tx.listRecoverableRunPlans().map(readRunPlan));
     },
 
     async pendingDeliveriesForSession(sessionId) {
@@ -1320,11 +1313,11 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async markDeliveryDelivered(input) {
-      await ports.ledger.transaction(async (tx) => {
-        const delivery = await tx.getDelivery(input.runId);
+      await ports.ledger.transaction((tx) => {
+        const delivery = tx.getDelivery(input.runId);
         if (delivery === null || delivery.deliveredAt !== null) return;
         const now = ports.now();
-        await tx.appendEvent(
+        tx.appendEvent(
           event(
             delivery.automationCommandId,
             "automation.run.instructions-delivered",
@@ -1332,7 +1325,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             now,
           ),
         );
-        await tx.markDeliveryDelivered(input.runId, now);
+        tx.markDeliveryDelivered(input.runId, now);
       });
     },
   };

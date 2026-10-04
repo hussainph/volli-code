@@ -14,6 +14,7 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionProjectionCheckpoint,
+  Synchronous,
   SessionUsageAttribution,
   SessionUsageEntry,
   SessionUsageScope,
@@ -59,7 +60,7 @@ class InMemorySessionLedger implements SessionLedger {
   #tail: Promise<void> = Promise.resolve();
 
   async transaction<T>(
-    work: (transaction: SessionLedgerTransaction) => Promise<T> | T,
+    work: (transaction: SessionLedgerTransaction) => Synchronous<T>,
   ): Promise<T> {
     const previous = this.#tail;
     let release: (() => void) | undefined;
@@ -72,7 +73,7 @@ class InMemorySessionLedger implements SessionLedger {
     const transaction = this.#scopedTransaction(() => open);
 
     try {
-      return await work(transaction);
+      return work(transaction) as T;
     } catch (error) {
       this.#restore(checkpoint);
       throw error;

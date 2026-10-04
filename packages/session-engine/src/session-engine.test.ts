@@ -3613,6 +3613,23 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
 });
 
 describe("InMemorySessionLedger", () => {
+  it("requires synchronous work while keeping transaction methods synchronous", () => {
+    const ledger = createInMemorySessionLedger();
+    expectTypeOf<
+      ReturnType<SessionLedgerTransaction["getSession"]>
+    >().toEqualTypeOf<Session | null>();
+    expectTypeOf<ReturnType<SessionLedgerTransaction["listSessions"]>>().toEqualTypeOf<
+      readonly Session[]
+    >();
+
+    // Type-check this function without calling it or opening a transaction.
+    const invalid = () => {
+      // @ts-expect-error -- Transaction callbacks must not return PromiseLike values.
+      return ledger.transaction(async () => "async result");
+    };
+    expectTypeOf(invalid).toBeFunction();
+  });
+
   it("exposes only a scoped transaction facade and closes captured facades", async () => {
     const ledger = createInMemorySessionLedger();
     expectTypeOf(ledger).toEqualTypeOf<SessionLedger>();

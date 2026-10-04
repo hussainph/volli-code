@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /**
  * `blobs` + `blob_links` repo (migration 020): row↔domain mapping for
  * attachment bytes and the links naming where each one hangs. Replaces
@@ -232,7 +233,7 @@ export function createBlobLink(
   input: CreateBlobLinkInput,
   now: number,
 ): BlobLink {
-  const run = db.transaction((): BlobLink => {
+  return withTransaction(db, (): BlobLink => {
     const blob = getBlob(db, input.blobHash);
     if (!blob) throw new Error(`Unknown blob: ${input.blobHash}`);
     // Attaching the same file to the same place twice is idempotent. Content
@@ -278,7 +279,6 @@ export function createBlobLink(
     }
     return link;
   });
-  return run();
 }
 
 /**
@@ -294,7 +294,7 @@ export function deleteBlobLink(
   now: number,
   eventActor?: TicketEventActor,
 ): BlobLink | undefined {
-  const run = db.transaction((): BlobLink | undefined => {
+  return withTransaction(db, (): BlobLink | undefined => {
     const link = getLink(db, linkId);
     if (!link) return undefined;
     prepared(db, "DELETE FROM blob_links WHERE id = ?").run(linkId);
@@ -309,7 +309,6 @@ export function deleteBlobLink(
     }
     return link;
   });
-  return run();
 }
 
 /**

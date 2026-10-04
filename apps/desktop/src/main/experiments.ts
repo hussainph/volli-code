@@ -11,7 +11,7 @@ import {
 } from "@volli/shared";
 
 import { getAppState, setAppState } from "./db/app-state-repo";
-import { getTransactionGate } from "./db/transaction-gate";
+import { withTransaction } from "./db/transaction-gate";
 
 /** Host-level settings, not workspace data; classification lives beside the registry. */
 export const EXPERIMENTS_APP_STATE_KEY = "volli:experimental-flags";
@@ -57,7 +57,7 @@ export class ExperimentalSettings {
     if (this.#environment.includes(id)) throw new Error("Experiment is set by environment");
     const db = this.db;
     if (db === null) throw new Error("Experimental settings storage is unavailable");
-    const stored = await getTransactionGate(db).transaction(() => {
+    const stored = withTransaction(db, () => {
       const raw = serializeExperimentUpdate(
         getAppState(db, EXPERIMENTS_APP_STATE_KEY),
         id,

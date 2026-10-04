@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { getAppState, setAppState } from "./db/app-state-repo";
 import { openRawDb, openTestDb, type TestDb } from "./db/test-helpers";
-import { getTransactionGate } from "./db/transaction-gate";
+import { settleTransaction } from "./db/transaction-gate";
 import {
   ExperimentalSettings,
   EXPERIMENTS_APP_STATE_KEY,
@@ -147,19 +147,22 @@ describe("experimental host settings", () => {
     await expect(setExperiment("cloud", true)).rejects.toThrow("storage is unavailable");
   });
 
-  it("waits for the shared transaction gate and exposes only committed flags", async () => {
+  it("publishes committed flags without joining an invalid awaited transaction", async () => {
     boot();
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const other = getTransactionGate(ctx!.db).transaction(async () => {
+    // @ts-expect-error Transaction work cannot span an await.
+    const other = settleTransaction(ctx!.db, async () => {
       await held;
       throw new Error("other writer rolled back");
     });
-    const rejected = expect(other).rejects.toThrow("other writer rolled back");
+    const rejected = expect(other).rejects.toThrow("must be synchronous");
     const saving = setExperiment("cloud", true);
-    expect(isExperimentEnabled("cloud")).toBe(false);
+    expect(ctx!.db.inTransaction).toBe(false);
+    expect(isExperimentEnabled("cloud")).toBe(true);
+    expect(new ExperimentalSettings(ctx!.db, undefined).isEnabled("cloud")).toBe(true);
     release();
     await rejected;
     await saving;

@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /**
  * `tickets` table repo: row↔domain mapping (snake_case → camelCase,
  * `uses_worktree` int→bool, `position`→domain `order`) plus the label-name
@@ -549,7 +550,7 @@ export function setTicketRetentionKeep(
  * does), so it composes with the ticket INSERT it's paired with.
  */
 export function nextTicketNumberForProject(db: Database.Database, projectId: string): number {
-  const allocate = db.transaction((): number => {
+  return withTransaction(db, (): number => {
     const project = prepared<[string], { next_ticket_number: number }>(
       db,
       "SELECT next_ticket_number FROM projects WHERE id = ?",
@@ -569,7 +570,6 @@ export function nextTicketNumberForProject(db: Database.Database, projectId: str
     );
     return allocated;
   });
-  return allocate();
 }
 
 /**
