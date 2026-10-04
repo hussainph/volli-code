@@ -1096,13 +1096,13 @@ describe("createAutomationRunner", () => {
       messageCommandId: randomUUID(),
       messageId: randomUUID(),
     } as unknown as AutomationRunPlan;
-    await new SqliteAutomationLedger(ctx.db).transaction(async (tx) => {
-      await tx.insertCommand({
+    await new SqliteAutomationLedger(ctx.db).transaction((tx) => {
+      tx.insertCommand({
         id: commandId,
         intent: { kind: "automation.run", plan: legacyPlan },
         createdAt: 1,
       });
-      await tx.appendReceipt({
+      tx.appendReceipt({
         id: randomUUID(),
         commandId,
         status: "accepted",

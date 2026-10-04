@@ -213,9 +213,9 @@ describe("cleanup command core", () => {
         preservation: [],
         items: [planItem()],
       };
-      await ledger.transaction(async (tx) => {
-        await tx.insertCommand({ id: "cmd-old", intent, createdAt: 1 });
-        await tx.appendFact({
+      await ledger.transaction((tx) => {
+        tx.insertCommand({ id: "cmd-old", intent, createdAt: 1 });
+        tx.appendFact({
           id: "f1",
           commandId: "cmd-old",
           kind: "cleanup.accepted",
@@ -299,8 +299,8 @@ describe("cleanup command core", () => {
     const { engine, ledger } = engineWith();
     // Not a state this core writes — reachable only from outside — but the
     // refusal path must still be able to answer for it.
-    await ledger.transaction(async (tx) => {
-      await tx.insertCommand({
+    await ledger.transaction((tx) => {
+      tx.insertCommand({
         id: "cmd-orphaned",
         intent: {
           kind: "orphan.cleanup",

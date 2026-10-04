@@ -17,6 +17,7 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
+import { withTransaction } from "./db/transaction-gate";
 import { createComment } from "./db/comments-repo";
 import { recordTicketEvent } from "./db/events-repo";
 import { createSignal } from "./db/signals-repo";
@@ -114,7 +115,7 @@ export function createTicketCommand(
   if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
     throw new Error("Invalid base branch name");
   }
-  return db.transaction((): Ticket => {
+  return withTransaction(db, (): Ticket => {
     const ticket = createTicket({
       id: input.id,
       projectId: input.projectId,
@@ -152,7 +153,7 @@ export function createTicketCommand(
     const created = getTicket(db, ticket.id);
     if (!created) throw new Error("Unknown ticket");
     return created;
-  })();
+  });
 }
 
 export function moveTicketCommand(
@@ -160,7 +161,7 @@ export function moveTicketCommand(
   input: { projectId: string; ticketId: string; toStatus: TicketStatus; toIndex: number },
   context: TicketCommandContext,
 ): Ticket[] {
-  return db.transaction((): Ticket[] => {
+  return withTransaction(db, (): Ticket[] => {
     requireLiveTicket(db, input.ticketId, "move");
     const before = listTicketsByProject(db, input.projectId);
     const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
@@ -185,7 +186,7 @@ export function moveTicketCommand(
       }
     }
     return after;
-  })();
+  });
 }
 
 /**
@@ -198,7 +199,7 @@ export function moveTicketsCommand(
   input: { projectId: string; ticketIds: string[]; toStatus: TicketStatus; toIndex: number },
   context: TicketCommandContext,
 ): Ticket[] {
-  return db.transaction((): Ticket[] => {
+  return withTransaction(db, (): Ticket[] => {
     const ticketIds = [...new Set(input.ticketIds)];
     for (const ticketId of ticketIds) requireLiveTicket(db, ticketId, "move");
 
@@ -238,7 +239,7 @@ export function moveTicketsCommand(
       }
     }
     return after;
-  })();
+  });
 }
 
 /**
@@ -265,7 +266,7 @@ export function setTicketPriorityCommand(
   input: { ticketId: string; priority: TicketPriority },
   context: TicketCommandContext,
 ): Ticket {
-  return db.transaction((): Ticket => {
+  return withTransaction(db, (): Ticket => {
     const row = requireLiveTicket(db, input.ticketId, "change the priority of");
     if (row.priority !== input.priority) {
       updateTicketPriority(db, input.ticketId, input.priority, context.now);
@@ -280,7 +281,7 @@ export function setTicketPriorityCommand(
     const ticket = getTicket(db, input.ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
-  })();
+  });
 }
 
 export function updateTicketFieldsCommand(
@@ -299,7 +300,7 @@ export function updateTicketFieldsCommand(
   if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
     throw new Error("Invalid base branch name");
   }
-  return db.transaction((): Ticket => {
+  return withTransaction(db, (): Ticket => {
     const row = options.allowArchived
       ? requireTicket(db, input.ticketId)
       : requireLiveTicket(db, input.ticketId, "update");
@@ -393,7 +394,7 @@ export function updateTicketFieldsCommand(
     const ticket = getTicket(db, input.ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
-  })();
+  });
 }
 
 export function setTicketLabelsCommand(
@@ -401,7 +402,7 @@ export function setTicketLabelsCommand(
   input: { ticketId: string; labels: string[] },
   context: TicketCommandContext,
 ): Ticket {
-  return db.transaction((): Ticket => {
+  return withTransaction(db, (): Ticket => {
     const row = requireLiveTicket(db, input.ticketId, "change the labels of");
     const current = listTicketLabels(db, input.ticketId);
     const requested = resolveRequestedLabels(db, row.project_id, input.labels, context.now);
@@ -428,7 +429,7 @@ export function setTicketLabelsCommand(
     const ticket = getTicket(db, input.ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
-  })();
+  });
 }
 
 /** The stable source, target, and complete Ticket blast radius of one Label merge. */
@@ -463,7 +464,7 @@ export function mergeLabelsCommand(
   input: { fromLabelId: string; intoLabelId: string },
   context: TicketCommandContext,
 ): LabelMergePlan {
-  return db.transaction(() => {
+  return withTransaction(db, () => {
     const plan = planLabelMerge(db, input);
     const alreadyWearingTarget = new Set(
       listTicketsWithLabel(db, plan.into.id).map((ticket) => ticket.id),
@@ -491,7 +492,7 @@ export function mergeLabelsCommand(
       );
     }
     return plan;
-  })();
+  });
 }
 
 export function createTicketCommentCommand(
@@ -555,13 +556,13 @@ export function archiveTicketCommand(
   ticketId: string,
   context: TicketCommandContext,
 ): void {
-  db.transaction(() => {
+  withTransaction(db, () => {
     const row = getTicketRow(db, ticketId);
     if (!row) throw new Error("Unknown ticket");
     if (row.archived_at !== null) return;
     archiveTicket(db, ticketId, context.now);
     recordTicketEvent(db, ticketId, { kind: "archived" }, context.now, context.actor);
-  })();
+  });
 }
 
 export function unarchiveTicketCommand(
@@ -569,7 +570,7 @@ export function unarchiveTicketCommand(
   ticketId: string,
   context: TicketCommandContext,
 ): Ticket {
-  return db.transaction((): Ticket => {
+  return withTransaction(db, (): Ticket => {
     const row = getTicketRow(db, ticketId);
     if (!row) throw new Error("Unknown ticket");
     if (row.archived_at !== null) {
@@ -582,7 +583,7 @@ export function unarchiveTicketCommand(
     const ticket = getTicket(db, ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
-  })();
+  });
 }
 
 /**
@@ -593,12 +594,12 @@ export function unarchiveTicketCommand(
  * in the FK cascade, so there is no actor to attribute.
  */
 export function deleteTicketCommand(db: Database.Database, ticketId: string): void {
-  db.transaction((): void => {
+  withTransaction(db, (): void => {
     const row = getTicketRow(db, ticketId);
     if (!row) throw new Error("Unknown ticket");
     if (row.archived_at === null) {
       throw new Error("Only archived tickets can be deleted");
     }
     deleteTicket(db, ticketId);
-  })();
+  });
 }

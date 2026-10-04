@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /**
  * `ticket_signals` table repo (migration 028): the typed verdict channel
  * VC-85 replaced the `VERDICT: FIRST-LINE` comment convention with.
@@ -83,7 +84,7 @@ export function createSignal(
   input: CreateSignalInput,
   now: number,
 ): TicketSignal {
-  const run = db.transaction((): TicketSignal => {
+  return withTransaction(db, (): TicketSignal => {
     const signal: TicketSignal = {
       id: randomUUID(),
       ticketId: input.ticketId,
@@ -113,7 +114,6 @@ export function createSignal(
     );
     return signal;
   });
-  return run();
 }
 
 /**

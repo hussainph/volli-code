@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { withTransaction } from "./db/transaction-gate";
 import { statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
@@ -646,7 +647,7 @@ export function registerDataIpcHandlers(
       }
       const legacyProjects = sanitizeLegacyProjects(request.projects);
       const now = Date.now();
-      const run = db.transaction(() => {
+      withTransaction(db, () => {
         // Back up the raw source FIRST, in the same transaction: whatever
         // else happens, once this commits the untouched localStorage strings
         // live in SQLite, so boot can clear localStorage without ever making
@@ -670,7 +671,6 @@ export function registerDataIpcHandlers(
           setAppState(db, key, value, now);
         }
       });
-      run();
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
@@ -1265,7 +1265,7 @@ export function registerDataIpcHandlers(
         // (VC-358): the Session it names already exists by the time this runs,
         // and its staged blobs must adopt it all-or-nothing — a retry that
         // half-adopted would leave the chat unsure what it is holding.
-        db.transaction(() => {
+        withTransaction(db, () => {
           for (const draft of input.blobs) {
             createBlobLink(
               db,
@@ -1283,7 +1283,7 @@ export function registerDataIpcHandlers(
               now,
             );
           }
-        })();
+        });
         // The caller reads back the owner it named: the Ticket composer its
         // strip, the promoted chat its Session's — the links it just made and
         // any that were already there.

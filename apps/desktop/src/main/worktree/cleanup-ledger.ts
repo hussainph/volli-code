@@ -12,15 +12,16 @@
  * below, and nothing outside reads it as global order. Durable IDs are UUIDs
  * minted by the core, never rowids.
  *
- * The connection's shared transaction gate serializes this ledger with the
- * Session and Automation ledgers, including across awaited work. Reads are
- * transactional too, so a projection can never observe a half-written run.
+ * The connection's shared transaction helper gives this ledger the same
+ * synchronous atomic boundary as the Session and Automation ledgers. No callback
+ * can yield while the database transaction is open. Reads are transactional too,
+ * so a projection can never observe a half-written run.
  */
 import type Database from "better-sqlite3";
-import type { OrphanCleanupReceipt, OrphanCleanupRejectionCode } from "@volli/shared";
+import type { OrphanCleanupReceipt, OrphanCleanupRejectionCode, Synchronous } from "@volli/shared";
 
 import { prepared } from "../db/prepared";
-import { getTransactionGate } from "../db/transaction-gate";
+import { settleTransaction } from "../db/transaction-gate";
 import type {
   OrphanCleanupCommand,
   OrphanCleanupFact,
@@ -183,10 +184,8 @@ export class SqliteOrphanCleanupLedger implements OrphanCleanupLedger {
   constructor(private readonly db: Database.Database) {}
 
   transaction<T>(
-    work: (transaction: OrphanCleanupLedgerTransaction) => T | Promise<T>,
+    work: (transaction: OrphanCleanupLedgerTransaction) => Synchronous<T>,
   ): Promise<T> {
-    return getTransactionGate(this.db).transaction(() =>
-      work(new SqliteOrphanCleanupTransaction(this.db)),
-    );
+    return settleTransaction(this.db, () => work(new SqliteOrphanCleanupTransaction(this.db)));
   }
 }

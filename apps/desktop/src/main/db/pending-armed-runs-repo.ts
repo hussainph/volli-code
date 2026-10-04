@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /** Main-owned durable countdowns and retained expiry attempts (VC-226, VC-228). */
 import type Database from "better-sqlite3";
 import { isTicketStatus, type PendingArmedRun, type PendingArmedRunAttempt } from "@volli/shared";
@@ -126,7 +127,7 @@ export function beginPendingArmedRunAttempt(
   commandId: string,
   fallbackError: string,
 ): PendingArmedRunAttempt | undefined {
-  const transition = db.transaction((): PendingArmedRunAttempt | undefined => {
+  return withTransaction(db, (): PendingArmedRunAttempt | undefined => {
     const pending = getPendingArmedRun(db, id);
     if (pending === undefined) return undefined;
 
@@ -156,7 +157,6 @@ export function beginPendingArmedRunAttempt(
     }
     return { pending, commandId, error: fallbackError };
   });
-  return transition();
 }
 
 /** Retained attempts are ordered by their original deadlines for deterministic priming. */

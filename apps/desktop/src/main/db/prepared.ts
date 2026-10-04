@@ -14,6 +14,14 @@ import type Database from "better-sqlite3";
 
 const stmtCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 
+/** Install execution checks on statements cached during sole-owner startup. */
+export function guardCachedStatements(
+  db: Database.Database,
+  guard: (statement: Database.Statement) => void,
+): void {
+  for (const statement of stmtCache.get(db)?.values() ?? []) guard(statement);
+}
+
 export function prepared<Params extends unknown[] = unknown[], Row = unknown>(
   db: Database.Database,
   sql: string,

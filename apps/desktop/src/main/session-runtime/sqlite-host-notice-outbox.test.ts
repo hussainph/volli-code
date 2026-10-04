@@ -165,18 +165,14 @@ describe("SQLite host notice outbox", () => {
     const f = launch(db!.db, paths.directory);
     const sessionId = await create(f);
     const value = notice(sessionId);
-    const gate = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    const failedTransaction = f.writer.transaction(async () => {
-      entered.resolve();
-      await gate.promise;
+    const failedTransaction = f.writer.transaction(() => {
       throw new Error("rollback unrelated write");
     });
     const failure = expect(failedTransaction).rejects.toThrow("rollback unrelated write");
-    await entered.promise;
+    // The failed transaction has already rolled back, even before its promise
+    // settles. An independent outbox write cannot join it.
+    expect(db!.db.inTransaction).toBe(false);
     const put = f.outbox.put(value);
-    expect(db!.db.prepare("SELECT * FROM host_notice_outbox").all()).toEqual([]);
-    gate.resolve();
     await failure;
     expect(await put).toEqual(value);
     const bundle = buildBackupDataDocument(db!.db, { appVersion: "test", now: clock });

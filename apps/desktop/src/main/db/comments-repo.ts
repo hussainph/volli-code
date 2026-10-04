@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /**
  * `ticket_comments` table repo (migration 003): row↔domain mapping and CRUD
  * for a ticket's work log — content, distinct from the append-only
@@ -90,7 +91,7 @@ export function createComment(
   input: CreateCommentInput,
   now: number,
 ): TicketComment {
-  const run = db.transaction((): TicketComment => {
+  return withTransaction(db, (): TicketComment => {
     const comment: TicketComment = {
       id: randomUUID(),
       ticketId: input.ticketId,
@@ -114,7 +115,6 @@ export function createComment(
     );
     return comment;
   });
-  return run();
 }
 
 export interface UpdateCommentInput {

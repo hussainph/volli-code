@@ -14,6 +14,7 @@ import Database from "better-sqlite3";
 import { createSessionRecord, createTicket } from "@volli/shared";
 import type { Project, SessionRecord, Ticket } from "@volli/shared";
 import { migrate } from "./migrations";
+import { guardTransactionOwnership, throwTransactionViolation } from "./transaction-gate";
 
 /**
  * Constructs a raw better-sqlite3 handle with no further setup. Test code uses
@@ -56,6 +57,7 @@ export function openTestDb(): TestDb {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
   migrate(db, dbPath);
+  guardTransactionOwnership(db, throwTransactionViolation);
   return {
     db,
     dbPath,
