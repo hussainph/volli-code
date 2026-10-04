@@ -212,7 +212,8 @@ import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
-import type { AgentRuntimeEnvironment, PtyManager } from "./pty";
+import { clientEventSink } from "./client-event-sink";
+import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty/manager";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import {
@@ -678,7 +679,7 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
-    const busy = ptyManager.busySessions(mainWindow.webContents);
+    const busy = ptyManager.busySessions(clientEventSink(mainWindow.webContents));
     if (unsavedStep === "quit" && busy.length === 0) return;
 
     // Something is at stake, so hold the close while the questions are asked;

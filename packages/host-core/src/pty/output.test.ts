@@ -243,3 +243,72 @@ describe("dispose", () => {
     expect(sink.pause).not.toHaveBeenCalled();
   });
 });
+
+describe("attachment resync and released flow (VC-560)", () => {
+  it("opens a new attachment with the retained tail, dropping the pending batch it already holds", () => {
+    vi.useFakeTimers();
+    const { sink, sent } = makeSink();
+    const pipeline = createOutputPipeline(sink);
+
+    pipeline.enqueue("before ");
+    runBatchWindow();
+    // Detached: nothing delivers, but the tail keeps every chunk.
+    sink.alive = false;
+    pipeline.enqueue("while ");
+    runBatchWindow();
+    pipeline.enqueue("away");
+
+    sink.alive = true;
+    pipeline.resync();
+    // One batch, the whole tail, and the pending "away" is not sent twice.
+    expect(sent).toEqual(["before ", "before while away"]);
+    runBatchWindow();
+    expect(sent).toHaveLength(2);
+  });
+
+  it("caps the resync at the retained tail without opening on half a surrogate pair", () => {
+    const { sink, sent } = makeSink();
+    const pipeline = createOutputPipeline(sink);
+    // "😀" is two UTF-16 units; the cap lands between them.
+    sink.alive = false;
+    pipeline.enqueue("😀" + "x".repeat(OBSERVATION_TAIL_MAX_CHARS - 1));
+
+    sink.alive = true;
+    pipeline.resync();
+    expect(sent).toEqual(["x".repeat(OBSERVATION_TAIL_MAX_CHARS - 1)]);
+  });
+
+  it("sends nothing for an empty tail, and drops the resync when no client takes it", () => {
+    const { sink } = makeSink();
+    const pipeline = createOutputPipeline(sink);
+    pipeline.resync();
+    expect(sink.send).not.toHaveBeenCalled();
+
+    pipeline.enqueue("x".repeat(FLOW_CONTROL_HIGH_WATERMARK + 1));
+    pipeline.dispose();
+    sink.alive = false;
+    pipeline.resync();
+    // A dropped resync never enters the accounting, so the pty is never paused.
+    expect(sink.pause).not.toHaveBeenCalled();
+  });
+
+  it("accounts the resync like any batch, and a departed client's unacked chars stop holding the pty", () => {
+    const { sink } = makeSink();
+    const pipeline = createOutputPipeline(sink);
+    pipeline.enqueue("x".repeat(FLOW_CONTROL_HIGH_WATERMARK + 1));
+    pipeline.flush();
+    expect(sink.pause).toHaveBeenCalledOnce();
+
+    pipeline.releaseFlow();
+    expect(sink.resume).toHaveBeenCalledOnce();
+    // Released: a further release has nothing to resume.
+    pipeline.releaseFlow();
+    expect(sink.resume).toHaveBeenCalledOnce();
+
+    // The resync is itself over the high watermark, so it pauses until acked.
+    pipeline.resync();
+    expect(sink.pause).toHaveBeenCalledTimes(2);
+    pipeline.ack(FLOW_CONTROL_HIGH_WATERMARK);
+    expect(sink.resume).toHaveBeenCalledTimes(2);
+  });
+});

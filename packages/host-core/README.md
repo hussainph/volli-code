@@ -51,6 +51,7 @@ if (!host.database.ok) console.error(host.database.error);
 | `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`) | VC-553   |
 | `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
 | `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power and client-capability ports, with their headless answers | VC-554   |
+| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                         | VC-560   |
 | `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
 
 VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
@@ -129,6 +130,13 @@ and the verb table are unchanged. Desktop retains `automations/ipc.ts` and the
 socket's app-quit adapter (`agent-socket-quit.ts`); host-core never holds an app
 lifecycle. Backup, recovery and maintenance remain for VC-618 (slice 2).
 
+VC-560 adds `src/pty/` (`@volli/host-core/pty/*`): the terminal supervisor
+(`manager.ts`, `PtyManager`), its output pipeline, warm park (`park.ts`,
+`park-controller.ts`), launch scope, launch line and offered-command run. The
+Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
+constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
+this gate with its test.
+
 ## Ports
 
 A port is what host-core asks of the process hosting it. Each port lives in
@@ -165,7 +173,9 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   exactly the requesting WebContents: its channels and `destroyed` hooks are
   unchanged. A headless host supplies its client's connection and disconnect
   hooks. Unsubscribing removes only that subscription's hook; disconnect tears
-  it down immediately. VC-557 and VC-560 can use the same port.
+  it down immediately. VC-557 uses the same port; the terminal supervisor
+  (VC-560) streams through it, with `terminal-data`, `terminal-exit` and
+  `terminal-park-state` on the topic map.
 - **Alerts** go through `ports.attention.deliver`. A background observer
   ignores the outcome; a person's own request reports it.
 - **Client work** goes through `clientCapabilities(ports.client)`, or
@@ -300,6 +310,68 @@ from root, from the host's own user and its Sessions, or from anyone who can
 read both the data directory and the key file. The full paragraph, cross-machine
 restore, and where Pi's `auth.json` lives for `hostd` are in
 [docs/secrets.md](../../docs/secrets.md#headless-hosts).
+
+### Terminals
+
+`PtyManager` (`src/pty/manager.ts`) supervises every live PTY. It is built by
+the host with a `PtyHost` (the event bus, the worktree bundle, and the
+harness-file writer whose module is still desktop's) plus
+the runtime pieces the host composes: the agent runtime environment, spawn
+ledger and concurrency reader. Desktop builds it in `registerTerminalIpcHandlers`
+with `desktopPtyHost()`; `hostd` will build it with its own. A degraded
+database still yields a supervisor whose `create` answers with the open error.
+
+**The stream contract.** M2's terminal ticket (VC-568) exposes this over the
+host protocol's [binary framing](../../docs/plans/host-protocol.md#binary-framing);
+the supervisor is shaped for it but ships no transport.
+
+- **One client per terminal.** A terminal's stream is attached to at most one
+  `HostClientEventSink`. Only that client receives its output, exit and park
+  state, and only it may write, resize, ack, park, wake, keep awake, detach or
+  close it. Ownership is the sink's `id`; any of those from another client is
+  answered exactly as an unknown session's (VC-509). `attach` is the one door
+  a non-holder uses, and the protocol authorizes it before it gets here.
+- **Create attaches.** `create(client, request, onDisconnect = "close")` starts
+  the process with `client` attached at the requested size.
+- **Close vs detach** (VC-320 C07). `kill` is the explicit close: the process
+  dies. `detach` is the explicit detach: output already batched goes to the
+  departing client, then nobody owns the terminal and the process keeps
+  running. A client's disconnect does what its attach said: `close` (a desktop
+  window, today's behavior) or `detach` (a remote client that will reconnect).
+- **Attach resumes.** `attach(client, sessionId, { cols, rows, onDisconnect })`
+  succeeds on a detached terminal, or for its current holder (a fresh
+  attachment). Another holder's terminal is refused with "Terminal is attached
+  to another client"; takeover is a later, explicit act. The client's size
+  becomes the PTY's: resize ownership travels with the stream.
+- **Resync, not replay.** While detached, output is not delivered but is kept
+  in the bounded retained tail (`OBSERVATION_TAIL_MAX_CHARS`, the same tail the
+  CLI's peek reads). An attachment opens with that tail as its first
+  `terminal-data` batch, then the current park state; the client resets its
+  screen and writes what it receives in order. Input is never retained or
+  replayed: a write reaches the PTY once, at call time, from the holder, and
+  the launch line is written once at spawn. The tail is raw bytes cut at a
+  character bound, so a resync may start inside an escape sequence; a screen
+  serializer is VC-568's call.
+- **Flow control per attachment.** The holder acks consumed characters; past
+  100,000 unacked the PTY's reads pause until acks bring it under 5,000. A
+  detach or a new attachment forgets the previous client's unacked count and
+  resumes the PTY, so a vanished client never freezes the process. A detached
+  terminal keeps running and its tail keeps the newest output.
+- **Ordered, lossless within an attachment.** Batches are published in order,
+  at most `BATCH_MAX_CHARS` (256,000) characters each. The binary channel
+  numbers frames from 1 per attachment and splits a batch into frames of at
+  most 64 KiB; a client concatenates frames in sequence. Nothing is durable:
+  a terminal that exits while detached is gone, and its attachment's close is
+  in the Session ledger.
+
+**node-pty.** `node-pty` 1.1.0 is N-API and loads lazily, when a terminal is
+created. One build loads under both Electron and plain Node: on macOS the
+package's darwin prebuild, or the build desktop's `rebuild:native`
+(`electron-rebuild`) makes; Linux has no prebuild, so it compiles from source.
+Desktop keeps its own `node-pty` dependency for packaging, exactly like
+`better-sqlite3`. CI's `Test (packages)` lane rebuilds it for its Node and
+runs `scripts/probe-node-pty.mjs` before `manager.pty.test.ts` drives real
+shells (see `docs/development/host-linux.md`).
 
 ## Moving a service cluster in
 
