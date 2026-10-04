@@ -44,6 +44,66 @@
     "./db/*": {
       "types": "./src/db/*.ts",
       "import": "./src/db/*.ts"
+    },
+    "./session-runtime": {
+      "types": "./src/session-runtime/index.ts",
+      "import": "./src/session-runtime/index.ts"
+    },
+    "./agent-runtime": {
+      "types": "./src/agent-runtime.ts",
+      "import": "./src/agent-runtime.ts"
+    },
+    "./agent-tools": {
+      "types": "./src/agent-tools.ts",
+      "import": "./src/agent-tools.ts"
+    },
+    "./session-env": {
+      "types": "./src/session-env.ts",
+      "import": "./src/session-env.ts"
+    },
+    "./session-tokens": {
+      "types": "./src/session-tokens.ts",
+      "import": "./src/session-tokens.ts"
+    },
+    "./pi-session-orphans": {
+      "types": "./src/pi-session-orphans.ts",
+      "import": "./src/pi-session-orphans.ts"
+    },
+    "./pi-tool-output": {
+      "types": "./src/pi-tool-output.ts",
+      "import": "./src/pi-tool-output.ts"
+    },
+    "./harness-install": {
+      "types": "./src/harness-install.ts",
+      "import": "./src/harness-install.ts"
+    },
+    "./login-shell-path": {
+      "types": "./src/login-shell-path.ts",
+      "import": "./src/login-shell-path.ts"
+    },
+    "./verb-input": {
+      "types": "./src/verb-input.ts",
+      "import": "./src/verb-input.ts"
+    },
+    "./mcp/*": {
+      "types": "./src/mcp/*.ts",
+      "import": "./src/mcp/*.ts"
+    },
+    "./codemode/*": {
+      "types": "./src/codemode/*.ts",
+      "import": "./src/codemode/*.ts"
+    },
+    "./web/*": {
+      "types": "./src/web/*.ts",
+      "import": "./src/web/*.ts"
+    },
+    "./decision/*": {
+      "types": "./src/decision/*.ts",
+      "import": "./src/decision/*.ts"
+    },
+    "./model-access/*": {
+      "types": "./src/model-access/*.ts",
+      "import": "./src/model-access/*.ts"
     }
   },
   "scripts": {
@@ -53,12 +113,15 @@
     "migrations:lock": "node scripts/lock-migrations.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-mcp": "0.99.2",
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
     "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
+    "@earendil-works/pi-codemode": "1.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "ai": "^7.0.83",

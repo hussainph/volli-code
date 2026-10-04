@@ -36,12 +36,12 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
-import type { AutoTitleRequest } from "../session-runtime/auto-title";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import {
   StructuredSessionsError,
   type SessionModelOverride,
   type Sessions,
-} from "../session-runtime/sessions";
+} from "@volli/host-core/session-runtime/sessions";
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
 export interface AutomationPromptSupply {

@@ -50,8 +50,8 @@ import type {
 } from "../../ipc/contract";
 
 import type { NotificationOutcome, NotificationRequest } from "../notifications/dispatch";
-import type { AutoTitleRequest } from "../session-runtime/auto-title";
-import type { Sessions } from "../session-runtime/sessions";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import type { Sessions } from "@volli/host-core/session-runtime/sessions";
 import type { RunGit, RunGitAsync } from "../worktree";
 
 export interface AgentCommandServiceOptions {

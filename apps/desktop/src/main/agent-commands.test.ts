@@ -60,9 +60,9 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
-import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
+import { writeModelAccessDefault } from "@volli/host-core/session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 import { scriptedGit } from "./worktree/scripted-git";
 import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";

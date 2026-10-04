@@ -212,7 +212,7 @@ belongs to the lease implementation, with tolerant reads of older history.
 `SessionLocation` lives in `packages/session-engine/src/session-runtime.ts`:
 `{ directory, venue }`. `directory` is a worker-local locator, never durable
 entity identity and never a path a remote client should execute against. Today
-`apps/desktop/src/main/session-runtime/location.ts` resolves the project or
+`packages/host-core/src/session-runtime/location.ts` resolves the project or
 worktree path; `prepare` materializes it and refuses failure rather than falling
 back to the main checkout; `reaffirm` verifies the already-bound directory.
 The runtime snapshots `location.venue` into the attachment and wraps the

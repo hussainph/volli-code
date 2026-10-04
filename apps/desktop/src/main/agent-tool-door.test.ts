@@ -57,10 +57,10 @@ import {
   listProjects,
 } from "@volli/host-core/db/projects-repo";
 import { getTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { DelegateSessionError } from "./session-runtime/delegate-session";
-import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
-import type { SessionStartInput } from "./session-runtime/sessions";
-import { StructuredSessionsError } from "./session-runtime/sessions";
+import { DelegateSessionError } from "@volli/host-core/session-runtime/delegate-session";
+import type { TicketSessionDelegationClaims } from "@volli/host-core/session-runtime/delegation-policy";
+import type { SessionStartInput } from "@volli/host-core/session-runtime/sessions";
+import { StructuredSessionsError } from "@volli/host-core/session-runtime/sessions";
 import type { Watches, WatchSessionInput } from "./watches";
 
 let ctx: TestDb | undefined;

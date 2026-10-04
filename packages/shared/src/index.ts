@@ -121,3 +121,6 @@ export * from "./theme/editor-themes";
 export * from "./session-origin";
 export * from "./session-stop";
 export * from "./experiments";
+
+export type * from "./pi-session-orphans";
+export type * from "./host-settings";

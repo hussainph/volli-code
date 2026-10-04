@@ -1,7 +1,7 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKET chat,
  * against the BUILT app. New ticket chats attach the `pi` manifest
- * (`apps/desktop/src/main/session-runtime/pi-adapter.ts`) instead of OpenCode —
+ * (`packages/host-core/src/session-runtime/pi-adapter.ts`) instead of OpenCode —
  * see that file's module doc comment. Nothing about the MODEL is pinned there:
  * the adapter runs whatever the Session recorded, so the model under test is
  * this file's own {@link MODEL_PIN} and nothing else. There is no fake server

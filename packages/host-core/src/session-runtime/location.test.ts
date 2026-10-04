@@ -18,14 +18,9 @@ vi.mock("../worktree", async (importOriginal) => {
 vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
 // Spied rather than fanned out, so a suite can say which prepares told the
 // ticket's surfaces their identity moved.
-const { dataChanged } = vi.hoisted(() => ({ dataChanged: vi.fn() }));
-vi.mock("../broadcast", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../broadcast")>();
-  return { ...actual, broadcastDataChanged: dataChanged };
-});
-// A recreated worktree really does fan out `volli:data-changed`; with no window
-// open that is a loop over nothing, which is all this suite needs it to be.
-vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
+const dataChanged = vi.fn();
+const ports = { events: { publish: dataChanged } };
+const options = { dataDir: "/profile" };
 
 import { createDesktopSessionLocationResolver } from "./location";
 import {
@@ -76,7 +71,7 @@ describe("desktop Session location resolver", () => {
     });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -118,7 +113,7 @@ describe("desktop Session location resolver", () => {
     insertTicket(testDb.db, ticket);
     insertProject(testDb.db, otherProject);
     insertTicket(testDb.db, foreignTicket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -174,7 +169,7 @@ describe("desktop Session location resolver", () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -196,7 +191,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", usesWorktree: false });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -223,7 +218,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // Present: the check before a turn is one `existsSync` and no git at all.
@@ -262,7 +257,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
     const reuse = (restamped: boolean) => ({
       ok: true,
@@ -276,7 +271,7 @@ describe("desktop Session location resolver", () => {
     ensureWorktree.mockResolvedValueOnce(reuse(true));
     await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
     expect(dataChanged).toHaveBeenCalledTimes(1);
-    expect(dataChanged).toHaveBeenCalledWith({
+    expect(dataChanged).toHaveBeenCalledWith("data-changed", {
       ticketId: ticket.id,
       projectId: project.id,
       kind: "worktree",
@@ -295,7 +290,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // `ensure` refused: `prepare`'s own error already names the worktree and
@@ -326,7 +321,7 @@ describe("desktop Session location resolver", () => {
     const root = scratch();
     const project = testProject({ id: "project-1", path: join(root, "main") });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
     const session: Session = {
       id: "project-session",
       projectId: project.id,
@@ -358,7 +353,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       const removing = acquireDeletionLease(worktreePath);
@@ -383,7 +378,7 @@ describe("desktop Session location resolver", () => {
       const root = scratch();
       const project = testProject({ id: "project-1", path: root });
       insertProject(testDb.db, project);
-      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
       const session: Session = {
         id: "project-session",
         projectId: project.id,
@@ -411,7 +406,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       let leaseDuringEnsure: unknown = "unasked";

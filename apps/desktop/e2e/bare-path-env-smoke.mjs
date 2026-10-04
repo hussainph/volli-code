@@ -12,7 +12,7 @@
  * so there is no spawned server whose PATH could be wrong. What survives is the
  * part that was never OpenCode-specific and still guards a shipping feature:
  * harness wrapper generation for the TERMINAL companions, which walks the LOGIN
- * SHELL's PATH (`apps/desktop/src/main/login-shell-path.ts`, `zsh -l -i -c
+ * SHELL's PATH (`packages/host-core/src/login-shell-path.ts`, `zsh -l -i -c
  * 'printenv PATH'`) precisely because `process.env.PATH` is this useless under
  * launchd.
  *

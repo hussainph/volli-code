@@ -502,6 +502,9 @@ importers:
 
   packages/host-core:
     dependencies:
+      '@earendil-works/pi-mcp':
+        specifier: 0.99.2
+        version: 0.99.2
       '@volli/agent-runtime':
         specifier: workspace:*
         version: link:../agent-runtime
@@ -515,6 +518,12 @@ importers:
         specifier: ^13.0.3
         version: 13.0.3
     devDependencies:
+      '@earendil-works/pi-codemode':
+        specifier: 1.0.0
+        version: 1.0.0(patch_hash=12e49843dc75a3b17dc6c57e9c92b5b78a74e79ac2ca8bb2f1a45c604bd5adc3)
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
       ai:
         specifier: ^7.0.83
         version: 7.0.84(zod@4.4.3)

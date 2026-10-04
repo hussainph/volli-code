@@ -29,7 +29,7 @@ import { blobFilePath } from "../blob-store";
 import {
   createFileTranscriptArtifactStore,
   transcriptReferenceForId,
-} from "../session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/transcript-artifacts";
 import { ArchiveError, isSafeArchivePath, packArchive, unpackArchive } from "./archive";
 import type { ArchiveEntry } from "./archive";
 import {

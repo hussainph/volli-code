@@ -28,11 +28,11 @@ import {
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import { inspectProjectFolder, relinkProject } from "./project-relink";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
-import { McpSettingsService } from "./mcp/settings";
-import { removeTicketToolOutput } from "./pi-tool-output";
-import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
+import { McpSettingsService } from "@volli/host-core/mcp/settings";
+import { removeTicketToolOutput } from "@volli/host-core/pi-tool-output";
+import type { StopSessionByIdPorts } from "@volli/host-core/session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,

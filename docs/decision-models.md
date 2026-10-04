@@ -57,7 +57,7 @@ Main stamps `acceptedAt` with its own clock on every cloud write.
 One port, `DecisionPort.decide(call)` (`@volli/shared`'s `decision-model.ts`),
 implemented by `createDecisionService` in `@volli/agent-runtime` and composed
 over the profile's settings and Pi's model collection in
-`apps/desktop/src/main/decision/desktop.ts`.
+`packages/host-core/src/decision/desktop.ts`.
 
 ```ts
 const value = await decisions.port.decide({
@@ -114,7 +114,7 @@ with the default model, `session_start` and `session_delegate` with no `model`,
 `tier` or `reasoning`, and an Automation Run whose definition pins no Runtime.
 The pure half is `@volli/shared`'s `model-auto-select.ts` (candidates, the
 question, reading the answer, the confidence threshold); the join to the
-service is `apps/desktop/src/main/decision/auto-select.ts`, reached from
+service is `packages/host-core/src/decision/auto-select.ts`, reached from
 `createSessions`' `mint`, the one creation path under every door.
 
 - **Candidates.** The configured default for this start (the project pin or

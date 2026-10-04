@@ -18,11 +18,11 @@ import { createSessionWakeBus } from "@volli/host-core/session-wake";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { buildBackupDataDocument } from "../backup/data-document";
 import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
-import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
-import { createPiNativeAdapter } from "./pi-adapter";
-import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
+import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
+import { createPiNativeAdapter } from "@volli/host-core/session-runtime/pi-adapter";
+import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
 import { createSqliteHostNoticeOutbox } from "@volli/host-core/session-runtime/sqlite-host-notice-outbox";
-import type { HostNoticeDelivery } from "./host-notice-delivery";
+import type { HostNoticeDelivery } from "@volli/host-core/session-runtime/host-notice-delivery";
 
 let db: TestDb | undefined;
 let clock = 1000;

@@ -231,7 +231,7 @@ import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-h
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import {

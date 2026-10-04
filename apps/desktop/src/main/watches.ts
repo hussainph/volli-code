@@ -108,7 +108,7 @@ import {
   cutAtCodePoint,
   deliverHostNotice,
   errorText,
-} from "./session-runtime/host-notice-delivery";
+} from "@volli/host-core/session-runtime/host-notice-delivery";
 
 /** How long one watcher's changes are gathered before they are delivered as one notice. */
 export const WATCH_COALESCE_MS = 1_500;

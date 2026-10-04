@@ -122,7 +122,7 @@ import {
   type SessionRuntimeSpec,
   type UIMessageLike,
 } from "@volli/shared";
-import type { SecretWaitPublisher } from "../secrets/service";
+import type { SecretWaitPublisher } from "../secrets/wait-publisher";
 
 type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
   withdraw?(interactionId: string): Promise<void>;
@@ -132,7 +132,7 @@ type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
 import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
-import type { TurnAttachments } from "../turn-attachments";
+import type { TurnAttachments } from "./turn-attachments";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
