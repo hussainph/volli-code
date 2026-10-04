@@ -15,6 +15,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `packages/host-core/` (`@volli/host-core`) — the host's services composed without Electron: `createHostCore(ports, options)`, the ports a host answers (`src/ports`: event bus, addressed client event sink, attention delivery, power, client capabilities, trash, secret-key), the SQLite open/migrations/repos (`src/db`) and the transaction-ownership guard. Worktrees/git/change sets, project roots, blob/ticket commands, Session/runtime wiring, MCP, Code Mode, Web Access, decisions, model sign-in, Automations, verb dispatch, the agent Unix socket, the terminal (node-pty) supervisor (`src/pty`), and the agent browser's engine-agnostic half (`src/browser`: the `BrowserBackend` seam, shared tab registry, CDP controller and agent port) also live here; desktop retains their IPC doors. Electron main calls it and wires the result by the pattern in its `README.md`. **No Electron imports.**
 - `packages/agent-runtime/` (`@volli/agent-runtime`) — the product-owned executor boundary, Pi implementation, deterministic workspace/secret guards and host-API actor policy, prompt assembly, model access, and safe web tools.
 - `packages/cli/` — the agent-facing `volli` CLI (built; Unix socket to main). App data lives under Electron's `userData` dir.
+- `apps/hostd/` (`@volli/hostd`) — `volli-hostd`, the headless host: host-core with headless ports, serving the agent socket on Linux and macOS. **No Electron.** Packaging, health, shutdown and the systemd/launchd templates: its `README.md`.
 - `packages/font-notices/` (`@volli/font-notices`) — the font license notices `apps/website` and `apps/docs` must publish beside the font binaries they redistribute (OFL-1.1 clause 2). `src/` is pure rendering — **no Electron/Node/DOM imports**, so each site resolves its own font package through its own bundler. `check-dist.mjs` (CLI: `check-font-notices`) re-reads the built `dist/` and fails the build on an uncovered font; it shares no code with the renderer so the two cannot agree with each other about a gap.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse. **Its subject is UI state, UX flows and visual systems — never backend behavior.** It has no main-process half and is not reconciled against SQLite or the Session ledger; a scratch that needs a live backend fact is a scratch in the wrong place, and the lab's own expressiveness is never a reason to keep a backend seam alive.
 
@@ -68,7 +69,8 @@ The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs ho
 `Test (packages)` is the plain-Node Linux host lane, pinned by `.nvmrc`; new host
 packages must provide `test:coverage`. `Check + Build` enforces zero Electron
 imports across all packages and hostd, including transitive relative imports.
-`Build (host container)` is path-filtered and required by `CI gate` when selected.
+`Build (host container)` is path-filtered and required by `CI gate` when selected;
+it also builds the hostd linux-x64 artifact in that image and boots it.
 Host development image, native ABI isolation and inventory commands:
 `docs/development/host-linux.md`.
 

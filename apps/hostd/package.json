@@ -1,0 +1,34 @@
+{
+  "name": "@volli/hostd",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The headless Volli host: host-core with headless ports, serving the agent socket.",
+  "license": "Apache-2.0",
+  "bin": {
+    "volli-hostd": "dist/hostd.cjs"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "package": "node scripts/package.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@vscode/ripgrep": "^1.18.0",
+    "better-sqlite3": "^13.0.3",
+    "jsdom": "^30.0.1",
+    "node-pty": "1.1.0",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "@volli/agent-runtime": "workspace:*",
+    "@volli/host-core": "workspace:*",
+    "@volli/shared": "workspace:*",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
