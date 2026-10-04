@@ -655,19 +655,7 @@ export default defineConfig(({ mode }) => ({
         // a stranger's process. The ledger's storage (`db/spawn-ledger-repo.ts`)
         // is held to the same bar in @volli/host-core's gate.
         "**/src/main/process/**",
-        "**/src/main/project-roots.ts",
-        // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
-        // for the reason the process modules above are: it is a concurrency
-        // guard, so its branches are the ones no screenshot and no manual pass
-        // can show. An uncovered branch here is a `worktree add` and a
-        // `worktree prune` nobody watched decide whether to run against one
-        // repository at the same time, which is a race git's own documentation
-        // names. Its sibling `worktree/git.ts` is deliberately NOT enrolled:
-        // one defensive fallback in it (a child-process failure carrying no
-        // `message`) is not reachable from a test without exporting an
-        // internal purely to satisfy the gate, and a contrived test is worth
-        // less than an honest gap.
-        "**/src/main/worktree/repository-turn.ts",
+        "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
         // guarantee it carries — five fields, one pragma, one app_state key,
@@ -681,7 +669,7 @@ export default defineConfig(({ mode }) => ({
         // inside the set this database recognises as its own. Both are silent
         // when wrong — one duplicates a project, the other strands checkouts
         // that no cleanup surface will ever list again.
-        "**/src/main/project-relink.ts",
+        "**/packages/host-core/src/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",

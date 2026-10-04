@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { blobFilePath, blobsRoot } from "../blob-store";
+import { blobFilePath, blobsRoot } from "@volli/host-core/blob-store";
 import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "@volli/host-core/db/migrations";
 import { openRawDb } from "@volli/host-core/db/test-helpers";

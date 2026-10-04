@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } fro
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
-import { blobsRoot, writeBlob } from "../blob-store";
+import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
 import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
 import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";

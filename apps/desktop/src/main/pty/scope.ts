@@ -18,7 +18,7 @@ import type {
   HarnessId,
   HarnessWrapperLookup,
 } from "@volli/shared";
-import { materializeBlobs } from "../blob-materialize";
+import { materializeBlobs } from "@volli/host-core/blob-materialize";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { getTicketSessionContext } from "@volli/host-core/db/tickets-repo";
 import { terminalSessionRecord } from "@volli/host-core/session-control";

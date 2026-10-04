@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 
-import { blobsRoot, writeBlob } from "../blob-store";
+import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
 import { migrate } from "@volli/host-core/db/migrations";
 import { openRawDb } from "@volli/host-core/db/test-helpers";
 import { sessionTranscriptsRoot } from "@volli/host-core/session-runtime/transcript-artifacts";

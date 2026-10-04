@@ -33,7 +33,7 @@ import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, listProjects } from "@volli/host-core/db/projects-repo";
 import { terminalSessionRecord } from "@volli/host-core/session-control";
-import { runGitCapturing, runGitCapturingAsync } from "./worktree";
+import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
 
 export {
   composeProjectBrief,

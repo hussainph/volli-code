@@ -11,8 +11,8 @@ import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-co
 // Only `ensure` is stood in for, so `prepare` can be asked the one question no
 // return value answers: whether a ticketless Session touches git at all.
 const { ensureWorktree } = vi.hoisted(() => ({ ensureWorktree: vi.fn() }));
-vi.mock("../worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../worktree")>();
+vi.mock("@volli/host-core/worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
@@ -28,7 +28,7 @@ import {
   acquireWorktreeStartLease,
   resetDeletionLeasesForTest,
   UNDER_DELETION_REFUSAL,
-} from "../worktree/deletion-lease";
+} from "@volli/host-core/worktree/deletion-lease";
 
 let testDb: TestDb | undefined;
 let scratchRoot: string | undefined;

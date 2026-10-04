@@ -28,7 +28,7 @@ import {
   listTicketsByProject,
   listWorktreePathsByProject,
 } from "@volli/host-core/db/tickets-repo";
-import { isInside } from "../worktree/paths";
+import { isInside } from "@volli/host-core/worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";

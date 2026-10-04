@@ -16,6 +16,18 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
+        // for the reason the process modules above are: it is a concurrency
+        // guard, so its branches are the ones no screenshot and no manual pass
+        // can show. An uncovered branch here is a `worktree add` and a
+        // `worktree prune` nobody watched decide whether to run against one
+        // repository at the same time, which is a race git's own documentation
+        // names. Its sibling `worktree/git.ts` is deliberately NOT enrolled:
+        // one defensive fallback in it (a child-process failure carrying no
+        // `message`) is not reachable from a test without exporting an
+        // internal purely to satisfy the gate, and a contrived test is worth
+        // less than an honest gap.
+        "src/worktree/repository-turn.ts",
         // The ports every moved service asks its host through (VC-554), and
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.

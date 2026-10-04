@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import type { ConnectivityPort } from "@volli/agent-runtime";
 import { openVolliDb } from "./db";
+import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
@@ -94,6 +95,7 @@ export interface HostCoreOptions {
 }
 
 export interface HostCore extends HostSessionServices {
+  readonly worktrees: WorktreeRuntime;
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
@@ -150,6 +152,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   const client = clientCapabilities(ports.client);
   const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
   return {
+    worktrees: createWorktreeRuntime(ports, options),
     dataDir: options.dataDir,
     dbPath,
     database,

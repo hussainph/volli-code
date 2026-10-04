@@ -53,7 +53,7 @@ import { existsSync } from "node:fs";
 import { lstat, readdir, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, relative as relativePath, resolve } from "node:path";
 
-import type { WorktreeTrimKeep, WorktreeTrimRemoval, WorktreeTrimReport } from "../../ipc/contract";
+import type { WorktreeTrimKeep, WorktreeTrimRemoval, WorktreeTrimReport } from "@volli/shared";
 
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isInside } from "./paths";

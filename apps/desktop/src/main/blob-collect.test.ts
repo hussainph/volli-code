@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { attachBlob } from "./blob-attach";
 import { collectUnlinkedBlobs } from "./blob-collect";
-import { blobExists } from "./blob-store";
+import { blobExists } from "@volli/host-core/blob-store";
 import { deleteBlobLink, getBlob, listTicketLinks } from "@volli/host-core/db/blobs-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";

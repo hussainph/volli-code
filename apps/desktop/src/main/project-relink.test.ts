@@ -23,9 +23,9 @@ import {
 } from "@volli/host-core/db/tickets-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { scriptedGit } from "./worktree/scripted-git";
-import { inspectProjectFolder, relinkProject } from "./project-relink";
-import type { FolderProbe, ProjectRelinkDeps } from "./project-relink";
+import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
+import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
+import type { FolderProbe, ProjectRelinkDeps } from "@volli/host-core/project-relink";
 
 let ctx: TestDb;
 

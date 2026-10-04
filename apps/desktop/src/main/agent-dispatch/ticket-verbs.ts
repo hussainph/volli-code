@@ -49,7 +49,7 @@ import {
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   updateTicketFieldsCommand,
-} from "../ticket-commands";
+} from "@volli/host-core/ticket-commands";
 import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";

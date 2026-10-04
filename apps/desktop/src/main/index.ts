@@ -289,9 +289,9 @@ import {
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
-} from "./worktree";
-import type { AgentSiteReleaseReport } from "./worktree";
-import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
+} from "@volli/host-core/worktree";
+import type { AgentSiteReleaseReport } from "@volli/host-core/worktree";
+import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -362,7 +362,7 @@ import {
 import { collectUnlinkedBlobs } from "./blob-collect";
 import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
-import { blobsRoot } from "./blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import { getBlob } from "@volli/host-core/db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
 import { getAutoReapPolicy } from "./process/auto-reap-settings";
@@ -3566,7 +3566,7 @@ app.whenReady().then(async () => {
       // rather than described as work nobody attempted (review C3). Read-only,
       // and never fatal to a launch.
       void reconcileInterruptedCleanups({
-        worktree: worktreeDeps(db),
+        worktree: hostCore.worktrees.deps(db),
         engine: orphanCleanupEngine(db),
       })
         .then((runs) => {
@@ -3580,7 +3580,7 @@ app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] cleanup history unreadable:", errorMessage(error));
         });
-      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
+      startOrphanScan(hostCore.worktrees.deps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
             `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,

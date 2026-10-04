@@ -124,3 +124,25 @@ export * from "./experiments";
 
 export type * from "./pi-session-orphans";
 export type * from "./host-settings";
+export type {
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+  WorktreeBranchListing,
+  DirtyWorktreeOrphan,
+  RemovableWorktreeOrphan,
+  KeptWorktreeOrphan,
+  PrunableWorktreeMetadata,
+  KeptWorktreeMetadata,
+  UnreadableWorktreeProject,
+  WorktreeTrimRemoval,
+  WorktreeTrimKeep,
+  WorktreeTrimReport,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+  WorktreeTrimSettings,
+  WorktreeTrimSettingsInput,
+  WorktreeDiffMode,
+  PrCheckState,
+  PrCheck,
+  TicketRetentionState,
+} from "./worktree-host";

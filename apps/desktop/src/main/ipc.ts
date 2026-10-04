@@ -11,9 +11,9 @@ import type {
 } from "../ipc/contract";
 // The project-roots registry lives in ./project-roots so main-process
 // consumers (this file, pty.ts) share one instance.
-import { isRealPathWithinRoots, syncProjectRoots } from "./project-roots";
-import { isInside } from "./worktree/paths";
-import { worktreesHome } from "./worktree-runtime";
+import { isRealPathWithinRoots, syncProjectRoots } from "@volli/host-core/project-roots";
+import { isInside } from "@volli/host-core/worktree/paths";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
 
 /** Project checkouts OR the app-owned worktree home (ticket Files navigator). */
 function isBrowsableFsPath(absPath: string): boolean {

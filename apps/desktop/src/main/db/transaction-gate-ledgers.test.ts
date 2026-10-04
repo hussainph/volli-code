@@ -4,7 +4,7 @@ import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { SqliteAutomationLedger } from "../automations/sqlite-ledger";
 import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
-import { SqliteOrphanCleanupLedger } from "../worktree/cleanup-ledger";
+import { SqliteOrphanCleanupLedger } from "@volli/host-core/worktree/cleanup-ledger";
 
 /**
  * The transaction gate's case that still needs desktop ledgers. The gate itself

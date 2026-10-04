@@ -1,3 +1,4 @@
+import { clientEventSink } from "./client-event-sink";
 import { randomUUID } from "node:crypto";
 import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import { statSync } from "node:fs";
@@ -27,7 +28,7 @@ import {
 } from "@volli/host-core/db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import { inspectProjectFolder, relinkProject } from "./project-relink";
+import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { McpSettingsService } from "@volli/host-core/mcp/settings";
@@ -202,8 +203,8 @@ import {
   setTicketPriorityCommand,
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
-} from "./ticket-commands";
-import { detectProjectBaseBranchAsync } from "./project-base-branch";
+} from "@volli/host-core/ticket-commands";
+import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
 import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
@@ -238,17 +239,18 @@ import {
   trimAllWorktrees,
   trimFinishedWorktree,
   WorktreeChangeWatchManager,
-} from "./worktree";
-import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./worktree/coalesce";
-import { getWorktreeSnapshots } from "./worktree/snapshot";
-import { credentialHelperIssues } from "./credential-helper-diagnostics";
+} from "@volli/host-core/worktree";
+import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "@volli/host-core/worktree/coalesce";
+import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
+import { credentialHelperIssues } from "@volli/host-core/credential-helper-diagnostics";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
-} from "./worktree/paths";
-import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
-import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
+} from "@volli/host-core/worktree/paths";
+import { isOwnedWorktreePath, ownedContainers } from "@volli/host-core/worktree/containers";
+import { orphanCleanupEngine, worktreeHomeDir } from "@volli/host-core/worktree-runtime";
+import { worktreeDeps } from "./worktree-host";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
@@ -1906,18 +1908,22 @@ export function registerDataIpcHandlers(
         case "missing-on-disk":
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
-          return changeWatchManager.watch(sender, input.ticketId, resolved.target.worktreePath);
+          return changeWatchManager.watch(
+            clientEventSink(sender),
+            input.ticketId,
+            resolved.target.worktreePath,
+          );
       }
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(sender, input.ticketId),
+      changeWatchManager.pause(clientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(sender, input.ticketId),
+      changeWatchManager.resume(clientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(sender, input.ticketId);
+      changeWatchManager.unwatch(clientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 
