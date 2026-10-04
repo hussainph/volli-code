@@ -58,16 +58,16 @@ In order; each refusal is logged as one JSON line and exits **78**
    instance lock, whatever its `--socket`: an exclusive SQLite lock on
    `<data-dir>/hostd.lock`, atomic, held until stop, released by the kernel
    if the process dies. Two hosts never open one database.
-3. **Operators.** The operator verifier file (`/etc/volli-hostd-operators`, or
-   `--operators`) is refused when it is not a regular file, root does not own
-   it or its directory, or its group or others can write either: whoever can
-   write it can mint a person. Absent is fine: no operator token is accepted.
-   An operator who shares hostd's uid is a warning (see the limitation below).
-4. **Secrets, eagerly.** `fileSecretKey` loads lazily by design; a service
+3. **Secrets, eagerly.** `fileSecretKey` loads lazily by design; a service
    cannot wait for the first Session to find a bad key. A relative
    `VOLLI_SECRET_KEY_FILE`, a key file with group or other access, owned by
    another user, not a file or not one key line, or sealed secrets whose key is
    missing or different: each refuses boot with the adapter's own sentence.
+4. **Operators.** The operator verifier file (`/etc/volli-hostd-operators`, or
+   `--operators`) is refused when it is not a regular file, root does not own
+   it or its directory, or its group or others can write either: whoever can
+   write it can mint a person. Absent is fine: no operator token is accepted.
+   An operator who shares hostd's uid is a warning (see the limitation below).
 5. **The agent socket**, before the database, so a request that arrives
    during migrations waits for boot rather than being refused at connect. A
    live listener on the same path refuses this host. Under socket activation
@@ -109,7 +109,9 @@ sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next r
 - **The service account can never become the person.** hostd and every
   Session it starts run as `volli`. That account cannot read alice's token
   file, cannot write the operators file (hostd refuses to boot if it could),
-  and cannot run `operator-token`; `--for volli` is refused too. No socket
+  and cannot run `operator-token`; `--for volli` is refused too, and so is any
+  issue when the service account (`--service-user`, default `volli`) cannot
+  be found to check against. No socket
   verb mints a token, and hostd removes `VOLLI_OPERATOR_TOKEN` from its own
   environment so no Session inherits one.
 - **A Session's request is judged exactly as before.** The CLI never reads or
@@ -139,7 +141,8 @@ removes the pathname. The `volli` group reaches it; group membership is reach,
 not authority, since a caller without a token reads and never writes. On its
 side, the CLI sends a token only to a socket owned by root or the caller,
 through directories only root or the caller can write (sticky ones such as
-`/tmp` excepted), along the path as typed and as resolved; otherwise it warns
+`/tmp` excepted) and no symlink anyone else owns, judging every entry along
+the path as typed and as resolved without following it; otherwise it warns
 and sends none. Without socket activation hostd binds `<data-dir>/volli.sock`
 itself at 0600, as before.
 

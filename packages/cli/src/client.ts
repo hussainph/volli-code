@@ -92,22 +92,42 @@ export async function operatorTokenFor(
 /** The file-system calls {@link untrustedSocketPath} makes; tests script them. */
 export interface SocketPathFileSystem {
   realpath(path: string): Promise<string>;
-  stat(path: string): Promise<{ uid: number; mode: number; isSocket(): boolean }>;
+  /** Never follows a symlink: the entry itself is what is judged. */
+  lstat(path: string): Promise<{
+    uid: number;
+    mode: number;
+    isSocket(): boolean;
+    isDirectory(): boolean;
+  }>;
   /** The invoking user's uid, or `null` where the platform has none. */
   uid(): number | null;
+}
+
+/** `path`, then each directory above it, ending at the root. */
+function componentsOf(path: string): string[] {
+  const components = [path];
+  for (let current = path; dirname(current) !== current; current = dirname(current)) {
+    components.push(dirname(current));
+  }
+  return components;
 }
 
 /**
  * Why `socketPath` might not be the host it claims to be, or `null`.
  *
- * The CLI cannot authenticate the listener, so it judges the NAME (VC-623): a
- * socket owned by root or this user, reached through directories only root or
- * this user can write (or sticky ones, like `/tmp`, where nobody can rename
- * another's entry) — along the path as typed and along the real path it
- * resolves to. Under the packaged unit that is `/run/volli-hostd.sock`, bound
- * by systemd as root in root's `/run`. A socket in a directory the host's
- * service account can write fails, because every Session runs as that
- * account and could have swapped an impostor in to collect the token.
+ * The CLI cannot authenticate the listener, so it judges the NAME (VC-623).
+ * Every entry along the path as typed AND along the real path it resolves to
+ * is `lstat`ed — never followed — and must belong to root or this user, so a
+ * symlink anywhere on the way is judged as the entry it is, by who could
+ * repoint it. A directory must also be one neither group nor others can write,
+ * unless it is sticky (`/tmp`), where nobody can rename or replace another's
+ * entry. The real path must end in a socket. Under the packaged unit that is
+ * `/run/volli-hostd.sock`, bound by systemd as root in root's `/run`.
+ *
+ * What this refuses is anything the host's service account could change
+ * between this check and the connect: every Session runs as that account, and
+ * a socket it could swap — or a symlink it owns, even in a sticky `/tmp` —
+ * would let it put an impostor in place to collect the token.
  */
 export async function untrustedSocketPath(
   socketPath: string,
@@ -115,27 +135,20 @@ export async function untrustedSocketPath(
 ): Promise<string | null> {
   const self = fs.uid();
   const trusted = (uid: number): boolean => uid === 0 || uid === self;
-  let real: string;
-  let socket;
   try {
-    real = await fs.realpath(socketPath);
-    socket = await fs.stat(real);
+    const real = await fs.realpath(socketPath);
+    if (!(await fs.lstat(real)).isSocket()) return `${socketPath} is not a socket`;
+    for (const component of [...componentsOf(socketPath), ...componentsOf(real)]) {
+      const entry = await fs.lstat(component);
+      if (!trusted(entry.uid)) {
+        return `${component} belongs to uid ${entry.uid}, who could replace ${socketPath}`;
+      }
+      if (entry.isDirectory() && (entry.mode & 0o022) !== 0 && (entry.mode & 0o1000) === 0) {
+        return `${component} can be written by its group or other users, who could replace ${socketPath}`;
+      }
+    }
   } catch {
     return `${socketPath} could not be resolved`;
-  }
-  if (!socket.isSocket()) return `${socketPath} is not a socket`;
-  if (!trusted(socket.uid)) return `${socketPath} belongs to uid ${socket.uid}`;
-  for (const start of [socketPath, real]) {
-    for (let directory = dirname(start); ; directory = dirname(directory)) {
-      const stat = await fs.stat(directory);
-      if (!trusted(stat.uid)) {
-        return `${directory} belongs to uid ${stat.uid}, who could replace ${socketPath}`;
-      }
-      if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
-        return `${directory} can be written by its group or other users, who could replace ${socketPath}`;
-      }
-      if (dirname(directory) === directory) break;
-    }
   }
   return null;
 }

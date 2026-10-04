@@ -331,7 +331,14 @@ describe("an operator at the host's shell", () => {
       {
         uid: () => me.uid,
         rootUid: me.uid,
-        lookupUser: (login) => (login === me.login ? me : null),
+        // The service account: another uid, this test's group (so the file's
+        // group can be set without root).
+        lookupUser: (login) =>
+          login === me.login
+            ? me
+            : login === "volli-test-service"
+              ? { login, uid: me.uid + 1, gid: me.gid }
+              : null,
         writeTokenAsUser: (user, token) => writeTokenAsUser(user, token, home),
         now: () => new Date(0),
         out: () => undefined,

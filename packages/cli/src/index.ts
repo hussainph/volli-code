@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -227,7 +227,7 @@ async function main(): Promise<void> {
     socketPathFault: (path) =>
       untrustedSocketPath(path, {
         realpath: (candidate) => realpath(candidate),
-        stat: (candidate) => stat(candidate),
+        lstat: (candidate) => lstat(candidate),
         uid: () => process.getuid?.() ?? null,
       }),
     launch: (timeoutMs) => {

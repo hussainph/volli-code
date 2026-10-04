@@ -162,11 +162,15 @@ describe("issuing", () => {
     expect(inspectOperatorsFile(operatorsFile, ME)).toMatchObject({ state: "absent" });
   });
 
-  it("says when there is no service account to check against, and writes the file world-readable", () => {
-    const { run, err } = setup({ lookupUser: (login) => (login === "alice" ? ALICE : null) });
-    expect(run({ serviceUser: "svc" })).toBe(0);
-    expect(err.join("")).toContain("no service account named svc");
-    expect(statSync(operatorsFile).mode & 0o777).toBe(0o644);
+  it("refuses to issue when the service account cannot be found, even for the service's own name", () => {
+    const { run, err, written } = setup({
+      lookupUser: (login) => (login === "volli" ? null : ALICE),
+    });
+    expect(run({ login: "volli" })).toBe(1);
+    expect(run()).toBe(1);
+    expect(err.join("")).toContain("no service account named volli");
+    expect(written).toEqual([]);
+    expect(inspectOperatorsFile(operatorsFile, ME)).toMatchObject({ state: "absent" });
   });
 });
 
@@ -186,6 +190,15 @@ describe("revoking", () => {
     expect(entries().map((entry) => entry.login)).toEqual(["bob"]);
     expect(matchOperator(entries(), written[0]!.token)).toBeNull();
     expect(out.join("")).toContain("Revoked alice's operator token");
+  });
+
+  it("still revokes when the service account is gone, leaving the file world-readable", () => {
+    const { run } = setup();
+    run();
+    const { run: revoke } = setup({ lookupUser: () => null });
+    expect(revoke({ action: "revoke" })).toBe(0);
+    expect(entries()).toEqual([]);
+    expect(statSync(operatorsFile).mode & 0o777).toBe(0o644);
   });
 
   it("is a no-op for a login that holds none", () => {

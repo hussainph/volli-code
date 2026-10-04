@@ -112,14 +112,17 @@ export function runOperatorToken(command: OperatorTokenCommand, ports: OperatorT
 
   const user = ports.lookupUser(login);
   if (user === null) return fail(`no user named ${login} on this host.`);
-  if (login === command.serviceUser || (service !== null && service.uid === user.uid)) {
+  // Without the service account there is nothing to check the operator
+  // against, and issuing anyway could hand a Session's own uid a person's
+  // token. So it is required, never a warning.
+  if (service === null) {
     return fail(
-      `${login} is the service account hostd and every Session run as; it is never issued an operator token. Name the person's own login.`,
+      `no service account named ${command.serviceUser}, so ${login} cannot be checked against the account hostd and its Sessions run as. Pass --service-user <the unit's User=>.`,
     );
   }
-  if (service === null) {
-    ports.err(
-      `volli-hostd operator-token: no service account named ${command.serviceUser}, so the token's owner could not be checked against it (pass --service-user).\n`,
+  if (login === command.serviceUser || service.uid === user.uid) {
+    return fail(
+      `${login} is the service account hostd and every Session run as; it is never issued an operator token. Name the person's own login.`,
     );
   }
   const token = mintOperatorToken();
@@ -182,10 +185,11 @@ function writeOperatorsFile(
   renameSync(temporary, path);
 }
 
-/** `id -u` and `id -g`, which every Linux and macOS host has. */
+/** `/usr/bin/id -u` and `-g`, which every Linux and macOS host has. */
 export function lookupSystemUser(login: string): SystemUser | null {
   const id = (flag: string): number | null => {
-    const result = spawnSync("id", [flag, login], { encoding: "utf8" });
+    // Absolute: this runs as root, and root's PATH is not something to trust.
+    const result = spawnSync("/usr/bin/id", [flag, login], { encoding: "utf8" });
     const value = result.stdout.trim();
     return result.status === 0 && /^\d+$/.test(value) ? Number(value) : null;
   };

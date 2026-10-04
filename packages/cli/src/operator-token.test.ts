@@ -115,61 +115,126 @@ describe("operatorTokenFor", () => {
   });
 });
 
-/** A scripted file system of directories, sockets and symlinks. */
-type Node = { uid: number; mode: number; socket?: boolean };
-const tree = (nodes: Record<string, Node>, links: Record<string, string> = {}, self = 501) => ({
-  realpath: async (path: string) => {
-    if (!(path in nodes) && !(path in links)) throw new Error("ENOENT");
-    return links[path] ?? path;
-  },
-  stat: async (path: string) => {
-    const node = nodes[links[path] ?? path]!;
-    return { uid: node.uid, mode: node.mode, isSocket: () => node.socket === true };
-  },
-  uid: () => self,
-});
+/** One entry in a scripted file system: a directory, a socket, a file, or a symlink. */
+type Entry = { uid: number; mode: number; link?: string };
+
+/**
+ * A scripted file system. `realpath` follows `link`s one level at a time and
+ * `lstat` never does, as the real calls behave.
+ */
+function tree(entries: Record<string, Entry>, self: number | null = 501) {
+  const resolve = (path: string): string => {
+    const entry = entries[path];
+    if (entry === undefined) throw new Error("ENOENT");
+    return entry.link === undefined ? path : resolve(entry.link);
+  };
+  return {
+    realpath: async (path: string) => resolve(path),
+    lstat: async (path: string) => {
+      const entry = entries[path];
+      if (entry === undefined) throw new Error("ENOENT");
+      const type = entry.link === undefined ? entry.mode & 0o170000 : 0o120000;
+      return {
+        uid: entry.uid,
+        mode: entry.mode,
+        isSocket: () => type === 0o140000,
+        isDirectory: () => type === 0o040000,
+      };
+    },
+    uid: () => self,
+  };
+}
+
+const DIR = 0o40755;
+const ROOT_DIRS: Record<string, Entry> = {
+  "/": { uid: 0, mode: DIR },
+  "/run": { uid: 0, mode: DIR },
+  "/tmp": { uid: 0, mode: 0o41777 },
+  "/run/volli-hostd.sock": { uid: 0, mode: 0o140660 },
+};
 
 describe("untrustedSocketPath", () => {
-  const rootDirs = { "/": { uid: 0, mode: 0o40755 }, "/run": { uid: 0, mode: 0o40755 } };
-
   it("trusts a root socket in root's /run, and the caller's own socket", async () => {
-    expect(
-      await untrustedSocketPath(
-        "/run/volli-hostd.sock",
-        tree({ ...rootDirs, "/run/volli-hostd.sock": { uid: 0, mode: 0o140660, socket: true } }),
-      ),
-    ).toBeNull();
+    expect(await untrustedSocketPath("/run/volli-hostd.sock", tree(ROOT_DIRS))).toBeNull();
     expect(
       await untrustedSocketPath(
         "/tmp/me/v.sock",
         tree({
-          "/": { uid: 0, mode: 0o40755 },
-          "/tmp": { uid: 0, mode: 0o41777 },
+          ...ROOT_DIRS,
           "/tmp/me": { uid: 501, mode: 0o40700 },
-          "/tmp/me/v.sock": { uid: 501, mode: 0o140600, socket: true },
+          "/tmp/me/v.sock": { uid: 501, mode: 0o140600 },
         }),
       ),
     ).toBeNull();
   });
 
-  it("refuses a socket in a directory the service account owns", async () => {
+  it("trusts a symlink root or the caller owns, even in sticky /tmp", async () => {
+    for (const owner of [0, 501]) {
+      expect(
+        await untrustedSocketPath(
+          "/tmp/volli.sock",
+          tree({
+            ...ROOT_DIRS,
+            "/tmp/volli.sock": { uid: owner, mode: 0o120777, link: "/run/volli-hostd.sock" },
+          }),
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("refuses a symlink the service account owns, though sticky /tmp and the target are root's", async () => {
+    // The Session could repoint its own link between this check and the
+    // connect, sending the token to an impostor.
     expect(
       await untrustedSocketPath(
-        "/run/volli-hostd/volli.sock",
+        "/tmp/volli.sock",
         tree({
-          ...rootDirs,
-          "/run/volli-hostd": { uid: 999, mode: 0o40750 },
-          "/run/volli-hostd/volli.sock": { uid: 999, mode: 0o140660, socket: true },
+          ...ROOT_DIRS,
+          "/tmp/volli.sock": { uid: 999, mode: 0o120777, link: "/run/volli-hostd.sock" },
         }),
       ),
-    ).toBe("/run/volli-hostd/volli.sock belongs to uid 999");
+    ).toBe("/tmp/volli.sock belongs to uid 999, who could replace /tmp/volli.sock");
+  });
+
+  it("refuses a symlinked directory the service account owns anywhere on the typed path", async () => {
+    expect(
+      await untrustedSocketPath(
+        "/home/svc/run/volli-hostd.sock",
+        tree({
+          ...ROOT_DIRS,
+          "/home": { uid: 0, mode: DIR },
+          "/home/svc": { uid: 0, mode: DIR },
+          "/home/svc/run": { uid: 999, mode: 0o120777, link: "/run" },
+          "/home/svc/run/volli-hostd.sock": {
+            uid: 0,
+            mode: 0o140660,
+            link: "/run/volli-hostd.sock",
+          },
+        }),
+      ),
+    ).toBe("/home/svc/run belongs to uid 999, who could replace /home/svc/run/volli-hostd.sock");
+  });
+
+  it("refuses a socket, or a directory, the service account owns", async () => {
     expect(
       await untrustedSocketPath(
         "/run/volli-hostd/volli.sock",
         tree({
-          ...rootDirs,
+          ...ROOT_DIRS,
+          "/run/volli-hostd": { uid: 0, mode: 0o40750 },
+          "/run/volli-hostd/volli.sock": { uid: 999, mode: 0o140660 },
+        }),
+      ),
+    ).toBe(
+      "/run/volli-hostd/volli.sock belongs to uid 999, who could replace /run/volli-hostd/volli.sock",
+    );
+    expect(
+      await untrustedSocketPath(
+        "/run/volli-hostd/volli.sock",
+        tree({
+          ...ROOT_DIRS,
           "/run/volli-hostd": { uid: 999, mode: 0o40750 },
-          "/run/volli-hostd/volli.sock": { uid: 0, mode: 0o140660, socket: true },
+          "/run/volli-hostd/volli.sock": { uid: 0, mode: 0o140660 },
         }),
       ),
     ).toBe("/run/volli-hostd belongs to uid 999, who could replace /run/volli-hostd/volli.sock");
@@ -178,53 +243,28 @@ describe("untrustedSocketPath", () => {
   it("refuses a group-writable directory, a missing path and a non-socket", async () => {
     expect(
       await untrustedSocketPath(
-        "/run/s",
-        tree({
-          "/": { uid: 0, mode: 0o40755 },
-          "/run": { uid: 0, mode: 0o40775 },
-          "/run/s": { uid: 0, mode: 0o140600, socket: true },
-        }),
+        "/run/volli-hostd.sock",
+        tree({ ...ROOT_DIRS, "/run": { uid: 0, mode: 0o40775 } }),
       ),
-    ).toBe("/run can be written by its group or other users, who could replace /run/s");
-    expect(await untrustedSocketPath("/nope", tree(rootDirs))).toBe("/nope could not be resolved");
+    ).toBe(
+      "/run can be written by its group or other users, who could replace /run/volli-hostd.sock",
+    );
+    expect(await untrustedSocketPath("/nope", tree(ROOT_DIRS))).toBe("/nope could not be resolved");
     expect(
       await untrustedSocketPath(
         "/run/f",
-        tree({ ...rootDirs, "/run/f": { uid: 0, mode: 0o100600 } }),
+        tree({ ...ROOT_DIRS, "/run/f": { uid: 0, mode: 0o100600 } }),
       ),
     ).toBe("/run/f is not a socket");
-  });
-
-  it("judges the path as typed as well as the one it resolves to", async () => {
-    // /home/svc/link -> /run/volli-hostd.sock: the target is root's, but the
-    // service account could repoint the link.
-    expect(
-      await untrustedSocketPath(
-        "/home/svc/link",
-        tree(
-          {
-            ...rootDirs,
-            "/home": { uid: 0, mode: 0o40755 },
-            "/home/svc": { uid: 999, mode: 0o40755 },
-            "/run/volli-hostd.sock": { uid: 0, mode: 0o140660, socket: true },
-          },
-          { "/home/svc/link": "/run/volli-hostd.sock" },
-        ),
-      ),
-    ).toBe("/home/svc belongs to uid 999, who could replace /home/svc/link");
   });
 
   it("trusts only root where the platform has no uid", async () => {
     expect(
       await untrustedSocketPath(
         "/run/s",
-        tree(
-          { ...rootDirs, "/run/s": { uid: 501, mode: 0o140600, socket: true } },
-          {},
-          null as unknown as number,
-        ),
+        tree({ ...ROOT_DIRS, "/run/s": { uid: 501, mode: 0o140600 } }, null),
       ),
-    ).toBe("/run/s belongs to uid 501");
+    ).toBe("/run/s belongs to uid 501, who could replace /run/s");
   });
 });
 

@@ -55,6 +55,9 @@ step "root will not issue one to the service account"
 code=0
 "$hostd" operator-token --for volli 2>&1 || code=$?
 test "$code" -eq 1 || fail "issuing to the service account exited $code"
+code=0
+"$hostd" operator-token --for volli --service-user no-such-service 2>&1 || code=$?
+test "$code" -eq 1 || fail "issuing with an unresolvable service account exited $code"
 
 step "socket activation, as volli-hostd.socket does it: root binds, hostd (as volli) serves"
 log=$(mktemp)
@@ -148,6 +151,14 @@ grep -q "not sending the operator token" <<<"$out" || fail "no warning for an un
 grep -q FORBIDDEN_ACTOR <<<"$out" || fail "the untrusted-name request was not read-only: $out"
 echo "refused as expected: the token stays home when the socket's name is not root's"
 chmod 700 /var/lib/volli-hostd
+# The sticky-/tmp variant: /tmp and the target are root's, but the link is
+# volli's, which could repoint it between the check and the connect.
+runuser -u volli -- ln -s "$socket" /tmp/volli.sock
+out=$(runuser -u ops -- env -i PATH=/usr/bin:/bin HOME=/home/ops VOLLI_SOCKET=/tmp/volli.sock \
+  "$volli" ticket create --title Phished --project "$prefix" 2>&1) &&
+  fail "a write went through volli's symlink: $out"
+grep -q "/tmp/volli.sock belongs to uid" <<<"$out" || fail "no warning for volli's symlink: $out"
+echo "refused as expected: no token through a symlink the service account owns, even in /tmp"
 
 step "the service account cannot read the token or mint one"
 if runuser -u volli -- cat "$token_file" >/dev/null 2>&1; then fail "volli read ops' token"; fi
