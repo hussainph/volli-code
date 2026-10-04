@@ -9,7 +9,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { MODEL_TIER_ROWS } from "@volli/shared";
+import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
 
 import { MODELS_CATEGORY_KEY, settingsGroups } from "./settings-groups";
 
@@ -35,6 +35,32 @@ describe("Settings → General", () => {
     expect(html).not.toContain("Protection");
     expect(html).not.toContain("experimental");
     expect(keywordsFor("general").some((term) => term.includes("protection"))).toBe(false);
+  });
+});
+
+describe("Settings → Experimental", () => {
+  it("lists the registry in System and makes its flag discoverable from the rail", () => {
+    const system = settingsGroups().find((group) => group.key === "system");
+    const experimental = system?.categories.find((category) => category.key === "experimental");
+    expect(experimental).toBeDefined();
+    if (!experimental) throw new Error("no Experimental category under System");
+
+    expect(experimental.label).toBe("Experimental");
+    const terms = [experimental.label, ...(experimental.keywords ?? [])].map((term) =>
+      term.toLowerCase(),
+    );
+    expect(terms).toContain("cloud");
+    expect(terms).toContain("feature flags");
+
+    const html = renderToStaticMarkup(experimental.content);
+    for (const experiment of EXPERIMENTS) {
+      expect(html).toContain(experiment.label);
+      expect(html).toContain(experiment.description);
+      expect(
+        terms.some((term) => term.includes(experiment.label.toLowerCase())),
+        `${experiment.label} is drawn in Experimental but nothing in the rail finds it`,
+      ).toBe(true);
+    }
   });
 });
 

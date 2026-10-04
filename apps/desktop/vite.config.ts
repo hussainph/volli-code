@@ -711,6 +711,7 @@ export default defineConfig(({ mode }) => ({
         // login shell. Neither is visible anywhere until the laptop swaps.
         "**/src/main/session-concurrency.ts",
         "**/src/main/session-rpc-ipc.ts",
+        "**/src/main/experiments.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",
         // The turn boundary that decides unread (VC-30), beside the watch it
