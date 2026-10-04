@@ -28,11 +28,11 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...fs,
     linkSync: (...args: Parameters<typeof fs.linkSync>) => {
-      const source = String(args[0]);
+      // Putting an original sidecar back from the preserved directory.
       if (
-        String(args[1]) === faults.dbPath &&
-        ((faults.publish && source.includes(".restore-")) ||
-          (faults.rollback && source.includes(".damaged-")))
+        faults.rollback &&
+        String(args[0]).includes(".damaged-") &&
+        String(args[1]).startsWith(faults.dbPath)
       )
         throw fullDiskFailure();
       return fs.linkSync(...args);
@@ -44,6 +44,13 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     renameSync: (...args: Parameters<typeof fs.renameSync>) => {
       if (faults.moveWal && String(args[0]) === `${faults.dbPath}-wal`) throw fullDiskFailure();
+      // Publishing the staged copy onto the live path.
+      if (
+        faults.publish &&
+        String(args[0]).includes(".restore-") &&
+        String(args[1]) === faults.dbPath
+      )
+        throw fullDiskFailure();
       return fs.renameSync(...args);
     },
   };
@@ -273,12 +280,14 @@ describe("DatabaseRecovery", () => {
     writeFileSync(`${dbPath}-wal`, "original WAL");
     const original = readFileSync(dbPath);
     const originalWal = readFileSync(`${dbPath}-wal`);
-    const open = database.openVolliDb;
-    vi.spyOn(database, "openVolliDb").mockImplementation((path) => {
-      if (path === dbPath) throw new Error("injected installed re-open failure");
-      return open(path);
+    const failing = new DatabaseRecovery({
+      dbPath,
+      userData: directory,
+      faults: (step) => {
+        if (step === "swap:verify") throw new Error("injected installed re-open failure");
+      },
     });
-    expect(() => recovery.restore()).toThrow("Restore failed");
+    expect(() => failing.restore()).toThrow("Restore failed");
     expect(readFileSync(dbPath)).toEqual(original);
     expect(readFileSync(join(preservedDirectory(), "before-checkpoint", "volli.db-wal"))).toEqual(
       originalWal,
@@ -295,11 +304,8 @@ describe("DatabaseRecovery", () => {
     const original = bundle();
     expect(recovery.list()[0]?.integrity).toBe("clean");
     expect(() => recovery.restore()).toThrow("Restore failed");
-    const after = bundle();
-    // Only the stable coordination lock is new; no source/recovery data changed.
-    expect(existsSync(`${dbPath}.open-lock`)).toBe(true);
-    delete after["volli.db.open-lock"];
-    expect(after).toEqual(original);
+    // Staging fails before the swap takes any lock: nothing at all changed.
+    expect(bundle()).toEqual(original);
   });
 
   it("refuses out-of-userData paths and linked current databases", () => {
@@ -351,6 +357,8 @@ describe("DatabaseRecovery", () => {
       faults.moveWal = boundary === "sidecar-move";
       expect(() => recovery.restore()).toThrow("Restore failed");
       expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+      // The live path never went empty: the damaged base stayed in place.
+      expect(readFileSync(dbPath)).toEqual(damagedBytes);
       expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
       const saved = preservedDirectory();
       expect(readFileSync(join(saved, "before-checkpoint", "volli.db"))).toEqual(damagedBytes);
@@ -477,14 +485,15 @@ describe("DatabaseRecovery", () => {
 
   it("keeps interrupted-recovery intent when a publication re-open fails", () => {
     backup(1);
-    const open = database.openVolliDb;
-    vi.spyOn(database, "openVolliDb").mockImplementation((path, options) => {
-      if (path === dbPath) throw new Error("injected re-open failure");
-      return open(path, options);
+    const failing = new DatabaseRecovery({
+      dbPath,
+      userData: directory,
+      faults: (step) => {
+        if (step === "swap:verify") throw new Error("injected re-open failure");
+      },
     });
-    expect(() => recovery.restore()).toThrow("Restore failed");
+    expect(() => failing.restore()).toThrow("Restore failed");
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
-    vi.mocked(database.openVolliDb).mockRestore();
     expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
     expect(recovery.restore()).toBe("volli.db.backup-v1");
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);

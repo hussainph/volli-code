@@ -1,0 +1,755 @@
+/**
+ * The database file: the one module that may put a file at the Volli database
+ * path, or publish a copy of one (VC-628).
+ *
+ * Three operations need to replace or copy the live file: opening it (which
+ * creates it on first run), the migration safety copy, and swapping in a
+ * staged database (backup recovery, and a bundle restore's profile
+ * activation). Each has the same crash rules, and they live here once:
+ *
+ * - **The open lock** (`open-lock.ts`) serializes boot against a swap, so a
+ *   dormant boot handle cannot resume against a different inode.
+ * - **The intent marker** (`recovery-pending.ts`) is durable before anything
+ *   is displaced. While it exists, {@link openVolliDb} refuses to open, so an
+ *   interruption can never turn a missing or half-swapped live path into an
+ *   apparently successful, empty first-run database.
+ * - **fsync** of every file before a name points at it, and of every
+ *   directory after its entries change, so a power loss cannot leave a name
+ *   pointing at torn content.
+ * - **Sidecars** (`-wal`, `-shm`, `-journal`) move with their base and never
+ *   attach to a different one. A swap first takes SQLite's exclusive
+ *   ownership of the live file and checkpoints it, so its base stands alone;
+ *   the base then gains a second name in the set-aside directory and STAYS at
+ *   the live path until the staged file replaces it with one atomic rename.
+ *   The live path is never empty.
+ *
+ * Every step that changes the disk first calls the optional
+ * {@link DatabaseFileFaults} hook with its name. A throw there is, to this
+ * module, indistinguishable from an I/O failure at that point; a crash test
+ * copies the directory inside the hook to see exactly what a power cut there
+ * would leave (`database-file.test.ts`). Production callers never pass one.
+ *
+ * Nothing outside this module imports the lock or the marker
+ * (`database-file-boundary.test.ts`).
+ */
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { verifyMigrationBackup } from "./backup-integrity";
+import { BACKUP_RETENTION_LOG_PREFIX } from "./backup-retention";
+import { migrate, SCHEMA_HEAD } from "./migrations";
+import { acquireDatabaseOpenLock } from "./open-lock";
+import {
+  assertNoPendingDatabaseRecovery,
+  beginDatabaseRecovery,
+  finishDatabaseRecovery,
+  hasPendingDatabaseRecovery,
+  recoveryPendingPath,
+  syncRecoveryPath,
+} from "./recovery-pending";
+import { checkSchemaCompatibility } from "./schema-compatibility";
+import type { SchemaCompatibility } from "./schema-compatibility";
+import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
+import type { TransactionViolationHandler } from "./transaction-gate";
+
+// Read-only questions about the fence, for recovery's listing.
+export { hasPendingDatabaseRecovery, recoveryPendingPath };
+
+/** A named point, just before a change to the disk, where a test may stop the operation. */
+export type DatabaseFileStep =
+  | "rollback-point:copy"
+  | `rollback-point:preserve${"" | "-wal" | "-shm" | "-journal"}`
+  | "rollback-point:publish"
+  | "rollback-point:sync"
+  | "swap:lock"
+  | "swap:preserve-raw"
+  | "swap:mark"
+  | "swap:own"
+  | `swap:set-aside:${string}`
+  | `swap:install:${string}`
+  | "swap:publish"
+  | "swap:verify"
+  | "swap:finish"
+  | `swap:rollback:${string}`;
+
+/**
+ * Called before each step that changes the disk. A throw is treated exactly as
+ * an I/O failure at that step. Crash tests only; production never passes one.
+ */
+export type DatabaseFileFaults = (step: DatabaseFileStep) => void;
+
+const noFaults: DatabaseFileFaults = () => {};
+
+const SIDECARS = ["-wal", "-shm", "-journal"] as const;
+const FAMILY = ["", ...SIDECARS] as const;
+
+/** Another SQLite connection holds the file the operation needs to own. */
+export class DatabaseFileBusyError extends Error {
+  constructor(
+    /** `opening`: another boot holds the open lock. `in-use`: a live connection holds the file. */
+    readonly phase: "opening" | "in-use",
+    options?: ErrorOptions,
+  ) {
+    super(
+      phase === "opening"
+        ? "The database is being opened by another Volli instance."
+        : "The database is in use.",
+      options,
+    );
+    this.name = "DatabaseFileBusyError";
+  }
+}
+
+/**
+ * A swap failed, and putting the original back failed too. The intent marker
+ * stays, so boot refuses instead of creating an empty profile; the original
+ * files are in {@link asideDirectory}.
+ */
+export class DatabaseSwapRollbackError extends Error {
+  constructor(
+    readonly asideDirectory: string,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `The swap failed and the original database could not be put back. It is preserved in ${asideDirectory}.`,
+      options,
+    );
+    this.name = "DatabaseSwapRollbackError";
+  }
+}
+
+/**
+ * The staged database is installed, checked and durable, but the intent
+ * marker could not be cleared. Undoing a verified install is never the answer.
+ */
+export class DatabaseSwapFinalizeError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The swap was installed and checked, but could not be finalized.", options);
+    this.name = "DatabaseSwapFinalizeError";
+  }
+}
+
+function exists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function regularFile(path: string): void {
+  if (!lstatSync(path).isFile())
+    throw new Error("Recovery requires regular local files, not links or directories.");
+}
+
+function isBusy(error: unknown): boolean {
+  return (error as { code?: string }).code === "SQLITE_BUSY";
+}
+
+function checkpoint(db: Database.Database): void {
+  const rows = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
+  if (rows.length !== 1 || rows[0]?.busy !== 0) throw new DatabaseFileBusyError("in-use");
+}
+
+function checksClean(db: Database.Database): boolean {
+  const rows = db.pragma("quick_check") as { quick_check: string }[];
+  return rows.length === 1 && rows[0]?.quick_check === "ok";
+}
+
+export function assertDatabaseHeader(dbPath: string): void {
+  // SQLite can update SHM even on a read-only handle. Reject a broken header
+  // without invoking SQLite, preserving malformed sidecars as raw evidence.
+  const fd = openSync(dbPath, "r");
+  const header = Buffer.alloc(100);
+  let bytesRead: number;
+  try {
+    bytesRead = readSync(fd, header, 0, header.length, 0);
+  } finally {
+    closeSync(fd);
+  }
+  if (bytesRead !== header.length || header.subarray(0, 16).toString() !== "SQLite format 3\0") {
+    throw new Error(
+      "The local database has a damaged header. Restore from the last backup that checks clean.",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Open
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens (creating if absent) the Volli SQLite database at `dbPath`, applies
+ * the pragmas migration 001 assumes — WAL journaling, foreign keys ON, a
+ * busy timeout so a brief writer/reader overlap blocks instead of erroring,
+ * NORMAL synchronous (safe under WAL) — plus the read-tuning pragmas
+ * (VC-355): a 64 MB page cache, 256 MB of memory-mapped I/O, and in-memory
+ * temp storage, so reads over a large history avoid the OS round-trip and
+ * sorts/hashes stay off disk. The WAL itself is bounded by an aggressive
+ * `wal_autocheckpoint` (see below) and, when migrations run, a bounded ANALYZE
+ * refreshes the planner statistics without making routine opens write.
+ *
+ * Runs any pending migrations — unless the file is from a newer build
+ * (VC-602). Before anything opens it for writing, the read-only preflight
+ * compares its `user_version` and minimum reader version with this build's
+ * schema head (`schema-compatibility.ts`): a newer, compatible file opens
+ * with no migration and its `user_version` untouched, and a newer,
+ * incompatible one throws `DatabaseFromNewerVersionError` with the file
+ * byte-for-byte as it was.
+ *
+ * Refuses while a swap's intent marker exists, so a crash mid-swap fails
+ * boot closed rather than creating an empty first-run database at a path the
+ * swap had not finished filling.
+ *
+ * The parent directory must already exist; the host creates it (and catches
+ * everything this throws) before calling in, since that's also where the
+ * open+migrate failure is turned into the degraded IPC story.
+ */
+export function openVolliDb(
+  dbPath: string,
+  options: {
+    /** The caller already holds the fence: a swap verifying what it installed. */
+    allowPendingRecovery?: boolean;
+    /** Tests/dev opt into failure; packaged startup explicitly uses logging. */
+    onTransactionViolation?: TransactionViolationHandler;
+  } = {},
+): Database.Database {
+  // A crash or full disk during publication must never turn a missing live
+  // pathname into an apparently successful, empty first-run database.
+  if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+  // Hold the startup mutex across construction AND first SQLite operations.
+  // A swap holds the same mutex through publication, so a dormant boot
+  // handle cannot resume against a different inode after a successful swap.
+  const openLock = options.allowPendingRecovery ? undefined : acquireDatabaseOpenLock(dbPath);
+  try {
+    if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+    let compatibility: SchemaCompatibility | undefined;
+    if (exists(dbPath)) {
+      // Read-only preflight cannot checkpoint/delete a damaged WAL on close or
+      // overwrite a clean migration safety copy before recovery becomes available.
+      assertDatabaseHeader(dbPath);
+      const check = new Database(dbPath, { readonly: true, fileMustExist: true });
+      try {
+        if (!checksClean(check)) {
+          throw new Error(
+            "The local database failed its integrity check. Restore from the last backup that checks clean.",
+          );
+        }
+        // The downgrade guard, on the read-only handle. A refusal opens no
+        // writable handle, checkpoints nothing and takes no safety copy: the
+        // db file and its WAL stay byte-identical; `-shm`, an index with no
+        // data, may be created or reset by SQLite's read-only reader, exactly
+        // as the preflight above already does.
+        compatibility = checkSchemaCompatibility(check, SCHEMA_HEAD);
+      } finally {
+        check.close();
+      }
+    }
+    const db = new Database(dbPath);
+    try {
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      db.pragma("busy_timeout = 5000");
+      db.pragma("synchronous = NORMAL");
+      // VC-355 read tuning. `cache_size` is negative = KiB (64 MB); `mmap_size`
+      // lets SQLite read pages straight from the page cache of the OS. Both are
+      // per-handle and harmless on a small database — they only set ceilings.
+      db.pragma("cache_size = -64000");
+      db.pragma("mmap_size = 268435456");
+      db.pragma("temp_store = MEMORY");
+      // Bound the WAL: checkpoint (and restart from zero) once it passes 400
+      // pages (~1.6 MB at the 4 KiB page size migration 001 assumes). The default
+      // 1000 already exists, but the session ledger appends densely and a smaller
+      // ceiling keeps the WAL file itself from dominating a 260k-event history's
+      // disk footprint while the automatic checkpoint still amortizes to a page
+      // or two per commit.
+      db.pragma("wal_autocheckpoint = 400");
+      if (compatibility?.newer === true) {
+        console.warn(
+          `[volli] database schema ${compatibility.schemaVersion} is newer than this build's ${SCHEMA_HEAD} and declares it compatible; opening without migrating.`,
+        );
+      }
+      const migrated = migrate(db, dbPath);
+      // Post-migration, so it sees the final schema. A bounded ANALYZE
+      // (`analysis_limit` keeps each table's scan proportional — SQLite's own
+      // recommendation for routine maintenance) keeps a migration from leaving
+      // the planner blind. Do not repeat it on a routine open: ANALYZE takes a
+      // write lock and changes sqlite_stat1 even when application data did not.
+      if (migrated) {
+        db.pragma("analysis_limit = 1000");
+        db.exec("ANALYZE");
+      }
+      guardTransactionOwnership(db, options.onTransactionViolation ?? logTransactionViolation);
+      return db;
+    } catch (error) {
+      // A degraded boot must not leave a writer alive during backup recovery.
+      db.close();
+      throw error;
+    }
+  } finally {
+    openLock?.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Publish rollback point (the migration safety copy)
+// ---------------------------------------------------------------------------
+
+export const MIGRATION_RECOVERY_ACTION =
+  "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
+
+/**
+ * Publishes `<dbPath>.backup-v<version>`: a verified, durable copy of the
+ * database as it is before a migration runs, and returns its path.
+ *
+ * Checkpoints first, so the base file alone is the whole database, then
+ * copies it to a unique staged name, verifies the copy, fsyncs it, sets any
+ * existing family at the rollback name aside, renames the copy into place and
+ * fsyncs the directory. By the time a migration can commit, the rollback
+ * point is on disk under its name; a power cut can never leave a torn copy
+ * behind a migrated database.
+ */
+export function publishRollbackPoint(
+  db: Database.Database,
+  dbPath: string,
+  version: number,
+  options: { faults?: DatabaseFileFaults } = {},
+): string {
+  const faults = options.faults ?? noFaults;
+  const recovery = MIGRATION_RECOVERY_ACTION;
+  const result = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
+  if (result.length !== 1 || result[0]?.busy !== 0) {
+    throw new Error(`Migration refused: WAL checkpoint did not complete. ${recovery}`);
+  }
+  const backupPath = `${dbPath}.backup-v${version}`;
+  // Stage separately so a failed copy/check cannot overwrite an existing
+  // clean rollback point at the same version (e.g. after a failed upgrade).
+  const stagedPath = `${backupPath}.pending-${randomUUID()}`;
+  faults("rollback-point:copy");
+  copyFileSync(dbPath, stagedPath);
+  try {
+    verifyMigrationBackup(stagedPath);
+  } catch (error) {
+    const quarantinePath = `${stagedPath}.corrupt`;
+    try {
+      renameSync(stagedPath, quarantinePath);
+      console.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", name: quarantinePath });
+    } catch (quarantineError) {
+      console.error(BACKUP_RETENTION_LOG_PREFIX, {
+        action: "failed",
+        operation: "quarantine",
+        name: stagedPath,
+        error: quarantineError,
+      });
+    }
+    throw new Error(`Migration refused: safety copy failed integrity verification. ${recovery}`, {
+      cause: error,
+    });
+  }
+  // Readonly WAL verification can create empty WAL/SHM files. These belong
+  // only to our unique staged snapshot, not to any existing backup family.
+  for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
+  // A verified backup's readonly check can leave WAL/SHM behind. Preserve
+  // the entire old family before publishing, including on restore/re-upgrade.
+  // Never attach an old WAL or journal to the newly verified base file.
+  const preservedPath = `${backupPath}.preserved-${randomUUID()}`;
+  const moved: string[] = [];
+  try {
+    // The copy's bytes are durable before any name can point at them.
+    syncRecoveryPath(stagedPath);
+    let orphanData = false;
+    const existingSuffixes = FAMILY.filter((suffix) => {
+      const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
+      if (info === undefined) return false;
+      if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
+      if (suffix !== "" && suffix !== "-shm" && info.size > 0) orphanData = true;
+      return true;
+    });
+    // Sidecars without a base that hold no data (an empty WAL or journal, an
+    // SHM index) are what a crash between these renames leaves, since the
+    // base goes first and copies only ever carry such sidecars. They are set
+    // aside like any family: refusing them would wedge every later upgrade on
+    // that one crash. A base-less journal WITH data is not ours; refuse it.
+    if (existingSuffixes.length > 0 && existingSuffixes[0] !== "" && orphanData) {
+      throw new Error("existing safety copy family is missing its base");
+    }
+    for (const suffix of existingSuffixes) {
+      faults(`rollback-point:preserve${suffix}`);
+      renameSync(`${backupPath}${suffix}`, `${preservedPath}${suffix}`);
+      moved.push(suffix);
+    }
+    faults("rollback-point:publish");
+    renameSync(stagedPath, backupPath);
+  } catch (error) {
+    // Restore sidecars before the base; on rollback failure leave the base
+    // aside, not at a rollback name with an incomplete family.
+    for (const suffix of moved.toReversed()) {
+      try {
+        renameSync(`${preservedPath}${suffix}`, `${backupPath}${suffix}`);
+        moved.pop();
+      } catch (rollbackError) {
+        console.error(BACKUP_RETENTION_LOG_PREFIX, {
+          action: "failed",
+          operation: "preserve",
+          name: preservedPath,
+          error: rollbackError,
+        });
+        break;
+      }
+    }
+    throw new Error(
+      `Migration refused: could not preserve and publish the safety copy. Recovery action: quit Volli and recover the complete backup family kept beside ${backupPath} before retrying.`,
+      { cause: error },
+    );
+  }
+  try {
+    // The new name is durable before the migration it protects can commit.
+    faults("rollback-point:sync");
+    syncRecoveryPath(dirname(dbPath));
+  } catch (error) {
+    throw new Error(`Migration refused: the safety copy could not be made durable. ${recovery}`, {
+      cause: error,
+    });
+  }
+  if (moved.length > 0)
+    console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preservedPath });
+  return backupPath;
+}
+
+// ---------------------------------------------------------------------------
+// Swap in a staged profile
+// ---------------------------------------------------------------------------
+
+export interface StagedProfileSwap {
+  /** The live database path. */
+  dbPath: string;
+  /**
+   * A closed, checkpointed database file, in a staging directory on the same
+   * volume. It is renamed into place; its staging directory stays the caller's.
+   */
+  stagedPath: string;
+  /**
+   * Where the live files go. Must not exist yet and must sit beside
+   * `dbPath`: the marker names it, and a rename must not cross volumes.
+   */
+  asideDirectory: string;
+  /**
+   * `damaged` (backup recovery): the live file is known bad. Its raw bytes are
+   * copied into `<aside>/before-checkpoint` before SQLite touches it, and a
+   * failed swap keeps the marker, so boot still refuses and recovery can
+   * resume. `healthy` (bundle restore): a failed swap puts the profile back
+   * and clears the marker, so the app opens exactly as before; it refuses to
+   * start over an interrupted swap.
+   */
+  replacing: "damaged" | "healthy";
+  /**
+   * Profile entries beside the database that move as one profile with it, by
+   * name, from the staging directory and to the set-aside directory.
+   */
+  companions?: readonly string[];
+  faults?: DatabaseFileFaults;
+}
+
+/**
+ * Makes a staged database (and its companion entries) the live profile, under
+ * the fence, and checks it there before declaring success.
+ *
+ * Holds the open lock throughout. Writes the intent marker before anything is
+ * displaced. Takes SQLite's exclusive ownership of the live file — refusing,
+ * with {@link DatabaseFileBusyError}, rather than detaching a live writer —
+ * and checkpoints it. Gives the live base a second name in the set-aside
+ * directory and moves its sidecars and companions there. Installs the staged
+ * companions, then renames the staged file over the live path: the commit
+ * point, atomic, so the live path is never empty. Re-opens and checks the
+ * installed file, fsyncs, and clears the marker.
+ *
+ * Any failure before the check passes is rolled back to the original files
+ * and rethrown; see {@link StagedProfileSwap.replacing} for the marker.
+ * Failing to roll back throws {@link DatabaseSwapRollbackError}; failing to
+ * clear the marker after a verified install throws
+ * {@link DatabaseSwapFinalizeError}.
+ */
+export function swapInStagedProfile(request: StagedProfileSwap): void {
+  const { dbPath, stagedPath, asideDirectory } = request;
+  if (resolve(dirname(asideDirectory)) !== resolve(dirname(dbPath)))
+    throw new Error("A swap sets the live database aside beside it, never elsewhere.");
+  if (resolve(stagedPath) === resolve(dbPath))
+    throw new Error("A swap installs a staged copy, never the live database itself.");
+  regularFile(stagedPath);
+  // A staged WAL with frames would be left behind and its data lost.
+  for (const suffix of SIDECARS) {
+    const sidecar = `${stagedPath}${suffix}`;
+    if (exists(sidecar) && suffix !== "-shm" && lstatSync(sidecar).size !== 0)
+      throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
+  }
+  (request.faults ?? noFaults)("swap:lock");
+  let lock: Database.Database;
+  try {
+    lock = acquireDatabaseOpenLock(dbPath);
+  } catch (error) {
+    if (isBusy(error)) throw new DatabaseFileBusyError("opening", { cause: error });
+    throw error;
+  }
+  try {
+    // A healthy swap never adopts someone else's interrupted one: its rollback
+    // would clear a marker that may be guarding a missing live file.
+    if (request.replacing === "healthy") assertNoPendingDatabaseRecovery(dbPath);
+    new Swap(request).run();
+  } finally {
+    lock.close();
+  }
+}
+
+/** One swap's progress, so a failure undoes exactly what happened and no more. */
+class Swap {
+  private readonly faults: DatabaseFileFaults;
+  private readonly profile: string;
+  private readonly staging: string;
+  private readonly name: string;
+  private readonly companions: readonly string[];
+  private createdAside = false;
+  private marked = false;
+  private owner: Database.Database | undefined;
+  /** The live base also has its name in the set-aside directory. */
+  private baseLinked = false;
+  /** Sidecars and companions moved into the set-aside directory, in order. */
+  private readonly setAside: { entry: string; sidecar: boolean }[] = [];
+  /** Staged companions moved into the profile, in order. */
+  private readonly installed: string[] = [];
+  private published = false;
+  private verified = false;
+
+  constructor(private readonly request: StagedProfileSwap) {
+    this.faults = request.faults ?? noFaults;
+    this.profile = dirname(request.dbPath);
+    this.staging = dirname(request.stagedPath);
+    this.name = basename(request.dbPath);
+    this.companions = request.companions ?? [];
+  }
+
+  run(): void {
+    const { dbPath, stagedPath, asideDirectory, replacing } = this.request;
+    try {
+      // Links and directories at the live names are refused before SQLite or
+      // a rename can follow them anywhere.
+      for (const suffix of FAMILY)
+        if (exists(`${dbPath}${suffix}`)) regularFile(`${dbPath}${suffix}`);
+      mkdirSync(asideDirectory);
+      this.createdAside = true;
+      if (replacing === "damaged") {
+        // Preserve BEFORE ownership and checkpoint: even a failed checkpoint
+        // can modify pages. Raw evidence and the post-checkpoint files survive.
+        this.faults("swap:preserve-raw");
+        this.preserveRaw();
+      }
+      // Durable intent precedes ANY displacement. An interruption or a failed
+      // rollback now fails boot closed instead of creating an empty profile.
+      this.faults("swap:mark");
+      beginDatabaseRecovery(dbPath, basename(asideDirectory));
+      this.marked = true;
+      this.faults("swap:own");
+      this.owner = this.takeOwnership();
+      this.setLiveAside();
+      for (const entry of this.companions) {
+        if (!exists(join(this.staging, entry))) continue;
+        this.faults(`swap:install:${entry}`);
+        renameSync(join(this.staging, entry), join(this.profile, entry));
+        this.installed.push(entry);
+      }
+      // The staged bytes are durable before the live name points at them.
+      syncRecoveryPath(stagedPath);
+      this.faults("swap:publish");
+      renameSync(stagedPath, dbPath);
+      this.published = true;
+      syncRecoveryPath(this.profile);
+      this.faults("swap:verify");
+      this.verifyInstalled();
+      // Release the old inode only now; the open lock still excludes boots.
+      this.owner?.close();
+      this.owner = undefined;
+      syncRecoveryPath(dbPath);
+      syncRecoveryPath(asideDirectory);
+      syncRecoveryPath(this.profile);
+      this.verified = true;
+      this.faults("swap:finish");
+      finishDatabaseRecovery(dbPath);
+    } catch (error) {
+      if (this.verified) throw new DatabaseSwapFinalizeError({ cause: error });
+      if (!this.marked) {
+        // Nothing displaced. A healthy swap leaves no trace; recovery keeps
+        // whatever raw evidence it had already copied.
+        if (replacing === "healthy" && this.createdAside)
+          rmSync(asideDirectory, { recursive: true, force: true });
+        throw error;
+      }
+      try {
+        this.rollback();
+      } catch (rollbackError) {
+        throw new DatabaseSwapRollbackError(asideDirectory, { cause: rollbackError });
+      }
+      throw error;
+    } finally {
+      this.owner?.close();
+    }
+  }
+
+  /** Byte-for-byte copies of the live family, before SQLite opens it for writing. */
+  private preserveRaw(): void {
+    const { dbPath, asideDirectory } = this.request;
+    const rawDirectory = join(asideDirectory, "before-checkpoint");
+    mkdirSync(rawDirectory);
+    for (const suffix of FAMILY) {
+      const source = `${dbPath}${suffix}`;
+      if (!exists(source)) continue;
+      const saved = join(rawDirectory, `${this.name}${suffix}`);
+      copyFileSync(source, saved, constants.COPYFILE_EXCL);
+      syncRecoveryPath(saved);
+    }
+    syncRecoveryPath(rawDirectory);
+    syncRecoveryPath(asideDirectory);
+  }
+
+  /**
+   * A checkpoint alone does not exclude idle connections. Acquire and HOLD
+   * SQLite's exclusive file ownership through set-aside and publication. If
+   * corruption prevents ownership, refuse rather than detach a live writer.
+   */
+  private takeOwnership(): Database.Database | undefined {
+    const { dbPath } = this.request;
+    if (!exists(dbPath)) return undefined;
+    // Failed SQLite ownership acquisition can delete malformed WAL/SHM on
+    // close. A non-SQLite header must fail before creating that connection.
+    assertDatabaseHeader(dbPath);
+    const owner = new Database(dbPath, { fileMustExist: true });
+    try {
+      owner.pragma("busy_timeout = 5000");
+      owner.pragma("locking_mode = EXCLUSIVE");
+      try {
+        owner.exec("BEGIN EXCLUSIVE; COMMIT");
+      } catch (error) {
+        if (isBusy(error)) throw new DatabaseFileBusyError("in-use", { cause: error });
+        throw error;
+      }
+      // The base must stand alone: it stays live while its sidecars move.
+      checkpoint(owner);
+      return owner;
+    } catch (error) {
+      owner.close();
+      throw error;
+    }
+  }
+
+  private setLiveAside(): void {
+    const { dbPath, asideDirectory } = this.request;
+    if (exists(dbPath)) {
+      // A second name, not a move: the live path keeps the original until the
+      // staged file atomically replaces it.
+      this.faults(`swap:set-aside:${this.name}`);
+      linkSync(dbPath, join(asideDirectory, this.name));
+      this.baseLinked = true;
+    }
+    for (const suffix of SIDECARS) {
+      const source = `${dbPath}${suffix}`;
+      if (!exists(source)) continue;
+      regularFile(source);
+      const entry = `${this.name}${suffix}`;
+      this.faults(`swap:set-aside:${entry}`);
+      renameSync(source, join(asideDirectory, entry));
+      this.setAside.push({ entry, sidecar: true });
+    }
+    for (const entry of this.companions) {
+      if (!exists(join(this.profile, entry))) continue;
+      this.faults(`swap:set-aside:${entry}`);
+      renameSync(join(this.profile, entry), join(asideDirectory, entry));
+      this.setAside.push({ entry, sidecar: false });
+    }
+    syncRecoveryPath(asideDirectory);
+    syncRecoveryPath(this.profile);
+  }
+
+  /**
+   * Re-open the installed file, not just the staging copy. It is already at
+   * the current schema, so this runs no migration and writes no floor.
+   */
+  private verifyInstalled(): void {
+    const restored = openVolliDb(this.request.dbPath, { allowPendingRecovery: true });
+    try {
+      if (!checksClean(restored))
+        throw new Error("The restored database failed its integrity check.");
+      checkpoint(restored);
+    } finally {
+      restored.close();
+    }
+  }
+
+  /**
+   * Puts the original files back without ever leaving the live path empty
+   * when it held a file. A failed install is kept as evidence; the original
+   * returns by hard link, so a full disk cannot force a second full copy.
+   */
+  private rollback(): void {
+    const { dbPath, asideDirectory, replacing } = this.request;
+    if (this.published) {
+      for (const suffix of SIDECARS) {
+        if (!exists(`${dbPath}${suffix}`)) continue;
+        this.faults(`swap:rollback:failed-restore${suffix}`);
+        renameSync(`${dbPath}${suffix}`, join(asideDirectory, `failed-restore${suffix}`));
+      }
+      this.faults("swap:rollback:failed-restore");
+      linkSync(dbPath, join(asideDirectory, "failed-restore"));
+      if (this.baseLinked) {
+        const spare = join(asideDirectory, `.${this.name}.reinstate-${randomUUID()}`);
+        this.faults(`swap:rollback:${this.name}`);
+        linkSync(join(asideDirectory, this.name), spare);
+        renameSync(spare, dbPath);
+      } else {
+        // There was no live file before the swap; there is none after it.
+        this.faults(`swap:rollback:${this.name}`);
+        unlinkSync(dbPath);
+      }
+    }
+    // Staged companions go back first, so the originals do not land on them.
+    for (const entry of this.installed.toReversed()) {
+      this.faults(`swap:rollback:${entry}`);
+      renameSync(join(this.profile, entry), join(this.staging, entry));
+    }
+    for (const { entry, sidecar } of this.setAside) {
+      this.faults(`swap:rollback:${entry}`);
+      if (sidecar) {
+        // Sidecars return by link, keeping the set-aside copy as evidence.
+        linkSync(join(asideDirectory, entry), join(this.profile, entry));
+      } else {
+        renameSync(join(asideDirectory, entry), join(this.profile, entry));
+      }
+    }
+    syncRecoveryPath(asideDirectory);
+    syncRecoveryPath(this.profile);
+    if (replacing === "healthy") {
+      // The profile is exactly as it was, and durable: let it boot again.
+      this.faults("swap:rollback:finish");
+      finishDatabaseRecovery(dbPath);
+      // Only extra names for files the profile owns again, plus the failed
+      // install. A leftover directory is clutter, not a failed rollback.
+      try {
+        rmSync(asideDirectory, { recursive: true, force: true });
+      } catch (error) {
+        console.error("[database file] set-aside cleanup failed", { asideDirectory, error });
+      }
+    }
+  }
+}

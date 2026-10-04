@@ -142,6 +142,10 @@ kinds to enter again (Session secrets, MCP server values and sign-ins, web
 search keys, model provider sign-ins), and one sentence a restore surface can
 show.
 
+Migration safety copies are different from bundles. Each `volli.db.backup-v<N>`
+is a whole copy of the database, so it carries the `secrets` table and the web
+search keys in it as plain text. Moving those keys out of `volli.db` is VC-631.
+
 Copying a data directory by hand is different. A keychain-sealed
 `session-secrets.enc` carried onto a headless host is refused as sealed by the
 macOS keychain, and the message says to delete it and enter the secrets again.
