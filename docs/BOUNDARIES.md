@@ -73,6 +73,12 @@ review, not a project to execute — none of them asks anyone to build sync.
    classified as device-local or workspace state. Workspace state belongs
    behind the workspace authority, not in the device-local catch-all.
 
+## Shipped SQLite migrations
+
+SQL and original TypeScript `apply` source (including referenced helpers) are frozen in `apps/desktop/src/main/db/migrations.lock.json`; edits to shipped entries require a new migration, never a rewritten lock. Keep frozen helpers/constants byte-identical (including shared runtime helpers); new behavior gets new names, leaving old applies bound to the original implementations. Formatter/tool upgrades must preserve these source slices, not regenerate shipped hashes.
+Append the next contiguous version to `MIGRATIONS`, then run `pnpm --filter @volli/desktop migrations:lock` and commit its single new version line; the script refuses to rewrite existing entries, and concurrent claims on the same number conflict on that line.
+Tests enforce versions 1..N with no exceptions (023/024 reconcile historical lineages, not numbering gaps); schema-head consumers derive the last version from `MIGRATIONS`.
+
 ## SQLite transaction ownership
 
 **No SQLite transaction spans an `await` (VC-551).** One host owns the handle
