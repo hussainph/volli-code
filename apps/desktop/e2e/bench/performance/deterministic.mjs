@@ -203,7 +203,7 @@ const TAPE_WORDS = [
 ];
 
 const TAPE_FRAGMENTS = [
-  "src/main/session-control/sqlite-ledger.ts",
+  "packages/host-core/src/session-control/sqlite-ledger.ts",
   "packages/shared/src/session-event-codec.ts",
   "apps/desktop/src/renderer/src/features/chat",
   "line 42:",

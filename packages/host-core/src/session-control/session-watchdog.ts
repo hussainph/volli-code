@@ -48,7 +48,7 @@ import {
 import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 
 /** How often the scan runs. Coarse on purpose: the verdict is minutes-grained. */
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;

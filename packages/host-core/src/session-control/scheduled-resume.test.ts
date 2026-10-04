@@ -19,7 +19,7 @@ import {
 import { pendingScheduledResume, scheduledResumeFireAt, type SessionCommand } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 import { createScheduledResumeHost, SCHEDULED_RESUME_TICK_MS } from "./scheduled-resume";
 
 const venue = { id: "machine-1", kind: "local" as const };

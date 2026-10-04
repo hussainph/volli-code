@@ -3,6 +3,7 @@ import { setImmediate } from "node:timers";
 import type Database from "better-sqlite3";
 import { createSessionEngine } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
+import type { SessionLedger } from "@volli/shared";
 import { createCheckpointFailureReporter } from "./checkpoint-diagnostics";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 
@@ -12,6 +13,8 @@ export function createDesktopSessionEngine(
   ports: {
     now?: () => number;
     nextId?: () => string;
+    /** Share the host-notice outbox's transaction writer at host composition. */
+    ledger?: SessionLedger;
     /**
      * The host's reporter for recovered checkpoint failures. Passed in when the
      * runtime is composed too, so one launch reports through a single throttle
@@ -23,7 +26,7 @@ export function createDesktopSessionEngine(
   const now = ports.now ?? Date.now;
   const nextId = ports.nextId ?? randomUUID;
   return createSessionEngine({
-    ledger: createSqliteSessionLedger(db),
+    ledger: ports.ledger ?? createSqliteSessionLedger(db),
     clock: { now },
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure:

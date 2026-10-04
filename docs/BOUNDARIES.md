@@ -40,7 +40,7 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 2. **Per-session `sequence` is provisional local order.** It is enforced
    single-writer at exactly one append gate (`appendEvent` in
-   `apps/desktop/src/main/session-control/sqlite-ledger.ts`). No writer or
+   `packages/host-core/src/session-control/sqlite-ledger.ts`). No writer or
    reducer may depend on cross-session global order, and none may treat
    adjacency — "immediately preceded by event X" — as an implicit position. A
    future authority assigns final order and local logs rebase onto it; code

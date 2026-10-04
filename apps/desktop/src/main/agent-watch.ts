@@ -53,7 +53,7 @@ import {
 } from "@volli/shared";
 
 import { listLiveTicketRefsByNumber } from "@volli/host-core/db/tickets-repo";
-import { terminalSessionRecord } from "./session-control/terminal-attachment";
+import { terminalSessionRecord } from "@volli/host-core/session-control/terminal-attachment";
 import type { Watches } from "./watches";
 
 export interface WatchToolPorts {

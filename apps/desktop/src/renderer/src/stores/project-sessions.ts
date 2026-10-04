@@ -17,7 +17,7 @@
  * moved nothing over here. Ten seconds is a long time to be told an agent is
  * idle while it is working.
  *
- * `volli:session-activity` closed that (`main/session-control/activity-watch.ts`):
+ * `volli:session-activity` closed that (`packages/host-core/src/session-control/activity-watch.ts`):
  * main re-derives a Session's listing row whenever its durable history moves and
  * pushes the row — the same row the fetch returns, so applying one is an upsert
  * and never a translation. The fetch survives as the BASELINE only: a window

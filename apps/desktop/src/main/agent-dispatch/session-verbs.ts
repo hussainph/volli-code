@@ -51,7 +51,7 @@ import {
   type SessionProvenanceQuery,
 } from "@volli/host-core/db/session-provenance-repo";
 import { readSessionUsageWindow } from "./cost-verb";
-import { chatSessionRecord, terminalSessionRecord } from "../session-control";
+import { chatSessionRecord, terminalSessionRecord } from "@volli/host-core/session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";

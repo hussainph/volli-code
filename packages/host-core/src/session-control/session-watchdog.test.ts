@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
 
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 import { createSessionWatchdog } from "./session-watchdog";
 import type { SessionWatchdogPorts } from "./session-watchdog";
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
-import { insertSession } from "../session-control/test-support";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { buildBackupDataDocument, validateBackupDataDocument } from "../backup/data-document";
 import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
 import {

@@ -108,7 +108,7 @@ import {
   insertSession,
   listSessions,
   listTicketSessions,
-} from "./session-control/test-support";
+} from "@volli/host-core/session-control/test-support";
 import {
   openTestDb,
   testProject,
@@ -119,7 +119,7 @@ import {
 import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { createSessionTokenRegistry } from "./session-tokens";
 
 let ptyPidSeq = 1000;

@@ -59,8 +59,8 @@ This is the production answer to "not in front", including window focus, which t
 
 - Ledger facts: `packages/shared/src/session-ledger.ts` · `SessionEventPayload` — `turn.started`, `turn.completed`, `turn.interrupted`, `interaction.opened/resolved/cancelled`, `attention.raised/cleared`, `usage.recorded`. Fold: `SessionProjection` with `turnActive`, `lastTurnOutcome`, `lastActivityAt`, `interactions`, `attention`; predicates `sessionAwaitsUser`, `sessionEndedInterrupted`, `sessionInterruptionReason`.
 - Per-Session stream: `packages/session-rpc/src/index.ts` (`session.subscribe`, `interaction.resolve`, `message.submit`) over `volli:session-rpc` / `volli:session-rpc-event`; renderer link `lib/session-rpc-ipc-link.ts`; resident client `@volli/session-presentation` `client.ts` (`getChatClient`), bound by `renderer/src/chat/use-session-controller.ts` (`SessionController.submit`, `.resolveInteraction`, `.cancelInteraction`, `.interrupt`, `.enqueue`/`.dequeue`).
-- Per-Project push (no subscription needed): `main/session-control/activity-watch.ts` · `watchSessionActivity` decorates the `SessionEngine`, re-folds dirty Sessions on a 60 ms trailing timer, builds `sessionListingRow(...)` and publishes only when the row differs. Ports: `publish`, `provenanceOf`, `listOpenNativeBindings`, **`observe(projection)`** (pre-gate, per fold — the hook `automations/run-attention.ts` and `scheduled-resume` already use), `observeBirth`, `onError`. Wired in `main/index.ts:~923`. Renderer side: `volli:session-activity` → `stores/project-sessions.ts` `applyActivity` and `stores/ticket-session-records.ts`.
-- Row builders: `main/session-control/listing-row.ts` · `sessionListingRow`/`sessionListingRows`; `main/session-control/listing-roster.ts` · `sessionListingRowsForRoster` (batch provenance + rows); `main/session-control/chat-attachment.ts` · `chatSessionRecord`, `chatActivity`, `chatWaitingOn`; `terminal-attachment.ts` · `terminalSessionRecord`.
+- Per-Project push (no subscription needed): `packages/host-core/src/session-control/activity-watch.ts` · `watchSessionActivity` decorates the `SessionEngine`, re-folds dirty Sessions on a 60 ms trailing timer, builds `sessionListingRow(...)` and publishes only when the row differs. Ports: `publish`, `provenanceOf`, `listOpenNativeBindings`, **`observe(projection)`** (pre-gate, per fold — the hook `automations/run-attention.ts` and `scheduled-resume` already use), `observeBirth`, `onError`. Wired in `main/index.ts:~923`. Renderer side: `volli:session-activity` → `stores/project-sessions.ts` `applyActivity` and `stores/ticket-session-records.ts`.
+- Row builders: `packages/host-core/src/session-control/listing-row.ts` · `sessionListingRow`/`sessionListingRows`; `packages/host-core/src/session-control/listing-roster.ts` · `sessionListingRowsForRoster` (batch provenance + rows); `packages/host-core/src/session-control/chat-attachment.ts` · `chatSessionRecord`, `chatActivity`, `chatWaitingOn`; `terminal-attachment.ts` · `terminalSessionRecord`.
 - IPC: `volli:session-list`, `volli:session-list-for-ticket` (`main/data-ipc.ts:1233,1244`), contract in `apps/desktop/src/ipc/contract.ts` (`SessionsResult`, `SessionActivityNotice`), preload `apps/desktop/src/preload/index.ts` `sessions.*`.
 
 ### 0.6 Ask User questions and answering them
@@ -86,7 +86,7 @@ This is the production answer to "not in front", including window focus, which t
 
 ### 0.9 Coverage gate
 
-- `apps/desktop/vite.config.ts` → `test.coverage.include` (thresholds **100 % statements/branches/functions/lines, global**). Already listed and therefore already protected: `src/stores/**`, `src/components/sidebar/active-session-listing.ts`, `src/components/sidebar/session-band-filter.ts`, `src/components/sidebar/listing.ts`, `src/components/ticket/session-history.ts`, `src/lib/relative-time.ts`, `**/src/main/session-control/activity-watch.ts`, `**/src/main/session-control/sessions.ts`, and a named (not wildcard) set of `src/main/db/*` modules — `spawn-ledger-repo.ts`, `export.ts`, `theme-repo.ts`. Note what is **not** listed: `src/main/data-ipc.ts`, `src/main/db/migrations.ts` and `src/main/db/session-provenance-repo.ts` are outside the report, so S2's handler and migration edits are gated by tests rather than by coverage — they still need `data-ipc.test.ts` / `migrations.test.ts` cases, which is why S2 names them.
+- `apps/desktop/vite.config.ts` → `test.coverage.include` (thresholds **100 % statements/branches/functions/lines, global**). Already listed and therefore already protected: `src/stores/**`, `src/components/sidebar/active-session-listing.ts`, `src/components/sidebar/session-band-filter.ts`, `src/components/sidebar/listing.ts`, `src/components/ticket/session-history.ts`, `src/lib/relative-time.ts`, `**/packages/host-core/src/session-control/activity-watch.ts`, `**/packages/host-core/src/session-control/sessions.ts`, and a named (not wildcard) set of `src/main/db/*` modules — `spawn-ledger-repo.ts`, `export.ts`, `theme-repo.ts`. Note what is **not** listed: `src/main/data-ipc.ts`, `src/main/db/migrations.ts` and `src/main/db/session-provenance-repo.ts` are outside the report, so S2's handler and migration edits are gated by tests rather than by coverage — they still need `data-ipc.test.ts` / `migrations.test.ts` cases, which is why S2 names them.
 - `packages/shared/vite.config.ts` → `include: ["src/**"]` at 100 %. Every new pure rule placed in `@volli/shared` is covered by construction and must ship with its test.
 - `.tsx`, hooks and `ui/**` are deliberately outside the report. Pure `.ts` extracted beside a view is the repo's idiom for getting a rule into the gate (`tab-focus.ts`, `tab-scroll.ts`, `drag-picker-model.ts`). **Every new module this plan adds to a covered glob must be at 100 %; every new pure module belongs in a covered glob.**
 
@@ -97,7 +97,7 @@ This is the production answer to "not in front", including window focus, which t
 `components/ui/list-row.test.tsx`, `status-dot.test.tsx`, `session-activity-status.test.ts`, `context-menu.test.tsx` ·
 `components/chat/interaction-ui.{test,behavior.test,layout.test}.tsx`, `subagent-peek-dialog.test.tsx` ·
 `lib/relative-time.test.ts` · `stores/project-sessions.test.ts`, `ticket-session-records.test.ts`, `chat-sessions.test.ts` ·
-`main/session-control/{activity-watch,chat-attachment,listing…}.test.ts`, `main/db/migrations.test.ts`, `main/data-ipc.test.ts` ·
+`packages/host-core/src/session-control/{activity-watch,chat-attachment,listing…}.test.ts`, `main/db/migrations.test.ts`, `main/data-ipc.test.ts` ·
 `packages/shared/src/session-ledger.test.ts`, `session.test.ts` ·
 lab: `scratches/session-peek-sidebars.test.tsx`, `session-peek/{sidebar-live,sidebar-model,geometry,conversation}.test.*`, `scratches/session-peek-wireframe*.test.*`.
 
@@ -346,14 +346,14 @@ it moves.
 
 **Owns (create).**
 - `apps/desktop/src/main/db/session-read-repo.ts` + `session-read-repo.test.ts`
-- `apps/desktop/src/main/session-control/session-read-watch.ts` + `session-read-watch.test.ts`
-- `apps/desktop/src/main/session-control/peek-content.ts` + `peek-content.test.ts`
+- `packages/host-core/src/session-control/session-read-watch.ts` + `session-read-watch.test.ts`
+- `packages/host-core/src/session-control/peek-content.ts` + `peek-content.test.ts`
 
 **Owns (modify).**
 - `apps/desktop/src/main/db/migrations.ts` (+ `migrations.test.ts`) — migration **52**.
-- `apps/desktop/src/main/session-control/listing-row.ts` — new optional `read` parameter.
-- `apps/desktop/src/main/session-control/listing-roster.ts` — batch read + thread.
-- `apps/desktop/src/main/session-control/activity-watch.ts` (+ `activity-watch.test.ts`) — new `readOf` port, threaded into `sessionListingRow`.
+- `packages/host-core/src/session-control/listing-row.ts` — new optional `read` parameter.
+- `packages/host-core/src/session-control/listing-roster.ts` — batch read + thread.
+- `packages/host-core/src/session-control/activity-watch.ts` (+ `activity-watch.test.ts`) — new `readOf` port, threaded into `sessionListingRow`.
 - `apps/desktop/src/main/notifications/runtime.ts` — expose `focusedSessionIds(): ReadonlySet<string>` on `NotificationRuntime`.
 - `apps/desktop/src/main/index.ts` — construct the repo + watch, wire `observe`, pass `readOf`.
 - `apps/desktop/src/main/data-ipc.ts` (+ `data-ipc.test.ts`) — two new handlers.
@@ -393,7 +393,7 @@ export function markSessionUnread(db: Database.Database, sessionId: string, at: 
 ```
 
 ```ts
-// main/session-control/session-read-watch.ts  — rides activity-watch's `observe` port
+// packages/host-core/src/session-control/session-read-watch.ts  — rides activity-watch's `observe` port
 export interface SessionReadWatchPorts {
   /** Session ids on screen in a FOCUSED window right now (notifications' ActiveTargetRegistry). */
   focusedSessionIds(): ReadonlySet<string>;
@@ -413,7 +413,7 @@ Rule, stated once: on each fold, `phase = sessionTurnPhaseOf(projection)`; if
 `markUnread(sessionId, projection.lastActivityAt)`. Store `phase` per Session. First sighting seeds.
 
 ```ts
-// main/session-control/listing-row.ts  (signature change; callers in this slice)
+// packages/host-core/src/session-control/listing-row.ts  (signature change; callers in this slice)
 export function sessionListingRow(
   session: SessionProjection,
   provenance?: SessionProvenance,
@@ -429,7 +429,7 @@ export function sessionListingRows(
 ```
 
 ```ts
-// main/session-control/peek-content.ts
+// packages/host-core/src/session-control/peek-content.ts
 export interface SessionPeekContentPorts {
   listEvents: (query: ListSessionEventsQuery) => Promise<readonly SessionEvent[]>;
   readArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
@@ -483,8 +483,8 @@ question scrubbed (`native` blanked), a Session that does not exist ⇒ `null`.
 `activity-watch.test.ts`: the pushed row carries `read` and the push still gates on difference.
 `data-ipc.test.ts`: both handlers, including the re-publish on set. Store tests: optimistic write,
 revert + toast on failure. All three new main modules are already enrolled in the coverage gate by
-S1 (`**/src/main/db/session-read-repo.ts`, `**/src/main/session-control/session-read-watch.ts`,
-`**/src/main/session-control/peek-content.ts`) and `src/stores/**` is enrolled already — **this
+S1 (`**/src/main/db/session-read-repo.ts`, `**/packages/host-core/src/session-control/session-read-watch.ts`,
+`**/packages/host-core/src/session-control/peek-content.ts`) and `src/stores/**` is enrolled already — **this
 slice must land them at 100 %**, and must not edit `apps/desktop/vite.config.ts`.
 
 ---
@@ -1037,14 +1037,14 @@ to make it reach 100 %.
 | Enrolled by S1 | Written by | Module |
 | --- | --- | --- |
 | new | S2 | `**/src/main/db/session-read-repo.ts` |
-| new | S2 | `**/src/main/session-control/session-read-watch.ts` |
-| new | S2 | `**/src/main/session-control/peek-content.ts` |
+| new | S2 | `**/packages/host-core/src/session-control/session-read-watch.ts` |
+| new | S2 | `**/packages/host-core/src/session-control/peek-content.ts` |
 | new | S3 | `src/components/session-peek/peek-machine.ts` |
 | new | S3 | `src/components/session-peek/peek-geometry.ts` |
 | new | S3 | `src/components/session-peek/peek-subject.ts` |
 | new | S5 | `src/components/sidebar/session-band-keys.ts` |
 | already listed | S1 | `src/lib/relative-time.ts` |
-| already listed | S2 | `src/stores/**`, `**/src/main/session-control/activity-watch.ts` |
+| already listed | S2 | `src/stores/**`, `**/packages/host-core/src/session-control/activity-watch.ts` |
 | already listed | S4 | `src/stores/**`, `src/components/sidebar/active-session-listing.ts` |
 | already listed | S6 | `src/components/ticket/session-history.ts` |
 | whole package | S1 | `packages/shared/src/**` (session-read, session-order, session-peek) |

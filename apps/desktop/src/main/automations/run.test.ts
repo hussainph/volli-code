@@ -32,7 +32,7 @@ import {
 import { listTicketEvents, recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { insertSession } from "../session-control/test-support";
+import { insertSession } from "@volli/host-core/session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";

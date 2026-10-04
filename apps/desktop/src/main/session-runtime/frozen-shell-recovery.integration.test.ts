@@ -14,7 +14,7 @@ import {
 } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { createPiNativeAdapter, type DesktopShellPort } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 

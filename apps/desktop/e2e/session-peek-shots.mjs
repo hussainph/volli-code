@@ -616,7 +616,7 @@ async function seedLedger(projectPath) {
     );
     const { insertTicket } = await vite.ssrLoadModule("/packages/host-core/src/db/tickets-repo.ts");
     const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-      "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+      "/packages/host-core/src/session-control/sqlite-ledger.ts",
     );
 
     db = openVolliDb(dbPath);

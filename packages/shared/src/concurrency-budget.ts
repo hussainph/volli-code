@@ -21,7 +21,7 @@
  * Pure by design — no `node:os`, no `process.env` — so the rules are unit
  * testable against a stated environment. Who counts the Sessions and who reads
  * the core count lives with the caller
- * (`apps/desktop/src/main/session-concurrency.ts`).
+ * (`packages/host-core/src/session-concurrency.ts`).
  */
 
 /**
