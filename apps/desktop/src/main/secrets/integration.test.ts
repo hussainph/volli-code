@@ -20,7 +20,7 @@ import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { BackgroundShellHost } from "../shell/background-shell-host";
 import { createAgentShellPort } from "../shell/agent-port";
-import { SecretStore } from "./store";
+import { SecretStore } from "@volli/host-core/secrets";
 import { SecretService } from "./service";
 import { registerSecretIpc } from "./ipc";
 

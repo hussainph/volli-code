@@ -26,6 +26,7 @@
  * for the app to fill when it next creates the resource.
  */
 
+import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 
 /** What a backup does with one persisted table. */
@@ -583,9 +584,17 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "MCP secrets a person stored and OAuth tokens (VC-470). Credentials never travel in a backup; a restored profile signs in again.",
   },
   {
-    area: "session-secrets.enc*",
+    area: `${SECRET_STORE_FILE_NAME}*`,
     decision: "exclude",
     reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
+  },
+  {
+    // A headless host's key (VC-559). A bundle that carried it would carry the
+    // one thing that opens the ciphertext beside it, on any machine.
+    area: `${SECRET_KEY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "A headless host's secret key (VC-559); a backup never carries what opens a credential.",
   },
   {
     area: "browser-pictures",

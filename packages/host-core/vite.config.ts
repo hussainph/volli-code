@@ -45,6 +45,11 @@ export default defineConfig({
         // The downgrade guard (VC-602): a branch read wrong either opens a
         // database this build cannot use or locks a person out of their own.
         "src/db/schema-compatibility.ts",
+        // The headless secret key (VC-559), beside its port under src/ports:
+        // every branch is a refusal that stands between a person's credentials
+        // and another user, a lost key or a silent re-key, and none of it shows
+        // anywhere until it is wrong.
+        "src/secrets/file-key.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

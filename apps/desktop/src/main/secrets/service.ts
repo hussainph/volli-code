@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SecretRequestMetadata, SecretScope } from "@volli/shared";
 import type { SecretsResult } from "../../ipc/secrets";
-import { isSecretName, type SecretStore } from "./store";
+import { isSecretName, type SecretStore } from "@volli/host-core/secrets";
 
 interface SecretOwner {
   sessionId: string;

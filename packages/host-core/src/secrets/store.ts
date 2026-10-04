@@ -12,14 +12,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { isSecretKeyUnavailable, type SecretKeyPort } from "../ports/secret-key";
 import { pendingNoticeSecretStart } from "./pending-notice-secret";
-
-/** Inject safeStorage at the application edge; importing this module never loads Electron. */
-export interface SecretCodec {
-  isEncryptionAvailable(): boolean;
-  encryptString(value: string): Buffer;
-  decryptString(value: Buffer): string;
-}
 
 import {
   payloadSecretSpans,
@@ -180,12 +174,16 @@ function sameSlot(left: SecretMetadata, right: SecretMetadata): boolean {
  */
 export class SecretStore {
   readonly #path: string;
-  readonly #codec: SecretCodec;
+  readonly #codec: SecretKeyPort;
   #persistent: SecretRecord[] | null = null;
   #sessions: SecretRecord[] = [];
   readonly #history = new Map<string, string>();
 
-  constructor(path: string, codec: SecretCodec) {
+  /**
+   * `codec` is the host's secret-key adapter: the keychain on desktop, the key
+   * file on a headless host (see `ports/secret-key.ts`).
+   */
+  constructor(path: string, codec: SecretKeyPort) {
     this.#path = path;
     this.#codec = codec;
   }
@@ -419,8 +417,11 @@ export class SecretStore {
       this.#persistent = records;
       for (const item of records) this.#history.set(item.value, item.name);
       return records;
-    } catch {
+    } catch (error) {
+      // A key a person must fix says how (its message never holds key bytes).
+      if (isSecretKeyUnavailable(error)) throw error;
       // Never include the codec, parser or filesystem error, its cause, or the path.
+      // eslint-disable-next-line preserve-caught-error
       throw new Error("Could not decrypt secret storage.");
     } finally {
       try {
@@ -449,7 +450,9 @@ export class SecretStore {
       closeSync(fd);
       fd = undefined;
       renameSync(temporary, this.#path);
-    } catch {
+    } catch (error) {
+      if (isSecretKeyUnavailable(error)) throw error;
+      // eslint-disable-next-line preserve-caught-error
       throw new Error("Could not persist encrypted secrets.");
     } finally {
       if (fd !== undefined) {

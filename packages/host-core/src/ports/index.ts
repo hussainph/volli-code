@@ -14,3 +14,9 @@ export {
 } from "./client";
 export type { HostEventBus, HostEventMap, HostEventTopic } from "./events";
 export { NO_POWER_EVENTS, type PowerEvent, type PowerPort } from "./power";
+export {
+  isSecretKeyUnavailable,
+  SecretKeyUnavailableError,
+  type SecretKeyPort,
+  type SecretKeyRefusal,
+} from "./secret-key";

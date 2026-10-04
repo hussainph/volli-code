@@ -7,6 +7,7 @@
  * — which is the ticket's actual requirement: new persisted data cannot be
  * added without an explicit include/rebuild/exclude decision.
  */
+import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -240,6 +241,13 @@ describe("profile file decisions", () => {
   it("never backs up MCP secrets or OAuth tokens (VC-470)", () => {
     const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
     expect(byArea.get(`${MCP_CREDENTIAL_FILE_NAME}*`)?.decision).toBe("exclude");
+  });
+
+  it("never backs up stored secrets, nor a headless host's key to them (VC-559)", () => {
+    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
+    expect(byArea.get(`${SECRET_STORE_FILE_NAME}*`)?.decision).toBe("exclude");
+    expect(byArea.get(`${SECRET_KEY_FILE_NAME}*`)?.decision).toBe("exclude");
+    expect(SECRET_STORE_FILE_NAME).toBe("session-secrets.enc");
   });
 
   it("decides every runtime area the app materialises under the profile root", () => {

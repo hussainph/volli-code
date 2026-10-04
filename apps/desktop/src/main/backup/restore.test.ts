@@ -30,8 +30,15 @@ import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
 } from "../session-runtime/transcript-artifacts";
+import {
+  fileSecretKey,
+  SECRET_KEY_FILE_NAME,
+  SECRET_STORE_FILE_NAME,
+  SecretStore,
+} from "@volli/host-core/secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { createBackupBundle } from "./bundle";
-import { restoreBackupBundle } from "./restore";
+import { RESTORE_CREDENTIALS, restoreBackupBundle } from "./restore";
 import { createFixtureProfile } from "./test-fixture";
 import type { FixtureProfile } from "./test-fixture";
 
@@ -381,6 +388,99 @@ describe("restoreBackupBundle — a clean restore", () => {
     expect(readFileSync(join(target.root, "volli.db")).equals(before)).toBe(true);
     expect(existsSync(join(blobsRoot(target.root), "aa", "old-blob"))).toBe(true);
     expect(readdirSync(target.root).some((name) => name.startsWith(".volli-restore-"))).toBe(false);
+  });
+});
+
+/**
+ * A bundle written under one secret-key adapter, restored under another
+ * (VC-559): a Mac whose secrets the keychain sealed, onto a headless host
+ * whose secrets a key file sealed.
+ */
+describe("restoreBackupBundle — across machines and secret-key adapters", () => {
+  /** The head of a keychain envelope, `VSC1`, and a value only the source machine had. */
+  const KEYCHAIN_SEALED = Buffer.concat([Buffer.from("VSC1"), Buffer.from("mac-only-sentinel")]);
+
+  function macBundle(): Buffer {
+    source = createFixtureProfile();
+    writeFileSync(join(source.root, SECRET_STORE_FILE_NAME), KEYCHAIN_SEALED, { mode: 0o600 });
+    writeFileSync(
+      join(source.root, MCP_CREDENTIAL_FILE_NAME),
+      JSON.stringify({ version: 1, servers: { s: { secrets: { "env:K": "mcp-sentinel" } } } }),
+      { mode: 0o600 },
+    );
+    return createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "0.2.0-test",
+      now: 1_700_000_000_000,
+    }).bytes;
+  }
+
+  it("carries no credential, keeps this host's own key and secrets, and says what to re-enter", async () => {
+    const bytes = macBundle();
+    const archive = gunzipSync(bytes).toString("latin1");
+    for (const absent of [
+      "mac-only-sentinel",
+      "mcp-sentinel",
+      SECRET_STORE_FILE_NAME,
+      MCP_CREDENTIAL_FILE_NAME,
+    ]) {
+      expect(archive, `${absent} must not travel`).not.toContain(absent);
+    }
+
+    const target = targetProfile();
+    const keyPath = join(target.root, SECRET_KEY_FILE_NAME);
+    const storePath = join(target.root, SECRET_STORE_FILE_NAME);
+    new SecretStore(storePath, fileSecretKey({ path: keyPath })).put({
+      name: "HOST_TOKEN",
+      value: "headless-host-value",
+      scope: "always",
+    });
+    const keyBefore = readFileSync(keyPath);
+    const storeBefore = readFileSync(storePath);
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.credentials).toEqual(RESTORE_CREDENTIALS);
+    expect(result.report.credentials).toMatchObject({
+      carried: false,
+      reenter: ["session-secrets", "mcp-credentials", "web-search-keys", "model-sign-ins"],
+    });
+    expect(result.report.credentials.message).toMatch(/^Backups never carry credentials\./);
+    // The host's own credential files are not profile entries the swap moves.
+    expect(readFileSync(keyPath).equals(keyBefore)).toBe(true);
+    expect(readFileSync(storePath).equals(storeBefore)).toBe(true);
+    expect(existsSync(join(result.report.replacedPath, SECRET_STORE_FILE_NAME))).toBe(false);
+    expect(existsSync(join(target.root, MCP_CREDENTIAL_FILE_NAME))).toBe(false);
+    // And they still open, in a fresh process, with the key that sealed them.
+    expect(
+      new SecretStore(storePath, fileSecretKey({ path: keyPath })).environment("s", "proj-alpha"),
+    ).toEqual({ HOST_TOKEN: "headless-host-value" });
+  });
+
+  it("writes no credential file into a host that had none", async () => {
+    const bytes = macBundle();
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    for (const name of [SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME, MCP_CREDENTIAL_FILE_NAME]) {
+      expect(existsSync(join(target.root, name)), `${name} must not appear`).toBe(false);
+    }
   });
 });
 

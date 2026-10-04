@@ -141,6 +141,16 @@ A restored profile reuses none of those strings; it also does not hide them.
 Any failure before step 7 removes the staging directory and leaves the original
 profile byte-for-byte unchanged, with a list of named problems to show.
 
+**Credentials (VC-559).** No bundle carries a credential, whichever
+secret-key adapter sealed it: the macOS keychain or a headless host's key
+file. A bundle from a Mac therefore restores onto a headless host, or the
+other way around, like any other. The swap moves only `volli.db*`, `blobs` and
+`session-transcripts`, so the target's `session-secrets.enc`,
+`session-secrets.key` and `mcp-credentials.json` stay exactly as they were. The
+report's `credentials` field says nothing was carried, lists what to enter
+again, and gives one sentence to show. See
+[docs/secrets.md](secrets.md#across-machines-and-adapters).
+
 ## Supported versions
 
 **Bundle format.** This build writes bundle version `1` and reads
