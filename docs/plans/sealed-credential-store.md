@@ -1,12 +1,13 @@
 # One sealed host credential store
 
-**Status:** proposal for owner review, VC-631 / VC-539, 2026-10-04.
+**Status:** owner-approved design, VC-631 / VC-539, 2026-10-04.
 This PR changes documentation only: no migration, credential access or deletion.
-Centralization, including moving web keys out of SQLite, is **approved**. The
-remaining decisions are at the end. Implementation follows VC-628 (fenced
+The owner's decisions are recorded at the end. **Lost-key degradation comes
+first:** fix hostd's current boot refusal using the existing store/key port,
+then build the typed module. DB migration and cleanup follow VC-628 (fenced
 DB-file operations, [PR #740](https://github.com/hussainph/volli-code/pull/740),
-under review when this note was written); this note assumes none of its code
-has merged. Finish the application credential cutover before M2 pairing.
+still under review); this note depends on none of its unmerged code. Finish
+the application credential cutover before M2 pairing.
 
 Current-code citations are relative to this repository at `bdc0e925b`.
 `H:` below means `packages/host-core/src/`; `R:` means
@@ -28,12 +29,14 @@ protocol. They receive storage adapters, not new authentication implementations.
 - **Credentials are expendable; work is not.** Board, artifacts, Sessions and
   authority epoch history are never encrypted under this key. An unusable key
   disables credentials, not boot, database access or local operator recovery.
-- **TPM is opt-in.** Cloud default: host key file, or explicitly selected
-  systemd-creds `host` mode. Never systemd's automatic TPM selection. TPM loss
-  must allow re-entry even without a recovery export.
-- **Recovery is optional and operator-held.** No recovery private key on a
-  provider's control plane. No mandatory escrow, and no promise that a cloud
-  vTPM is an independent owner-held recovery copy.
+- **TPM is opt-in.** M2 defaults to the host key file. An optional systemd-creds
+  `host` adapter requires real fail-soft unit tests; `host+tpm2` is explicit
+  bare-metal opt-in, never the cloud default or automatic TPM selection.
+  TPM loss must allow re-entry even without a recovery export.
+- **Recovery is optional and operator-held; age recovery is deferred.**
+  Re-entering credentials is enough for the first cut. No recovery private key
+  on a provider's control plane, no mandatory escrow, and no promise that a
+  cloud vTPM is an independent owner-held recovery copy.
 - **Storage unification is not an authority grant.** A Session cannot enumerate
   host-only values, become a device/person, or choose the credential namespace.
   Values never enter general command receipts, events, transcripts or backups.
@@ -92,10 +95,11 @@ arbitrary files a user's SSH client, shell or terminal companion holds.
 Do not read/import those files on discovery. Browser profiles are a real
 remaining credential surface: Chromium persists more than a cookie jar (site
 storage can hold bearer tokens too). Moving cookies alone would not unify it.
-Recommend treating the personal browser as a separately documented engine-owned
-vault pending a browser-specific plan; M2 workers keep agent profiles ephemeral.
-Owner must confirm this boundary before we claim **every** host-held credential
-is sealed. No browser persistence behavior changes in this docs PR.
+The owner confirmed a separate plan for a personal browser vault owned by the
+engine; M2 workers keep agent profiles ephemeral. Keep that plan's seam open
+for the owner's broader browser direction. Do not claim **every** host-held
+credential is sealed until that plan is resolved. No browser persistence
+behavior changes in this docs PR.
 
 ## 3. Target module and file contract
 
@@ -339,7 +343,7 @@ resurrection, disk-full/fsync failure, multiple-process updates, direct pre-E
 upgrade and a restore missing all credentials. This note does not claim these
 tests have run; they gate the implementation tickets.
 
-## 5. Existing plaintext safety copies: owner decision
+## 5. Existing plaintext safety copies: approved purge policy
 
 The ticket reports the owner's v55/v56 families at about **1.8 GB**; this Session
 has not opened or measured the real profile. Migration 023 explains why a copied
@@ -348,20 +352,22 @@ residual disclosure even after the live DB is cleaned.
 
 | Option | Benefit | Cost / risk |
 |---|---|---|
-| **Purge stale families after verified cutover** (recommended) | Removes redundant local plaintext and disk cost; simplest long-term policy | Loses those raw rollback points; deletion is not secure erase and external snapshots remain |
+| **Purge stale families after verified cutover** (owner-approved) | Removes redundant local plaintext and disk cost; simplest long-term policy | Loses those raw rollback points; deletion is not secure erase and external snapshots remain |
 | Re-encrypt each whole family | Preserves historical rollback data without readable local keys | New encrypted-backup format, recovery/decryption integration and extra disk; sealing key loss can lose rollback data. Re-encrypting only current key rows does not clean freed pages/sidecars |
 | Keep, restricted to owner-only storage | No recovery format change; retains pre-migration evidence | Plaintext keys indefinitely, permission boundary only; “all credentials sealed” remains false for that profile |
 
-Recommend purge, **not automatic deletion in this PR or implied owner consent**.
-After successful S/C, compacted live DB verification and a tested credential-free
-replacement recovery point, show an exact family inventory and obtain approval.
+**The owner chose purge on 2026-10-04; this PR deletes nothing.** Purge only
+stale, complete families after verified C, compacted live DB verification and
+a tested credential-free replacement recovery point. The owner approves the
+exact inventory at that point; policy approval is not approval of filenames.
 Delete complete stale families through VC-628; include newly made pre-S/pre-C
 copies, preserved duplicates and migration/DB-swap evidence, not merely v55/v56.
 Never remove the only verified rollback point during migration or the source of
 an unresolved recovery. A damaged/quarantined family requires an explicit
 operator disposition, not a broad glob. Persist non-secret cleanup completion,
-retry interrupted cleanup, and report partial failures. Until the owner decides,
-keep families private and label cleanup pending; do not claim purging finished.
+retry interrupted cleanup, and report partial failures. Until those prerequisites
+and exact-inventory approval are satisfied, keep families private and label
+cleanup pending; do not claim purging finished.
 
 If retaining historical board evidence is essential, prefer a credential-free
 verified bundle over encryption of a credential-bearing raw DB. Any encrypted
@@ -467,7 +473,7 @@ permission for older code to rewrite a new inventory schema.
 | **systemd-creds `host`** (optional Linux) | Seals the data key with local root-owned `/var/lib/systemd/credential.secret`; runtime delivery through `$CREDENTIALS_DIRECTORY` | Not hardware-bound; root or a disk copy with host secret decrypts. Lose host secret → re-enter/recover; no network custody |
 | **systemd-creds `host+tpm2`** (explicit opt-in) | Needs local host secret and original TPM; bare-metal disk-only theft gets a stronger boundary | Hardware reset/move or PCR policy change may lock credentials. Does not stop authorized runtime/root; keep independent operator recovery if continuity matters |
 | **macOS Keychain / desktop safeStorage** | Local OS key wrapping; launch-cached data keys avoid per-command prompts | Locked/missing Keychain or code-signing changes can require unlock; never plaintext `basic_text`. Headless sharing requires compatible local adapter |
-| **age, multiple recipients** (optional recovery export) | Independent offline recipients can each recover; no boot dependency | Every recipient can decrypt, not threshold escrow. Extra ciphertext/key copies and revocation/retention burden; no freshness guarantee |
+| **age, multiple recipients** (deferred optional recovery export) | Independent offline recipients can each recover; no boot dependency | Every recipient can decrypt, not threshold escrow. Extra ciphertext/key copies and revocation/retention burden; no freshness guarantee |
 
 The [systemd-creds manual](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html)
 and [credential contract](https://systemd.io/CREDENTIALS/) describe host/TPM
@@ -477,9 +483,10 @@ fallbacks. A **cloud vTPM is software state controlled by the hypervisor**.
 It may impede an attacker with only a guest disk copy and no vTPM state. It
 does not protect against the provider reading guest memory, controlling the
 vTPM, or restoring/cloning disk plus vTPM. It is not owner-controlled key custody
-or protection against a malicious provider. Recommend TPM only on owner-held
-bare metal; cloud opt-in must retain independent operator-held recovery or
-explicit acceptance of credential re-entry on loss, never a sole continuity key.
+or protection against a malicious provider. TPM binding is an explicit opt-in
+for owner-held bare metal, never the cloud default; cloud opt-in must retain
+independent operator-held recovery or explicit acceptance of credential re-entry
+on loss, never a sole continuity key.
 
 Do not pass an ordinary `LoadCredential=` file to today's file-key adapter:
 it enforces own uid and no group/other access (`H:secrets/file-key.ts:243-261`),
@@ -490,9 +497,9 @@ runtime plaintext key back to disk to satisfy the existing adapter.
 
 **Service activation must also survive key loss.** Required
 `LoadCredentialEncrypted=` decryption happens before hostd executes; catching
-an application exception cannot save that boot. If systemd support is adopted,
-a bounded local provisioning helper attempts unwrap and publishes a runtime
-key (or non-secret unavailable status), without making hostd depend on helper
+an application exception cannot save that boot. The optional systemd backend
+must use a bounded local provisioning helper that attempts unwrap and publishes
+a runtime key (or non-secret unavailable status), without making hostd depend on helper
 success. Deliver that result via a credential source that can return empty on
 unwrap failure; the dedicated adapter treats empty as unavailable, never a key.
 The helper must not print key bytes, leave stale keys after failure or require
@@ -534,13 +541,15 @@ backend, restore disk on a different backend, lock Keychain, corrupt ciphertext.
 Assert hostd reaches ready-for-local-work, history/rows unchanged (apart from
 ordinary boot migrations), no credential use/leak, status actionable, no sealed
 file overwrite/new key without reset, and re-entry restores service. Add actual
-Linux systemd-unit fault tests if that backend is chosen, not just mocked port
+Linux systemd-unit fault tests before the optional backend ships, not just mocked port
 exceptions. Lost-key boot is a required CI path before the migration ships.
 
-### Optional operator recovery with age
+### Optional operator recovery with age (deferred)
 
-Recommend a **separate opt-in credential recovery export**, not embedding a
-recoverable key in ordinary Volli bundles. Export a versioned typed snapshot
+**Owner decision: deferred; re-enter credentials for now.** The following keeps
+the future recovery boundary explicit, not a first-cut implementation dependency.
+If revisited, use a **separate opt-in credential recovery export**, never embed
+a recoverable key in ordinary Volli bundles. Export a versioned typed snapshot
 (or key plus matching ciphertext) to operator-supplied age recipients; multiple
 recipients each independently decrypt ([age documentation](https://github.com/FiloSottile/age#multiple-recipients)).
 Store only public recipients on the host; private identities remain offline/on
@@ -566,8 +575,8 @@ not a service that must both encrypt and decrypt its own inventory
 The host would still hold the private key and need the same custody, lock,
 rotation and recovery discipline. Anyone with the public key can create a box;
 it supplies no sender authorization. It buys nothing over authenticated
-symmetric storage here. Use age for the distinct multi-recipient recovery use,
-and systemd/Keychain to wrap keys, not competing per-credential inventories.
+symmetric storage here. Age is the deferred alternative for multi-recipient
+recovery; systemd/Keychain wrap keys, not competing per-credential inventories.
 
 | Threat / failure | Protection promised | Not promised |
 |---|---|---|
@@ -583,52 +592,63 @@ and systemd/Keychain to wrap keys, not competing per-credential inventories.
 ## 9. Proposed implementation tickets
 
 Sizes are engineering scope, not delivery dates. Each is one reviewable PR;
-allocate real display ids only after owner review. No implementation is opened
-or authorized by this docs PR.
+allocate display ids in follow-up implementation tickets. This docs PR opens
+no implementation tickets and applies no code or migration.
+
+**First fix:** hostd currently turns a bad key/store into `HostdBootError`
+(`apps/hostd/src/secrets.ts:39-61`), violating “losing the key never bricks a
+host.” Lost-key degradation uses the existing store/key port and must not wait
+for the typed module, a migration or optional backend. The typed module follows
+and preserves that tested boot path; both lead the credential cutovers.
 
 | Ticket | Size | Depends on / done gate |
 |---|---|---|
-| Typed sealed module, lock and key-id format | L | This note approved; Linux/macOS multi-process merge, revocation, durable file/crash tests; legacy readers retained |
-| Lost-key degradation and dedicated status/re-entry | M | Typed module; real hostd boot/history tests and desktop locked-Keychain path; no remote fail-open |
+| Lost-key degradation and dedicated status/re-entry — first | M | Approved design + existing store/key port; fix hostd boot refusal first; real boot/history tests and desktop locked-Keychain path; no remote fail-open |
+| Typed sealed module, lock and key-id format | L | Lost-key degradation; Linux/macOS multi-process merge, revocation, durable file/crash tests; legacy readers and fail-soft boot retained |
 | Web expansion E and reconciliation | M | Above + **VC-628 merged**; real-profile copy proof, N-1 writes/deletes/backup restore; floor unchanged |
 | Web switch S and import coordinator | L | E deployed; explicit runner preconditions/batch boundaries; receipt/crash tests, floor S, N-1 byte-identical refusal |
 | MCP + persistent Session imports | M | Coordinator + floor gate; final locked import, no post-switch legacy writes, endpoint/revision tests |
 | Sealed Pi CredentialStore / explicit import | M | Typed module + coordinator + floor gate; Pi refresh concurrency, no auth.json writes, independent CLI sign-in documented |
 | Contract C / DB residual cleanup | L | S verified, imports handled + VC-628; real-profile fenced compaction, sentinel scan, new credential-free recovery point |
-| Safety-family cleanup policy | M | **Owner choice**, C success + VC-628; exact inventory, approval, partial/crash retry; no sole recovery point deleted |
+| Safety-family purge | M | Approved purge policy, C success + VC-628; tested credential-free recovery point, owner-approved exact inventory, partial/crash retry; no sole recovery point deleted |
 | Key rotation across local backends | M | Typed module; two-process cached-key and every-boundary crash tests; K1 retained through K2 commit |
-| systemd-creds adapter / fail-soft delivery (optional) | M | **Owner choice**, lost-key path + rotation; real Linux unit/TPM fault tests; explicit host default |
-| age credential recovery export/import (optional) | M | **Owner choice**, typed module + rotation; no plaintext spill, new-host allowlist, stale-export warning |
+| systemd-creds adapter / fail-soft delivery (optional) | M | Lost-key path + rotation; only with real Linux fail-soft unit/TPM fault tests; file backend is M2 default, TPM explicit bare-metal opt-in |
+| age credential recovery export/import (deferred) | M, later | Not part of the first cut/M2; if revisited, typed module + rotation; no plaintext spill, new-host allowlist, stale-export warning |
 | M2 pairing/device/host trust integration | M | Typed module + lost-key + S/C; VC-575 pairing contract, restore = new host, revoke/rotate tests; VC-623 authority boundary preserved |
-| Personal browser credential boundary plan | S design first | **Owner boundary decision**; engine/site-storage inventory, no unsupported “all cookies sealed” claim |
+| Personal browser credential boundary plan | S design first | Confirmed separate engine-owned vault plan; seam stays open for broader browser direction; ephemeral M2 agent profiles, no blanket “every credential sealed” claim |
 
 Keep credential migration independent of VC-588's future DB split, but classify
 its metadata as host-local, rebuildable and excluded now. Keep backups/replicas
 credential-free at every later file boundary. Before enabling M2, test one
 composition of model, web, MCP and pairing consumers with the key missing.
 
-## Owner decisions
+## Decided (owner, 2026-10-04)
 
-**Already settled:** centralize application credentials and migrate web keys;
+**Hard requirements:** centralize application credentials and migrate web keys;
 no provider key custody; lost key never bricks the host; TPM opt-in/off by
 default in cloud; recovery optional. These are not reopened for convenience.
 
-1. **Existing safety families: purge, re-encrypt or keep?** Recommend purge
-   stale complete families only after verified C and a tested credential-free
-   recovery point; include pre-S/pre-C/evidence copies. Owner approval required.
-2. **Adopt systemd-creds on Linux now, or retain only the file backend for M2?**
-   Recommend file default and optional `host` adapter only with real fail-soft
-   unit tests; `host+tpm2` remains explicit bare-metal opt-in, never cloud default.
-3. **Offer operator-held age recovery in the first cut or defer?** Recommend
-   optional separate export, never ordinary backups; re-entry is sufficient.
-4. **Confirm authority exceptions and interoperability boundary.** VC-623's
-   root-controlled verifier stays separate; external user-owned Pi auth remains
-   untouched and independent after explicit import. Recommend both; neither
-   external plaintext nor operator tokens become host-service inventory.
-5. **Confirm the browser boundary.** Recommend a separate engine-owned personal
-   browser vault plan, ephemeral M2 agent profiles, and no blanket “every
-   credential on disk is sealed” claim until that plan is resolved.
-6. **Approve S's downgrade fence and rollout gate.** Recommend raising the floor
-   at read/write switch, not waiting for table drop; retain supported E boot
-   while a failed credential precondition is pending. This is the cost of a
-   safe filesystem/SQLite cutover, not permission to reintroduce plaintext.
+1. **Existing safety families: purge.** Delete only stale, complete families
+   after verified C and a tested credential-free recovery point, including
+   pre-S, pre-C and evidence copies. The owner approves the exact inventory
+   at that point; no deletion is performed or implicitly approved by this PR.
+2. **systemd-creds: file backend is the M2 default.** An optional `host` adapter
+   comes only with real fail-soft unit tests. `host+tpm2` stays explicit opt-in
+   for bare metal, never the cloud default.
+3. **Operator-held age recovery: deferred.** Re-entering credentials is enough
+   for now; age is not a first-cut dependency or ordinary backup feature.
+4. **Authority exceptions confirmed.** VC-623's root-controlled verifier stays
+   separate. External user-owned Pi `auth.json` stays untouched and independent
+   after an explicit import; neither becomes host-service authority inventory.
+5. **Browser boundary confirmed.** A separate plan owns the engine's personal
+   browser vault; M2 agent profiles stay ephemeral. Keep the plan's seam open
+   for the owner's broader browser direction. No blanket “every credential
+   sealed” claim until the plan is resolved.
+6. **S's downgrade fence and rollout gate approved.** Raise the floor at the
+   read/write switch, not table drop; retain supported E boot while a credential
+   precondition is pending. This does not permit reintroducing plaintext.
+
+**Sequencing (orchestrator):** lost-key degradation is the first implementation
+fix, using today's store/key port to remove hostd's boot refusal. The typed
+module follows; DB migration/cleanup follows VC-628. Optional backends and
+deferred age recovery never delay the “never brick” fix.
