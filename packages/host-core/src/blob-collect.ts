@@ -23,8 +23,8 @@
  * what releases them back to the next boot's sweep.
  */
 import type Database from "better-sqlite3";
-import { deleteBlob, listUnlinkedBlobHashes } from "@volli/host-core/db/blobs-repo";
-import { removeBlob } from "@volli/host-core/blob-store";
+import { deleteBlob, listUnlinkedBlobHashes } from "./db/blobs-repo";
+import { removeBlob } from "./blob-store";
 
 export interface BlobCollectionReport {
   /** Hashes whose bytes and row were both dropped. */

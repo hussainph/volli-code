@@ -32,9 +32,9 @@ import {
   type RuntimeImageInput,
   type UIMessageLike,
 } from "@volli/shared";
-import { materializeBlobs } from "@volli/host-core/blob-materialize";
-import { readBlob } from "@volli/host-core/blob-store";
-import { getBlob, listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
+import { materializeBlobs } from "./blob-materialize";
+import { readBlob } from "./blob-store";
+import { getBlob, listMaterializableLinks } from "./db/blobs-repo";
 
 import type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";
 export type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";

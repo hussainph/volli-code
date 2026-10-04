@@ -14,7 +14,7 @@
  * that delegates here.
  */
 import { parseBlobUrl } from "@volli/shared";
-import { readBlob } from "@volli/host-core/blob-store";
+import { readBlob } from "./blob-store";
 
 export interface BlobProtocolDeps {
   blobsRoot: string;

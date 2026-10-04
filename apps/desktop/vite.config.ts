@@ -618,10 +618,6 @@ export default defineConfig(({ mode }) => ({
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",
-        "**/src/main/blob-attach.ts",
-        "**/src/main/blob-collect.ts",
-        "**/src/main/blob-protocol.ts",
-        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
@@ -670,7 +666,6 @@ export default defineConfig(({ mode }) => ({
         // when wrong — one duplicates a project, the other strands checkouts
         // that no cleanup surface will ever list again.
         "**/packages/host-core/src/project-relink.ts",
-        "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",

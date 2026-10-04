@@ -7,7 +7,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => windows },
 }));
 
-import type { HostEventMap, HostEventTopic } from "@volli/host-core/ports";
+import type { HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import {
   broadcastDataChanged,
   broadcastPendingArmedRuns,
@@ -159,7 +159,7 @@ describe("pending armed Run broadcast", () => {
 describe("the host event bus over every window (VC-554)", () => {
   // One payload per topic, sent on the channel the topic names. `data-changed`
   // is the one that coalesces, and is covered above.
-  const SENT: { [T in Exclude<HostEventTopic, "data-changed">]: HostEventMap[T] } = {
+  const SENT: { [T in Exclude<HostBroadcastEventTopic, "data-changed">]: HostEventMap[T] } = {
     "session-activity": { projectId: "p", ticketId: null } as HostEventMap["session-activity"],
     "session-retitled": { sessionId: "s", title: "Named" },
     "sessions-interrupted": { ticketId: "t", sessionIds: ["s"] },
@@ -169,8 +169,6 @@ describe("the host event bus over every window (VC-554)", () => {
     "pending-armed-runs-changed": [PENDING],
     "pending-armed-run-settled": { kind: "failed", pending: PENDING, error: "no" },
     "worktree-phase": { ticketId: "t", phase: "ready" },
-    "worktree-changed": { ticketId: "t" },
-    "worktree-watch-error": { ticketId: "t", error: "gone" },
   };
 
   it("sends each topic on its own volli: channel to every live window, at once", () => {

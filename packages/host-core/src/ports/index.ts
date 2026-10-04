@@ -12,7 +12,14 @@ export {
   type ClientCapabilityPort,
   type ClientMenuItem,
 } from "./client";
-export type { HostClientEventSink, HostEventBus, HostEventMap, HostEventTopic } from "./events";
+export type {
+  HostClientEventSink,
+  HostClientEventTopic,
+  HostBroadcastEventTopic,
+  HostEventBus,
+  HostEventMap,
+  HostEventTopic,
+} from "./events";
 export { NO_POWER_EVENTS, type PowerEvent, type PowerPort } from "./power";
 export {
   isSecretKeyUnavailable,
@@ -20,3 +27,4 @@ export {
   type SecretKeyPort,
   type SecretKeyRefusal,
 } from "./secret-key";
+export { trashCapabilities, TrashUnavailableError, type TrashPort } from "./trash";

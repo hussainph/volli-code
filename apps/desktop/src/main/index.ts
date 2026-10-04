@@ -205,8 +205,8 @@ import {
   type SessionSkillPorts,
   type SessionToolSurfacePorts,
 } from "@volli/host-core/session-runtime/sessions";
-import { loadSkills } from "./skills";
-import { loadPromptTemplates } from "./prompt-templates";
+import { loadSkills } from "@volli/host-core/skills";
+import { loadPromptTemplates } from "@volli/host-core/prompt-templates";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
@@ -259,7 +259,7 @@ import {
   getGlobalCanvas,
 } from "@volli/host-core/db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
-import { registerFileIpcHandlers } from "./volli-fs";
+import { registerFileIpcHandlers } from "./volli-fs-ipc";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
@@ -359,9 +359,9 @@ import {
   PACKAGED_RENDERER_SCHEME,
   resolvePackagedRendererAsset,
 } from "./app-protocol";
-import { collectUnlinkedBlobs } from "./blob-collect";
-import { prepareTurnAttachments } from "./turn-attachments";
-import { blobProtocolResponse } from "./blob-protocol";
+import { collectUnlinkedBlobs } from "@volli/host-core/blob-collect";
+import { prepareTurnAttachments } from "@volli/host-core/turn-attachments";
+import { blobProtocolResponse } from "@volli/host-core/blob-protocol";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import { getBlob } from "@volli/host-core/db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
@@ -928,6 +928,7 @@ app.whenReady().then(async () => {
     power: powerMonitor,
     connectivity: createConnectivityPort({ net, powerMonitor }),
     client: createElectronClientCapabilities(),
+    trash: { trashItem: (path) => shell.trashItem(path) },
     listOpenNativeBindings: () => listOpenNativeBindings(),
     observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
   };
@@ -2941,10 +2942,14 @@ app.whenReady().then(async () => {
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
-  registerFileIpcHandlers(dbHandle, {
-    globalCommandsDir: join(fsDeps.userDataDir, "commands"),
-    globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
-  });
+  registerFileIpcHandlers(
+    dbHandle,
+    {
+      globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+      globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+    },
+    hostCore.fileServices,
+  );
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the
   // `userData` root is where Volli's overlay files live (never the user's own

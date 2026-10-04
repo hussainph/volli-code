@@ -144,6 +144,50 @@
     "./worktree/*": {
       "types": "./src/worktree/*.ts",
       "import": "./src/worktree/*.ts"
+    },
+    "./volli-fs": {
+      "types": "./src/volli-fs.ts",
+      "import": "./src/volli-fs.ts"
+    },
+    "./file-types": {
+      "types": "./src/file-types.ts",
+      "import": "./src/file-types.ts"
+    },
+    "./file-services": {
+      "types": "./src/file-services.ts",
+      "import": "./src/file-services.ts"
+    },
+    "./file-search": {
+      "types": "./src/file-search.ts",
+      "import": "./src/file-search.ts"
+    },
+    "./blob-attach": {
+      "types": "./src/blob-attach.ts",
+      "import": "./src/blob-attach.ts"
+    },
+    "./blob-collect": {
+      "types": "./src/blob-collect.ts",
+      "import": "./src/blob-collect.ts"
+    },
+    "./blob-import": {
+      "types": "./src/blob-import.ts",
+      "import": "./src/blob-import.ts"
+    },
+    "./blob-protocol": {
+      "types": "./src/blob-protocol.ts",
+      "import": "./src/blob-protocol.ts"
+    },
+    "./turn-attachments": {
+      "types": "./src/turn-attachments.ts",
+      "import": "./src/turn-attachments.ts"
+    },
+    "./prompt-templates": {
+      "types": "./src/prompt-templates.ts",
+      "import": "./src/prompt-templates.ts"
+    },
+    "./skills": {
+      "types": "./src/skills.ts",
+      "import": "./src/skills.ts"
     }
   },
   "scripts": {
@@ -157,7 +201,9 @@
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
-    "better-sqlite3": "^13.0.3"
+    "@vscode/ripgrep": "^1.18.0",
+    "better-sqlite3": "^13.0.3",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@earendil-works/pi-codemode": "1.0.0",

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { blobUrl } from "@volli/shared";
 
 import { blobProtocolResponse } from "./blob-protocol";
-import { writeBlob } from "@volli/host-core/blob-store";
+import { writeBlob } from "./blob-store";
 
 let root: string;
 
