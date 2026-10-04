@@ -10,10 +10,9 @@ export default defineConfig({
     // Plain Node: this package runs in the Linux host lane, never in Electron.
     environment: "node",
     coverage: {
-      // The protected surface moved here from apps/desktop's gate with the
-      // modules it names, plus the composition entry. A module whose covering
-      // test still needs desktop code (db/export.ts) stays enrolled in
-      // apps/desktop/vite.config.ts until that test can move.
+      // The protected surface moved here from apps/desktop's gate with its
+      // covering tests, plus the composition entry. project-roots.ts remains
+      // in desktop's gate until this package covers every registry branch.
       include: [
         "src/index.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
@@ -34,6 +33,14 @@ export default defineConfig({
         // internal purely to satisfy the gate, and a contrived test is worth
         // less than an honest gap.
         "src/worktree/repository-turn.ts",
+        // Relinking a project to the folder it moved to (VC-430). In the gate
+        // because every branch of it is a rule about a filesystem nobody is
+        // watching: the refusal that stops two projects tracking one checkout,
+        // and the container move that keeps a renamed project's worktrees
+        // inside the set this database recognises as its own. Both are silent
+        // when wrong — one duplicates a project, the other strands checkouts
+        // that no cleanup surface will ever list again.
+        "src/project-relink.ts",
         // The ports every moved service asks its host through (VC-554), and
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.
@@ -58,6 +65,9 @@ export default defineConfig({
         // back wrong is what the decision to signal a process is made from.
         "src/db/spawn-ledger-repo.ts",
         "src/db/theme-repo.ts",
+        // The export's table/column envelope stays at the same 100% bar as
+        // desktop's gate, now proved here beside the ledgers it exports.
+        "src/db/export.ts",
         // Where "unread" is written down (VC-30): a receipt read or written
         // wrong is work a person never sees they have, and nothing on screen
         // says the dot was the part that was broken.

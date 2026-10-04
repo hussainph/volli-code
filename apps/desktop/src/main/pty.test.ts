@@ -123,7 +123,7 @@ import {
 import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { syncProjectRoots } from "@volli/host-core/project-roots";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "./test-session-engine";
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ptyPidSeq = 1000;
@@ -277,6 +277,7 @@ let root: string;
 let outside: string;
 let sessionTokens: ReturnType<typeof createSessionTokenRegistry>;
 let manager: ReturnType<typeof registerTerminalIpcHandlers>;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 let testDb: TestDb;
 let project: Project;
 
@@ -323,20 +324,18 @@ beforeEach(() => {
   // migrated db. The workspace ("w") must be a real project row (FK), rooted at
   // `root` so Board Session cwds and resolved ticket cwds land inside the synced root.
   testDb = openTestDb();
+  fixtureSessionEngine = createTestSessionEngine(testDb.db);
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
   sessionTokens = createSessionTokenRegistry();
   sessionOwners.clear();
-  manager = registerTerminalIpcHandlers(
-    { ok: true, db: testDb.db },
-    {
-      socketPath: "/profile/volli.sock",
-      binDir: "/profile/bin",
-      mintSessionToken: sessionTokens.mint,
-      revokeSessionToken: sessionTokens.revoke,
-    },
-  );
+  manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, fixtureSessionEngine, {
+    socketPath: "/profile/volli.sock",
+    binDir: "/profile/bin",
+    mintSessionToken: sessionTokens.mint,
+    revokeSessionToken: sessionTokens.revoke,
+  });
   syncProjectRoots([root]);
 });
 
@@ -348,7 +347,7 @@ afterEach(() => {
 
 describe("volli:terminal-create", () => {
   it("preserves the new Session without inventing an attachment when executor.start is rejected", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
+    const sessionEngine = createTestSessionEngine(testDb.db);
     const submit = sessionEngine.submit.bind(sessionEngine);
     sessionEngine.submit = async (request) => {
       const result = await submit(request);
@@ -366,11 +365,10 @@ describe("volli:terminal-create", () => {
         },
       };
     };
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
 
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "w",
@@ -475,14 +473,11 @@ describe("volli:terminal-create", () => {
     // The wrapper reads its injected argv out of the environment, so the whole
     // hook configuration has to be in place before the first line is typed —
     // and it is session-independent, so one environment serves every session.
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      {
-        socketPath: "/profile/volli.sock",
-        binDir: "/profile/bin",
-        harnessEnv: { VOLLI_HARNESS_ARGV_CLAUDE_CODE: "'--settings' '{}'" },
-      },
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, fixtureSessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+      harnessEnv: { VOLLI_HARNESS_ARGV_CLAUDE_CODE: "'--settings' '{}'" },
+    });
 
     await createSession();
 
@@ -1404,7 +1399,7 @@ describe("ticket sessions", () => {
         payload: { kind: "session_started", sessionId: result.sessionId, origin: { kind: "user" } },
       },
     ]);
-    const projection = await createDesktopSessionEngine(testDb.db).getSession({
+    const projection = await createTestSessionEngine(testDb.db).getSession({
       sessionId: result.sessionId,
     });
     expect(projection?.attachments).toEqual([
@@ -1792,12 +1787,11 @@ describe("PtyManager.interruptTicketSessions", () => {
   });
 
   it("keeps interrupting the rest when one session's pty write throws", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    const sessionEngine = createTestSessionEngine(testDb.db);
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
@@ -1905,13 +1899,12 @@ describe("resume launch (issue #78)", () => {
   });
 
   it("keeps the latest linked native id and active harness when a terminal exits before resume", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
+    const sessionEngine = createTestSessionEngine(testDb.db);
     // Re-register the PTY door with the SAME writer the socket service uses.
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const { result: launched, pty: launchedPty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
       prompt: "go",
@@ -1959,12 +1952,11 @@ describe("resume launch (issue #78)", () => {
   });
 
   it("serializes concurrent PTY exit and agent signal through the injected Session Engine", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    const sessionEngine = createTestSessionEngine(testDb.db);
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const { result: launched, pty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
       prompt: "go",
@@ -2014,7 +2006,7 @@ describe("resume launch (issue #78)", () => {
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
     expect(result.sessionId).toBe(prior.id);
-    const engine = createDesktopSessionEngine(testDb.db);
+    const engine = createTestSessionEngine(testDb.db);
     const projection = await engine.getSession({ sessionId: prior.id });
     expect(projection?.attachments.at(-1)).toMatchObject({
       origin: { kind: "user" },
@@ -2513,7 +2505,7 @@ describe("Board Session persistence", () => {
 
 describe("degraded database", () => {
   it("reports the db-open error and never spawns when the database is unavailable", async () => {
-    registerTerminalIpcHandlers({ ok: false, error: "disk full" });
+    registerTerminalIpcHandlers({ ok: false, error: "disk full" }, null);
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "w",
       cwd: root,
@@ -2552,7 +2544,14 @@ describe("warm park", () => {
 
   beforeEach(() => {
     parts = makeInspector();
-    parkManager = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, ENABLED_CONFIG);
+    parkManager = new PtyManager(
+      desktopPtyHost(),
+      testDb.db,
+      "",
+      fixtureSessionEngine,
+      parts.inspector,
+      ENABLED_CONFIG,
+    );
   });
 
   /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
@@ -2723,10 +2722,17 @@ describe("warm park", () => {
     });
 
     it("refuses even a manual park when parking is disabled", async () => {
-      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const sender = makeWebContents();
@@ -2932,10 +2938,17 @@ describe("warm park", () => {
 
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
-      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       await disabled.create(asWc(makeWebContents()), {
@@ -3032,11 +3045,18 @@ describe("warm park", () => {
     });
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
-      const manager2 = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        idleThresholdMs: 0,
-        quietSamplesRequired: 1,
-      });
+      const manager2 = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          idleThresholdMs: 0,
+          quietSamplesRequired: 1,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const created = await manager2.create(asWc(makeWebContents()), {
@@ -3058,10 +3078,17 @@ describe("warm park", () => {
     });
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
-      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       expect(() => {
         disabled.startParkSweep();
         disabled.stopParkSweep();

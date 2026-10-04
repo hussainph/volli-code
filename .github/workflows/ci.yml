@@ -485,9 +485,9 @@ jobs:
         working-directory: apps/desktop
         run: vp test run --merge-reports="$RUNNER_TEMP/desktop-blobs" --coverage
 
-  # Every other package's suite and its own coverage gate, unsharded: together
-  # they take about 50s, less than a desktop shard. Each package's thresholds
-  # are judged in place, exactly as before.
+  # Every other package's suite and its own coverage gate, unsharded. Each
+  # package's thresholds are judged in place. This runs in parallel with the
+  # desktop lanes; its duration grows with the host surface and native tests.
   #
   # The filter selects by DIRECTORY and then subtracts the desktop app, and
   # both halves matter. An exclusion-only filter (`--filter '!@volli/desktop'`)
@@ -497,8 +497,8 @@ jobs:
   # under apps/ or packages/ is picked up with no edit here; one without a
   # `test:coverage` script is skipped, as `-r` skipped apps/docs.
   # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
-  # covers session-engine, session-rpc, agent-runtime and shared; host-protocol,
-  # host-core and apps/hostd join automatically when added with test:coverage.
+  # covers session-engine, session-rpc, agent-runtime, shared and host-core.
+  # Future host-protocol and apps/hostd suites join with test:coverage.
   # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
   test-packages:
     name: Test (packages)
@@ -543,12 +543,17 @@ jobs:
           --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
           test:coverage --maxWorkers=$(nproc)
 
+  # The Linux host image, then the hostd artifact built inside it (VC-562):
+  # Node = .nvmrc and bookworm's glibc, natives compiled there, then booted
+  # from the archive alone against an empty data directory, driven by the
+  # volli CLI, stopped with SIGTERM and its database integrity-checked. A CI
+  # artifact only: release.yml and desktop packaging never see it.
   host-container:
     name: Build (host container)
     needs: changes
     if: needs.changes.outputs.host-container == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -568,6 +573,32 @@ jobs:
             test "$(node -p "process.versions.node")" = "$(cat /opt/volli-toolchain/.nvmrc)"
             test "$(pnpm --version)" = "$(node -p "require(\"/opt/volli-toolchain/package.json\").packageManager.split(\"@\")[1]")"
           '
+
+      # The checkout is mounted read-only; the image's non-root user copies it,
+      # installs host-only (never desktop), builds and writes only the archive.
+      - name: Build the hostd artifact (linux-x64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/hostd"
+          chmod 0777 "$RUNNER_TEMP/hostd"
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/hostd:/out" volli-host-dev \
+            bash /src/apps/hostd/scripts/ci-build-artifact.sh
+
+      # A fresh container with no checkout and no system node on PATH.
+      - name: Boot the hostd artifact against an empty data directory
+        run: |
+          docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-boot-artifact.sh
+
+      - name: Upload the hostd artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: volli-hostd-linux-x64
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
   # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
   # theming, plus the macOS-only licence assertions. It runs BESIDE the shard

@@ -25,10 +25,6 @@
       "types": "./src/session-runtime/*.ts",
       "import": "./src/session-runtime/*.ts"
     },
-    "./session-wake": {
-      "types": "./src/session-wake.ts",
-      "import": "./src/session-wake.ts"
-    },
     "./session-concurrency": {
       "types": "./src/session-concurrency.ts",
       "import": "./src/session-concurrency.ts"
@@ -132,6 +128,10 @@
     "./blob-materialize": {
       "types": "./src/blob-materialize.ts",
       "import": "./src/blob-materialize.ts"
+    },
+    "./ticket-move": {
+      "types": "./src/ticket-move.ts",
+      "import": "./src/ticket-move.ts"
     },
     "./ticket-commands": {
       "types": "./src/ticket-commands.ts",

@@ -1,0 +1,211 @@
+/**
+ * The whole deliberate ticket-move command (VC-629), independent of its door.
+ * Owns the atomic write, post-commit wakes, Done trim, armed arrivals and
+ * backward interrupts. IPC maps UUID/indexed drops; the socket maps display
+ * ids/column-only intent. Neither adapter owns post-commit behavior.
+ *
+ * No new command ledger: the reply is the committed board projection, just as
+ * before. Interrupt command/receipts remain owned by the Session service.
+ */
+import {
+  displayTicketId,
+  errorMessage,
+  TICKET_STATUS_LABELS,
+  type DeliberateMoveChoice,
+  type DataChangedEvent,
+  type NotificationRequest,
+  type Ticket,
+  type TicketEventActorKind,
+  type TicketMovedNotice,
+  type TicketStatus,
+} from "@volli/shared";
+import { getProjectById } from "./db/projects-repo";
+import { getTicket, getTicketRow, listTicketsByProject } from "./db/tickets-repo";
+import {
+  interruptOnBackwardMove,
+  moveTicketCommand,
+  moveTicketsCommand,
+  type TicketCommandContext,
+} from "./ticket-commands";
+import { withTicketWake } from "./ticket-wake";
+import { trimFinishedWorktree, type TrimFinishDeps } from "./worktree";
+import { getWorktreeSnapshots } from "./worktree/snapshot";
+
+export type TicketMoveCommandInput = {
+  projectId: string;
+  toStatus: TicketStatus;
+  choice?: DeliberateMoveChoice;
+} & (
+  | { ticketId: string; /** Absent means column-only; same-column is a no-op. */ toIndex?: number }
+  | { ticketIds: string[]; toIndex: number }
+);
+
+export interface TicketMovePorts extends TrimFinishDeps {
+  interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+  onDeliberateMove?: (notice: TicketMovedNotice) => void;
+  onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
+  notify?: (request: NotificationRequest) => unknown;
+}
+
+/** The archive path shares the same best-effort trim, without being a move. */
+export function trimFinishedTicketInBackground(
+  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation">,
+  ticketId: string,
+  projectId: string | undefined,
+): void {
+  // Start now, do not put a filesystem walk on the board reply's critical path.
+  void trimFinishedWorktree(ports, ticketId)
+    .then((outcome) => {
+      if (outcome.kind !== "trimmed") return;
+      getWorktreeSnapshots().invalidate(ticketId);
+      ports.onMutation?.({ ticketId, projectId, kind: "worktree" });
+    })
+    .catch((error: unknown) => {
+      console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+    });
+}
+
+function moveNotificationBody(kind: TicketEventActorKind, via: string | null): string {
+  switch (kind) {
+    case "automation":
+      return "Moved by automation";
+    case "unauthenticated":
+      return "Moved by an unauthenticated caller";
+    case "session":
+      return via ? `Moved via ${via}'s session` : "Moved via a session";
+    case "user":
+      return "Moved by you";
+  }
+}
+
+function recordInterruptFailure(error: unknown): void {
+  console.error(
+    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
+  );
+}
+
+export function executeTicketMove(
+  ports: TicketMovePorts,
+  input: TicketMoveCommandInput,
+  context: TicketCommandContext,
+): Ticket[] | Promise<Ticket[]> {
+  const db = ports.worktree.db;
+  const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
+  const before = new Map(ticketIds.map((id) => [id, getTicketRow(db, id)]));
+  for (const prior of before.values()) {
+    if (prior === undefined) throw new Error("Unknown ticket");
+    if (prior.archived_at !== null) throw new Error("Cannot move an archived ticket");
+  }
+  const columnOnly = "ticketId" in input && input.toIndex === undefined;
+  if (
+    columnOnly &&
+    before.get(input.ticketId)?.project_id === input.projectId &&
+    before.get(input.ticketId)?.status === input.toStatus
+  ) {
+    return listTicketsByProject(db, input.projectId);
+  }
+  const toIndex =
+    input.toIndex ??
+    listTicketsByProject(db, input.projectId).filter((ticket) => ticket.status === input.toStatus)
+      .length;
+  const runMove = () =>
+    "ticketIds" in input
+      ? moveTicketsCommand(db, { ...input, toIndex }, context)
+      : moveTicketCommand(db, { ...input, toIndex }, context);
+  const tickets = ticketIds.reduceRight<() => Ticket[]>(
+    (write, ticketId) => () => withTicketWake(db, ticketId, write),
+    runMove,
+  )();
+  const after = new Map(ticketIds.map((id) => [id, getTicketRow(db, id)]));
+
+  for (const ticketId of ticketIds) {
+    const moved = after.get(ticketId);
+    if (moved?.status === "done" && before.get(ticketId)?.status !== "done") {
+      trimFinishedTicketInBackground(ports, ticketId, moved.project_id);
+    }
+  }
+  for (const ticketId of ticketIds) {
+    const prior = before.get(ticketId);
+    const moved = after.get(ticketId);
+    if (
+      prior === undefined ||
+      moved === undefined ||
+      prior.status === moved.status ||
+      moved.status !== input.toStatus
+    )
+      continue;
+    try {
+      ports.onDeliberateMove?.({
+        projectId: moved.project_id,
+        ticketId,
+        from: prior.status as TicketStatus,
+        to: input.toStatus,
+        ...(input.choice === undefined ? {} : { choice: input.choice }),
+      });
+    } catch (error) {
+      console.error(
+        `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
+      );
+    }
+    // Operational guardrail: only non-user arrivals into Doing notify. Actor
+    // policy, not transport policy, so a renderer move remains silent.
+    if (input.toStatus === "doing" && context.actor.kind !== "user") {
+      const project = getProjectById(db, moved.project_id)!;
+      const actorTicket =
+        context.actor.kind === "session" && context.actor.ticketId !== null
+          ? getTicket(db, context.actor.ticketId)
+          : undefined;
+      const actorProject =
+        actorTicket === undefined ? undefined : getProjectById(db, actorTicket.projectId);
+      const via =
+        actorTicket !== undefined && actorProject !== undefined
+          ? displayTicketId(actorProject.ticketPrefix, actorTicket.ticketNumber)
+          : null;
+      ports.notify?.({
+        producer: "ticket-moved-to-doing",
+        title: `${displayTicketId(project.ticketPrefix, moved.ticket_number)} → ${TICKET_STATUS_LABELS[input.toStatus]}`,
+        body: moveNotificationBody(context.actor.kind, via),
+        target: { kind: "ticket", projectId: moved.project_id, ticketId },
+      });
+    }
+  }
+  // A column-only no-op returned above. Indexed reorders remain real writes.
+  for (const ticketId of ticketIds) {
+    if (after.get(ticketId)?.project_id === input.projectId) {
+      ports.onMutation?.({ projectId: input.projectId, ticketId, kind: "ticket" });
+    }
+  }
+  const pending: Promise<string[]>[] = [];
+  for (const ticketId of ticketIds) {
+    const prior = before.get(ticketId);
+    const moved = after.get(ticketId);
+    if (
+      prior === undefined ||
+      moved === undefined ||
+      moved.project_id !== input.projectId ||
+      prior.status === moved.status ||
+      moved.status !== input.toStatus
+    )
+      continue;
+    try {
+      const interrupt = interruptOnBackwardMove(
+        {
+          ticketId,
+          fromStatus: prior.status as TicketStatus,
+          toStatus: input.toStatus,
+        },
+        ports.interruptTicketSessions,
+      );
+      if (interrupt instanceof Promise) pending.push(interrupt);
+    } catch (error) {
+      recordInterruptFailure(error);
+    }
+  }
+  if (pending.length === 0) return tickets;
+  return Promise.allSettled(pending).then((results) => {
+    for (const result of results) {
+      if (result.status === "rejected") recordInterruptFailure(result.reason);
+    }
+    return tickets;
+  });
+}

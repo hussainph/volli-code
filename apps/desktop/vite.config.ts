@@ -647,6 +647,8 @@ export default defineConfig(({ mode }) => ({
         // The process IPC door stays here; the sweep and its unchanged 100%
         // gate moved with its tests to @volli/host-core (VC-618).
         "**/src/main/process/ipc.ts",
+        // Still covered by desktop's IPC/PTY boundary tests; host-core's own
+        // tests do not yet hold every registry branch at 100%.
         "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
@@ -654,15 +656,6 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
-        // Relinking a project to the folder it moved to (VC-430). In the gate
-        // because every branch of it is a rule about a filesystem nobody is
-        // watching: the refusal that stops two projects tracking one checkout,
-        // and the container move that keeps a renamed project's worktrees
-        // inside the set this database recognises as its own. Both are silent
-        // when wrong — one duplicates a project, the other strands checkouts
-        // that no cleanup surface will ever list again.
-        "**/packages/host-core/src/project-relink.ts",
-        "**/src/main/pty.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
         // The host deadline is still covered by desktop's quit/socket integration tests.
@@ -674,11 +667,8 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
-        // The db modules moved to @volli/host-core (VC-553) and took their gate
-        // entries with them; see that package's vite.config.ts. `export.ts`
-        // stays enrolled here because its covering test composes desktop
-        // Session code, and moves when that test can.
-        "**/packages/host-core/src/db/export.ts",
+        // The db modules, including export.ts, are protected by
+        // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
       ],

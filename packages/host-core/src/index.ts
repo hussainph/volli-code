@@ -9,9 +9,9 @@
  * ask its host to do comes in as {@link HostCorePorts}. Nothing in this
  * package imports `electron` (`scripts/check-host-electron-imports.mjs`).
  *
- * Persistence (VC-553) and Session composition (VC-612) live here. The repos
- * and ledger are exported under `db/*` and `session-control/*`. See README.md
- * for how later slices move a cluster.
+ * Persistence, Session/runtime services, worktrees and files, secrets, agent
+ * tools and dispatch, Automations, terminals and the engine-agnostic browser
+ * live here. See README.md for the cluster exports, ports and move pattern.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

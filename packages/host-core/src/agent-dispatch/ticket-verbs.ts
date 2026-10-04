@@ -34,28 +34,24 @@ import type {
   HarnessId,
   Ticket,
   TicketBodyMutation,
-  TicketEventActorKind,
 } from "@volli/shared";
 
 import { getRegisteredHarness } from "@volli/host-core/db/harness-registry-repo";
 import { findLabelByName } from "@volli/host-core/db/labels-repo";
-import { listTicketsByProject } from "@volli/host-core/db/tickets-repo";
 import {
   createTicketCommand,
   createTicketCommentCommand,
   createTicketSignalCommand,
-  interruptOnBackwardMove,
-  moveTicketCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   updateTicketFieldsCommand,
 } from "@volli/host-core/ticket-commands";
+import { executeTicketMove } from "../ticket-move";
 import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import {
-  actorSessionTicketDisplay,
   attributedActor,
   invalidPriorityResponse,
   projectForCreate,
@@ -318,34 +314,6 @@ export async function ticketUpdateVerb(
   }
 }
 
-/**
- * What the into-Doing notification says about who moved it.
- *
- * Total over {@link TicketEventActorKind} so a kind added later fails to
- * compile here rather than falling into someone else's sentence — which is
- * exactly how `unauthenticated` would have been announced as a Session had the
- * old `else` branch survived it.
- *
- * `via` is the display id of the Ticket the DRIVING Session is itself working,
- * and only the session sentence has ever named it.
- *
- * `user` is unreachable over the socket (VC-163) and is kept for totality
- * rather than for behaviour: this door cannot authenticate a person, and the
- * app's own moves never reach this verb.
- */
-function moveNotificationBody(kind: TicketEventActorKind, via: string | null): string {
-  switch (kind) {
-    case "automation":
-      return "Moved by automation";
-    case "unauthenticated":
-      return "Moved by an unauthenticated caller";
-    case "session":
-      return via ? `Moved via ${via}'s session` : "Moved via a session";
-    case "user":
-      return "Moved by you";
-  }
-}
-
 /** `volli ticket move` — a ticket to another column. */
 export async function ticketMoveVerb(
   context: AgentCommandContext,
@@ -381,11 +349,6 @@ export async function ticketMoveVerb(
       },
     );
     if (noOpPreview !== null) return noOpPreview;
-    return {
-      v: 1,
-      ok: true,
-      data: { ticket: agentTicket(resolved.ticket, resolved.project) },
-    };
   }
   const movePreview = dryRunResponse(request, {
     kind: "ticket",
@@ -394,106 +357,20 @@ export async function ticketMoveVerb(
   });
   if (movePreview !== null) return movePreview;
   try {
-    const movedAt = now();
-    const before = listTicketsByProject(options.db, resolved.project.id);
-    const toIndex = before.filter((ticket) => ticket.status === to).length;
-    // The wake fires here rather than after the interrupt below, because the
-    // move is what a waiter is waiting for and it is already durable — an
-    // interrupt that fails afterwards does not un-move the ticket.
-    const moved = withTicketWake(options.db, resolved.ticket.id, () =>
-      moveTicketCommand(
-        options.db,
-        {
-          projectId: resolved.project.id,
-          ticketId: resolved.ticket.id,
-          toStatus: to,
-          toIndex,
-        },
-        { now: movedAt, actor },
-      ),
+    const moved = await executeTicketMove(
+      {
+        worktree: { db: options.db, git: context.git, gitAsync: context.gitAsync, blobsRoot: "" },
+        now,
+        busySites: options.busyWorktreeSites,
+        interruptTicketSessions: options.interruptTicketSessions,
+        onDeliberateMove: options.onDeliberateMove,
+        onMutation: options.onMutation,
+        notify: options.notify,
+      },
+      { projectId: resolved.project.id, ticketId: resolved.ticket.id, toStatus: to },
+      { now: now(), actor },
     );
     const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
-    // Backward-move interrupt (issue #78): the move committed above, so the
-    // interrupt runs as its side effect. `resolved.ticket.status` is the
-    // pre-move status (same-column no-ops already returned above).
-    try {
-      await interruptOnBackwardMove(
-        {
-          ticketId: resolved.ticket.id,
-          fromStatus: resolved.ticket.status,
-          toStatus: to,
-        },
-        options.interruptTicketSessions,
-      );
-    } catch (error) {
-      console.error(
-        `[volli] failed to interrupt sessions after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
-      );
-    }
-    // Guardrail is visibility, not caps (decision 2): an entry into Doing that
-    // a person did not make at the keyboard fires a native notification.
-    // Same-column moves already returned above, so reaching here with
-    // to === "doing" means the prior status wasn't.
-    //
-    // Every actor this door can produce is notifiable, which is why there is no
-    // "stays silent" case left to test for. The `user` actor no longer arrives
-    // over this door at all (VC-163): the socket cannot authenticate a person,
-    // so the plain-CLI move that used to be attributed to one is now
-    // `unauthenticated` — and that case is the loudest of the three rather than
-    // the quietest. A caller Volli could not identify, pushing work into the
-    // active column, is the told-to-work-on-changes vector VC-92 §3 named. The
-    // body says what is unknown about it rather than inventing a party.
-    if (to === "doing") {
-      const movedDisplay = displayTicketId(
-        resolved.project.ticketPrefix,
-        resolved.ticket.ticketNumber,
-      );
-      // Resolved only for the one sentence that names it, so an automation
-      // move costs no ticket lookup — exactly as before.
-      const via =
-        actor.kind === "session"
-          ? actorSessionTicketDisplay(options.db, projects, actor.ticketId)
-          : null;
-      // Operational, never preference-controlled (VC-295): this is the
-      // guardrail VC-92 §3 asked for, and a notifications switch that could
-      // silence it would be a mute button on the one signal that work was
-      // pushed into the active column by somebody who is not at the keyboard.
-      // It still deep-links — the ticket is a real target, not an invented one.
-      options.notify?.({
-        producer: "ticket-moved-to-doing",
-        title: `${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`,
-        body: moveNotificationBody(actor.kind, via),
-        target: {
-          kind: "ticket",
-          projectId: resolved.project.id,
-          ticketId: resolved.ticket.id,
-        },
-      });
-    }
-    options.onMutation?.({
-      ticketId: resolved.ticket.id,
-      projectId: resolved.project.id,
-      kind: "ticket",
-    });
-    // An explicit `volli ticket move` is a Deliberate move (CONTEXT.md), with
-    // the same semantics as a drag — so it enters main's one pending-arrival
-    // coordinator after the same committed status change (VC-226). No renderer
-    // is involved. The columns travel because the status the Ticket LEFT is
-    // gone the moment the write commits; same-column no-ops returned earlier.
-    try {
-      options.onDeliberateMove?.({
-        projectId: resolved.project.id,
-        ticketId: resolved.ticket.id,
-        from: resolved.ticket.status,
-        to,
-      });
-    } catch (error) {
-      // The Ticket move already committed. A failed pending projection is
-      // operational evidence, not grounds to answer that the move failed.
-      console.error(
-        `[volli] failed to record armed-column arrival after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
-      );
-    }
     return {
       v: 1,
       ok: true,

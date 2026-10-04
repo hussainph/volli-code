@@ -7,7 +7,6 @@ import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { createRunAttentionWatch } from "./automations/run-attention";
 import {
-  createDesktopSessionEngine,
   createSqliteSessionLedger,
   createSessionReadWatch,
   publishSessionListingRow,
@@ -16,11 +15,12 @@ import {
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
+import { createHostSessionEngine } from "./sessions/engine";
 import type { AttentionDeliveryPort } from "./ports/attention";
 import type { HostEventBus } from "./ports/events";
 import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
 import { observeSessionResumptions } from "./session-runtime/session-resumptions";
-import { createSessionWakeBus, type SessionWakeBus } from "./session-wake";
+import { createSessionWakeBus, type SessionWakeBus } from "./session-control/session-wake";
 
 /** Only the process-owned edges of Session composition; no window mechanisms. */
 export interface HostSessionPorts {
@@ -67,12 +67,9 @@ export function createHostSessionServices(
     },
   });
   // Wake committed facts before marking listing rows dirty, as in desktop.
-  const sessionWakeBus = createSessionWakeBus(
-    createDesktopSessionEngine(db, { ledger: sessionLedger }),
-    {
-      db,
-    },
-  );
+  const sessionWakeBus = createSessionWakeBus(createHostSessionEngine(sessionLedger), {
+    db,
+  });
   const publishSessionActivity: SessionActivityWatchPorts["publish"] = (notice) =>
     ports.events.publish("session-activity", notice);
   const publishSessionRow = (sessionId: string): void => {

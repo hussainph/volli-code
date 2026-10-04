@@ -2770,7 +2770,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
-    sessionEngine: sessionEngine ?? undefined,
+    sessionEngine,
     listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
@@ -3118,8 +3118,8 @@ app.whenReady().then(async () => {
   // one question about one machine, asked once.
   const ptyManager = registerTerminalIpcHandlers(
     dbHandle,
-    agentRuntime,
     sessionEngine,
+    agentRuntime,
     concurrencyEnvReader,
   );
   ptyManagerRef = ptyManager;
@@ -3859,6 +3859,7 @@ app.whenReady().then(async () => {
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
+          busyWorktreeSites,
           interruptTicketSessions: interruptTicketSessionsAnnounced,
           // An explicit `volli ticket move` is the other Deliberate-move door.
           // It reaches the same one main-owned pending arrival as renderer IPC;

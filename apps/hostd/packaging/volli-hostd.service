@@ -1,0 +1,71 @@
+# volli-hostd as a systemd system service (VC-562). A template: adjust the
+# install path, the user and, if you keep the secret key elsewhere,
+# VOLLI_SECRET_KEY_FILE. Setup, the key and why LoadCredential= is not used:
+# apps/hostd/README.md ("Running under systemd").
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/volli-hostd \
+#     --shell /bin/bash volli
+#   sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd \
+#     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
+#   sudo install -m 644 volli-hostd.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
+#   journalctl -u volli-hostd -o cat | jq .
+
+[Unit]
+Description=Volli headless host (volli-hostd)
+Documentation=https://github.com/hussainph/volli-code/blob/main/apps/hostd/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# A dedicated, unprivileged service user. The secret key must be owned by it.
+User=volli
+Group=volli
+# /var/lib/volli-hostd, owned by User= and private to it: hostd refuses a data
+# directory other users can write (they could rename its key or database).
+StateDirectory=volli-hostd
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/var/lib/volli-hostd
+Environment=VOLLI_HOSTD_LOG_LEVEL=info
+# Optional: keep the key outside the data directory, so a copy of the data
+# directory does not carry it (docs/secrets.md, "Headless hosts"). Install it
+# with: sudo install -o volli -g volli -m 600 key /etc/volli-hostd/session-secrets.key
+#Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key
+ExecStart=/opt/volli-hostd/bin/volli-hostd --data-dir /var/lib/volli-hostd
+# SIGTERM stops accepting work, drains in-flight requests (10 s at most),
+# checkpoints the WAL and closes the database. hostd's own deadline is 30 s.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=5
+# 78 (EX_CONFIG): a refusal an operator must fix (bad key, data directory
+# others can write, another host on the socket). Restarting cannot help.
+RestartPreventExitStatus=78
+
+# Hardening that does not get in the way of git, Node or a shell.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# No capabilities at all: hostd and its Sessions run as an ordinary user.
+CapabilityBoundingSet=
+# The agent socket, outbound HTTPS and git, and the interface lookups Node
+# and git make. No raw or packet sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# Not MemoryDenyWriteExecute=: V8's JIT needs writable executable memory.
+
+[Install]
+WantedBy=multi-user.target
