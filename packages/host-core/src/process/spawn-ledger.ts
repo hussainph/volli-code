@@ -32,7 +32,7 @@ import {
   markSpawnExited,
   pruneSpawnLedger,
   recordSpawn,
-} from "@volli/host-core/db/spawn-ledger-repo";
+} from "../db/spawn-ledger-repo";
 
 export interface SpawnLedgerOptions {
   now?: () => number;

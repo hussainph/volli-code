@@ -1,4 +1,4 @@
-import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+import { settleShutdownBeforeDeadline } from "@volli/host-core/shutdown-deadline";
 
 /**
  * The quit decision: whether ⌘Q is allowed to destroy work, and how a refusal

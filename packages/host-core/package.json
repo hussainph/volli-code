@@ -25,10 +25,6 @@
       "types": "./src/session-runtime/*.ts",
       "import": "./src/session-runtime/*.ts"
     },
-    "./session-wake": {
-      "types": "./src/session-wake.ts",
-      "import": "./src/session-wake.ts"
-    },
     "./session-concurrency": {
       "types": "./src/session-concurrency.ts",
       "import": "./src/session-concurrency.ts"
@@ -133,6 +129,10 @@
       "types": "./src/blob-materialize.ts",
       "import": "./src/blob-materialize.ts"
     },
+    "./ticket-move": {
+      "types": "./src/ticket-move.ts",
+      "import": "./src/ticket-move.ts"
+    },
     "./ticket-commands": {
       "types": "./src/ticket-commands.ts",
       "import": "./src/ticket-commands.ts"
@@ -192,6 +192,38 @@
     "./pty/*": {
       "types": "./src/pty/*.ts",
       "import": "./src/pty/*.ts"
+    },
+    "./backup/*": {
+      "types": "./src/backup/*.ts",
+      "import": "./src/backup/*.ts"
+    },
+    "./process/*": {
+      "types": "./src/process/*.ts",
+      "import": "./src/process/*.ts"
+    },
+    "./orphan-scan": {
+      "types": "./src/orphan-scan.ts",
+      "import": "./src/orphan-scan.ts"
+    },
+    "./retention-runtime": {
+      "types": "./src/retention-runtime.ts",
+      "import": "./src/retention-runtime.ts"
+    },
+    "./quiet-windows": {
+      "types": "./src/quiet-windows.ts",
+      "import": "./src/quiet-windows.ts"
+    },
+    "./shutdown-deadline": {
+      "types": "./src/shutdown-deadline.ts",
+      "import": "./src/shutdown-deadline.ts"
+    },
+    "./host-shutdown": {
+      "types": "./src/host-shutdown.ts",
+      "import": "./src/host-shutdown.ts"
+    },
+    "./database-recovery": {
+      "types": "./src/database-recovery.ts",
+      "import": "./src/database-recovery.ts"
     },
     "./browser/*": {
       "types": "./src/browser/*.ts",

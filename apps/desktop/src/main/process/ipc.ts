@@ -21,8 +21,8 @@ import type { DbHandle } from "../data-ipc";
 import { ORPHAN_PROCESS_CHANNELS, ORPHAN_PROCESS_IPC } from "../ipc-descriptors";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "../ipc-registry";
 import type { IpcHandlerTable } from "../ipc-registry";
-import { getAutoReapPolicy, setAutoReapPolicy } from "./auto-reap-settings";
-import type { OrphanProcessService } from "./orphan-processes";
+import { getAutoReapPolicy, setAutoReapPolicy } from "@volli/host-core/process/auto-reap-settings";
+import type { OrphanProcessService } from "@volli/host-core/process/orphan-processes";
 
 export function registerOrphanProcessIpcHandlers(
   handle: DbHandle,

@@ -34,7 +34,13 @@ import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { McpSettingsService } from "@volli/host-core/mcp/settings";
 import { removeTicketToolOutput } from "@volli/host-core/pi-tool-output";
 import type { StopSessionByIdPorts } from "@volli/host-core/session-runtime/supervise-session";
-import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import type {
+  AuthorityPolicyOverride,
+  DataChangedEvent,
+  Label,
+  Project,
+  Ticket,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -173,7 +179,6 @@ import {
  * performance harness can measure the same function the handler calls.
  */
 import {
-  createDesktopSessionEngine,
   publishSessionListingRow,
   readSessionPeekContent,
   sessionListingRowsForRoster,
@@ -196,18 +201,21 @@ import {
   createTicketCommand,
   createTicketCommentCommand,
   deleteTicketCommand,
-  interruptOnBackwardMove,
-  moveTicketCommand,
-  moveTicketsCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "@volli/host-core/ticket-commands";
+import { executeTicketMove, trimFinishedTicketInBackground } from "@volli/host-core/ticket-move";
 import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
-import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
+import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import { deliverNotification } from "./notifications/runtime";
 import { withTicketWake } from "@volli/host-core/ticket-wake";
-import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
+import {
+  invalidateOrphanScan,
+  orphanScanReport,
+  resolveCleanupPlan,
+} from "@volli/host-core/orphan-scan";
 import { exportDatabase } from "./menu";
 import {
   acquireDeletionLease,
@@ -237,13 +245,12 @@ import {
   setRetentionTtlDays,
   setTrimSettings,
   trimAllWorktrees,
-  trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "@volli/host-core/worktree";
 import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "@volli/host-core/worktree/coalesce";
 import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
 import { credentialHelperIssues } from "@volli/host-core/credential-helper-diagnostics";
-import { getRetentionWatcher } from "./retention-runtime";
+import { getRetentionWatcher } from "@volli/host-core/retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -269,12 +276,6 @@ function databaseStorageBytes(dbPath: string): number {
     sizeBytes += statSync(`${dbPath}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
   }
   return sizeBytes;
-}
-
-function recordInterruptFailure(error: unknown): void {
-  console.error(
-    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-  );
 }
 
 // ---- bootstrap payload --------------------------------------------------
@@ -464,7 +465,7 @@ export function registerDataIpcHandlers(
      */
     onDeliberateMove?: (notice: TicketMovedNotice) => void;
     /** The app's single durable Session Engine. */
-    sessionEngine?: SessionEngine;
+    sessionEngine: SessionEngine | null;
     /**
      * The structured executor bindings this process holds right now. Session
      * attachments stay durably open across relaunch for lazy rehydration, so a
@@ -509,7 +510,7 @@ export function registerDataIpcHandlers(
      * output. Absent (tests, degraded boot) means nothing is removed.
      */
     piSessionsDirectory?: string;
-  } = {},
+  },
 ): void {
   if (!handle.ok) {
     registerDegradedIpcHandlers(DATA_CHANNELS, handle.error);
@@ -517,11 +518,18 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
-  const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  const sessionEngine = options.sessionEngine;
+  if (sessionEngine === null) throw new Error("Session Engine is unavailable");
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+  const retentionWatcher = () =>
+    getRetentionWatcher(
+      db,
+      { events: windowEventBus, attention: { deliver: deliverNotification } },
+      () => worktreeDeps(db),
+    );
 
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
@@ -588,22 +596,18 @@ export function registerDataIpcHandlers(
     }
   };
 
-  const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
-    void trimFinishedWorktree(
-      { worktree: worktreeDeps(db), now: () => Date.now(), ...busySeam() },
-      ticketId,
-    )
-      .then((outcome) => {
-        if (outcome.kind !== "trimmed") return;
-        // The checkout's contents moved under a ticket a rail may still be
-        // watching: its last-known snapshot is stale (VC-372).
-        getWorktreeSnapshots().invalidate(ticketId);
-        broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
-      })
-      .catch((error: unknown) => {
-        console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
-      });
-  };
+  const movePorts = () => ({
+    worktree: worktreeDeps(db),
+    now: () => Date.now(),
+    ...busySeam(),
+    interruptTicketSessions: options.interruptTicketSessions,
+    onDeliberateMove: options.onDeliberateMove,
+    // The board projection travels in the IPC reply. Only the detached trim
+    // needs a push; preserve flag-off renderer invalidation behavior.
+    onMutation: (change: Omit<DataChangedEvent, "entity">) => {
+      if (change.kind === "worktree") broadcastDataChanged(change);
+    },
+  });
 
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
@@ -920,106 +924,13 @@ export function registerDataIpcHandlers(
     },
 
     "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
-      const now = Date.now();
-      const actor = { kind: "user" } as const;
-      const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
-      // Snapshot every pre-move row BEFORE the atomic move. Both the armed
-      // arrival and backward interrupt are derived from durable truth, never
-      // renderer state.
-      const before = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
-
-      // One post-commit wake scope per selected ticket. Nesting is intentional:
-      // every mark is taken before the command, and every finally emits only
-      // after the command's one transaction has committed.
-      const runMove = () =>
-        "ticketIds" in input
-          ? moveTicketsCommand(db, input, { now, actor })
-          : moveTicketCommand(db, input, { now, actor });
-      const tickets = ticketIds.reduceRight<() => Ticket[]>(
-        (write, ticketId) => () => withTicketWake(db, ticketId, write),
-        runMove,
-      )();
-
-      const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
-
-      // VC-340: a ticket that just landed in Done gives up its worktree's
-      // git-ignored content NOW rather than whenever the 60s retention poll next
-      // runs. Same act, same refusals, same durable event — the poll remains the
-      // backfill for everything already finished before this door existed.
-      for (const ticketId of ticketIds) {
-        const moved = after.get(ticketId);
-        if (moved === undefined || moved.status !== "done") continue;
-        if (before.get(ticketId)?.status === "done") continue;
-        trimFinishedInBackground(ticketId, moved.project_id);
-      }
-      // Main owns armed-column arrivals. A group drop is one deliberate move
-      // per selected Ticket, so every real column change reports independently
-      // with the same Option-drag choice.
-      for (const ticketId of ticketIds) {
-        const prior = before.get(ticketId);
-        const moved = after.get(ticketId);
-        if (
-          prior === undefined ||
-          moved === undefined ||
-          prior.status === moved.status ||
-          moved.status !== input.toStatus
-        ) {
-          continue;
-        }
-        try {
-          options.onDeliberateMove?.({
-            projectId: moved.project_id,
-            ticketId,
-            from: prior.status as TicketStatus,
-            to: input.toStatus,
-            ...(input.choice === undefined ? {} : { choice: input.choice }),
-          });
-        } catch (error) {
-          // The board transaction already committed. A pending-projection
-          // failure is evidence to log, not grounds to roll the move back.
-          console.error(
-            `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
-          );
-        }
-      }
-
-      // Interrupt all affected Sessions in parallel. A delivery failure cannot
-      // roll the already-committed board transaction back; it remains
-      // operational evidence rather than turning a successful move into a lie.
-      const pending: Promise<string[]>[] = [];
-      for (const ticketId of ticketIds) {
-        const row = before.get(ticketId);
-        const moved = after.get(ticketId);
-        if (
-          row === undefined ||
-          moved === undefined ||
-          moved.project_id !== input.projectId ||
-          row.status === moved.status ||
-          moved.status !== input.toStatus
-        ) {
-          continue;
-        }
-        try {
-          const interrupt = interruptOnBackwardMove(
-            {
-              ticketId,
-              fromStatus: row.status as TicketStatus,
-              toStatus: input.toStatus,
-            },
-            options.interruptTicketSessions,
-          );
-          if (interrupt instanceof Promise) pending.push(interrupt);
-        } catch (error) {
-          recordInterruptFailure(error);
-        }
-      }
-      if (pending.length === 0) return { ok: true, tickets };
-      return Promise.allSettled(pending).then((results) => {
-        for (const result of results) {
-          if (result.status === "rejected") recordInterruptFailure(result.reason);
-        }
-        return { ok: true, tickets };
+      const moved = executeTicketMove(movePorts(), input, {
+        now: Date.now(),
+        actor: { kind: "user" },
       });
+      return moved instanceof Promise
+        ? moved.then((tickets) => ({ ok: true, tickets }))
+        : { ok: true, tickets: moved };
     },
 
     "volli:ticket-set-priority": (input: TicketSetPriorityInput): TicketResult => {
@@ -1097,7 +1008,7 @@ export function registerDataIpcHandlers(
       releaseTicketToolOutput(input.ticketId);
       // An archive KEEPS the checkout, which makes an archived ticket the
       // longest-lived carrier of a dead dependency tree in the app (VC-340).
-      trimFinishedInBackground(input.ticketId, ticket?.project_id);
+      trimFinishedTicketInBackground(movePorts(), input.ticketId, ticket?.project_id);
       return { ok: true };
     },
 
@@ -1984,7 +1895,7 @@ export function registerDataIpcHandlers(
     // (retention-runtime.ts) is shared with index.ts's start/stop + focus wiring.
 
     "volli:retention-state": (input: TicketIdInput): RetentionStateResult => {
-      const state = getRetentionWatcher(db).getState(input.ticketId);
+      const state = retentionWatcher().getState(input.ticketId);
       if (state === null) return { ok: false, error: "Unknown ticket" };
       return { ok: true, state };
     },
@@ -2004,7 +1915,7 @@ export function registerDataIpcHandlers(
 
     "volli:retention-dismiss": (input: TicketIdInput): RetentionDismissResult => {
       // In-memory, launch-scoped: the prompt is re-offered next launch.
-      getRetentionWatcher(db).dismiss(input.ticketId);
+      retentionWatcher().dismiss(input.ticketId);
       broadcastDataChanged({
         ticketId: input.ticketId,
         ...ticketScope(db, input.ticketId),
@@ -2060,7 +1971,7 @@ export function registerDataIpcHandlers(
 
     "volli:retention-poll": (): RetentionPollResult => {
       // Fire-and-forget: the poll runs async and broadcasts on change itself.
-      getRetentionWatcher(db).triggerNow();
+      retentionWatcher().triggerNow();
       return { ok: true };
     },
   };

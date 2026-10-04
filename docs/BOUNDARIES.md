@@ -147,10 +147,9 @@ statements in the repo cache (`prepared`) when it installs; any other early
 statement would escape it.
 `packages/host-core/src/db/transaction-gate.test.ts` proves that the former
 ungated-write rollback hazard cannot happen, and covers cached statements,
-raw transaction controls, nesting and the packaged handler; the cases that need
-desktop ledgers (cross-ledger work) are in
-`apps/desktop/src/main/db/transaction-gate-ledgers.test.ts` until those ledgers
-move into host-core.
+raw transaction controls, nesting and the packaged handler. Cross-ledger work
+is proved by `packages/host-core/src/db/transaction-gate-ledgers.test.ts`, which
+composes the Session, Automation and cleanup ledgers in the Linux packages lane.
 
 ## The chosen path, for context
 

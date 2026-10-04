@@ -1,10 +1,10 @@
 /**
- * The app-side construction of the retention merge-watch (CONCEPT #16, issue
+ * The host-side construction of the retention merge-watch (CONCEPT #16, issue
  * #76). Like `worktree-runtime.ts`, this is where the pure, injected watch
- * ({@link RetentionWatcher}) is wired to its real Electron/main seams — the open
+ * ({@link RetentionWatcher}) is wired to its host ports — the open
  * database, the async `gh`/git network runner, the wall clock, the one
  * notification delivery path for its three alerts (VC-295), and
- * `broadcastDataChanged` so every window re-hydrates when the
+ * the event bus so every client re-hydrates when the
  * watch's observed state moves. Held as ONE singleton so `data-ipc.ts` (the
  * retention IPC handlers) and `index.ts` (start/stop + on-focus trigger) drive the same
  * watch — the transient observation/notify-dedup/dismissal state is meaningless
@@ -12,16 +12,15 @@
  */
 import type Database from "better-sqlite3";
 
-import { broadcastDataChanged } from "./broadcast";
-import { deliverNotification } from "./notifications/runtime";
+import type { AttentionDeliveryPort, HostEventBus } from "./ports";
 import {
   RetentionWatcher,
   retentionConfigFromEnv,
   runNet,
   type ReclaimDeps,
   type TrimFinishDeps,
-} from "@volli/host-core/worktree";
-import { worktreeDeps } from "./worktree-host";
+  type WorktreeDeps,
+} from "./worktree";
 
 let watcher: RetentionWatcher | null = null;
 
@@ -43,12 +42,12 @@ export type RetentionReclaimSeams = Pick<ReclaimDeps, "releaseAgentSites" | "bus
  * automatic trim must refuse everything an automatic removal would.
  */
 function trimSeams(
-  db: Database.Database,
+  worktree: () => WorktreeDeps,
   reclaimSeams: RetentionReclaimSeams,
 ): TrimFinishDeps | undefined {
   const busy = reclaimSeams.busyWorktreeSites;
   if (busy === undefined) return undefined;
-  return { worktree: worktreeDeps(db), now: () => Date.now(), busySites: busy };
+  return { worktree: worktree(), now: () => Date.now(), busySites: busy };
 }
 
 /**
@@ -58,6 +57,8 @@ function trimSeams(
  */
 export function getRetentionWatcher(
   db: Database.Database,
+  ports: { events: HostEventBus; attention: Pick<AttentionDeliveryPort, "deliver"> },
+  worktree: () => WorktreeDeps,
   reclaimSeams?: RetentionReclaimSeams,
 ): RetentionWatcher {
   watcher ??= new RetentionWatcher(
@@ -65,22 +66,21 @@ export function getRetentionWatcher(
       db,
       net: runNet,
       now: () => Date.now(),
-      // The one delivery door (VC-295), reached through the process runtime
-      // because this watch is a lazy singleton with no constructor argument to
-      // receive it in. The watch names a producer per alert — `finished` for a
-      // merged PR, `swept` for a reclaim, operational for a failed write — and
-      // the preference is read there, not here.
-      notify: deliverNotification,
-      onChange: broadcastDataChanged,
+      // The one delivery door (VC-295), through the host's attention port.
+      // The watch names a producer per alert — `finished` for a merged PR,
+      // `swept` for a reclaim, operational for a failed write — and the
+      // preference is read there, not here.
+      notify: (request) => ports.attention.deliver(request),
+      onChange: () => ports.events.publish("data-changed", {}),
       // No seams, no reclaim: an app that cannot ask whether a directory is
       // busy has no business deleting one.
       reclaim:
         reclaimSeams === undefined
           ? undefined
-          : { worktree: worktreeDeps(db), now: () => Date.now(), ...reclaimSeams },
+          : { worktree: worktree(), now: () => Date.now(), ...reclaimSeams },
       // Same rule as the reclaim, one step smaller: an app that cannot ask
       // whether a directory is busy has no business deleting anything in one.
-      trim: reclaimSeams === undefined ? undefined : trimSeams(db, reclaimSeams),
+      trim: reclaimSeams === undefined ? undefined : trimSeams(worktree, reclaimSeams),
     },
     retentionConfigFromEnv(process.env),
   );

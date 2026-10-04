@@ -95,11 +95,10 @@ function withinRoot(root, target) {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..");
 }
 
-function sourceFilesBelow(repoRoot, rootRelative, { required = true } = {}) {
+function sourceFilesBelow(repoRoot, rootRelative) {
   const root = resolve(repoRoot, rootRelative);
   if (!existsSync(root)) {
-    if (required) fail(`required source root is missing: ${rootRelative}`);
-    return [];
+    fail(`required source root is missing: ${rootRelative}`);
   }
   if (!statSync(root).isDirectory()) fail(`source root is not a directory: ${rootRelative}`);
 
@@ -119,8 +118,9 @@ function sourceFilesBelow(repoRoot, rootRelative, { required = true } = {}) {
 function enumerateGuardFiles(repoRoot) {
   const files = [
     ...sourceFilesBelow(repoRoot, "packages"),
-    // hostd joins the boundary when its package appears; it does not exist in M0.
-    ...sourceFilesBelow(repoRoot, "apps/hostd", { required: false }),
+    // The headless host (VC-562). Required: deleting or moving it must fail
+    // the guard rather than silently shrink what it checks.
+    ...sourceFilesBelow(repoRoot, "apps/hostd"),
   ];
   const unique = [...new Set(files)].toSorted();
   if (unique.length === 0) fail("no source files found under packages/ or apps/hostd");

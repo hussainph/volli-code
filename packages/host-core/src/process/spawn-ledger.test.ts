@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { openTestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb } from "../db/test-helpers";
 import { NO_SPAWN_LEDGER, SpawnLedger } from "./spawn-ledger";
 
 const NOW = 1_800_000_000_000;

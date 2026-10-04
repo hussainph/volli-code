@@ -385,7 +385,7 @@ async function compose(
     usageLimits: { fetch: refusingFetch },
   });
 
-  // `createDesktopSessionEngine`, with the ledger's transactions timed. The
+  // The host's private Session engine, with the ledger's transactions timed. The
   // ledger runs BEGIN IMMEDIATE and COMMIT outside the work callback, so the
   // handle it is given times those statements too. Both are filed under the
   // Session whose call queued the transaction: the ledger runs it as a

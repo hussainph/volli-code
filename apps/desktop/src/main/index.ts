@@ -72,11 +72,7 @@ import type {
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "@volli/host-core/harness-install";
 import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
-import {
-  closeAllMcpSessionHosts,
-  McpSessionHost,
-  serversForFrozenMcpTools,
-} from "@volli/host-core/mcp/session-host";
+import { McpSessionHost, serversForFrozenMcpTools } from "@volli/host-core/mcp/session-host";
 import { desktopCodeMode } from "@volli/host-core/codemode/dev-config";
 import { codeModeSandboxAssets } from "@volli/host-core/codemode/sandbox-assets";
 import {
@@ -98,7 +94,7 @@ import {
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
-} from "./quiet-windows";
+} from "@volli/host-core/quiet-windows";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import {
@@ -117,12 +113,7 @@ import {
 import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import { listAutomationsForProject } from "@volli/host-core/db/automations-repo";
-import {
-  getTicket,
-  getTicketBrief,
-  listWorktreeHoldersForSessions,
-  listWorktreeRefs,
-} from "@volli/host-core/db/tickets-repo";
+import { getTicket, getTicketBrief } from "@volli/host-core/db/tickets-repo";
 import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { catchUpSessionResumptions } from "@volli/host-core/session-runtime/session-resumptions";
@@ -149,7 +140,7 @@ import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-rec
 import { sessionRootThreadId } from "@volli/session-engine";
 import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
 import type { OpenNativeBinding } from "@volli/session-engine";
-import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
@@ -238,7 +229,7 @@ import type { AgentToolDoor } from "@volli/host-core/agent-tool-door";
 import { subscribeTicketWake } from "@volli/host-core/ticket-wake";
 import type { Watches } from "@volli/host-core/watches";
 import { getComment } from "@volli/host-core/db/comments-repo";
-import { startOrphanScan } from "./orphan-scan";
+import { startOrphanScan } from "@volli/host-core/orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
@@ -248,7 +239,6 @@ import {
 } from "@volli/host-core/worktree";
 import type { AgentSiteReleaseReport } from "@volli/host-core/worktree";
 import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
-import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
   composeSubagentBrief,
@@ -318,11 +308,7 @@ import { blobsRoot } from "@volli/host-core/blob-store";
 import { getBlob } from "@volli/host-core/db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS } from "@volli/host-core/browser/backend";
 import { BrowserTabHost } from "./browser/tab-host";
-import { getAutoReapPolicy } from "./process/auto-reap-settings";
-import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
-import { OrphanProcessService } from "./process/orphan-processes";
-import { SpawnLedger } from "./process/spawn-ledger";
 import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { relayShellNotices } from "./shell/shell-notices";
@@ -888,8 +874,7 @@ app.whenReady().then(async () => {
   });
   const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
-    dbPath,
-    userData: app.getPath("userData"),
+    recovery: hostCore.maintenance.createDatabaseRecovery(),
     degraded: !dbHandle.ok,
     // A database from a newer Volli gets its own recovery screen (VC-602).
     fault: hostCore.databaseFailure?.kind === "newer-version" ? "newer-version" : "unreadable",
@@ -1231,7 +1216,7 @@ app.whenReady().then(async () => {
    * without guessing from its command line. One instance, shared by every
    * spawn door, and a no-op when the database never opened.
    */
-  const spawnLedger = new SpawnLedger(dbHandle.ok ? dbHandle.db : null);
+  const spawnLedger = hostCore.maintenance.createSpawnLedger();
   /**
    * The Agent Tool Surface's door into main (VC-162) — the same application
    * handler the socket's `session.start` reaches, entered with a caller main
@@ -2448,26 +2433,15 @@ app.whenReady().then(async () => {
   // reading refusals, so the destructive-work gates registered below still win.
   registerAcceptedQuitCoordinator({
     lifecycle: app,
-    shutdownNativeSessions: async () => {
-      sessionWatchdog?.stop();
-      scheduledResumeHost?.stop();
-      shellHostNotices?.close();
-      const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
-      for (const result of results) {
-        if (result.status === "rejected") {
-          console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
-        }
-      }
-      // Every Session has closed, and with it every MCP host it owned. This is
-      // the backstop for one whose own close never ran: a stdio server's whole
-      // process group goes with it, so a quit leaves no `npx`/`uvx` child.
-      await closeAllMcpSessionHosts();
-      // The one flush, and it is here rather than anywhere else because this is
-      // the only point at which every Session has stopped producing events.
-      // Bounded inside the owner, so a collector that has stopped answering
-      // delays the quit by a couple of seconds instead of holding it.
-      await agentObservability?.shutdown();
-    },
+    shutdownNativeSessions: () =>
+      hostCore.maintenance.shutdownNativeSessions({
+        sessionWatchdog,
+        scheduledResumeHost,
+        shellHostNotices,
+        sessionRpc,
+        sessionRuntime,
+        agentObservability,
+      }),
     shutdownAgentSocket,
     reportFailure: (error) => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
@@ -2796,7 +2770,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
-    sessionEngine: sessionEngine ?? undefined,
+    sessionEngine,
     listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
@@ -2832,29 +2806,14 @@ app.whenReady().then(async () => {
   // the answer — and the terminal manager is reached through the ref the
   // worktree guards already use, because this registration runs before it
   // exists.
-  const orphanProcesses = dbHandle.ok
-    ? new OrphanProcessService({
-        ledger: spawnLedger,
-        worktrees: () => listWorktreeRefs(dbHandle.db),
-        // A writing caller is live exactly while its attachment token is valid,
-        // which is the same fact `volli doctor` reports as the Session check.
-        liveSessionIds: () => sessionTokens.liveSessionIds(),
-        liveWorktrees: () =>
-          listWorktreeHoldersForSessions(dbHandle.db, sessionTokens.liveSessionIds()),
-        // A terminal tab standing in a worktree is a person looking at it.
-        openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
-        policy: () => getAutoReapPolicy(dbHandle.db),
-        // Through the one door (VC-295), under the same switch as the worktree
-        // reclaim: this is that act one layer down.
-        notify: (title, message) =>
-          notifications.deliver({
-            producer: "orphan-processes-reaped",
-            title,
-            body: message,
-            target: null,
-          }),
-      })
-    : null;
+  const orphanProcesses = hostCore.maintenance.createOrphanProcesses({
+    ledger: spawnLedger,
+    // A writing caller is live exactly while its attachment token is valid,
+    // which is the same fact `volli doctor` reports as the Session check.
+    liveSessionIds: () => sessionTokens.liveSessionIds(),
+    // A terminal tab standing in a worktree is a person looking at it.
+    openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+  });
   registerOrphanProcessIpcHandlers(dbHandle, orphanProcesses);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
@@ -3159,8 +3118,8 @@ app.whenReady().then(async () => {
   // one question about one machine, asked once.
   const ptyManager = registerTerminalIpcHandlers(
     dbHandle,
-    agentRuntime,
     sessionEngine,
+    agentRuntime,
     concurrencyEnvReader,
   );
   ptyManagerRef = ptyManager;
@@ -3409,7 +3368,7 @@ app.whenReady().then(async () => {
     // The reclaim seams (VC-113) are handed over here because this is the only
     // scope that can answer them — the same two the destructive IPC guards use,
     // so an automatic removal refuses everything a manual one would.
-    const retention = getRetentionWatcher(db, { busyWorktreeSites, releaseAgentSites });
+    const retention = hostCore.maintenance.retention(db, { busyWorktreeSites, releaseAgentSites });
     mainWindow.webContents.once("did-finish-load", () => retention.start());
     app.on("browser-window-focus", () => retention.triggerNow());
 
@@ -3417,7 +3376,7 @@ app.whenReady().then(async () => {
     // With the setting off — the default — a tick reads one `app_state` row and
     // stops, so a machine that never turns this on pays nothing for it.
     if (orphanProcesses !== null) {
-      const autoReap = createAutoReapWatch(orphanProcesses);
+      const autoReap = hostCore.maintenance.createAutoReapWatch(orphanProcesses);
       mainWindow.webContents.once("did-finish-load", () => autoReap.start());
     }
   }
@@ -3900,6 +3859,7 @@ app.whenReady().then(async () => {
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
+          busyWorktreeSites,
           interruptTicketSessions: interruptTicketSessionsAnnounced,
           // An explicit `volli ticket move` is the other Deliberate-move door.
           // It reaches the same one main-owned pending arrival as renderer IPC;

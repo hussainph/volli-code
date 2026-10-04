@@ -66,6 +66,20 @@ export type {
   DecisionModelScope,
 } from "@volli/shared";
 
+import type {
+  OrphanProcessReapInput,
+  OrphanProcessInventory,
+  OrphanProcessReapReport,
+  DatabaseSafetyCopy,
+} from "@volli/shared";
+export type {
+  OrphanProcessReapInput,
+  OrphanProcessInventory,
+  OrphanProcessKept,
+  OrphanProcessReapReport,
+  DatabaseSafetyCopy,
+} from "@volli/shared";
+
 import type { ExternalAppId } from "../external-app-ids";
 import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
 
@@ -91,7 +105,6 @@ import type {
   Appearance,
   ArchivedTicket,
   AutoReapPolicy,
-  OrphanProcessCandidate,
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
@@ -636,12 +649,6 @@ export interface WorktreeOrphanCleanupInput {
 /** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
 export interface WorktreeOrphanDeleteInput {
   path: string;
-}
-
-/** A reap names only processes from one main-owned scan revision (VC-341). */
-export interface OrphanProcessReapInput {
-  scanRevision: string;
-  itemIds: string[];
 }
 
 /** `{ ticketId, keep }` — sets/clears the durable retention pin. */
@@ -2605,16 +2612,6 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
-export interface DatabaseSafetyCopy {
-  name: string;
-  modifiedAt: number;
-  /**
-   * `newer`: the copy checks clean but comes from a newer Volli this build
-   * cannot open (VC-602), so restore passes over it.
-   */
-  integrity: "clean" | "damaged" | "unavailable" | "newer";
-}
-
 export type DatabaseRecoveryListResult = Result<{ backups: DatabaseSafetyCopy[] }>;
 export type DatabaseRecoveryRestoreResult = Result<{ restoredBackup: string }>;
 
@@ -3230,33 +3227,6 @@ export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings
 
 export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
 export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;
-
-/**
- * The exact list of running processes a person is shown before any of them may
- * be signalled (VC-341). `candidates` carries both sources — the spawn ledger's
- * owned children and the cwd sweep's double-forkers — and the stance that says
- * which of them Volli is prepared to kill.
- */
-export interface OrphanProcessInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: OrphanProcessCandidate[];
-  /** How many of them carry a Reap; the rest are listed for context only. */
-  reapableCount: number;
-}
-
-/** One candidate a reap declined, with what was found instead. */
-export interface OrphanProcessKept {
-  candidate: OrphanProcessCandidate;
-  reason: string;
-}
-
-/** What one explicit reap actually did. */
-export interface OrphanProcessReapReport {
-  reaped: OrphanProcessCandidate[];
-  kept: OrphanProcessKept[];
-  reapedCount: number;
-}
 
 export type OrphanProcessScanResult = Result<{
   inventory: OrphanProcessInventory;
