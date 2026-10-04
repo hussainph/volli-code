@@ -62,6 +62,12 @@ export default defineConfig({
         // and another user, a lost key or a silent re-key, and none of it shows
         // anywhere until it is wrong.
         "src/secrets/file-key.ts",
+        // The terminal supervisor's process-tree signalling (moved from
+        // desktop's gate with its test, VC-560), and the output pipeline that
+        // carries the stream contract's flow control and attach resync: a
+        // branch wrong here is a frozen shell or a client that never resumes.
+        "src/pty/park.ts",
+        "src/pty/output.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

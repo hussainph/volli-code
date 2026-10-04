@@ -518,6 +518,22 @@ jobs:
           cache: true
           run-install: true
 
+      # host-core's terminal supervisor drives real shells through node-pty
+      # under plain Node here (VC-560). node-pty ships no Linux prebuild, and the
+      # install above ran desktop's postinstall, which built it against
+      # Electron's headers. Rebuild it from source for this Node (this job runs
+      # no Electron; the desktop jobs keep their own Electron build), then
+      # prove it loads and runs a shell before the tests depend on it.
+      - name: Build node-pty for Node
+        run: |
+          env -u npm_config_arch -u npm_config_target_arch \
+            npm_config_runtime=node \
+            npm_config_target="$(node -p 'process.versions.node')" \
+            npm_config_disturl=https://nodejs.org/download/release \
+            npm_config_build_from_source=true \
+            pnpm --filter @volli/host-core rebuild node-pty
+          node packages/host-core/scripts/probe-node-pty.mjs
+
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface
         run: >-

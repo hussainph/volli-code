@@ -28,6 +28,9 @@ import type {
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionStartedNotice,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalParkStateEvent,
   WorktreePhaseEvent,
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
@@ -62,6 +65,12 @@ export interface HostEventMap {
   "worktree-changed": WorktreeChangedEvent;
   /** A subscribed client's worktree watch faulted, before its teardown. */
   "worktree-watch-error": WorktreeWatchErrorEvent;
+  /** A batch of a terminal's output, to the one client attached to it (VC-560). Never broadcast. */
+  "terminal-data": TerminalDataEvent;
+  /** A terminal's shell exited, to its attached client, after its final output. Never broadcast. */
+  "terminal-exit": TerminalExitEvent;
+  /** A terminal's park/keep-awake state, to its attached client. Never broadcast. */
+  "terminal-park-state": TerminalParkStateEvent;
 }
 
 export type HostEventTopic = keyof HostEventMap;

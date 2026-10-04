@@ -70,6 +70,11 @@ const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => vo
   "worktree-phase": (event) => sendToEveryWindow("volli:worktree-phase", event),
   "worktree-changed": (event) => sendToEveryWindow("volli:worktree-changed", event),
   "worktree-watch-error": (event) => sendToEveryWindow("volli:worktree-watch-error", event),
+  // Addressed topics: the terminal supervisor publishes these only through
+  // the attached client's sink (`client-event-sink.ts`), never on the bus.
+  "terminal-data": (event) => sendToEveryWindow("volli:terminal-data", event),
+  "terminal-exit": (event) => sendToEveryWindow("volli:terminal-exit", event),
+  "terminal-park-state": (event) => sendToEveryWindow("volli:terminal-park-state", event),
 };
 
 /** host-core's `HostEventBus` over every open window. */

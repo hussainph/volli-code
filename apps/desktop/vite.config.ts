@@ -672,7 +672,6 @@ export default defineConfig(({ mode }) => ({
         "**/packages/host-core/src/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
-        "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
         "**/src/main/shutdown-deadline.ts",

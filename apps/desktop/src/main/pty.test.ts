@@ -97,10 +97,12 @@ vi.mock("@volli/host-core/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
-import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./pty";
+import { PtyManager } from "@volli/host-core/pty/manager";
+import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
 import { createAgentCommandService } from "./agent-commands";
-import type { ParkConfig, ProcessInspector } from "./park";
+import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
 import { importBlob } from "./blob-import";
 import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
 import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
@@ -157,10 +159,15 @@ function makeFakePty(pid = nextPid()) {
   };
 }
 
+let webContentsIdSeq = 0;
+
 /** A WebContents double; `destroyed` listener and destroyed-state are steerable. */
 function makeWebContents() {
   const eventListeners = new Map<string, () => void>();
+  webContentsIdSeq += 1;
   return {
+    // Electron's per-process id: what the supervisor's ownership check reads.
+    id: webContentsIdSeq,
     send: vi.fn(),
     destroyed: false,
     isDestroyed(): boolean {
@@ -178,8 +185,8 @@ function makeWebContents() {
 
 type WebContentsDouble = ReturnType<typeof makeWebContents>;
 
-/** Casts a WebContents double for the direct manager methods that take one. */
-const asWc = (double: WebContentsDouble): WebContents => double as unknown as WebContents;
+/** The supervisor's client for a WebContents double, as the IPC adapter builds it. */
+const asWc = (double: WebContentsDouble) => clientEventSink(double as unknown as WebContents);
 
 const invokeCreate = async (
   sender: WebContentsDouble,
@@ -200,9 +207,9 @@ const invokeCreate = async (
  */
 const sessionOwners = new Map<string, WebContentsDouble>();
 
-/** The owning sender of a created session; `undefined` for ids no session backs. */
-const ownerOf = (sessionId: unknown): WebContentsDouble | undefined =>
-  typeof sessionId === "string" ? sessionOwners.get(sessionId) : undefined;
+/** The owning sender of a created session; a stranger window for ids no session backs. */
+const ownerOf = (sessionId: unknown): WebContentsDouble =>
+  (typeof sessionId === "string" ? sessionOwners.get(sessionId) : undefined) ?? makeWebContents();
 
 const invokeWrite = (sessionId: unknown, data: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-write" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
@@ -243,8 +250,8 @@ const invokeRun = (sessionId: unknown, command: unknown, from = ownerOf(sessionI
     command,
   ) as Promise<TerminalCommandResult>;
 
-/** Casts a WebContents double to the real type for calls typed against it directly (not through IPC). */
-const asWebContents = (sender: WebContentsDouble) => sender as unknown as WebContents;
+/** The supervisor's client for a WebContents double, for calls made directly (not through IPC). */
+const asWebContents = asWc;
 
 /** A `before-quit` event double with a spyable `preventDefault`. */
 const makeQuitEvent = () => ({ preventDefault: vi.fn() });
@@ -2545,7 +2552,7 @@ describe("warm park", () => {
 
   beforeEach(() => {
     parts = makeInspector();
-    parkManager = new PtyManager(testDb.db, "", parts.inspector, ENABLED_CONFIG);
+    parkManager = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, ENABLED_CONFIG);
   });
 
   /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
@@ -2716,7 +2723,7 @@ describe("warm park", () => {
     });
 
     it("refuses even a manual park when parking is disabled", async () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
         ...ENABLED_CONFIG,
         enabled: false,
       });
@@ -2925,7 +2932,7 @@ describe("warm park", () => {
 
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
         ...ENABLED_CONFIG,
         enabled: false,
       });
@@ -3025,7 +3032,7 @@ describe("warm park", () => {
     });
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
-      const manager2 = new PtyManager(testDb.db, "", parts.inspector, {
+      const manager2 = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
         ...ENABLED_CONFIG,
         idleThresholdMs: 0,
         quietSamplesRequired: 1,
@@ -3051,7 +3058,7 @@ describe("warm park", () => {
     });
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
+      const disabled = new PtyManager(desktopPtyHost(), testDb.db, "", parts.inspector, {
         ...ENABLED_CONFIG,
         enabled: false,
       });

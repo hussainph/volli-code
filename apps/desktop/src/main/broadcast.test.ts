@@ -171,6 +171,9 @@ describe("the host event bus over every window (VC-554)", () => {
     "worktree-phase": { ticketId: "t", phase: "ready" },
     "worktree-changed": { ticketId: "t" },
     "worktree-watch-error": { ticketId: "t", error: "gone" },
+    "terminal-data": { sessionId: "s", data: "out" },
+    "terminal-exit": { sessionId: "s", exitCode: 0 },
+    "terminal-park-state": { sessionId: "s", parked: false, keepAwake: false },
   };
 
   it("sends each topic on its own volli: channel to every live window, at once", () => {

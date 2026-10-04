@@ -11,8 +11,8 @@ import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import type { EnsureOutcome } from "@volli/host-core/worktree";
-import type { SessionScope } from "./scope";
-import { composeWorktreeLaunchCommand } from "./launch";
+import type { SessionScope } from "@volli/host-core/pty/scope";
+import { composeWorktreeLaunchCommand } from "@volli/host-core/pty/launch";
 
 let ctx: TestDb;
 

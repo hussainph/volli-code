@@ -84,6 +84,10 @@
     "./worktree/*": {
       "types": "./src/worktree/*.ts",
       "import": "./src/worktree/*.ts"
+    },
+    "./pty/*": {
+      "types": "./src/pty/*.ts",
+      "import": "./src/pty/*.ts"
     }
   },
   "scripts": {
@@ -96,7 +100,8 @@
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "1.1.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
