@@ -20,6 +20,8 @@ describe("Session RPC wire protocol", () => {
   it("publishes a frozen allow-list of the routed procedures", () => {
     expect(Object.isFrozen(SESSION_RPC_IPC_PROCEDURES)).toBe(true);
     expect(SESSION_RPC_IPC_PROCEDURES).toEqual([
+      "settings.experiments",
+      "settings.setExperiment",
       "modelAccess.inspect",
       "modelAccess.defaults",
       "modelAccess.setDefault",
