@@ -22,7 +22,7 @@ import {
   updateProjectCanvas,
   updateProjectThemeOverride,
 } from "@volli/host-core/db/projects-repo";
-import { createTestSessionEngine } from "../test-session-engine";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
 import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
