@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { volliRuntimePaths } from "@volli/host-core/agent-runtime";
 import { blobsRoot } from "@volli/host-core/blob-store";
-import { browserPicturesRoot } from "../browser/picture-disk";
+import { browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
 import { openTestDb } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { sessionTranscriptsRoot } from "@volli/host-core/session-runtime/transcript-artifacts";

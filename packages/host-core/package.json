@@ -224,6 +224,10 @@
     "./database-recovery": {
       "types": "./src/database-recovery.ts",
       "import": "./src/database-recovery.ts"
+    },
+    "./browser/*": {
+      "types": "./src/browser/*.ts",
+      "import": "./src/browser/*.ts"
     }
   },
   "scripts": {

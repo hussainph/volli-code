@@ -42,7 +42,7 @@ const SAMPLE_MS = 2_000;
 const TIMER_PERIOD_MS = 10;
 /** Idle tabs to hold open for the CPU scenarios — the parallel-work shape. */
 const IDLE_TABS = 4;
-/** Matches CDP_COMMAND_TIMEOUT_MS in src/main/browser/cdp-controller.ts. */
+/** Matches CDP_COMMAND_TIMEOUT_MS in packages/host-core/src/browser/cdp-controller.ts. */
 const SCREENSHOT_BOUND_MS = 15_000;
 
 const PAGE = `<!doctype html>

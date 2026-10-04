@@ -70,6 +70,7 @@ export * from "./slash-name";
 export * from "./slash-namespace";
 export * from "./tag-color";
 export * from "./browser-tab-hold";
+export * from "./browser-tab";
 export * from "./session-color";
 export * from "./session-cursor-motion";
 export * from "./label";
