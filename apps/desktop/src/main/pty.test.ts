@@ -99,7 +99,7 @@ vi.mock("@volli/host-core/worktree-runtime", () => ({
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
-import { createAgentCommandService } from "./agent-commands";
+import { createAgentCommandService } from "@volli/host-core/agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";

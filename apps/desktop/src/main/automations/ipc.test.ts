@@ -34,18 +34,18 @@ vi.mock("electron", () => ({
 }));
 
 import { registerAutomationIpcHandlers } from "./ipc";
-import { createAutomationEngine } from "./engine";
-import { enabledAutomationIds } from "./enablement";
-import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
-import type { AutomationRunner } from "./run";
-import { createAutomationScheduler } from "./scheduler";
+import { createAutomationEngine } from "@volli/host-core/automations/engine";
+import { enabledAutomationIds } from "@volli/host-core/automations/enablement";
+import type { PendingArmedRunCoordinator } from "@volli/host-core/automations/pending-armed-runs";
+import type { AutomationRunner } from "@volli/host-core/automations/run";
+import { createAutomationScheduler } from "@volli/host-core/automations/scheduler";
 import {
   advanceScheduleCursor,
   readScheduleCursors,
   rebaseScheduleCursor,
-} from "./schedule-cursor";
-import { createAutomationService } from "./service";
-import { SqliteAutomationLedger } from "./sqlite-ledger";
+} from "@volli/host-core/automations/schedule-cursor";
+import { createAutomationService } from "@volli/host-core/automations/service";
+import { SqliteAutomationLedger } from "@volli/host-core/automations/sqlite-ledger";
 import {
   createAutomation,
   deleteAutomation,

@@ -23,8 +23,8 @@ import {
 } from "@volli/shared";
 import type { RuntimeAskChoice, RuntimeAskRequest, RuntimeSessionIdentity } from "@volli/shared";
 
-import { createAgentToolDoor } from "../agent-tool-door";
-import type { VerbBudgetAsk } from "../agent-tool-door";
+import { createAgentToolDoor } from "@volli/host-core/agent-tool-door";
+import type { VerbBudgetAsk } from "@volli/host-core/agent-tool-door";
 import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { listMcpServers, putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";

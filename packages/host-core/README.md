@@ -112,6 +112,23 @@ and format. They do not use `SecretStore`; changing that storage would not be a
 pure move. Pi's secret-wait publisher type is exported by `secrets`, and its
 turn-attachment type lives in `session-runtime/turn-attachments`.
 
+VC-558 (slice 1) adds `src/automations/`, `src/agent-dispatch/`,
+`agent-commands`, `agent-tool-door`, `agent-socket`, `agent-watch`, `watches`,
+`ticket-wake` and the Electron-free `harness-registry`, all at matching subpath
+exports. Tests move with them except the Automation IPC and harness-runtime
+integration tests, which still compose desktop modules.
+
+`host.automations` stages engine, service, runner, armed-arrival and scheduler
+construction in the original boot order. `host.agentServices` stages the verb
+and tool doors and watches over the same event and attention ports. The scheduler
+reads host facts and Node timers only; it never asks whether a window exists.
+`createHostAgentSocket` (`@volli/host-core/agent-services`) composes the early
+socket lifecycle before database boot. Its caller still supplies the unchanged
+`<dataDir>/volli.sock` path; mode 0600, v1 NDJSON, request limits, shutdown drain
+and the verb table are unchanged. Desktop retains `automations/ipc.ts` and the
+socket's app-quit adapter (`agent-socket-quit.ts`); host-core never holds an app
+lifecycle. Backup, recovery and maintenance remain for VC-618 (slice 2).
+
 ## Ports
 
 A port is what host-core asks of the process hosting it. Each port lives in

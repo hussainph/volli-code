@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { SqliteAutomationLedger } from "../automations/sqlite-ledger";
+import { SqliteAutomationLedger } from "@volli/host-core/automations/sqlite-ledger";
 import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { SqliteOrphanCleanupLedger } from "@volli/host-core/worktree/cleanup-ledger";
 

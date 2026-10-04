@@ -35,7 +35,7 @@ import type {
   VerbToolKey,
 } from "@volli/shared";
 
-import type { SessionStartedNotice } from "../ipc/contract";
+import type { SessionStartedNotice } from "@volli/shared";
 
 import { createAgentToolDoor } from "./agent-tool-door";
 import type { AgentToolDoorOptions, VerbBudgetAsk } from "./agent-tool-door";

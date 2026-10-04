@@ -1,7 +1,7 @@
 /**
  * The durability rules of VC-130, as a table.
  *
- * Every claim here used to be reachable only through the Electron timer's
+ * Every claim here used to be reachable only through the host timer's
  * ports — a fake clock, a fake ledger, a fake `setTimeout` — which is what the
  * ticket's amendment ruled against: "reschedule and never replay, never start
  * early, stagger, and let the stored zone win" are statements about arithmetic,
@@ -264,7 +264,7 @@ describe("the stored zone wins, here too", () => {
     // that differ only in their stored zone owe DIFFERENT due times from the
     // same inputs, each its own 21:30. The travelling laptop itself is proved
     // one layer up, where a host clock exists to move
-    // (`main/automations/scheduler.test.ts`).
+    // (`packages/host-core/src/automations/scheduler.test.ts`).
     const cursor = Date.parse("2026-06-01T00:00:00Z");
     const now = Date.parse("2026-06-02T12:00:00Z");
     const owedIn = (timeZone: string) =>

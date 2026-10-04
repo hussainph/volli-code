@@ -25,7 +25,7 @@ import {
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createAgentToolDoor, type VerbBudgetAsk } from "../agent-tool-door";
+import { createAgentToolDoor, type VerbBudgetAsk } from "@volli/host-core/agent-tool-door";
 import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
 import { getMcpServer, putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";

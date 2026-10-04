@@ -40,8 +40,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { AGENT_COMMAND_BINDINGS, AGENT_COMMANDS, VERB_REGISTRY } from "@volli/shared";
 
-import { createAgentCommandService } from "./agent-commands";
-import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
+import { createAgentCommandService } from "@volli/host-core/agent-commands";
+import { AGENT_VERB_TABLE } from "@volli/host-core/agent-dispatch/table";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";

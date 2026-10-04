@@ -2896,22 +2896,7 @@ export type {
   WorktreePhaseEvent,
 };
 
-/**
- * A committed Deliberate move as main's armed-arrival coordinator receives it.
- *
- * Both move doors report through this one shape after persistence: renderer IPC
- * may carry the Option-drag choice, while an explicit `volli ticket move`
- * carries no choice. Same-column no-ops are never reported because they are not
- * arrivals.
- */
-export interface TicketMovedNotice {
-  projectId: string;
-  ticketId: string;
-  /** The column it left — the fact a post-commit re-read cannot recover. */
-  from: TicketStatus;
-  to: TicketStatus;
-  choice?: DeliberateMoveChoice;
-}
+export type { TicketMovedNotice } from "@volli/shared";
 
 /**
  * The app-owned database actions. `undefined` reads its size; neither action
