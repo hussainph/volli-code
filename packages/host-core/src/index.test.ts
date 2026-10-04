@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  ClientCapabilityUnavailableError,
   createHostCore,
   defaultDatabasePath,
+  HEADLESS_ATTENTION,
+  NO_POWER_EVENTS,
   logTransactionViolation,
   throwTransactionViolation,
 } from "./index";
@@ -25,7 +28,7 @@ function dataDir(): string {
   return dir;
 }
 function compose(
-  ports: { log: Pick<Console, "error"> },
+  ports: { log: Pick<Console, "error">; client?: HostCorePorts["client"] },
   options: Parameters<typeof createHostCore>[1],
 ): HostCore {
   const core = createHostCore(
@@ -39,12 +42,24 @@ function compose(
 function sessionPorts(): HostCorePorts {
   return {
     log: { error: vi.fn(), warn: vi.fn() },
-    publishSessionActivity: vi.fn(),
-    publishDataChanged: vi.fn(),
-    deliverNotification: vi.fn(),
-    focusedSessionIds: () => new Set(),
+    events: { publish: vi.fn() },
+    attention: HEADLESS_ATTENTION,
+    power: NO_POWER_EVENTS,
+    connectivity: {
+      isOnline: () => true,
+      waitUntilOnline: () => Promise.resolve(),
+      onResume: () => () => undefined,
+    },
     listOpenNativeBindings: () => [],
     observeScheduledResume: vi.fn(),
+  };
+}
+
+function headlessOptions(root: string): Parameters<typeof createHostCore>[1] {
+  return {
+    dataDir: root,
+    onTransactionViolation: throwTransactionViolation,
+    devDiagnostics: false,
   };
 }
 
@@ -143,5 +158,25 @@ describe("createHostCore", () => {
       "[volli] failed to open database:",
       expect.stringContaining("damaged header"),
     );
+  });
+
+  it("refuses client capabilities readably without a client, and hands a client's through", async () => {
+    const headless = compose({ log: { error: vi.fn() } }, headlessOptions(dataDir()));
+    await expect(headless.client.openExternal("https://example.com")).rejects.toBeInstanceOf(
+      ClientCapabilityUnavailableError,
+    );
+    expect(() => headless.client.revealInFolder(headless.dbPath)).toThrow(
+      "Revealing a file needs the Volli desktop app, and this host is running without one.",
+    );
+
+    const client = {
+      openExternal: vi.fn(() => Promise.resolve()),
+      revealInFolder: vi.fn(),
+      writeClipboardText: vi.fn(() => Promise.resolve()),
+      readClipboardText: vi.fn(() => Promise.resolve("")),
+      showMenu: vi.fn(() => Promise.resolve(null)),
+    };
+    const desktop = compose({ log: { error: vi.fn() }, client }, headlessOptions(dataDir()));
+    expect(desktop.client).toBe(client);
   });
 });

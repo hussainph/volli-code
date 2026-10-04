@@ -17,6 +17,7 @@
  */
 import { app, BrowserWindow, Notification } from "electron";
 import type Database from "better-sqlite3";
+import type { AttentionDeliveryPort } from "@volli/host-core/ports";
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   parseNotificationTarget,
@@ -34,7 +35,12 @@ import {
 } from "./dispatch";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
 
-export interface NotificationRuntime {
+/**
+ * Desktop's attention delivery (VC-554): host-core's `AttentionDeliveryPort`
+ * is answered by `deliver` and `focusedSessionIds` here, which raise a native
+ * notification and read the focused windows' targets.
+ */
+export interface NotificationRuntime extends AttentionDeliveryPort {
   /** The Settings service, or null when the database never opened. */
   settings: NotificationSettings | null;
   /**

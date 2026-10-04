@@ -16,6 +16,10 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // The ports every moved service asks its host through (VC-554), and
+        // what a headless host answers with: a refusal that reads wrong is
+        // what a person on a server sees instead of their link opening.
+        "src/ports/*.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a

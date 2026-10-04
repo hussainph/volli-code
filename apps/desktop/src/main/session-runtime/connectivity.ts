@@ -20,19 +20,20 @@
  */
 
 import type { ConnectivityPort } from "@volli/agent-runtime";
+import type { PowerPort } from "@volli/host-core/ports";
 
 /** How often a turn waiting for the network re-asks whether it is back. */
 export const ONLINE_POLL_MS = 2_000;
 
 type PowerEvent = "resume" | "unlock-screen";
 
-/** The slice of Electron's `net` and `powerMonitor` this reads. */
+/**
+ * Electron's `net`, and the host's power port (VC-554) — which desktop
+ * answers with `powerMonitor` itself.
+ */
 export interface ConnectivityPlatform {
   net: { isOnline(): boolean };
-  powerMonitor: {
-    on(event: PowerEvent, listener: () => void): unknown;
-    removeListener(event: PowerEvent, listener: () => void): unknown;
-  };
+  powerMonitor: PowerPort;
 }
 
 export function createConnectivityPort(
