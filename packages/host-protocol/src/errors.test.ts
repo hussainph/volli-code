@@ -49,6 +49,15 @@ describe("the error envelope", () => {
     expect(readHostError({ message: "wrapped", data: { hostError: envelope } })).toStrictEqual(
       envelope,
     );
+    const future = { code: "NOT_FOUND", message: "gone", reason: "future-reason" };
+    expect(readHostError(future)).toStrictEqual({ code: "NOT_FOUND", message: "gone" });
+    expect(readHostError({ data: { hostError: future } })).toStrictEqual({
+      code: "NOT_FOUND",
+      message: "gone",
+    });
+    expect(readHostError({ data: { hostError: { code: "NOT_FOUND", message: 7 } } })).toMatchObject(
+      { code: "INTERNAL_SERVER_ERROR" },
+    );
     // Both of today's links: a tRPC client error carrying only the code key.
     expect(readHostError({ message: "slow down", data: { code: "TOO_MANY_REQUESTS" } })).toEqual({
       code: "TOO_MANY_REQUESTS",

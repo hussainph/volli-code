@@ -1,11 +1,5 @@
-/**
- * `@volli/host-protocol`: the versioned, capability-negotiated contract every
- * client and worker speaks to a host. The spec is `docs/plans/host-protocol.md`.
- *
- * Types and small runtime guards only. There is no transport here and no
- * `electron` import, directly or transitively. The contract-test harness lives
- * at `@volli/host-protocol/testing`, for tests alone.
- */
+/** Host protocol types and guards (host-protocol.md). No transport/Node/Electron;
+ * the test-only contract harness is exported separately at /testing. */
 export * from "./actor";
 export * from "./commands";
 export * from "./errors";

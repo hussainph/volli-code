@@ -1,15 +1,4 @@
-/**
- * The host protocol contract harness (`docs/plans/host-protocol.md` § Contract
- * harness). It is test-only: nothing outside a test file imports
- * `@volli/host-protocol/testing`, and its transport dependencies are dev ones.
- *
- * A contract case is written once against a tRPC client. `describeContract`
- * runs it over every link it is handed, so a router that behaves differently
- * on Electron IPC (structured clone) and over a WebSocket (JSON text) fails
- * the case on the link that differs. That covers a dropped `undefined`, a
- * `Date` that turned into a string, an error that lost its code, and a
- * subscription that ends where the other one errors.
- */
+/** Test-only two-link contract harness; production never imports /testing. */
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 
@@ -23,33 +12,22 @@ import { readHostError, type HostError } from "../errors";
 
 /** One way a client reaches a router: Electron IPC, an in-process WebSocket, or a future transport. */
 export interface ContractLink<Host, Router extends AnyRouter> {
-  /** Shown in the test name, as `<title> over <name>`. */
   readonly name: string;
-  /** Serves the router for `host` and returns a client connected to it. */
   open(host: Host): Promise<ContractConnection<Router>>;
 }
 
 export interface ContractConnection<Router extends AnyRouter> {
   readonly client: TRPCClient<Router>;
-  /** Tears down the client, the served router and every subscription between them. */
   close(): Promise<void>;
 }
 
 /** What a case body receives once per link. */
 export interface ContractScope<Host, Router extends AnyRouter> {
-  /** The link this pass runs over, for the rare case that must say why a link differs. */
   readonly link: string;
-  /** Opens a connection for this test. It is closed after the test, pass or fail. */
   connect(host: Host): Promise<TRPCClient<Router>>;
 }
 
-/**
- * The harness's one entry point. It registers `cases` once per link, under
- * `describe("<title> over <link>")`. Each case calls `connect(host)` with the
- * fixture it needs and talks to the returned client. Connections close after
- * every test, so a case can leave a subscription open without leaking it into
- * the next one.
- */
+/** Run each case unchanged against every link; connections close after each test. */
 export function describeContract<Host, Router extends AnyRouter>(
   title: string,
   links: readonly ContractLink<Host, Router>[],
@@ -75,26 +53,14 @@ export function describeContract<Host, Router extends AnyRouter>(
 
 export interface WebSocketContractLinkOptions<Host, Router extends AnyRouter> {
   router: Router;
-  /**
-   * The router context for one connection. `connectionParams` is what the client
-   * sent before its first operation, which is where the host hello rides
-   * (§ Handshake). It is `null` when the link sent none.
-   */
   createContext(
     host: Host,
     connection: { connectionParams: Readonly<Record<string, string | undefined>> | null },
   ): inferRouterContext<Router> | Promise<inferRouterContext<Router>>;
-  /** Sent as tRPC `connectionParams`. Absent sends none. */
   connectionParams?: Record<string, string>;
 }
 
-/**
- * A tRPC WebSocket server on an ephemeral loopback port, with a stock `wsLink`
- * client. It runs in-process, but the wire is real: every payload crosses as
- * JSON text over a real socket, and every subscription runs through tRPC's own
- * WebSocket adapter. That is the shape the host transport (VC-564) serves
- * across a network.
- */
+/** Real loopback WS server/client; stock tRPC adapters carry JSON on the wire. */
 export function webSocketContractLink<Host, Router extends AnyRouter>(
   options: WebSocketContractLinkOptions<Host, Router>,
 ): ContractLink<Host, Router> {
@@ -144,22 +110,14 @@ export interface SubscriptionHandlers<Data> {
 }
 
 export interface RecordedSubscription<Data> {
-  /** Every `onData` payload so far, in arrival order. */
   readonly frames: readonly Data[];
-  /** Settles once the server acknowledged the subscription. */
   readonly started: Promise<void>;
-  /** Settles on the first terminal event, with the error read as a {@link HostError}. */
   readonly ended: Promise<SubscriptionEnd>;
-  /** Resolves with the frames once at least `count` have arrived. */
   received(count: number): Promise<readonly Data[]>;
   unsubscribe(): void;
 }
 
-/**
- * Turns tRPC's callback subscription into something a case can await,
- * identically on every link: `await stream.started`, make the host emit, then
- * `await stream.received(n)` or `await stream.ended`.
- */
+/** Await subscription start, received frames and terminal state identically on each link. */
 export function recordSubscription<Data>(
   subscribe: (handlers: SubscriptionHandlers<Data>) => { unsubscribe(): void },
 ): RecordedSubscription<Data> {

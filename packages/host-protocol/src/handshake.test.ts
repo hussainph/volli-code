@@ -137,9 +137,9 @@ describe("the hello on the wire", () => {
     expect(readHostHello(null)).toBeNull();
     expect(readHostHello({})).toBeNull();
     expect(readHostHello({ [HOST_HELLO_PARAM]: "{not json" })).toBeNull();
-    expect(readHostHello({ [HOST_HELLO_PARAM]: JSON.stringify({ ...hello, credential: "" }) })).toBe(
-      null,
-    );
+    expect(
+      readHostHello({ [HOST_HELLO_PARAM]: JSON.stringify({ ...hello, credential: "" }) }),
+    ).toBe(null);
   });
 
   it("refuses a hello that claims more than the grammar allows", () => {

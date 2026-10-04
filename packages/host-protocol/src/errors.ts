@@ -1,20 +1,9 @@
 import type { TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
 
-/**
- * The one error envelope every host operation fails with
- * (`docs/plans/host-protocol.md` § Errors).
- *
- * It is the shape both existing doors already agree on. The ipc-registry
- * envelope (`apps/desktop/src/main/ipc-registry.ts`) makes a failure cross the
- * wire as data with a message, never as a thrown string. The Session RPC
- * bridge (`SessionRpcIpcResponse` in `@volli/shared`) adds the `code`
- * that a caller branches on. The host protocol keeps both and adds one optional
- * `reason`, which names the host-specific case inside a code.
- */
+/** Client-visible failure: IPC result shape plus tRPC code and optional reason. */
 export interface HostError {
   readonly code: HostErrorCode;
   readonly message: string;
-  /** Absent when the code alone is the whole answer. */
   readonly reason?: HostErrorReason;
 }
 
@@ -23,12 +12,7 @@ export type HostResult<Data> =
   | { readonly ok: true; readonly data: Data }
   | { readonly ok: false; readonly error: HostError };
 
-/**
- * The code vocabulary is tRPC's own key set. It is the one `@volli/session-rpc`
- * already throws and the one both links map to a `TRPCClientError`. It is written
- * out here so the guard has runtime values. The assertion below fails to compile
- * the day tRPC adds or drops a key.
- */
+/** tRPC codes; HostErrorCodeCoverage fails if an upstream key is missing. */
 export const HOST_ERROR_CODES = [
   "PARSE_ERROR",
   "BAD_REQUEST",
@@ -56,37 +40,19 @@ export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];
 type AssertNever<Type extends never> = Type;
 export type HostErrorCodeCoverage = AssertNever<Exclude<TRPC_ERROR_CODE_KEY, HostErrorCode>>;
 
-/**
- * The host-specific cases, each pinned to the one code it travels under. A
- * client that does not know a reason still has the right code to act on.
- */
+/** Host-specific reasons, each pinned to one tRPC code. */
 export const HOST_ERROR_REASON_CODES = {
-  /** The hello's version range and the host's do not meet. */
   "protocol-version-unsupported": "PRECONDITION_FAILED",
-  /** The hello is missing or malformed. */
   "hello-invalid": "BAD_REQUEST",
-  /** The credential is missing, unknown, expired or revoked. */
   "credential-invalid": "UNAUTHORIZED",
-  /**
-   * The host has no such workspace, or the credential does not grant it. One
-   * reason for both, so a guess cannot learn that a workspace exists (VC-320 C01).
-   */
   "workspace-unknown": "NOT_FOUND",
-  /** This host's workspace epoch is older than one the client has seen: it was fenced. */
   "workspace-epoch-fenced": "PRECONDITION_FAILED",
-  /** Two hosts claim the same workspace epoch: a restore copied a host, or a move was not fenced. */
   "workspace-split-brain": "CONFLICT",
-  /** A worker wrote under a checkout lease epoch the host has since moved past. */
   "lease-epoch-fenced": "PRECONDITION_FAILED",
-  /** The actor's verb policy refuses this operation (VC-92). */
   "verb-refused": "FORBIDDEN",
-  /** The same idempotency key was already accepted with a different intent. */
   "command-conflict": "CONFLICT",
-  /** A subscription's bounded queue dropped frames; resume from the last event id. */
   "subscription-overflow": "TOO_MANY_REQUESTS",
-  /** A subscription's source failed; resume from the last event id. */
   "subscription-source-failed": "INTERNAL_SERVER_ERROR",
-  /** The host does not serve this operation (an unconfigured facade or a missing feature). */
   "operation-unavailable": "NOT_IMPLEMENTED",
 } as const satisfies Record<string, HostErrorCode>;
 export type HostErrorReason = keyof typeof HOST_ERROR_REASON_CODES;
@@ -112,18 +78,20 @@ export function isHostError(value: unknown): value is HostError {
   return isHostErrorReason(value.reason) && HOST_ERROR_REASON_CODES[value.reason] === value.code;
 }
 
-/**
- * Reads the envelope back out of whatever a client was handed. Three shapes are
- * accepted: a `HostError`; a tRPC error whose formatter attached one at
- * `data.hostError`; and a tRPC error that carries only `data.code`, which is
- * what both of today's links produce. Anything else is
- * `INTERNAL_SERVER_ERROR` with the best message on offer, because a failure
- * must never be lost on the way to a person.
- */
+/** Read a HostError, data.hostError, or legacy data.code failure on either link. */
 export function readHostError(error: unknown): HostError {
-  if (isHostError(error)) return copyHostError(error);
   const data = isRecord(error) && isRecord(error.data) ? error.data : null;
-  if (data !== null && isHostError(data.hostError)) return copyHostError(data.hostError);
+  for (const envelope of [data?.hostError, error]) {
+    if (isHostError(envelope)) return copyHostError(envelope);
+    // Additive reason names must not hide a code this client already knows.
+    if (
+      isRecord(envelope) &&
+      isHostErrorCode(envelope.code) &&
+      typeof envelope.message === "string"
+    ) {
+      return { code: envelope.code, message: envelope.message };
+    }
+  }
   const message =
     isRecord(error) && typeof error.message === "string" ? error.message : "Host request failed";
   return {

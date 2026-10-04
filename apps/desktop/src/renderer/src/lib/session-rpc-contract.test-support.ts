@@ -1,19 +1,4 @@
-/**
- * The Session router's two contract links (`docs/plans/host-protocol.md` §
- * Contract harness). This is test support, imported only by
- * `session-rpc-contract.test.ts` and by any later contract test for this router.
- *
- * - `electron-ipc` is today's product path, end to end: main's real bridge
- *   (`registerSessionRpcIpcHandlers`) and the renderer's real terminating link
- *   (`createSessionRpcClient`), joined by a fake `ipcMain` and `WebContents`.
- *   The fake copies every value by structured clone, as Electron does.
- * - `websocket` is the same router behind tRPC's own WebSocket adapter, so every
- *   value crosses as JSON text.
- *
- * The file sits in the renderer project because only that project type-checks
- * both halves: main's bridge uses Node types, which this project also sees, and
- * the renderer link uses `window`, which main's project does not.
- */
+/** Real Session IPC bridge/link (structured clone) and stock WS router (JSON), for tests only. */
 import type { TRPCClient } from "@trpc/client";
 import { webSocketContractLink, type ContractLink } from "@volli/host-protocol/testing";
 import { createSessionRouter, RpcDiagnosticLog, type AppRouter } from "@volli/session-rpc";
@@ -26,10 +11,7 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
-import {
-  registerSessionRpcIpcHandlers,
-  type RegisterSessionRpcIpcOptions,
-} from "../../../main/session-rpc-ipc";
+import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
 import { createSessionRpcClient } from "./session-rpc-ipc-link";
 
 /** Everything a contract case can hand the Session router: the runtime and its optional facades. */
@@ -62,6 +44,8 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
   return {
     name: "electron-ipc",
     async open(host) {
+      // Import after the test's Electron mock and this module's fake are initialized.
+      const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
       const registration = registerSessionRpcIpcHandlers({ ...host });
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
@@ -99,7 +83,7 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
         client: client as unknown as TRPCClient<AppRouter>,
         async close() {
           destroyed = true;
-          for (const listener of [...teardown]) listener();
+          for (const listener of teardown) listener();
           await registration.close();
         },
       };

@@ -47,10 +47,12 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
-   all three. `SessionRouterJsonSafety` in
-   `packages/session-rpc/src/index.ts` applies `IsJsonSafe` to every raw
-   procedure input and output at the router seam, so an unsafe payload fails
-   type-checking before any transport can expose it.
+   all three. `IsJsonSafe` and `JsonUnsafeProcedures` live in
+   `@volli/host-protocol` (`packages/host-protocol/src/json-safe.ts`); assert
+   the latter is `never` at every router seam, including subscription yields.
+   `SessionRouterJsonSafety` in `packages/session-rpc/src/index.ts` is the
+   existing example, and session-rpc re-exports the types for compatibility.
+   See `docs/plans/host-protocol.md` for the opaque-type/runtime-validation limit.
 
 4. **A receipt is local acceptance, not eternal finality.** UI code may
    render "accepted" from a receipt; it may not be written so that a remote
