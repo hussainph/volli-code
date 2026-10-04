@@ -10,12 +10,27 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { closeSync, constants, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 
 const bundlePath = fileURLToPath(new URL("../dist/volli.cjs", import.meta.url));
+const readerGatePath = fileURLToPath(
+  new URL("./__fixtures__/departed-reader-gate.cjs", import.meta.url),
+);
+const outputProbePath = fileURLToPath(
+  new URL("./__fixtures__/broken-output-probe.cjs", import.meta.url),
+);
 
 /**
  * The promotion marker is the REPOSITORY root version, which vite.config.ts
@@ -136,28 +151,28 @@ function collectOutcome(child: ChildProcess, intact: Readable): Promise<BrokenOu
  * A larger response could force backpressure, but this fixture avoids both
  * payload-size assumptions and reader scheduling.
  *
- * So the close happens first and the CLI is held back until it has: `sh` holds
- * the write end, waits for a go-ahead on stdin, and only then `exec`s the CLI
- * over itself — the same process, so the status observed here is the CLI's
- * own. Writing to a pipe with no readers is EPIPE on the first byte, every
- * time, whatever the payload. Nothing is on disk, so there is no FIFO to make,
- * no temporary directory to clean up, and no path for anything to race.
+ * So the close happens first and a Node preload holds the CLI back until it
+ * has: the preload blocks on stdin until the parent sends a go-ahead and EOF,
+ * and only then does Node load the built CLI in that same process. No wrapper
+ * forwards an exit status or catches a stream error: both belong to the CLI.
+ * Writing to a pipe with no readers is EPIPE on the first byte, every time,
+ * whatever the payload. There is no shell, FIFO, or scheduling delay.
  */
 function runWithDepartedReader(
   broken: "stdout" | "stderr",
   argv: readonly string[],
+  paths: { entrypoint?: string; preload?: string } = {},
 ): Promise<BrokenOutputRun> {
-  // The literal `sh` is the shell's `$0`; the CLI invocation is its `$@`.
   const child = spawn(
-    "sh",
-    ["-c", 'read go; exec "$@"', "sh", process.execPath, bundlePath, ...argv],
+    process.execPath,
+    ["--require", paths.preload ?? readerGatePath, paths.entrypoint ?? bundlePath, ...argv],
     { env: cliEnvironment(), stdio: ["pipe", "pipe", "pipe"] },
   );
   // Every stream is a pipe here, so none of the three is null.
   const doomed = (broken === "stdout" ? child.stdout : child.stderr)!;
   const outcome = collectOutcome(child, (broken === "stdout" ? child.stderr : child.stdout)!);
   // `close` fires once the descriptor is really gone, so the go-ahead cannot
-  // reach the shell while the pipe still has a reader.
+  // release the preload while the pipe still has a reader.
   doomed.once("close", () => child.stdin!.end("go\n"));
   doomed.destroy();
   return outcome;
@@ -224,6 +239,29 @@ describe("volli built entrypoint", () => {
     expect(run.intactOutput).toBe("");
     expect(run.exitCode).toBe(2);
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "the departed %s fixture yields EPIPE and preserves paths, arguments, and exit status",
+    async (broken) => {
+      // Keep the temporary links inside this worktree. Both Node paths and
+      // the probe's arguments must remain literal, not shell syntax.
+      const directory = mkdtempSync(
+        fileURLToPath(new URL("../.departed reader ;$()' -", import.meta.url)),
+      );
+      try {
+        const entrypoint = join(directory, "output probe ;$()' .cjs");
+        const preload = join(directory, "reader gate ;$()' .cjs");
+        symlinkSync(outputProbePath, entrypoint);
+        symlinkSync(readerGatePath, preload);
+        const argv = [broken, "two words", "'\";$HOME $(echo unexpected) `echo unexpected`", ""];
+        const run = await runWithDepartedReader(broken, argv, { entrypoint, preload });
+        expect(JSON.parse(run.intactOutput)).toEqual({ code: "EPIPE", argv });
+        expect(run.exitCode).toBe(23);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   // Quiet is owed to a departed reader and to nobody else. A descriptor that
   // cannot be written is a real fault, and it still costs what it always did.
