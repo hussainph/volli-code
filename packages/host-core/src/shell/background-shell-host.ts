@@ -67,8 +67,7 @@ import {
   type SpawnLedgerPort,
 } from "@volli/shared";
 
-import type { BackgroundShellState } from "../../ipc/contract";
-import { NO_SPAWN_LEDGER } from "@volli/host-core/process/spawn-ledger";
+import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { NoticeMatchWatch, NoticeOutput } from "./notice-output";
 import {
   compileNotifyPattern,
@@ -89,6 +88,29 @@ export const SHELL_KILL_GRACE_MS = 5_000;
 export const SHELL_EXIT_NOTICE_GRACE_MS = 1_000;
 /** The most of a shell's output an exit notice carries: its last few kilobytes. */
 export const SHELL_NOTICE_TAIL_MAX_BYTES = 4_000;
+/**
+ * One background shell as the renderer sees it: the host's whole snapshot of a
+ * live or finished shell. Defined here beside the host that produces it; the
+ * desktop's IPC contract re-exports it (`apps/desktop/src/ipc/contract.ts`).
+ */
+export interface BackgroundShellState {
+  /** Host-minted opaque id, never a pid. */
+  shellId: string;
+  sessionId: string;
+  projectId: string;
+  ticketId: string | null;
+  /** The command as the model gave it; the island shows its first line. */
+  command: string;
+  title: string | null;
+  state: "running" | "exited";
+  /** Exit code once exited; `null` while running and when a signal ended it. */
+  code: number | null;
+  signal: string | null;
+  startedAt: number;
+  exitedAt: number | null;
+  pid: number;
+}
+
 /** The longest label a notice names a shell by, in characters. */
 export const SHELL_NOTICE_LABEL_MAX_CHARS = 80;
 /** The most of a matching line a match notice quotes, in characters. */

@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { SessionRuntimeCommandRequest } from "@volli/session-engine";
 import type { SessionProjection } from "@volli/shared";
 
-import type { BackgroundShellState } from "../../ipc/contract";
+import type { BackgroundShellState } from "./background-shell-host";
 import { createAgentShellPort, type AgentShellPort } from "./agent-port";
 import { BackgroundShellHost } from "./background-shell-host";
 import { relayShellNotices } from "./shell-notices";

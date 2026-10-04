@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { VERB_REGISTRY } from "@volli/shared";
-import { SecretService } from "./service";
-import { SecretStore } from "@volli/host-core/secrets";
+import { SecretStore } from "./index";
 import { retiresSessionSecrets } from "./lifetime";
+import { SecretService } from "./service";
 
 const dirs: string[] = [];
 afterEach(() => {

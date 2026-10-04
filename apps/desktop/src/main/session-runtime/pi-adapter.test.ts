@@ -4,7 +4,7 @@ import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqli
 import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
 import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
 import { randomUUID } from "node:crypto";
-import { SecretService } from "../secrets/service";
+import { SecretService } from "@volli/host-core/secrets/service";
 import { SecretStore } from "@volli/host-core/secrets";
 
 import { insertProject } from "@volli/host-core/db/projects-repo";
