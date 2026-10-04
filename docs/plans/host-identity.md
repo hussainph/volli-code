@@ -6,6 +6,10 @@
 must share. Migration 058 only reserves empty tables; none of the behavior
 below is activated by this PR.
 
+**Revised by VC-630** (architecture review, 2026-10-04, lens A candidate E),
+finding **F5**: host, device and worker names are bound to keys before VC-575
+pairs any device. See [Keys](#keys-proof-behind-the-names).
+
 ## Identity table
 
 UUIDs are UUID v4 strings, allocated once with `randomUUID()` or its platform
@@ -21,6 +25,8 @@ Revocation never makes an id available for reuse.
 | Worker / `workerId` | UUID v4 | One worker install registered with one host; restart keeps it, wiped local execution state or re-registration after revocation does not | Host at worker registration | Executor identity independent of transport and checkout. `workers.id`; host-level, excluded from backups. |
 | Checkout grant / `leaseEpoch` | Positive safe integer, scoped by ticket UUID; token is `(workspaceEpoch, leaseEpoch)` | One grant, unchanged by renewal, incremented for every new grant | Workspace authority | Fence stale checkout writes. `checkout_leases.epoch`; workspace-level, excluded from backup bundles. No separate lease UUID. |
 | Device / `deviceId` | UUID v4 | One client install paired to one host; retained after revocation for attribution | Host at pairing | Authenticated client principal, not a hardware fingerprint. `devices.id`; host-level, excluded from backups. |
+| Host key / `hostKey` (F5) | P-256 public key; fingerprint = SHA-256 of its SPKI DER | Same as `hostId`, minted with it | Host | Proves `hostId`. Public half in host-level storage (VC-575) and in every paired device's pin; private half never in SQLite or a backup. |
+| Device / worker key (F5) | P-256 public key | Same as its `deviceId` / `workerId` | The device or worker, at pairing / registration | Proves the principal. Public half on `devices` (VC-575) / `workers` (VC-580); private half stays on its holder. |
 | Session / `sessionId` | Existing UUID | Durable Session, across attachments and execution moves | Existing Session creation | Session lifetime belongs to the ledger, not a worker. Existing `sessions.id`. |
 | Attachment / `attachmentId` | Existing UUID | One historical association of a Session with an executor | Session runtime / authority | Identifies the execution association, not ownership of the checkout. Existing attachment ledger. |
 | Ticket / `ticketId` | Existing UUID | Durable ticket | Workspace authority | Lease scope and permanent identity. Existing `tickets.id`. |
@@ -99,8 +105,9 @@ not sorted to choose a winner:
 
 This pin must survive reconnects and restarts. A hello is not a one-time waiver:
 commands and worker execution must remain tied to the accepted generation.
-UUIDs are names, not proof of authority. Authentication and authorization still
-apply. VC-549 owns the wire aliases and errors; this PR adds no TS identity
+UUIDs are names, not proof of authority: the host key is the proof (F5). A
+client compares only a `hostId` whose welcome verified against the key it
+pinned for that id; authorization still applies. VC-549 owns the wire aliases and errors; this PR adds no TS identity
 types to `@volli/shared` or a new package.
 
 A replica may lag. `MAX(epoch) + 1` in a stale restored file is **not** sufficient
@@ -252,13 +259,64 @@ UUID. One phone can have separate registrations with several hosts.
 
 `devices(id, name, created_at, revoked_at)` stores only attribution in 058.
 VC-575 owns approval, credential issuance/storage/rotation, revocation and
-workspace access. A credential is bound to `(deviceId, workspaceId)` and the
+workspace access, under the key contract below (F5): a device credential is
+short-lived and proved by the device key, never a long-lived bearer secret. A credential is bound to `(deviceId, workspaceId)` and the
 issuing host; a host-level device record does not authorize all its workspaces.
 Actors are derived from authenticated credentials, never claimed by a hello.
 Device → `deviceId`, worker → `workerId`, Session → existing `sessionId`.
 No token, secret or hardware fingerprint is added by this migration. A managed
 control-plane device/account registry must reference these public identities,
 not introduce another identity for the same paired principal.
+
+## Keys: proof behind the names (F5)
+
+`hostId` is a UUID the host claims, and device credentials would otherwise be
+bearer secrets. VC-575 binds both to keys before any device pairs, as Syncthing
+device ids (a hash of the device certificate) and Tailscale node keys do.
+Workers follow the same contract at registration (VC-580).
+
+- **Names stay UUIDs.** `hostId`, `deviceId` and `workerId` remain the UUIDs
+  above (BOUNDARIES rule 1; 058 shipped them). A key binds a name; it does not
+  replace it. A host key never identifies a workspace and never moves with one.
+- **Algorithm.** ECDSA P-256: the curve Secure Enclave, Android Keystore and
+  WebCrypto can all hold non-exportably. Keys and proofs carry an algorithm id,
+  so a later algorithm is additive.
+- **Custody.**
+  - The host's private key lives beside the host secret key: the keychain on
+    desktop, a mode-0600 file on hostd, refused when other users can read it,
+    as ssh refuses such a key. It is never in SQLite and never in a backup
+    bundle, so a restore mints a new id and key together.
+  - A device's private key is non-exportable wherever the platform allows.
+  - A worker's private key is local state: wiping it is a new worker, as now.
+- **Pairing pins the host key.** The pairing code or QR carries the host key
+  fingerprint out of band, like an ssh known-hosts entry or a Syncthing device
+  id. The device keeps `(hostId, fingerprint)` beside its fence. Trust on first
+  use over the network alone is not pairing.
+- **The welcome proves the host.** The hello carries a client nonce. The host
+  signs the nonce, negotiated version, host id, workspace id and epoch, actor
+  and granted features, and the client verifies that signature against the key
+  pinned for `hostId` before it applies the fence.
+  - A different key for a pinned `hostId` is refused, as a changed ssh host
+    key is. Only an explicit re-pair replaces the pin.
+  - A workspace moved to a host this device never paired with needs that
+    pairing first: credentials already bind the issuing host.
+- **Devices and workers prove theirs.** A device or worker signs a
+  host-issued challenge bound to the host id, its own id, the workspace and a
+  purpose. In return it gets a short-lived connection credential (minutes),
+  which it presents as the hello's `credential` and refreshes with a new proof.
+  Revocation drops the public key and is checked at dispatch, so a phone holds
+  nothing long-lived worth stealing. Session credentials (per-attachment
+  tokens, VC-163) stay host-issued and attachment-scoped, and never leave the
+  worker.
+- **Rotation.** A key rotates by a statement signed with the old key. A lost
+  private key is a new identity (new id, pair again), as a restore is.
+- **What keys do not settle.**
+  - A raw profile copy copies the private key with the id, so the copy proves
+    the same key. Copy detection stays open.
+  - The proof binds the handshake, not the channel, so WSS stays required.
+    Where hostd terminates TLS itself, VC-575 binds the proof to the TLS
+    exporter.
+  - Tailscale identity (WhoIs) stays an extra signal, never authorization.
 
 ## Ticket display numbers: authority only
 
@@ -309,9 +367,18 @@ identity.
   that rule. 058 adds no new refusal on ordinary boot
   and does not loosen restore validation to disguise a missing fence.
 
-Open decisions are explicit: raw-profile-copy detection; whether/how a restore
+Open decisions are explicit: raw-profile-copy detection (host keys do not
+settle it, F5); whether/how a restore
 requests promotion; main-checkout lease scope; attachment lease-binding storage
 and historical venue-label snapshots; control-plane CAS and offline promotion
 arbitration. None is permission to enable unsafe behavior. The owner reviews
 this naming contract in VC-550's PR; the implementing tickets resolve these
 flows before using it.
+
+## Open decisions for the owner
+
+- **Key-bound identity in M2** (F5, VC-575). Keys before any device pairs, as
+  specified above, or bearer device tokens for M2 and keys before M5, at the
+  cost of pairing every device again. The protocol spec's
+  [open decisions](host-protocol.md#open-decisions-for-the-owner) list it with
+  the others from VC-630.

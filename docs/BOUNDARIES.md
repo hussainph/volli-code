@@ -45,6 +45,12 @@ review, not a project to execute — none of them asks anyone to build sync.
    adjacency — "immediately preceded by event X" — as an implicit position. A
    future authority assigns final order and local logs rebase onto it; code
    that quietly assumed local order was final is the code that breaks.
+   The Workspace change-feed cursor is not such a sequence and sits outside
+   this rule (VC-630; `docs/plans/host-protocol.md`, "Workspace change
+   feed"). Under the one-authority ruling it is that authority's delivery
+   order for one Workspace and epoch, used only to resume a subscription. Its
+   changes name state, never a delta, so no reducer reads meaning from their
+   order or adjacency either.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
@@ -62,8 +68,12 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 5. **No new raw IPC for new domain surfaces.** New features take the command
    → event → projection shape with IPC as a dumb transport, the way Sessions
-   already work. The existing raw channels migrate opportunistically when a
-   surface is touched — never as a big-bang rewrite.
+   already work. From VC-564 on, a new domain command is one entry in
+   host-core's command catalog (VC-630; `docs/plans/host-protocol.md`,
+   "Command catalog"). IPC, the agent socket, tools and the WebSocket project
+   it and carry no behavior of their own. The existing raw channels migrate
+   opportunistically when a surface is touched — never as a big-bang rewrite;
+   under the `cloud` flag, an area's channels are deleted when that area moves.
 
 6. **Host code never imports `electron`.** This applies to
    `packages/host-core`, `packages/host-protocol` and `apps/hostd`. They host
