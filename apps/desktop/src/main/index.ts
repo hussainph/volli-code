@@ -253,6 +253,12 @@ import {
   registerSessionRpcIpcHandlers,
 } from "./session-rpc-ipc";
 import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
+import {
+  ExperimentalSettings,
+  installExperimentalSettings,
+  readExperiments,
+  setExperiment,
+} from "./experiments";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -950,6 +956,9 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  installExperimentalSettings(
+    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"]),
+  );
   // One transaction queue for Session facts AND host notices. put() must
   // commit before submission, never ride inside another writer's transaction.
   const sessionLedger = watchedDb === null ? null : createSqliteSessionLedger(watchedDb);
@@ -2203,6 +2212,8 @@ app.whenReady().then(async () => {
       ? null
       : registerSessionRpcIpcHandlers({
           runtime: sessionRuntime,
+          readExperiments,
+          writeExperiment: setExperiment,
           inspectModelAccess:
             piRuntimeHost === null
               ? undefined

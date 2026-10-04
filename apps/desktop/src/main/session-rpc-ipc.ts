@@ -14,6 +14,8 @@ import type { SessionRuntime } from "@volli/session-engine";
 import type {
   CodeModePolicy,
   CompactionPolicy,
+  ExperimentId,
+  ExperimentSnapshot,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
@@ -126,6 +128,11 @@ export interface RegisterSessionRpcIpcOptions {
   writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
   readModelPickerView?: () => ModelPickerView;
   writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
+  readExperiments?: () => ExperimentSnapshot;
+  writeExperiment?: (
+    id: ExperimentId,
+    enabled: boolean,
+  ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
   /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -187,6 +194,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           writeCodeModePolicy: options.writeCodeModePolicy,
           readModelPickerView: options.readModelPickerView,
           writeModelPickerView: options.writeModelPickerView,
+          readExperiments: options.readExperiments,
+          writeExperiment: options.writeExperiment,
           createSession: options.createSession,
           attachSession: options.attachSession,
           diagnostics,
@@ -310,6 +319,10 @@ async function callProcedure(
   request: Exclude<SessionRpcIpcRequest, { procedure: "session.subscribe" }>,
 ): Promise<unknown> {
   switch (request.procedure) {
+    case "settings.experiments":
+      return caller.settings.experiments();
+    case "settings.setExperiment":
+      return caller.settings.setExperiment(request.input as never);
     case "modelAccess.inspect":
       return caller.modelAccess.inspect(request.input as never);
     case "modelAccess.defaults":

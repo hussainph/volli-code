@@ -12,7 +12,7 @@ import { SettingsPage } from "./settings-page";
  * it is the one nobody looks at while developing.
  */
 describe("SettingsPage (app-wide)", () => {
-  it("groups the rail rather than listing nine categories flat", () => {
+  it("groups the rail rather than listing categories flat", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     // The group labels carry the relationship — see settings-groups.tsx.
@@ -33,6 +33,7 @@ describe("SettingsPage (app-wide)", () => {
       "Integrations",
       "Storage",
       "Telemetry",
+      "Experimental",
       "Updates",
       "About",
     ]) {
