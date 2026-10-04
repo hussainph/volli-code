@@ -1979,23 +1979,13 @@ export type BrowserTabStateEvent =
  * that started them, do not survive a relaunch, and the tool calls that
  * started and read them are the durable record.
  */
-export interface BackgroundShellState {
-  /** Host-minted opaque id, never a pid. */
-  shellId: string;
-  sessionId: string;
-  projectId: string;
-  ticketId: string | null;
-  /** The command as the model gave it; the island shows its first line. */
-  command: string;
-  title: string | null;
-  state: "running" | "exited";
-  /** Exit code once exited; `null` while running and when a signal ended it. */
-  code: number | null;
-  signal: string | null;
-  startedAt: number;
-  exitedAt: number | null;
-  pid: number;
-}
+/**
+ * One background shell as the host holds it. Defined beside the host that
+ * produces it (`@volli/host-core/shell/background-shell-host`, VC-622) and
+ * re-exported here so the renderer contract stays in one place.
+ */
+export type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
+import type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
 
 /**
  * A complete shell snapshot pushed on start and on exit, or the id of a shell

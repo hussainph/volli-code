@@ -57,6 +57,8 @@ export default defineConfig({
         // login shell. Neither is visible anywhere until the laptop swaps.
         "src/session-concurrency.ts",
         "src/session-runtime/boot-recovery.ts",
+        // Birth-frozen membership must never name an absent host capability (VC-622).
+        "src/session-runtime/host-capabilities.ts",
         "src/session-runtime/sessions.ts",
         "src/session-control/activity-watch.ts",
         // The turn boundary that decides unread (VC-30), beside the watch it
@@ -95,6 +97,17 @@ export default defineConfig({
         // Every branch decides whether to signal a stranger's process; the
         // ledger's storage above is held to the same unchanged 100% bar.
         "src/process/**",
+        // The agent-observability export boundary (VC-119, moved from desktop's
+        // gate with its tests in VC-622). The mapping module is the ONLY place
+        // Volli's metadata-only vocabulary becomes somebody else's attribute
+        // names, and the sink is the bound that stops a collector from reaching
+        // a turn — both are enrolled for the same reason the IPC handlers are:
+        // a missed branch is a privacy or a liveness failure, not a cosmetic
+        // one. `otlp.ts` stays outside, as it was in desktop's gate: it is
+        // transport bootstrap around an SDK.
+        "src/observability/genai.ts",
+        "src/observability/settings.ts",
+        "src/observability/sink.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
