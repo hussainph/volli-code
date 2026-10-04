@@ -556,6 +556,24 @@ tool that fails is kept in the catalog **marked unusable with the reason**,
 rather than dropped. It cannot be selected. The rest of the server works
 normally.
 
+Both schema halves must be bounded JSON object schemas with root `type: "object"`
+that validate against a bundled JSON Schema meta-schema. Discovery recognizes
+these root `$schema` declarations (HTTP and HTTPS spellings are accepted, with
+or without a trailing empty `#` fragment):
+
+- draft-07: `http://json-schema.org/draft-07/schema`
+- 2019-09: `https://json-schema.org/draft/2019-09/schema`
+- 2020-12: `https://json-schema.org/draft/2020-12/schema`
+
+Without a declaration, the existing 2020-12 default applies. Unknown or malformed
+declarations are refused; Volli never downloads a meta-schema or resolves a
+server's `$ref` during discovery. Each recognized draft is checked against its
+own meta-schema: draft-07 and 2019-09 tuple `items` are valid, for instance, but
+2020-12 uses `prefixItems` instead. The published schema, including `$schema`,
+is kept unchanged in the catalog, frozen Session definition and Pi parameters;
+it is not rebuilt through TypeBox. Discovery's meta-schema check is distinct
+from Pi's TypeBox argument validation at call time.
+
 A tool's **output schema** is checked against the same schema limits, but a
 failing one does not make the tool unusable: the schema is left off and the
 tool works without it, and the main-process log says why. An output schema only
