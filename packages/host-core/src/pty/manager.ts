@@ -286,7 +286,6 @@ export class PtyManager {
   private readonly sessions = new Map<string, Session>();
   /** Callers parked on {@link PtyManager.runCommand}, by the session running it. */
   private readonly commandRuns = new Map<string, PromiseWithResolvers<CommandRunOutcome>>();
-  /** One app-owned durable Session Engine; tests may lazily compose one around their test db. */
   /**
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
    * #99. It reads this manager's live `sessions` map (the SAME instance) and

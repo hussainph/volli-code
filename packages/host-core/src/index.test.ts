@@ -95,7 +95,10 @@ describe("createHostCore", () => {
     expect(terminalRequiresEngine).toBe(true);
     expect(sessionControl).not.toHaveProperty("createDesktopSessionEngine");
     expect(sessionControl).not.toHaveProperty("createHostSessionEngine");
-    expect(() => import.meta.resolve("@volli/host-core/sessions/engine")).toThrow();
+    expect(import.meta.resolve).toBeTypeOf("function");
+    expect(() => import.meta.resolve("@volli/host-core/sessions/engine")).toThrowError(
+      expect.objectContaining({ code: "ERR_PACKAGE_PATH_NOT_EXPORTED" }),
+    );
 
     const construct = vi.spyOn(sessionLedgerModule, "createSqliteSessionLedger");
     const ports = sessionPorts();
