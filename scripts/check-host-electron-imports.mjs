@@ -413,6 +413,12 @@ function importSpecifiers(source) {
     if (token?.kind === "string") found.push({ specifier: token.value, kind, line: token.line });
   };
   const previousIsProperty = (index) => [".", "?."].includes(tokens[index - 1]?.value);
+  const addCall = (cursor, kind) => {
+    const argument = tokens[cursor + 1];
+    if (argument?.kind === "string" && [")", ","].includes(tokens[cursor + 2]?.value)) {
+      add(argument, kind);
+    } else found.push({ specifier: null, kind, line: tokens[cursor].line });
+  };
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -420,8 +426,17 @@ function importSpecifiers(source) {
 
     if (token.value === "import" && !previousIsProperty(index)) {
       const next = tokens[index + 1];
-      if (next?.value === "(" && tokens[index + 2]?.kind === "string") {
-        add(tokens[index + 2], "dynamic-import");
+      if (next?.value === "(") {
+        addCall(index + 1, "dynamic-import");
+        continue;
+      }
+      if (
+        tokens
+          .slice(index + 1, index + 6)
+          .map((part) => part.value)
+          .join("") === ".meta.resolve("
+      ) {
+        addCall(index + 5, "import-meta-resolve");
         continue;
       }
       if (next?.kind === "string") {
@@ -470,19 +485,29 @@ function importSpecifiers(source) {
       }
     }
 
-    if (token.value === "require" && !previousIsProperty(index)) {
+    if (
+      token.value === "require" &&
+      (!previousIsProperty(index) || tokens[index - 2]?.value === "module")
+    ) {
       let cursor = index + 1;
+      if (tokens[cursor]?.value === "." && tokens[cursor + 1]?.value === "resolve") cursor += 2;
       if (tokens[cursor]?.value === "?.") cursor += 1;
-      if (tokens[cursor]?.value === "(" && tokens[cursor + 1]?.kind === "string") {
-        add(tokens[cursor + 1], "require");
-      }
+      if (tokens[cursor]?.value === "(") addCall(cursor, "require");
     }
   }
   return found;
 }
 
 function isElectronSpecifier(specifier) {
-  return specifier === "electron" || specifier.startsWith("electron/");
+  return (
+    typeof specifier === "string" && (specifier === "electron" || specifier.startsWith("electron/"))
+  );
+}
+
+function isUnsupportedHostAlias(specifier) {
+  return (
+    specifier?.startsWith("#") || /^@(?:volli\/desktop|renderer)(?:\/|$)/.test(specifier ?? "")
+  );
 }
 
 function sourceCandidate(repoRoot, candidate) {
@@ -531,7 +556,7 @@ function loadModule(repoRoot, filePath) {
   const electronImports = imports.filter(({ specifier }) => isElectronSpecifier(specifier));
   const edges = [];
   for (const imported of imports) {
-    if (!imported.specifier.startsWith(".")) continue;
+    if (imported.specifier === null || !imported.specifier.startsWith(".")) continue;
     const resolved = resolveLocalImport(repoRoot, filePath, imported.specifier);
     if (resolved.asset) continue;
     edges.push({ file: resolved.file, line: imported.line, specifier: imported.specifier });
@@ -604,6 +629,20 @@ function formatWitness(repoRoot, witness) {
 function runGuard(repoRoot) {
   const entries = enumerateGuardFiles(repoRoot);
   const graph = buildGraph(repoRoot, entries);
+  for (const module of graph.values()) {
+    for (const imported of module.imports) {
+      if (isUnsupportedHostAlias(imported.specifier)) {
+        fail(
+          `unsupported host alias ${JSON.stringify(imported.specifier)} at ${repoRelative(repoRoot, module.file)}:${imported.line}; use a relative edge so the guard can verify its closure`,
+        );
+      }
+      if (imported.specifier === null) {
+        console.warn(
+          `[host-electron-imports] computed ${imported.kind} at ${repoRelative(repoRoot, module.file)}:${imported.line}; target cannot be checked statically`,
+        );
+      }
+    }
+  }
   const violations = entries.flatMap((file) => {
     const witnesses = electronWitnesses(file, graph);
     return witnesses.length > 0 ? [{ file, witnesses }] : [];
@@ -634,6 +673,7 @@ function runReport(repoRoot, outputPath) {
     return {
       file: repoRelative(repoRoot, file),
       classification: witnesses.length > 0 ? "reaches-electron" : "does-not-reach-electron",
+      computedImports: graph.get(file).imports.filter((imported) => imported.specifier === null),
       witnesses: witnesses.map((witness) => ({
         chain: witness.chain.map((part) => repoRelative(repoRoot, part)),
         electronAt: repoRelative(repoRoot, witness.electronAt),
@@ -643,6 +683,8 @@ function runReport(repoRoot, outputPath) {
   });
   const inventory = {
     schemaVersion: 1,
+    caveat:
+      "Literal relative-import closure before mocks/type erasure; computed targets, aliases, JSDoc type comments and third-party internals are not resolved. Witnesses are illustrative, not exhaustive.",
     sourceRoot: "apps/desktop/src/main",
     summary: {
       modules: modules.length,
@@ -655,8 +697,10 @@ function runReport(repoRoot, outputPath) {
     modules,
   };
   const destination = resolve(repoRoot, outputPath);
-  if (!withinRoot(repoRoot, destination))
-    fail("--report output must stay inside the repository root");
+  if (!repoRelative(repoRoot, destination).startsWith(".tmp/") || extname(destination) !== ".json")
+    fail(
+      "--report output must be a JSON file under .tmp/; refusing to overwrite repository source or manifests",
+    );
   mkdirSync(dirname(destination), { recursive: true });
   const physicalParent = realpathSync(dirname(destination));
   if (!withinRoot(repoRoot, physicalParent))
@@ -692,6 +736,9 @@ function selfTest() {
     ["const electron = require(`electron`);", ["require"]],
     ['type App = import("electron").App;', ["dynamic-import"]],
     ['const electron = require("electron");', ["require"]],
+    ['const electron = module.require("electron");', ["require"]],
+    ['const path = require.resolve("electron");', ["require"]],
+    ['const path = import.meta.resolve("electron");', ["import-meta-resolve"]],
     ['import electron = require("electron");', ["require"]],
     ['const electron = `raw require("other") ${import("electron")}`;', ["dynamic-import"]],
     ['import "\\u0065lectron";', ["import"]],
@@ -719,6 +766,36 @@ function selfTest() {
       [],
       failures,
     );
+  }
+
+  for (const specifier of ["#main", "#electron", "@volli/desktop/main", "@renderer/view"]) {
+    check(
+      `unsupported alias fails closed: ${specifier}`,
+      isUnsupportedHostAlias(specifier),
+      true,
+      failures,
+    );
+  }
+  check(
+    "workspace packages are independently guarded roots",
+    isUnsupportedHostAlias("@volli/shared"),
+    false,
+    failures,
+  );
+  for (const source of ["import(target)", "require(target)", 'require("electr" + "on")']) {
+    check(
+      `computed target is reported: ${source}`,
+      importSpecifiers(source).map((entry) => entry.specifier),
+      [null],
+      failures,
+    );
+  }
+  try {
+    runReport(REPO_ROOT, "package.json");
+    failures.push("report must not overwrite manifests");
+  } catch (error) {
+    if (!error.message.includes("under .tmp/"))
+      failures.push(`wrong report safety error: ${error.message}`);
   }
 
   const fixtureFiles = enumerateGuardFiles(FIXTURE_ROOT);

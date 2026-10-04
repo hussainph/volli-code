@@ -36,14 +36,20 @@ node scripts/check-host-electron-imports.mjs --report
 
 The guard covers all first-party source under `packages/*` and `apps/hostd`,
 including tests and configuration. It scans literal module specifiers (also
-constant backtick strings), not evaluated programs, computed loader targets or
-third-party package internals. Relative import edges are followed even when
-they leave a package for desktop code. Static imports, export-from,
-dynamic imports and `require` all count; type-only imports are not an exemption.
+constant backtick strings), not evaluated programs, computed loader targets,
+JSDoc type comments or third-party package internals. Computed loaders emit a
+warning rather than silently being treated as a literal. Relative import edges
+are followed even when they leave a package for desktop code. Static imports,
+export-from, dynamic imports and `require` (also resolve calls) all count;
+TypeScript type-only imports are not an exemption. Package `#` aliases and
+desktop/renderer aliases fail closed: use relative edges until alias resolution
+is implemented. Other workspace packages are independently guarded roots.
 The committed VC-486 fixture reproduces `session-runtime/location.ts` reaching
 Electron through both `../broadcast` and `../worktree-runtime`; the self-test
 requires that checking this fixture exits unsuccessfully. Report mode uses the
 same resolver to inventory desktop main modules, not to execute their tests.
+Its schema records the closure limitations and illustrative (not exhaustive)
+witnesses; output is restricted to JSON files in `.tmp/`, never source/manifests.
 
 A desktop Vitest test passing in the Node environment can still have an
 Electron-dependent production graph: `vi.mock("electron", ...)` and mocks of
