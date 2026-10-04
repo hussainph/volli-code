@@ -89,5 +89,8 @@ describe("migration backup publication failure recovery", () => {
         db.close();
       }
     },
+    // Real migrations plus recovery retries took 4.6s on main's Linux coverage
+    // lane before the Session suites moved here; allow their shared-runner load.
+    15_000,
   );
 });

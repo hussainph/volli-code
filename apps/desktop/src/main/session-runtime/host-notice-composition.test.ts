@@ -15,9 +15,13 @@ function before(first: string, second: string): void {
 }
 
 describe("host notice composition", () => {
-  it("shares the Session transaction queue, and recovers only after the executor ports and stale attachments", () => {
-    expect(source).toContain("createSqliteHostNoticeOutbox(watchedDb, sessionLedger)");
-    expect(source).toContain("ledger: sessionLedger");
+  it("consumes the host-core outbox, and recovers only after the executor ports and stale attachments", () => {
+    // The shared writer is exercised in host-core's session-services.test.ts;
+    // desktop consumes that service rather than constructing a second outbox.
+    expect(source).toContain(
+      "const { hostNoticeOutbox, sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore",
+    );
+    expect(source).toContain("outbox: hostNoticeOutbox");
     before("browserTabsRef = browserTabs", "await shellHostNotices?.recover()");
     before("await closeStaleAttachments({", "await shellHostNotices?.recover()");
     expect(source).toContain("delivery: shellHostNotices");
