@@ -64,6 +64,7 @@ import { writeModelAccessDefault } from "@volli/host-core/session-runtime/model-
 import { archiveTicketCommand, updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
+import * as worktree from "@volli/host-core/worktree";
 import {
   getWorktreeSnapshots,
   resetWorktreeSnapshotsForTest,
@@ -924,6 +925,71 @@ describe("agent command service", () => {
 
       expect(moves).toEqual([]);
     });
+  });
+
+  it("socket ticket.move starts the shared Done trim immediately, keeps its receipt, and publishes the trim", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, status: "needs_review" }));
+    let settle!: (value: Awaited<ReturnType<typeof worktree.trimFinishedWorktree>>) => void;
+    const trim = vi.spyOn(worktree, "trimFinishedWorktree").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const busyWorktreeSites = vi.fn(async () => []);
+    const onMutation = vi.fn();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      busyWorktreeSites,
+      onMutation,
+    });
+    const execute = (to: string, dryRun = false) =>
+      service.execute({
+        v: 1,
+        cmd: "ticket.move",
+        args: { id: "VC-1", to, dryRun },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+      });
+    try {
+      expect(await execute("done", true)).toMatchObject({ ok: true });
+      expect(trim).not.toHaveBeenCalled();
+      expect(onMutation).not.toHaveBeenCalled();
+      const receipt = await execute("done");
+      expect(receipt).toMatchObject({
+        v: 1,
+        ok: true,
+        data: { ticket: { id: "VC-1", status: "done" } },
+      });
+      expect(trim).toHaveBeenCalledTimes(1);
+      expect(trim.mock.calls[0]?.[1]).toBe("t1");
+      expect(trim.mock.calls[0]?.[0].busySites).toBe(busyWorktreeSites);
+      expect(onMutation).toHaveBeenCalledExactlyOnceWith({
+        projectId: "p1",
+        ticketId: "t1",
+        kind: "ticket",
+      });
+      expect(listTicketEvents(ctx.db, "t1").map((e) => e.payload.kind)).toEqual(["status_changed"]);
+      onMutation.mockClear();
+      expect(await execute("done")).toEqual(receipt);
+      expect(trim).toHaveBeenCalledTimes(1);
+      expect(onMutation).not.toHaveBeenCalled();
+      settle({
+        kind: "trimmed",
+        report: { worktreePath: "/mock", removed: [], kept: [], totalBytes: 0, dryRun: false },
+      });
+      await vi.waitFor(() =>
+        expect(onMutation).toHaveBeenCalledExactlyOnceWith({
+          projectId: "p1",
+          ticketId: "t1",
+          kind: "worktree",
+        }),
+      );
+    } finally {
+      trim.mockRestore();
+    }
   });
 
   describe("ticket.move backward-move interrupt (issue #78)", () => {

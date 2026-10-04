@@ -52,6 +52,7 @@ import type {
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import type { Sessions } from "@volli/host-core/session-runtime/sessions";
+import type { BusyWorktreeSites } from "@volli/host-core/worktree/activity";
 import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
 
 export interface AgentCommandServiceOptions {
@@ -179,6 +180,8 @@ export interface AgentCommandServiceOptions {
    * action is the only door into the new session's tab.
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
+  /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
+  busyWorktreeSites?: BusyWorktreeSites;
   /**
    * Interrupts every live agent attachment of a ticket after a committed
    * backward move. Its command and receipt are Session evidence; Esc leaves

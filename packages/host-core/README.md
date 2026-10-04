@@ -420,6 +420,29 @@ is the one thing that changes between hosts:
   engine it drives. Never `--remote-debugging-port`: no loopback endpoint
   through which another local process could reach a tab.
 
+## Ticket moves
+
+`executeTicketMove` (`@volli/host-core/ticket-move`, VC-629) is the whole
+Deliberate move: atomic single/group write, post-commit Ticket wakes, immediate
+background Done trim, armed arrivals, non-user Doing notification, and backward
+Session interrupts. IPC and `ticket.move` only resolve/map their inputs and
+replies. An omitted drop index means column-only intent (same-column no-op);
+indexed drops retain renderer reorder semantics. The reply remains synchronous
+unless interrupt delivery is asynchronous, and never waits for trim.
+
+The socket intentionally gains the renderer's immediate trim, including on
+hostd without a retention poll. Both reuse the trim primitive's busy/dirty/Keep/
+opt-out refusals, durable `worktree_trimmed` event, snapshot invalidation and
+worktree change notice. Desktop wires the same busy supplier to both doors.
+The renderer still receives the board projection in its reply, not a new
+`data-changed` push; detached trims push as before. NDJSON receives its existing
+agent projection and targeted invalidation. There is no new receipt ledger or
+migration; backward-interrupt receipts remain Session evidence.
+
+This is a handler seam for the future command catalog, not a second catalog.
+The pre-change audit on VC-629 records remaining projection/delivery and harness
+policy differences for the board-area migration.
+
 ## Moving a service cluster in
 
 This is the pattern for every later move (VC-554 onward). A move is a **pure

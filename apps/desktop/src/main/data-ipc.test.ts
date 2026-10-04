@@ -2172,6 +2172,48 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(trim.mock.calls[0]?.[1]).toBe(ticket.id);
   });
 
+  it("keeps the IPC reply synchronous while the shared Done trim is pending, with the same busy guard", async () => {
+    let settle!: (value: Awaited<ReturnType<typeof trimFinishedWorktree>>) => void;
+    vi.mocked(trimFinishedWorktree).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const busyWorktreeSites = vi.fn(async () => []);
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine: fixtureSessionEngine,
+        busyWorktreeSites,
+      },
+    );
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const reply = move(projectId, ticket.id, "done");
+    expect(reply).not.toBeInstanceOf(Promise);
+    expect(reply).toMatchObject({
+      ok: true,
+      tickets: [expect.objectContaining({ id: ticket.id, status: "done" })],
+    });
+    expect(vi.mocked(trimFinishedWorktree).mock.calls.at(-1)?.[0].busySites).toBe(
+      busyWorktreeSites,
+    );
+    // The board change is delivered by the receipt, not a new IPC push.
+    expectNoDataChange();
+    settle({
+      kind: "trimmed",
+      report: { worktreePath: "/mock", dryRun: false, removed: [], kept: [], totalBytes: 0 },
+    });
+    await expectDataChanged({
+      entity: "tickets",
+      projectId,
+      ticketId: ticket.id,
+      kind: "worktree",
+    });
+  });
+
   // The other door (review r2): an archive KEEPS the checkout, which makes an
   // archived ticket the longest-lived carrier of a dead dependency tree, so the
   // wiring is held here and not only in the primitive's own suite.
