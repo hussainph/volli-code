@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import {
   ClientCapabilityUnavailableError,
   clientCapabilities,
@@ -84,4 +84,17 @@ describe("headless attention and power", () => {
     expect(NO_POWER_EVENTS.removeListener("resume", listener)).toBeUndefined();
     expect(listener).not.toHaveBeenCalled();
   });
+});
+
+// A subscription's payload must never accidentally fan out to every client.
+it("keeps subscription events off the broadcast port at the type boundary", () => {
+  expectTypeOf<
+    Extract<
+      Parameters<import("./events").HostEventBus["publish"]>[0],
+      "file-changed" | "dir-changed" | "worktree-changed" | "worktree-watch-error"
+    >
+  >().toEqualTypeOf<never>();
+  expectTypeOf<Parameters<import("./events").HostClientEventSink["publish"]>[0]>().toEqualTypeOf<
+    "file-changed" | "dir-changed" | "worktree-changed" | "worktree-watch-error"
+  >();
 });

@@ -19,7 +19,7 @@ import {
   validateUniquePrefix,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob, sessionLinkBudgetRefusal } from "./blob-attach";
+import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/blob-attach";
 import {
   createBlobLink,
   deleteBlobLink,

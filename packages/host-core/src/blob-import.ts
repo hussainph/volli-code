@@ -19,12 +19,8 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type Database from "better-sqlite3";
 import { MAX_INLINE_IMAGE_BYTES, isInlinableImageMime, type BlobLink } from "@volli/shared";
-import { blobExists, hashBytes, writeBlob } from "@volli/host-core/blob-store";
-import {
-  createBlobLink,
-  upsertBlob,
-  type CreateBlobLinkInput,
-} from "@volli/host-core/db/blobs-repo";
+import { blobExists, hashBytes, writeBlob } from "./blob-store";
+import { createBlobLink, upsertBlob, type CreateBlobLinkInput } from "./db/blobs-repo";
 
 /**
  * Extension → media type for the kinds a user actually attaches. Deliberately

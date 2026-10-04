@@ -1,3 +1,22 @@
+import type {
+  FileMutationResult,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/host-core/file-types";
+export type {
+  FileMutationResult,
+  FileContent,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchMatch,
+  FileSearchFile,
+  FileSearchLimit,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/host-core/file-types";
+export type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 // The Electron IPC catalog: every channel this app speaks, declared once.
 //
 // Type-only module, and it must stay that way. All three desktop processes may
@@ -90,8 +109,6 @@ import type {
   DiffStat,
   DirEntry,
   DoctorCheck,
-  FileKind,
-  FileSource,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   HarnessAdapter,
@@ -737,14 +754,6 @@ export interface FileRenameInput extends FilePathInput {
   toRelPath: string;
 }
 
-/**
- * What the create/rename/duplicate track resolves with: the project-relative
- * path the entry now has (plan §4.5). Named rather than echoed back from the
- * request because the caller does not always know it — `duplicate` derives a
- * free name in main, and the renderer opens exactly what was created.
- */
-export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
-
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
   projectId: string;
@@ -1055,7 +1064,7 @@ export type DataIpcChannel = keyof VolliDataIpcContract;
 /**
  * Global artifacts + `@file` refs, the
  * Project Files workspace (issue #106), and Files' external-app launch/reveal
- * surface — the file channels `src/main/volli-fs.ts` owns.
+ * surface — the file channels `src/main/volli-fs-ipc.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
@@ -3127,122 +3136,7 @@ export type PromptTemplateIndexResult = Result<{
   skills: SkillReference[];
 }>;
 
-/**
- * A read file's content, discriminated by how the renderer must render it:
- * `text` (utf8, `truncated` when the ~1 MiB cap was hit), `image` (inline
- * `data:` URI), or `binary` (NUL-sniffed or oversize — stub + reveal only).
- */
-export type FileContent =
-  | { type: "text"; text: string; truncated: boolean }
-  | { type: "image"; dataUrl: string }
-  | { type: "binary" };
-
-/**
- * A resolved file read — returned by `volli:file-read`. `source` says which
- * checkout it came from (drives the worktree tab badge); `size`/`mtime` are the
- * on-disk stats; `content` carries the render-ready payload.
- */
-export type FileReadResult = Result<{
-  source: FileSource;
-  kind: FileKind;
-  size: number;
-  mtime: number;
-  content: FileContent;
-}>;
-
-/** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
-export type FileWriteResult = Result<{ mtime: number }>;
-
 // ---- find across files (plan §4.7) ----------------------------------------
-
-/**
- * One matched line, as the Search page draws it and opens it.
- *
- * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
- * the file hands them straight to `revealLineInCenter`/`setPosition` without a
- * translation step nobody would think to test. `preview` is the matched line,
- * possibly windowed around the match (a minified bundle's single 400 KB line is
- * not a preview), and `start`/`end` are the match's offsets INSIDE that
- * preview — never into the original line, which the renderer never sees.
- */
-export interface FileSearchMatch {
-  line: number;
-  column: number;
-  preview: string;
-  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
-  start: number;
-  end: number;
-}
-
-/** Every match in one file, in file order — the Search page's group. */
-export interface FileSearchFile {
-  relPath: string;
-  matches: readonly FileSearchMatch[];
-}
-
-/**
- * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
- * `truncated` flag, saying WHICH bound was hit rather than only that one was:
- *
- *  - `none`    — ripgrep ran to completion; this is everything there is.
- *  - `matches` — the match cap was reached and the search was stopped there.
- *  - `time`    — the time budget ran out; what is here is what had arrived.
- */
-export type FileSearchLimit = "none" | "matches" | "time";
-
-/**
- * A completed search — returned by `volli:search`. `matches` counts what is
- * carried in `files` (not what exists on disk, which a capped search cannot
- * know), and `limit` is why counting stopped.
- */
-export type FileSearchResult = Result<{
-  files: readonly FileSearchFile[];
-  matches: number;
-  limit: FileSearchLimit;
-}>;
-
-/**
- * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
- * insertable directly as an `@ref` — returned by `volli:artifact-create`.
- */
-export type ArtifactCreateResult = Result<{ relPath: string }>;
-
-/**
- * The last word a watch subscription gets: main has torn the subscription down
- * and will never send for it again (issue #134). Every holder of that watch owes
- * itself a re-arm or an honest "live updates are off" — its `watch()` hold is
- * now a hold on nothing. Only ever `true`; ORDINARY change events omit the field
- * entirely, so `event.final === true` is the whole test.
- *
- * It cannot be inferred from the payload: the dominant teardown (the watched
- * directory is gone for good) does carry `revision: null`, but a watcher that
- * fails to REWIRE over a directory still present sends a final event that reads
- * exactly like ordinary news.
- */
-interface FinalWatchEvent {
-  final?: true;
-}
-
-/** The single watched file a `volli:file-changed` push event fired for. */
-export interface FileChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  /** The worktree owner; Main-checkout files always normalize this to null. */
-  ticketId: string | null;
-  relPath: string;
-  source: FileSource;
-  /** Current on-disk mtime after the debounce, or null when the file is unreadable. */
-  revision: number | null;
-}
-
-/**
- * The single watched directory a `volli:dir-changed` push event fired for
- * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
- * {@link FileChangedEvent} there is no `source` to disambiguate.
- */
-export interface DirChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  relPath: string;
-}
 
 // ---- ticket worktrees ------------------------------------------------------
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapterLookup, HarnessId, HarnessWrapperLookup } from "@volli/shared";
-import { importBlob } from "../blob-import";
+import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";

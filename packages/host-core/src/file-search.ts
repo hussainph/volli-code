@@ -41,7 +41,7 @@ import { createRequire } from "node:module";
 import { sep } from "node:path";
 import { errorMessage } from "@volli/shared";
 
-import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "../ipc/contract";
+import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "./file-types";
 
 /** Hard cap on matches carried back (decision: the twin of the 1 MiB read cap). */
 export const SEARCH_MATCH_CAP = 500;

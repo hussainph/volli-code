@@ -11,7 +11,7 @@
  * plus, for the Project Files workspace (issue #106), a per-expanded-directory
  * watch that refreshes one listing at a time rather than mirroring the repo.
  * Mirrors pty.ts/ghostty-config.ts's shape: pure fs helpers exported for direct
- * testing against real temp dirs, thin Electron IPC wiring at the bottom. Every
+ * testing against real temp dirs; the desktop IPC door is `volli-fs-ipc.ts`. Every
  * op returns a typed `Result` rather than throwing across the IPC boundary —
  * same convention as data-ipc.ts.
  *
@@ -28,11 +28,8 @@ import {
   watch as fsWatch,
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { shell } from "electron";
-import type { WebContents } from "electron";
 import type Database from "better-sqlite3";
 import {
-  applySkillModes,
   artifactBaseName,
   classifyFileKind,
   DEPENDENCY_AND_BUILD_DIRS,
@@ -43,61 +40,34 @@ import {
   isValidNewArtifactName,
   isVolliRelPath,
   projectArtifactsDir,
-  projectCommandsDir,
-  projectSkillsDir,
   resolveFileRoot,
   VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
   volliDir,
   withMarkdownExtension,
 } from "@volli/shared";
-import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
-import { searchFiles } from "./file-search";
-import { systemExternalAppGateway } from "./external-apps";
-import type { ExternalAppGateway } from "./external-apps";
 import type { FileKind, FileSource, IndexedFile } from "@volli/shared";
 import type {
-  ArtifactCreateInput,
   ArtifactCreateResult,
-  DirChangedEvent,
-  DirPathInput,
-  ExternalAppListResult,
-  ExternalAppOpenFileInput,
-  ExternalAppOpenWorktreeInput,
-  FileChangedEvent,
   FileContent,
-  FileIndexInput,
-  FileIndexResult,
-  FileIpcChannel,
   FileMutationResult,
-  FilePathInput,
   FileReadResult,
-  FileRenameInput,
-  FileSearchInput,
-  FileSearchResult,
-  FileWriteInput,
   FileWriteResult,
-  PromptTemplateCreateInput,
-  PromptTemplateCreateResult,
-  PromptTemplateIndexInput,
-  PromptTemplateIndexResult,
   Result,
   RevealResult,
-  VolliIpcEvent,
-  WorktreeRevealInput,
-} from "../ipc/contract";
-import type { DbHandle } from "./data-ipc";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
-import type { TicketRow } from "@volli/host-core/db/tickets-repo";
-import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
-import type { IpcHandlerTable } from "./ipc-registry";
-import { isPathWithinRoots } from "@volli/host-core/project-roots";
-import { loadPromptTemplates, writePromptTemplate } from "./prompt-templates";
-import { worktreesHome } from "@volli/host-core/worktree-runtime";
-import { isInside } from "@volli/host-core/worktree/paths";
-import { loadSkills } from "./skills";
-import { createGitCapturingAsyncRunner } from "@volli/host-core/worktree/git";
+} from "./file-types";
+import type { HostClientEventSink } from "./ports/events";
+import type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
+import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
+import { trashCapabilities, type TrashPort } from "./ports/trash";
+
+import { getProjectById } from "./db/projects-repo";
+import { getTicketRow } from "./db/tickets-repo";
+import type { TicketRow } from "./db/tickets-repo";
+import { isPathWithinRoots } from "./project-roots";
+import { worktreesHome } from "./worktree-runtime";
+import { isInside } from "./worktree/paths";
+import { createGitCapturingAsyncRunner } from "./worktree/git";
 
 /** Text-read cap (decision #7): utf8 files past this are truncated + flagged. */
 const TEXT_CAP_BYTES = 1024 * 1024;
@@ -280,7 +250,7 @@ interface ResolvedFile {
  * {@link isSafeRelPath} like any other dot segment), anything else runs the full
  * two-layer path safety before being confirmed to actually be a directory.
  */
-async function resolveSafeDir(
+export async function resolveSafeDir(
   projectPath: string,
   relPath: string,
 ): Promise<{ ok: true; dirPath: string } | { ok: false; error: string }> {
@@ -310,7 +280,7 @@ async function resolveSafeDir(
 }
 
 /** Runs both path-safety layers, returning the resolved absolute path + its source, or a typed error. */
-async function resolveSafePath(
+export async function resolveSafePath(
   projectPath: string,
   worktreeRoot: string | null,
   relPath: string,
@@ -1090,13 +1060,14 @@ export async function trashEntry(
   projectPath: string,
   worktreeRoot: string | null,
   relPath: string,
+  trash: TrashPort = trashCapabilities(undefined),
 ): Promise<Result> {
   const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
   if (!resolved.ok) return resolved;
   const { filePath } = resolved.value;
   if ((await statOrNull(filePath)) === null) return { ok: false, error: "File was not found" };
   try {
-    await shell.trashItem(filePath);
+    await trash.trashItem(filePath);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
@@ -1108,11 +1079,12 @@ export async function revealFile(
   projectPath: string,
   worktreeRoot: string | null,
   relPath: string,
+  client: ClientCapabilityPort = clientCapabilities(undefined),
 ): Promise<RevealResult> {
   const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
   if (!resolved.ok) return resolved;
   try {
-    shell.showItemInFolder(resolved.value.filePath);
+    client.revealInFolder(resolved.value.filePath);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
@@ -1130,7 +1102,7 @@ const WATCH_DEBOUNCE_MS = 250;
  * {@link FileWatchSubscription}); a directory watch adds nothing.
  */
 interface WatchSubscription {
-  webContents: WebContents;
+  client: HostClientEventSink;
   projectId: string;
   /** The project's MAIN checkout path — used to recreate a wiped `.volli` watch dir on re-arm. */
   projectPath: string;
@@ -1196,7 +1168,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       existing.refCount += 1;
       return { ok: true };
     }
-    if (sub.webContents.isDestroyed()) return { ok: true };
+    if (sub.client.isClosed()) return { ok: true };
 
     sub.refCount = 1;
     this.subs.set(key, sub);
@@ -1209,7 +1181,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       this.subs.delete(key);
       return { ok: false, error: errorMessage(error) };
     }
-    sub.webContents.once("destroyed", sub.onDestroyed);
+    sub.client.onceClosed(sub.onDestroyed);
     return { ok: true };
   }
 
@@ -1228,7 +1200,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
     sub.debounceTimer = setTimeout(() => {
       sub.debounceTimer = null;
-      if (sub.webContents.isDestroyed()) return;
+      if (sub.client.isClosed()) return;
       this.sendChanged(sub, false);
     }, this.debounceMs);
   }
@@ -1326,7 +1298,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
         // is the path where the dir (and usually the file) is STILL THERE, so
         // only the `final` flag distinguishes the event from ordinary news.
         this.teardown(key);
-        if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
+        if (!sub.client.isClosed()) this.sendChanged(sub, true);
         return;
       }
       sub.reArming = false;
@@ -1341,7 +1313,7 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
       return;
     }
     this.teardown(key);
-    if (!sub.webContents.isDestroyed()) this.sendChanged(sub, true);
+    if (!sub.client.isClosed()) this.sendChanged(sub, true);
   }
 
   protected teardown(key: string): void {
@@ -1350,8 +1322,8 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
     sub.watcher?.close();
     if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
     if (sub.retryTimer !== null) clearTimeout(sub.retryTimer);
-    if (!sub.webContents.isDestroyed()) {
-      sub.webContents.removeListener("destroyed", sub.onDestroyed);
+    if (!sub.client.isClosed()) {
+      sub.client.removeCloseListener(sub.onDestroyed);
     }
     this.subs.delete(key);
   }
@@ -1361,21 +1333,21 @@ abstract class WatchManagerBase<S extends WatchSubscription> {
  * Watches one open file tab and broadcasts a debounced `volli:file-changed`.
  * Watches the file's PARENT directory and filters events by basename so an
  * atomic replace (temp-write + rename, how most editors save) still fires.
- * One subscription per `(webContents, projectId, ticketId, relPath)`.
+ * One subscription per `(client, projectId, ticketId, relPath)`.
  */
 export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
   private keyFor(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
   ): string {
-    return `${webContents.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
+    return `${client.id}:${projectId}:${ticketId ?? ""}:${relPath}`;
   }
 
   /** Idempotent wiring: a second watch on the same tab bumps refCount. `dir`/`base`/`source`/`projectPath` come from the caller's resolution. */
   watch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
@@ -1384,9 +1356,9 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
     base: string,
     projectPath: string,
   ): Result {
-    const key = this.keyFor(webContents, projectId, ticketId, relPath);
+    const key = this.keyFor(client, projectId, ticketId, relPath);
     return this.install(key, {
-      webContents,
+      client,
       projectId,
       projectPath,
       relPath,
@@ -1405,12 +1377,12 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
 
   /** Drops one hold; tears down only when the last FileView/DiffView (etc.) releases. */
   unwatch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     ticketId: string | null,
     relPath: string,
   ): void {
-    this.release(this.keyFor(webContents, projectId, ticketId, relPath));
+    this.release(this.keyFor(client, projectId, ticketId, relPath));
   }
 
   /**
@@ -1432,7 +1404,7 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
       revision: this.currentRevision(join(sub.dir, sub.base)),
     };
     if (final) payload.final = true;
-    sub.webContents.send("volli:file-changed" satisfies VolliIpcEvent, payload);
+    sub.client.publish("file-changed", payload);
   }
 
   private currentRevision(filePath: string): number | null {
@@ -1455,21 +1427,21 @@ export class FileWatchManager extends WatchManagerBase<FileWatchSubscription> {
  * {@link DirWatchManager.matches} for the one exclusion.
  */
 export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
-  private keyFor(webContents: WebContents, projectId: string, relPath: string): string {
-    return `${webContents.id}:${projectId}:${relPath}`;
+  private keyFor(client: HostClientEventSink, projectId: string, relPath: string): string {
+    return `${client.id}:${projectId}:${relPath}`;
   }
 
   /** Idempotent wiring: a second watch on the same directory bumps refCount. `dir` is the caller's resolved absolute path. */
   watch(
-    webContents: WebContents,
+    client: HostClientEventSink,
     projectId: string,
     relPath: string,
     dir: string,
     projectPath: string,
   ): Result {
-    const key = this.keyFor(webContents, projectId, relPath);
+    const key = this.keyFor(client, projectId, relPath);
     return this.install(key, {
-      webContents,
+      client,
       projectId,
       projectPath,
       relPath,
@@ -1484,8 +1456,8 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
   }
 
   /** Drops one hold; safe for a directory that was never watched (a collapse racing a teardown). */
-  unwatch(webContents: WebContents, projectId: string, relPath: string): void {
-    this.release(this.keyFor(webContents, projectId, relPath));
+  unwatch(client: HostClientEventSink, projectId: string, relPath: string): void {
+    this.release(this.keyFor(client, projectId, relPath));
   }
 
   /**
@@ -1514,14 +1486,14 @@ export class DirWatchManager extends WatchManagerBase<WatchSubscription> {
   protected override sendChanged(sub: WatchSubscription, final: boolean): void {
     const payload: DirChangedEvent = { projectId: sub.projectId, relPath: sub.relPath };
     if (final) payload.final = true;
-    sub.webContents.send("volli:dir-changed" satisfies VolliIpcEvent, payload);
+    sub.client.publish("dir-changed", payload);
   }
 }
 
 // ---- IPC wiring --------------------------------------------------------------
 
 /** The main-repo path for a project id, or a typed error. */
-function resolveProjectPath(
+export function resolveProjectPath(
   db: Database.Database,
   projectId: string,
 ): { ok: true; projectPath: string } | { ok: false; error: string } {
@@ -1530,7 +1502,7 @@ function resolveProjectPath(
   return { ok: true, projectPath: project.path };
 }
 
-interface FileScope {
+export interface FileScope {
   projectPath: string;
   worktreeRoot: string | null;
   usesWorktree: boolean;
@@ -1547,7 +1519,7 @@ interface FileScope {
  * has gone stale degrades to Main for exactly the reason a read of one of its
  * files does.
  */
-function searchRoot(scope: FileScope): string {
+export function searchRoot(scope: FileScope): string {
   return scope.worktreeRoot ?? scope.projectPath;
 }
 
@@ -1556,7 +1528,7 @@ function searchRoot(scope: FileScope): string {
  * request. `ticketId` is optional; when given it's checked against `projectId`
  * (defense-in-depth — a mismatched pair is rejected, not trusted).
  */
-async function resolveFileScope(
+export async function resolveFileScope(
   db: Database.Database,
   projectId: string,
   ticketId: string | undefined,
@@ -1617,7 +1589,7 @@ async function resolveTrustedLiveWorktree(
  * uses worktrees must resolve a trusted live worktree; it never silently opens
  * Main when that checkout is gone.
  */
-async function resolveExternalFileTarget(
+export async function resolveExternalFileTarget(
   scope: FileScope,
   ticketId: string | undefined,
   relPath: string,
@@ -1638,7 +1610,7 @@ async function resolveExternalFileTarget(
 }
 
 /** Resolves only a trusted LIVE ticket worktree: unlike a File read, it must never fall back to main. */
-async function resolveLiveWorktree(
+export async function resolveLiveWorktree(
   db: Database.Database,
   projectId: string,
   ticketId: string,
@@ -1646,327 +1618,4 @@ async function resolveLiveWorktree(
   const scope = await resolveFileScope(db, projectId, ticketId);
   if (!scope.ok) return scope;
   return await resolveTrustedLiveWorktree(scope.value);
-}
-
-/** The live watch managers `registerFileIpcHandlers` owns — one per watch surface. */
-export interface FileIpcWatchManagers {
-  files: FileWatchManager;
-  dirs: DirWatchManager;
-}
-
-/** What this surface needs that the db cannot tell it. */
-export interface FileIpcOptions {
-  /**
-   * `<userData>/commands` — the global tier of the composer's `/` picker.
-   * Injected rather than resolved here because `index.ts` is the one module
-   * that may call `app.getPath("userData")`.
-   */
-  globalCommandsDir: string;
-  /**
-   * `<home>/.agents/skills` — the personal tier of the `/` picker's skills,
-   * injected for `globalCommandsDir`'s reason: the home directory is resolved
-   * once, in `index.ts`, and handed down rather than read here.
-   */
-  globalSkillsDir: string;
-  /** Native app detection/launch, injectable so the IPC boundary stays testable without macOS. */
-  externalApps?: ExternalAppGateway;
-}
-
-/**
- * Registers every file, directory, artifact, and external-app handler through
- * the shared guard→body→envelope registry (issue #98): `FILE_IPC` (@volli/shared)
- * supplies the descriptor table (validators + invalid-request messages) and
- * `registerGuardedIpcHandlers` applies guard → body → try/catch; this module
- * supplies only the handler bodies below. When the db failed to open, every
- * channel instead resolves with a typed `{ ok: false, error }`
- * (`registerDegradedIpcHandlers(FILE_CHANNELS, …)`) — same degraded-DB stance
- * as `registerDataIpcHandlers`. Returns both watch managers; watchers are
- * otherwise self-cleaning on window `destroyed`/explicit unwatch.
- */
-export function registerFileIpcHandlers(
-  handle: DbHandle,
-  options: FileIpcOptions,
-): FileIpcWatchManagers {
-  const manager = new FileWatchManager();
-  const dirManager = new DirWatchManager();
-
-  if (!handle.ok) {
-    registerDegradedIpcHandlers(FILE_CHANNELS, handle.error);
-    return { files: manager, dirs: dirManager };
-  }
-
-  const db = handle.db;
-  const externalApps = options.externalApps ?? systemExternalAppGateway;
-
-  const handlers: IpcHandlerTable<FileIpcChannel> = {
-    // Scope follows the surface that asked (VC-190): Home hands no ticketId and
-    // gets Main; a Ticket workspace hands its own and gets that worktree —
-    // through `resolveFileScope`, the same seam `volli:file-read` resolves
-    // through, so quick-open can never offer a row the read then answers from
-    // the other checkout.
-    "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      const { files, truncated } = await buildFileIndex(scope.value.projectPath, {
-        worktreeRoot: scope.value.worktreeRoot,
-      });
-      return { ok: true, files, truncated };
-    },
-
-    "volli:file-read": async (input: FilePathInput): Promise<FileReadResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await readFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
-    },
-
-    // Find across files (plan §4.7), scoped by the SAME seam as the read above
-    // — so the checkout that answered the search is the checkout the click on a
-    // result reads from. `searchRoot` is the one difference: a search has no
-    // relPath to route on, so `.volli/**`'s always-Main rule has nothing to
-    // apply to, and a ticket searches its worktree whole (falling back to Main
-    // when that worktree is gone, exactly as a read does).
-    "volli:search": async (input: FileSearchInput): Promise<FileSearchResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      const run = await searchFiles({ root: searchRoot(scope.value), query: input.query });
-      if (!run.ok) return run;
-      return { ok: true, ...run.value };
-    },
-
-    // `{ ok: true }` is a claim that the scan RAN: the gateway rejects when a
-    // Launch Services lookup could not, and the shared envelope in
-    // `ipc-registry.ts` turns that rejection into `{ ok: false, error }` for
-    // Integrations to show with its Try again (VC-287). Catching here would
-    // put the failure back into an empty menu.
-    "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({
-      ok: true,
-      apps: await externalApps.list(),
-    }),
-
-    "volli:external-app-open-file": async (input: ExternalAppOpenFileInput): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
-      if (!resolved.ok) return resolved;
-      return await externalApps.open(input.appId, resolved.value.filePath);
-    },
-
-    "volli:external-app-open-worktree": async (
-      input: ExternalAppOpenWorktreeInput,
-    ): Promise<Result> => {
-      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
-      if (!resolved.ok) return resolved;
-      return await externalApps.open(input.appId, resolved.value.filePath);
-    },
-
-    "volli:worktree-reveal": async (input: WorktreeRevealInput): Promise<Result> => {
-      const resolved = await resolveLiveWorktree(db, input.projectId, input.ticketId);
-      if (!resolved.ok) return resolved;
-      try {
-        shell.showItemInFolder(resolved.value.filePath);
-        return { ok: true };
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    },
-
-    "volli:file-write": async (input: FileWriteInput): Promise<FileWriteResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await writeFile(
-        scope.value.projectPath,
-        scope.value.worktreeRoot,
-        input.relPath,
-        input.content,
-        input.expectedMtime,
-      );
-    },
-
-    // The creation track (VC-191). Every one of the five resolves through
-    // `resolveFileScope` — the same seam `volli:file-read` uses — so a Ticket
-    // workspace creates, renames and trashes inside ITS worktree while Home
-    // acts on the main checkout, and neither can act on a path the other's
-    // navigator was showing.
-    "volli:file-create": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await createFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
-    },
-
-    "volli:dir-create": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await createDirectory(
-        scope.value.projectPath,
-        scope.value.worktreeRoot,
-        input.relPath,
-      );
-    },
-
-    "volli:file-rename": async (input: FileRenameInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await renameEntry(
-        scope.value.projectPath,
-        scope.value.worktreeRoot,
-        input.relPath,
-        input.toRelPath,
-      );
-    },
-
-    "volli:file-duplicate": async (input: FilePathInput): Promise<FileMutationResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await duplicateFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
-    },
-
-    "volli:file-delete": async (input: FilePathInput): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      return await trashEntry(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
-    },
-
-    "volli:artifact-create": async (input: ArtifactCreateInput): Promise<ArtifactCreateResult> => {
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
-      return await createArtifact(project.projectPath, input.name);
-    },
-
-    "volli:file-reveal": async (input: FilePathInput): Promise<RevealResult> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      const resolved = await resolveExternalFileTarget(scope.value, input.ticketId, input.relPath);
-      if (!resolved.ok) return resolved;
-      try {
-        shell.showItemInFolder(resolved.value.filePath);
-        return { ok: true };
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    },
-
-    "volli:file-watch": async (input: FilePathInput, sender: WebContents): Promise<Result> => {
-      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
-      if (!scope.ok) return scope;
-      const resolved = await resolveSafePath(
-        scope.value.projectPath,
-        scope.value.worktreeRoot,
-        input.relPath,
-      );
-      if (!resolved.ok) return resolved;
-      const { source, filePath } = resolved.value;
-      return manager.watch(
-        sender,
-        input.projectId,
-        input.ticketId ?? null,
-        input.relPath,
-        source,
-        dirname(filePath),
-        basename(filePath),
-        scope.value.projectPath,
-      );
-    },
-
-    // No try/catch previously guarded this handler either — `manager.unwatch`
-    // is synchronous teardown (close/clearTimeout calls), not expected to
-    // throw. Under the envelope a throw here now yields `{ ok: false }` rather
-    // than an unhandled IPC rejection: a deliberate hardening, not a behavior
-    // this handler relied on.
-    "volli:file-unwatch": (input: FilePathInput, sender: WebContents): Result => {
-      manager.unwatch(sender, input.projectId, input.ticketId ?? null, input.relPath);
-      return { ok: true };
-    },
-
-    "volli:dir-watch": async (input: DirPathInput, sender: WebContents): Promise<Result> => {
-      // Main-checkout-scoped on purpose (CONCEPT #54): no ticket lookup, so an
-      // expanded tree row can never drift onto a worktree copy of the repo.
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
-      const resolved = await resolveSafeDir(project.projectPath, input.relPath);
-      if (!resolved.ok) return resolved;
-      return dirManager.watch(
-        sender,
-        input.projectId,
-        input.relPath,
-        resolved.dirPath,
-        project.projectPath,
-      );
-    },
-
-    // Unwatch takes no path resolution at all: a collapsed row must be able to
-    // drop its subscription even if the directory has since been deleted (which
-    // is often exactly why it collapsed).
-    "volli:dir-unwatch": (input: DirPathInput, sender: WebContents): Result => {
-      dirManager.unwatch(sender, input.projectId, input.relPath);
-      return { ok: true };
-    },
-
-    // The `/` picker's supply — templates AND skills, one fetch. Project-keyed
-    // like the file index and for the same reason: `.volli` is self-gitignored,
-    // so keying a ticket session's commands to its worktree would hide exactly
-    // the templates the project author wrote (see `projectCommandsDir`). The
-    // three reads are independent, and any one tier that exists but cannot be
-    // read is still an error the composer says out loud.
-    /**
-     * Creates one `/command` (VC-111). The scope picks which of the two
-     * directories the reader already merges it lands in — so a project command
-     * shadows a personal one of the same name exactly as it always has, and
-     * the collision this refuses is only WITHIN the chosen directory.
-     */
-    "volli:prompt-template-create": async (
-      input: PromptTemplateCreateInput,
-    ): Promise<PromptTemplateCreateResult> => {
-      const project = getProjectById(db, input.projectId);
-      if (!project) return { ok: false, error: "Unknown project" };
-      return writePromptTemplate({
-        dir:
-          input.scope === "project" ? projectCommandsDir(project.path) : options.globalCommandsDir,
-        name: input.name,
-        description: input.description,
-        body: input.body,
-      });
-    },
-
-    "volli:prompt-templates": async (
-      input: PromptTemplateIndexInput,
-    ): Promise<PromptTemplateIndexResult> => {
-      const project = getProjectById(db, input.projectId);
-      if (!project) return { ok: false, error: "Unknown project" };
-      const [loaded, skills] = await Promise.all([
-        loadPromptTemplates({
-          projectCommandsDir: projectCommandsDir(project.path),
-          globalCommandsDir: options.globalCommandsDir,
-        }),
-        loadSkills({
-          projectSkillsDir: projectSkillsDir(project.path),
-          globalSkillsDir: options.globalSkillsDir,
-        }),
-      ]);
-      if (!loaded.ok) return loaded;
-      if (!skills.ok) return skills;
-      // A Settings write may land while the two directories are being read.
-      // Resolve only against the row current after that wait, so no response
-      // can expose the policy snapshot that merely supplied the stable path.
-      const currentProject = getProjectById(db, input.projectId);
-      if (!currentProject) return { ok: false, error: "Unknown project" };
-      // The picker offers what this project actually has. A `manual` skill IS
-      // still offered here — withholding it from the model's index is the
-      // whole point of that mode, and it stays typable by name; only `off`
-      // removes a row. The Skills pane asks for the UNRULED list instead
-      // (`ruled: false`): it edits the rules, so a skill set to `off` must
-      // stay on its screen to be turned back on.
-      return {
-        ok: true,
-        templates: [...loaded.templates],
-        skills:
-          input.ruled === false
-            ? [...skills.skills]
-            : [...applySkillModes(skills.skills, currentProject.skillModes ?? {})],
-      };
-    },
-  };
-
-  registerGuardedIpcHandlers(FILE_IPC, handlers);
-
-  return { files: manager, dirs: dirManager };
 }

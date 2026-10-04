@@ -16,6 +16,12 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // File/blob/template services moved with their tests at unchanged 100% (VC-557).
+        "src/blob-attach.ts",
+        "src/blob-collect.ts",
+        "src/blob-protocol.ts",
+        "src/turn-attachments.ts",
+        "src/prompt-templates.ts",
         // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
         // for the reason the process modules above are: it is a concurrency
         // guard, so its branches are the ones no screenshot and no manual pass

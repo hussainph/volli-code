@@ -514,9 +514,15 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vscode/ripgrep':
+        specifier: ^1.18.0
+        version: 1.18.0
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
     devDependencies:
       '@earendil-works/pi-codemode':
         specifier: 1.0.0
@@ -524,15 +530,15 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
-      ai:
-        specifier: ^7.0.83
-        version: 7.0.84(zod@4.4.3)
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
       '@types/node':
         specifier: 'catalog:'
         version: 26.3.0
+      ai:
+        specifier: ^7.0.83
+        version: 7.0.84(zod@4.4.3)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

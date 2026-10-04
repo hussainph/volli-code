@@ -1258,7 +1258,7 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
-// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// external-app channels `src/main/volli-fs-ipc.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
 /**

@@ -58,6 +58,16 @@ VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
+VC-557 adds the file services under `src/`, mirroring their former desktop
+paths: `volli-fs.ts`, `file-search.ts`, `blob-{attach,collect,import,protocol}.ts`,
+`turn-attachments.ts`, `prompt-templates.ts` and `skills.ts`. Their named subpath
+exports are `@volli/host-core/<file>`. `createHostCore` composes `fileServices`
+(the watch managers and client/trash adapters). The desktop IPC door is
+`main/volli-fs-ipc.ts`; protocol registration, native external-app launch and
+pickers also remain desktop-owned. The file-boundary tests run here against
+real directories and symlinks; desktop IPC integration tests stay with the door.
+Protected blob/template coverage moves with its tests at the same 100% gates.
+`blob-store.ts` and `blob-materialize.ts` belong to VC-556, not this move.
 VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
 `@volli/host-core/worktree/*`), `worktree-runtime`, `project-base-branch`,
 `project-relink`, `project-roots`, `blob-store`, `blob-materialize`,
@@ -120,6 +130,7 @@ Electron adapter does exactly what desktop did before the port existed.
 | `attention`                                        | Raise an alert with a person (`deliver`), and which Sessions a focused client shows               | `notifications/runtime.ts`: native notification, preferences, focused-target suppression           | `HEADLESS_ATTENTION`: every alert `unsupported`, nothing focused                    |
 | `power: PowerPort`                                 | Sleep and wake (`suspend`, `resume`, `unlock-screen`, `user-did-become-active`)                   | Electron's `powerMonitor` itself                                                                   | `NO_POWER_EVENTS`                                                                   |
 | `connectivity`                                     | The network, for retry policy. This is `ConnectivityPort` from `@volli/agent-runtime`, not a copy | `createConnectivityPort({ net, powerMonitor })`                                                    | `ALWAYS_ONLINE` from `@volli/agent-runtime`                                         |
+| `trash?`                                           | Move a host file to recoverable Trash (`TrashPort`)                                               | `(path) => shell.trashItem(path)`, unchanged                                                       | Nothing. Requests reject with `TrashUnavailableError`; never permanent deletion     |
 | `client?`                                          | Open a link, reveal a file, the clipboard, menus (`ClientCapabilityPort`)                         | `createElectronClientCapabilities()` (`main/client-capabilities.ts`): `shell`, `clipboard`, `Menu` | Nothing. `host.client` refuses each request with `ClientCapabilityUnavailableError` |
 | `log`                                              | Errors and warnings                                                                               | `console`                                                                                          | Its logger                                                                          |
 | `listOpenNativeBindings`, `observeScheduledResume` | The live runtime's bindings and the scheduled-resume host, bound after the runtime exists         | Late-bound closures in `index.ts`                                                                  | Its runtime's                                                                       |
@@ -135,7 +146,9 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   compile until you do. Desktop code that has not moved yet keeps calling the
   `broadcastX` functions, which publish through the same bus.
 - **One client's stream** (a watched worktree, terminal output, a file
-  watch) is not a broadcast. `HostClientEventSink` (VC-556) uses the same topic
+  watch) is not a broadcast. `HostClientEventTopic` is excluded from
+  `HostBroadcastEventTopic`, so the broadcast adapter cannot carry a
+  subscription event by accident. `HostClientEventSink` (VC-556) uses the same topic
   map as the bus, with a stable connection-scoped `id`, `publish`, `isClosed`,
   `onceClosed` and `removeCloseListener`. Desktop's `clientEventSink` adapts
   exactly the requesting WebContents: its channels and `destroyed` hooks are
@@ -151,6 +164,12 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   message a person can read ("Opening a link needs the Volli desktop app, and
   this host is running without one."). Let it reach the caller as a refusal;
   `isClientCapabilityUnavailable` tells it apart from a real failure.
+
+Trash is a **host-side filesystem operation**, not a client capability. A moved
+service asks through `trashCapabilities(ports.trash)`. With no adapter, it rejects
+with `TrashUnavailableError` (`code: "trash-unavailable"`), stating that nothing
+was deleted. There is no unlink/rm fallback. Desktop's adapter calls the same
+`shell.trashItem` as before.
 
 Window-only work stays in desktop and never becomes a port: the OS
 appearance broadcast, the updater state, notification Settings pushes,
