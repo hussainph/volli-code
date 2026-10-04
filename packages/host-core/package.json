@@ -192,6 +192,10 @@
     "./pty/*": {
       "types": "./src/pty/*.ts",
       "import": "./src/pty/*.ts"
+    },
+    "./browser/*": {
+      "types": "./src/browser/*.ts",
+      "import": "./src/browser/*.ts"
     }
   },
   "scripts": {

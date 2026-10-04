@@ -1,7 +1,8 @@
 /**
- * The desktop's answer to {@link RuntimeBrowserPort}: one Session's Browser
- * capability, composed from the BrowserTabHost's registry and a per-tab CDP
- * controller, scoped before anything else happens.
+ * The host's answer to {@link RuntimeBrowserPort}: one Session's Browser
+ * capability, composed from a Browser backend's registry and a per-tab CDP
+ * controller, scoped before anything else happens. The same port drives every
+ * backend (VC-561): desktop's `WebContentsView`s and standalone Chromium alike.
  *
  * Scope is the whole of the visibility policy this slice carries: a Session
  * sees the person's own tabs (duosync — "look at what I'm reading" needs the
@@ -55,7 +56,7 @@
  * from an earlier attachment cannot keep or release a newer one's hold.
  *
  * Generations bridge the two owners: the host counts navigations off the
- * webContents' own events (a person navigating a shared tab included), and
+ * engine's own events (a person navigating a shared tab included), and
  * every port call re-syncs the controller to the host's count before acting,
  * so a ref minted before anyone — model or person — moved the page refuses
  * rather than clicks what now sits at those coordinates.
@@ -65,11 +66,10 @@
  * readable text and let the latter fail the call, exactly as the web ports do.
  */
 
-import type { WebContents } from "electron";
-
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
   BrowserTabHolder,
+  BrowserTabState,
   RuntimeBrowserActResult,
   RuntimeBrowserConsole,
   RuntimeBrowserFind,
@@ -81,23 +81,26 @@ import type {
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
-import type { BrowserTabState } from "../../ipc/contract";
 import type { BrowserAgentCoordinator } from "./agent-coordinator";
-import type {
-  BrowserHoldEnd,
-  BrowserHoldOutcome,
-  BrowserSessionHolder,
-  BrowserTabCreateOptions,
-} from "./tab-host";
-import { BrowserSessionTabLimitError, BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
+import {
+  BrowserSessionTabLimitError,
+  BrowserTabLimitError,
+  isAllowedBrowserUrl,
+  type BrowserBackend,
+  type BrowserHoldEnd,
+  type BrowserHoldOutcome,
+  type BrowserLoadWaitMode,
+  type BrowserSessionHolder,
+  type BrowserTabCreateOptions,
+} from "./backend";
 import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-controller";
 import { traced } from "./trace-steps";
 import type { BrowserTraceStepInput } from "./trace-store";
 
 /**
  * What the port asks of the host — the registry and navigation surface, as a
- * structural subset of BrowserTabHost so tests can answer it with a plain
- * record and production hands the host itself.
+ * structural subset of {@link BrowserBackend} so tests can answer it with a
+ * plain record and production hands the backend itself.
  */
 export interface AgentBrowserHost {
   /** Host-wide Browser operation queues and shared debugger lifetimes. */
@@ -115,7 +118,7 @@ export interface AgentBrowserHost {
   keepScreenshot(tabId: string, base64Png: string): string;
   /** Closes the headless tabs one Session owns; a shown tab is the person's and stays. */
   closeHeadlessOwnedBy(sessionId: string): string[];
-  /** The hold doors (VC-239); see {@link BrowserTabHost.hold} and its siblings. */
+  /** The hold doors (VC-239); see `BrowserTabRegistry.hold` and its siblings. */
   hold(tabId: string, holder: BrowserSessionHolder): BrowserHoldOutcome;
   releaseHold(tabId: string, holder: BrowserSessionHolder, why?: BrowserHoldEnd): void;
   releaseAllHeldBy(holder: BrowserSessionHolder, why: BrowserHoldEnd): string[];
@@ -169,13 +172,13 @@ export interface AgentBrowserPortOptions {
    * any other; tests and a build with no overlay pass nothing and pay nothing.
    */
   cursorFor?: (tabId: string) => TabCursorDriver | undefined;
-  /** The CDP wire for one live tab — production binds `webContents.debugger`. */
+  /** The CDP wire for one live tab — production binds the backend's {@link BrowserBackend.transportFor}. */
   transportFor: (tabId: string) => CdpTransport;
   /** Resolves when the tab has settled enough to read; must honour the signal. */
   waitForLoad: (tabId: string, signal: AbortSignal, mode?: BrowserLoadWaitMode) => Promise<void>;
   /**
    * Holds one tab's engine at foreground pace and returns the release —
-   * production binds {@link BrowserTabHost.holdAwake}. Chromium throttles a
+   * production binds {@link BrowserBackend.holdAwake}. Chromium throttles a
    * hidden tab's timers, rendering and loads, and a Session keeps driving its
    * tabs after the person switches workspaces (VC-252); the port takes a hold
    * the first time it drives a tab and keeps it until the tab leaves scope or
@@ -183,117 +186,6 @@ export interface AgentBrowserPortOptions {
    * is on screen.
    */
   holdAwake: (tabId: string) => () => void;
-}
-
-/**
- * The production CDP wire: one tab's `webContents.debugger`, Electron's
- * app-private protocol client. Attaching here — rather than ever passing
- * `--remote-debugging-port` — is the load-bearing security decision this
- * feature rests on: there is no loopback endpoint, so no other local process
- * can reach this tab or the app's own privileged renderer through one.
- * Attachment is lazy and re-checked per send, because DevTools sharing the
- * target can drop it between calls.
- */
-export function debuggerTransport(contents: WebContents): CdpTransport {
-  const wire = contents.debugger;
-  let initialized = false;
-  let disposed = false;
-  const assertLive = (): void => {
-    if (disposed) throw new Error("The Browser Tab debugger transport was disposed");
-  };
-  const ensureReady = async (): Promise<void> => {
-    assertLive();
-    if (initialized && wire.isAttached()) return;
-    initialized = false;
-    try {
-      if (!wire.isAttached()) wire.attach("1.3");
-      await wire.sendCommand("Accessibility.enable");
-      assertLive();
-      await wire.sendCommand("DOM.enable");
-      assertLive();
-      await wire.sendCommand("Page.enable");
-      assertLive();
-      initialized = true;
-    } catch {
-      assertLive();
-      throw new BrowserRefusal(
-        "browser.debugger-unavailable",
-        "Browser control is unavailable while another debugger owns this tab. Close its DevTools and retry.",
-      );
-    }
-  };
-  return {
-    ensureReady,
-    send: async (method, params) => {
-      await ensureReady();
-      assertLive();
-      return wire.sendCommand(method, params);
-    },
-    dispose: () => {
-      // Attachment, not initialization, is what has to be given back. An
-      // `ensureReady` that attached and then failed or was withdrawn leaves
-      // `initialized` false over a live attachment, and while Chromium's
-      // debugger owns the tab the person cannot open their own DevTools on it.
-      disposed = true;
-      if (!wire.isAttached()) return;
-      initialized = false;
-      try {
-        wire.detach();
-      } catch {
-        // The target may already be disappearing. Disposal owns no user
-        // operation to fail; the WebContents teardown finishes the job.
-      }
-    },
-  };
-}
-
-/**
- * The production load-wait: settle when the tab stops loading, when the bound
- * falls, or when the caller withdraws — whichever is first. Resolution, never
- * rejection: a page still loading at the bound is a page a snapshot can
- * honestly describe as it stands, and a withdrawn wait belongs to a turn that
- * is already gone.
- */
-export type BrowserLoadWaitMode = "current" | "possible-navigation" | "required-navigation";
-
-export function loadWaiter(
-  webContentsOf: (tabId: string) => Pick<WebContents, "isLoading" | "on" | "removeListener">,
-  timeoutMs = 10_000,
-  navigationGraceMs = 50,
-): (tabId: string, signal: AbortSignal, mode?: BrowserLoadWaitMode) => Promise<void> {
-  return async (tabId, signal, mode = "current") => {
-    const contents = webContentsOf(tabId);
-    const loading = contents.isLoading();
-    if ((!loading && mode === "current") || signal.aborted) return;
-    await new Promise<void>((resolve) => {
-      let grace: ReturnType<typeof setTimeout> | undefined;
-      const started = (): void => {
-        if (grace !== undefined) clearTimeout(grace);
-      };
-      const finish = (): void => {
-        clearTimeout(timer);
-        if (grace !== undefined) clearTimeout(grace);
-        contents.removeListener("did-start-loading", started);
-        contents.removeListener("did-stop-loading", finish);
-        contents.removeListener("destroyed", finish);
-        contents.removeListener("render-process-gone", finish);
-        signal.removeEventListener("abort", finish);
-        resolve();
-      };
-      const timer = setTimeout(finish, timeoutMs);
-      contents.on("did-start-loading", started);
-      contents.on("did-stop-loading", finish);
-      contents.on("destroyed", finish);
-      contents.on("render-process-gone", finish);
-      signal.addEventListener("abort", finish, { once: true });
-      // Close BOTH gaps: a load can start or finish during listener install,
-      // and a withdrawal can precede its abort listener too.
-      if (signal.aborted) finish();
-      else if (contents.isLoading()) started();
-      else if (loading) finish();
-      else if (mode === "possible-navigation") grace = setTimeout(finish, navigationGraceMs);
-    });
-  };
 }
 
 /**
@@ -313,40 +205,29 @@ function pageOf(tab: BrowserTabState): RuntimeBrowserPage {
 }
 
 /**
- * What the desktop's composition needs of the live host beyond
- * {@link AgentBrowserHost}: each tab's `webContents` for the CDP wire and the
- * load waiter, and the wake hold against background throttling (VC-252).
+ * The port as a host composes it over one backend: the backend's own CDP
+ * wire, load waiter and wake hold, and the Session cursor where the host draws
+ * one. ONE factory for every caller — the adapter's attach path and the
+ * smoke's probe alike — so an option added here reaches both, and the smoke
+ * can never drift into testing a port that is not the one Sessions get.
  */
-export interface DesktopBrowserHost extends AgentBrowserHost {
-  webContentsOf(tabId: string): WebContents;
-  holdAwake(tabId: string): () => void;
-}
-
-/**
- * The port as the desktop composes it over one host: the app-private
- * debugger as the CDP wire, the host's own load waiter and wake hold, and
- * the Session cursor for the tab on screen. ONE factory for every caller —
- * the adapter's attach path and the smoke's probe alike — so an option added
- * here reaches both, and the smoke can never drift into testing a port that
- * is not the one Sessions get.
- */
-export function desktopBrowserPort(input: {
-  host: DesktopBrowserHost;
+export function browserAgentPort(input: {
+  backend: BrowserBackend;
   scope: AgentBrowserPortOptions["scope"];
   session: BrowserSessionHolder;
   cursorFor: AgentBrowserPortOptions["cursorFor"];
   /** VC-9's parent/child seam, when the composition has one to offer (VC-238). */
   sharesTabsOf?: AgentBrowserPortOptions["sharesTabsOf"];
 }): AgentBrowserPort {
-  const { host } = input;
+  const { backend } = input;
   return createAgentBrowserPort({
-    host,
+    host: backend,
     scope: input.scope,
     session: input.session,
     ...(input.sharesTabsOf === undefined ? {} : { sharesTabsOf: input.sharesTabsOf }),
-    transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
-    waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
-    holdAwake: (tabId) => host.holdAwake(tabId),
+    transportFor: (tabId) => backend.transportFor(tabId),
+    waitForLoad: (tabId, signal, mode) => backend.waitForLoad(tabId, signal, mode),
+    holdAwake: (tabId) => backend.holdAwake(tabId),
     cursorFor: input.cursorFor,
   });
 }
