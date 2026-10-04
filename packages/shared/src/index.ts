@@ -69,6 +69,7 @@ export * from "./slash-name";
 export * from "./slash-namespace";
 export * from "./tag-color";
 export * from "./browser-tab-hold";
+export * from "./browser-tab";
 export * from "./session-color";
 export * from "./session-cursor-motion";
 export * from "./label";
@@ -87,6 +88,7 @@ export * from "./session-peek";
 export * from "./session-need";
 export * from "./notification-preferences";
 export * from "./notification-catalog";
+export * from "./host-events";
 export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
@@ -119,3 +121,29 @@ export * from "./theme/editor-themes";
 
 export * from "./session-origin";
 export * from "./session-stop";
+export * from "./experiments";
+
+export type * from "./pi-session-orphans";
+export type * from "./host-settings";
+export type {
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+  WorktreeBranchListing,
+  DirtyWorktreeOrphan,
+  RemovableWorktreeOrphan,
+  KeptWorktreeOrphan,
+  PrunableWorktreeMetadata,
+  KeptWorktreeMetadata,
+  UnreadableWorktreeProject,
+  WorktreeTrimRemoval,
+  WorktreeTrimKeep,
+  WorktreeTrimReport,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+  WorktreeTrimSettings,
+  WorktreeTrimSettingsInput,
+  WorktreeDiffMode,
+  PrCheckState,
+  PrCheck,
+  TicketRetentionState,
+} from "./worktree-host";

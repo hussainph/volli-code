@@ -1,0 +1,285 @@
+/**
+ * The two control-tier supervision operations (VC-86): stop another Session's
+ * work, and steer a message into one. The application half behind the
+ * `session_stop` / `session_send` tools, the way `start-session.ts` is the
+ * half behind `session_start` — the door validates and words the answer, this
+ * module owns the semantics.
+ *
+ * ## The authority bound
+ *
+ * Both operations resolve their target inside the CALLER'S project, before any
+ * handle is parsed — the same scoping the start operation pins. A Session
+ * cannot stop or steer outside the project its attachment belongs to, because
+ * no other project's Sessions are ever candidates.
+ *
+ * ## What a stop is
+ *
+ * Three acts in one operation, ordered so the durable truth leads:
+ *
+ * 1. The stop fact — `session.stop` through the Session Engine, carrying the
+ *    calling Session as its actor. Durable whatever happens next; this is
+ *    what listings read as "stopped" and history reads as who-and-why.
+ * 2. An interrupt of the active turn, when one is open.
+ * 3. A release of the live attachment, so the executor lets go.
+ *
+ * The runtime acts are best-effort and their failures are REPORTED, never
+ * hidden: a stop whose release failed says so in the answer, because "stopped"
+ * with a still-streaming executor is the one lie a supervisor must not be
+ * told. The Session identity stays openable throughout — stop ends work,
+ * never identity (Session durability doctrine).
+ *
+ * The three acts are one function, {@link stopResolvedSession}, behind two
+ * doors that differ only in who is asking and how the target is named:
+ * {@link stopSessionOperation} is the agent tool (a handle, the calling
+ * Session as actor) and {@link stopSessionById} is the person's (an id, the
+ * `user` actor — VC-269's island stop). Neither copies the other's acts.
+ *
+ * ## What a send is
+ *
+ * One `message.submit` into the target's live attachment, delivery `steer`, so
+ * a mid-turn model reads the direction now rather than after it finishes. The
+ * message text carries an explicit supervision marker naming the sending
+ * Session — the receiving model must never mistake steering for its own user.
+ *
+ * **What the send awaits, and what it does not (VC-324).** It awaits the
+ * durable Command — `#submitMessage` persists intent before any dispatch — and
+ * the target's turn OPENING: the runtime answers a `settle: "opened"` submit
+ * once the `{kind:"turn", state:"started"}` observation is committed and the
+ * Command is marked accepted. It does not await the target's RUN. It used to,
+ * and that was one promise carrying two facts: a supervisor steering an idle
+ * Session paid its own whole turn to learn something it never asked about, and
+ * every later call in its batch waited behind that one. The target's run ends
+ * where it always did — in the target's own ledger — and a supervisor reads it
+ * with `volli session peek`.
+ *
+ * This is not fire-and-forget: a Command that never became durable, a runtime
+ * that refused it, and a run that failed on its way to opening a turn are all
+ * still refusals here, worded for the caller.
+ *
+ * **Receipt honesty.** The status is unchanged: `accepted` — the same status
+ * this path has always written, because `#recordDelivery` maps an adapter's
+ * accepted delivery onto the ledger's `accepted`. It stays the honest one
+ * under `settle: "opened"`: the Receipt records that the runtime ACCEPTED the
+ * Command, which is exactly what has been observed when the turn opens, and it
+ * never claimed the turn had finished (the engine writes no second receipt at
+ * run end, and did not before either). `turnOpened` rides the in-memory
+ * command result, not the durable receipt, because how a delivery landed is
+ * transport detail and the ledger's own turn events already carry the rest.
+ */
+
+import { shortSessionId } from "@volli/shared";
+import type { CommandReceipt, SessionProjection } from "@volli/shared";
+import type { SessionEngine, SessionRuntime, StopSessionOutcome } from "@volli/session-engine";
+import { stopResolvedSession, SuperviseSessionError } from "@volli/session-engine";
+export { stopSessionById, SuperviseSessionError } from "@volli/session-engine";
+export type {
+  StopSessionByIdPorts,
+  StopSessionByIdInput,
+  StopSessionOutcome,
+} from "@volli/session-engine";
+
+import {
+  latestStructuredAttachment,
+  terminalSessionRecord,
+} from "@volli/host-core/session-control";
+
+/** What the operations need. Narrow on purpose; everything is per-call. */
+export interface SuperviseSessionPorts {
+  sessionEngine: Pick<SessionEngine, "listSessions" | "submit">;
+  runtime: Pick<SessionRuntime, "command">;
+}
+
+export interface SuperviseTargetInput {
+  /** The caller's own durable Session id — the actor, and the self-guard. */
+  callerSessionId: string;
+  /** The caller's project — the bound targets are resolved inside. */
+  projectId: string;
+  /** The short public handle, as `session list` prints it. */
+  handle: string;
+}
+
+/**
+ * The target a supervision operation acts on: a structured (chat) Session in
+ * the caller's project, addressed by its short public handle.
+ *
+ * Terminal sessions are excluded the way every session verb excludes them
+ * from the chat half: a PTY has no turn to interrupt and no steer channel, so
+ * a handle that names one is answered with what it is rather than with a
+ * generic miss.
+ */
+async function resolveTarget(
+  ports: SuperviseSessionPorts,
+  input: SuperviseTargetInput,
+): Promise<SessionProjection> {
+  const handle = input.handle.trim();
+  if (handle.length === 0) {
+    throw new SuperviseSessionError(
+      "`session` must be a short session id, as `volli session list` prints it.",
+    );
+  }
+  const projections = await ports.sessionEngine.listSessions({
+    projectId: input.projectId,
+    scope: "all",
+  });
+  const matches = projections.filter(
+    (projection) => shortSessionId(projection.session.id) === handle,
+  );
+  if (matches.length === 0) {
+    throw new SuperviseSessionError(
+      `No session ${handle} in this project. \`volli session list\` prints the handles.`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new SuperviseSessionError(
+      `Session id ${handle} is ambiguous in this project; nothing was touched.`,
+    );
+  }
+  const target = matches[0]!;
+  if (target.session.id === input.callerSessionId) {
+    throw new SuperviseSessionError(
+      "That handle is this Session. Finish your turn, or signal done or blocked instead.",
+    );
+  }
+  if (terminalSessionRecord(target) !== null) {
+    throw new SuperviseSessionError(
+      `Session ${handle} is a terminal session; stop and send address structured chat Sessions only.`,
+    );
+  }
+  return target;
+}
+
+export interface StopSessionInput extends SuperviseTargetInput {
+  /** Idempotency key: every durable write derives from it. */
+  operationId: string;
+  reason?: string;
+}
+
+/** Stop another Session's work, durably and attributably. */
+export async function stopSessionOperation(
+  ports: SuperviseSessionPorts,
+  input: StopSessionInput,
+): Promise<StopSessionOutcome> {
+  const target = await resolveTarget(ports, input);
+  return stopResolvedSession(ports, target, () => resolveTarget(ports, input), {
+    operationId: input.operationId,
+    by: { kind: "session", sessionId: input.callerSessionId },
+    reason: input.reason ?? null,
+    name: `Session ${input.handle}`,
+    provenance: {
+      kind: "system",
+      id: "session-supervision",
+      detail: { sessionOrigin: { kind: "session", sessionId: input.callerSessionId } },
+    },
+  });
+}
+
+export interface SendSessionInput extends SuperviseTargetInput {
+  /** Idempotency key: the message command id derives from it. */
+  operationId: string;
+  message: string;
+}
+
+export interface SendSessionOutcome {
+  sessionId: string;
+  handle: string;
+  title: string | null;
+  /**
+   * Whether the runtime delivered the message into a turn already in flight.
+   * `null` means the adapter did not report how delivery landed; the caller
+   * must not replace that absence with a projection sampled before dispatch.
+   */
+  midTurn: boolean | null;
+  /** Whether this send opened the target's turn, from the runtime's own answer. */
+  turnOpened: boolean;
+}
+
+/**
+ * The supervision marker the receiving model reads. In-band on purpose: the
+ * transcript is the one channel a model is guaranteed to read, and provenance
+ * metadata never reaches it. Owner direction relayed this way is exactly the
+ * channel the rc-0.1.0 pass lacked.
+ */
+export function supervisionMarker(callerSessionId: string): string {
+  return `[Steering from supervising Session ${shortSessionId(callerSessionId)} — owner direction, not your user's own message]`;
+}
+
+/** Steer a message into another Session's live attachment. */
+export async function sendSessionMessageOperation(
+  ports: SuperviseSessionPorts,
+  input: SendSessionInput,
+): Promise<SendSessionOutcome> {
+  const message = input.message.trim();
+  if (message.length === 0) {
+    throw new SuperviseSessionError("`message` must be non-empty text.");
+  }
+  const target = await resolveTarget(ports, input);
+  if (target.stopped !== null) {
+    throw new SuperviseSessionError(
+      `Session ${input.handle} is stopped; a stopped Session reads nothing. A person can reattach it, or start a new Session.`,
+    );
+  }
+  const attachment = latestStructuredAttachment(target.attachments);
+  if (attachment?.status !== "open") {
+    throw new SuperviseSessionError(
+      `Session ${input.handle} has no live executor to read a message; a person can reattach it from the app.`,
+    );
+  }
+
+  const text = `${supervisionMarker(input.callerSessionId)}\n\n${message}`;
+  const delivered = await ports.runtime.command({
+    commandId: input.operationId,
+    origin: { kind: "session", sessionId: input.callerSessionId },
+    sessionId: target.session.id,
+    command: {
+      kind: "message.submit",
+      delivery: "steer",
+      // The one caller that settles on the turn opening rather than on its
+      // end. See "What a send is" above.
+      settle: "opened",
+      message: {
+        id: `${input.operationId}:message`,
+        role: "user",
+        parts: [{ type: "text", text }],
+      },
+    },
+  });
+  if (!receiptAccepted(delivered.receipt)) {
+    throw new SuperviseSessionError(
+      `Volli could not confirm steering into Session ${shortSessionId(target.session.id)}: ${receiptFailure(delivered.receipt)}.`,
+    );
+  }
+
+  return {
+    sessionId: target.session.id,
+    handle: shortSessionId(target.session.id),
+    title: target.session.title,
+    // Delivery is an adapter fact. The target projection was read before the
+    // Command and can race with another caller opening a turn in between.
+    midTurn:
+      delivered.delivery === undefined
+        ? null
+        : delivered.delivery === "steer" || delivered.delivery === "queue",
+    turnOpened: delivered.turnOpened ?? false,
+  };
+}
+
+function receiptAccepted(receipt: CommandReceipt | null): boolean {
+  return receipt?.status === "accepted" || receipt?.status === "completed";
+}
+
+function receiptFailure(receipt: CommandReceipt | null): string {
+  if (receipt === null) return "the runtime returned no delivery receipt";
+  switch (receipt.status) {
+    case "rejected":
+      return receipt.detail === null
+        ? `the runtime rejected it (${receipt.code})`
+        : `the runtime rejected it (${receipt.code}): ${receipt.detail}`;
+    case "unreconciled":
+      return receipt.detail === null
+        ? "delivery is unreconciled"
+        : `delivery is unreconciled: ${receipt.detail}`;
+    case "accepted":
+    case "completed":
+      return "delivery was not accepted";
+  }
+}

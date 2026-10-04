@@ -7,15 +7,16 @@
  * — which is the ticket's actual requirement: new persisted data cannot be
  * added without an explicit include/rebuild/exclude decision.
  */
-import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { volliRuntimePaths } from "../agent-runtime";
-import { blobsRoot } from "../blob-store";
-import { browserPicturesRoot } from "../browser/picture-disk";
-import { openTestDb } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
-import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
+import { volliRuntimePaths } from "@volli/host-core/agent-runtime";
+import { blobsRoot } from "@volli/host-core/blob-store";
+import { browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
+import { openTestDb } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { sessionTranscriptsRoot } from "@volli/host-core/session-runtime/transcript-artifacts";
 import {
   BACKUP_INCLUDED_TABLES,
   COLUMN_REDACTIONS,
@@ -90,6 +91,18 @@ describe("table decisions", () => {
       "worktree_cleanup_receipts",
     ]) {
       expect(tableBackupDecision(table)?.decision).toBe("exclude");
+      expect(BACKUP_INCLUDED_TABLES).not.toContain(table);
+    }
+  });
+
+  it("carries workspace epochs and keeps per-host cloud identity out of every bundle (VC-550)", () => {
+    // A restored profile is a new host: it must not inherit the source's host
+    // id, workers, leases or paired devices. The workspace's epoch counter is
+    // the exception, because restarting it could reissue a used epoch.
+    expect(tableBackupDecision("workspace_epochs")?.decision).toBe("include");
+    expect(BACKUP_INCLUDED_TABLES).toContain("workspace_epochs");
+    for (const table of ["host_identity", "workers", "checkout_leases", "devices"]) {
+      expect(tableBackupDecision(table)?.decision, `${table} must be excluded`).toBe("exclude");
       expect(BACKUP_INCLUDED_TABLES).not.toContain(table);
     }
   });
@@ -228,6 +241,13 @@ describe("profile file decisions", () => {
   it("never backs up MCP secrets or OAuth tokens (VC-470)", () => {
     const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
     expect(byArea.get(`${MCP_CREDENTIAL_FILE_NAME}*`)?.decision).toBe("exclude");
+  });
+
+  it("never backs up stored secrets, nor a headless host's key to them (VC-559)", () => {
+    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
+    expect(byArea.get(`${SECRET_STORE_FILE_NAME}*`)?.decision).toBe("exclude");
+    expect(byArea.get(`${SECRET_KEY_FILE_NAME}*`)?.decision).toBe("exclude");
+    expect(SECRET_STORE_FILE_NAME).toBe("session-secrets.enc");
   });
 
   it("decides every runtime area the app materialises under the profile root", () => {

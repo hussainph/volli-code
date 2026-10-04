@@ -7,7 +7,7 @@ import type {
   OrphanProcessScanResult,
   VolliIpcChannel,
 } from "../../ipc/contract";
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { ORPHAN_PROCESS_CHANNELS } from "../ipc-descriptors";
 
 const { handlers } = vi.hoisted(() => ({

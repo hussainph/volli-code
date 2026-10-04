@@ -20,7 +20,6 @@ import type {
   SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
-  SessionStopResult,
   TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
@@ -60,6 +59,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
@@ -68,8 +68,8 @@ const { detectAsync, detectSync } = vi.hoisted(() => ({
   detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
-vi.mock("./project-base-branch", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./project-base-branch")>()),
+vi.mock("@volli/host-core/project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@volli/host-core/project-base-branch")>()),
   detectProjectBaseBranchAsync: detectAsync,
   detectProjectBaseBranch: detectSync,
 }));
@@ -134,7 +134,7 @@ vi.mock("electron", () => ({
 // shell out; `worktree-runtime`'s `worktreeDeps` stays real (it just builds a
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
-vi.mock("./worktree", async () => ({
+vi.mock("@volli/host-core/worktree", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   // The rail reads. Mocked so the coalescing/dedup assertions below can count
@@ -158,21 +158,23 @@ vi.mock("./worktree", async () => ({
   // NOT mocked: the cleanup command core and its SQLite ledger are what the
   // channel's receipts and durable history come from, and a stand-in would
   // answer a different question than the one production asks (VC-284 S1).
-  ...(await vi.importActual<typeof import("./worktree/cleanup-engine")>(
-    "./worktree/cleanup-engine",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-engine")>(
+    "@volli/host-core/worktree/cleanup-engine",
   )),
-  ...(await vi.importActual<typeof import("./worktree/cleanup-ledger")>(
-    "./worktree/cleanup-ledger",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-ledger")>(
+    "@volli/host-core/worktree/cleanup-ledger",
   )),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
-  ...(await vi.importActual<typeof import("./worktree/activity")>("./worktree/activity")),
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/activity")>(
+    "@volli/host-core/worktree/activity",
+  )),
   // NOT mocked either: the deletion lease is the serialization the manual
   // delete and the cleanup share (VC-284 review C4), and a stand-in would let
   // this channel claim a lease discipline it does not have.
-  ...(await vi.importActual<typeof import("./worktree/deletion-lease")>(
-    "./worktree/deletion-lease",
+  ...(await vi.importActual<typeof import("@volli/host-core/worktree/deletion-lease")>(
+    "@volli/host-core/worktree/deletion-lease",
   )),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
@@ -219,21 +221,21 @@ vi.mock("./worktree", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
-import { insertSession } from "./session-control/test-support";
-import { recordAutomationRun } from "./db/automations-repo";
-import { recordSessionStartedOnce } from "./db/events-repo";
-import { readSessionProvenance } from "./db/session-provenance-repo";
-import { readSessionUnread } from "./db/session-read-repo";
-import { recordMcpOperation } from "./db/mcp-operations-repo";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
-import { getProjectById } from "./db/projects-repo";
+import { createDesktopSessionEngine, watchSessionActivity } from "@volli/host-core/session-control";
+import { insertSession } from "@volli/host-core/session-control/test-support";
+import { recordAutomationRun } from "@volli/host-core/db/automations-repo";
+import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
+import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
+import { readSessionUnread } from "@volli/host-core/db/session-read-repo";
+import { recordMcpOperation } from "@volli/host-core/db/mcp-operations-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { worktreesHome } from "./worktree-runtime";
-import { projectContainerName } from "./worktree/containers";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
+import { projectContainerName } from "@volli/host-core/worktree/containers";
 import {
   archiveAndClean,
   cleanupOrphans,
@@ -253,12 +255,15 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-} from "./worktree";
-import { resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
-import { orphanCleanupEngine } from "./worktree-runtime";
-import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
-import { updateTicketFieldsCommand } from "./ticket-commands";
-import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
+} from "@volli/host-core/worktree";
+import { resetWorktreeSnapshotsForTest } from "@volli/host-core/worktree/snapshot";
+import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
+import {
+  acquireDeletionLease,
+  resetDeletionLeasesForTest,
+} from "@volli/host-core/worktree/deletion-lease";
+import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
+import { subscribeTicketWake, type TicketWake } from "@volli/host-core/ticket-wake";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   MAX_INLINE_IMAGE_BYTES,
@@ -3040,146 +3045,6 @@ describe("volli:session-rename", () => {
   });
 });
 
-// VC-269: the Activity Island's armed stop, as the person.
-describe("volli:session-stop", () => {
-  async function structuredSession(sessionEngine: ReturnType<typeof createDesktopSessionEngine>) {
-    const projectId = createProject();
-    const created = await sessionEngine.createSession({
-      commandId: "stop-create",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Helper",
-      provenance: {
-        source: { kind: "user", id: "test", detail: null },
-        venue: { id: "local", kind: "local" },
-      },
-    });
-    return { projectId, sessionId: created.session.id };
-  }
-
-  it("records the stop with the user actor, then interrupts and releases through the runtime", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    const { projectId, sessionId } = await structuredSession(sessionEngine);
-    const attachment = {
-      id: "att-1",
-      sessionId,
-      adapterId: "pi",
-      venue: { id: "local", kind: "local" as const },
-      continuity: "fresh" as const,
-      native: null,
-      authority: null,
-    };
-    const provenance = {
-      source: { kind: "adapter" as const, id: "pi", detail: null },
-      venue: { id: "local", kind: "local" as const },
-    };
-    await sessionEngine.observe({
-      id: "stop-opened",
-      kind: "attachment.opened",
-      sessionId,
-      commandId: null,
-      occurredAt: 501,
-      provenance,
-      attachment,
-    });
-    await sessionEngine.observe({
-      id: "stop-turn",
-      kind: "turn.started",
-      sessionId,
-      attachmentId: "att-1",
-      turnId: "t1",
-      commandId: null,
-      occurredAt: 502,
-      provenance,
-    });
-    const commands: { commandId: string; command: { kind: string } }[] = [];
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      {
-        sessionEngine,
-        sessionRuntime: {
-          command: async (request) => {
-            commands.push({ commandId: request.commandId, command: request.command });
-            return {
-              receipt: {
-                id: `${request.commandId}:receipt`,
-                commandId: request.commandId,
-                status: "accepted",
-                recordedAt: 1,
-                sequence: 1,
-              },
-            } as never;
-          },
-        },
-      },
-    );
-
-    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", {
-      sessionId,
-      reason: "  Runaway  ",
-    });
-
-    expect(result).toEqual({ ok: true, interrupted: true, released: true, failures: [] });
-    expect(commands.map((one) => one.command.kind)).toEqual([
-      "executor.interrupt",
-      "adapter.release",
-    ]);
-    // The durable fact names the person, and the listing now reads stopped.
-    const projection = await sessionEngine.getSession({ sessionId });
-    expect(projection?.stopped).toMatchObject({ reason: "Runaway", by: { kind: "user" } });
-    const list = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
-    expect(list.ok && list.sessions.find((row) => rowId(row) === sessionId)).toMatchObject({
-      kind: "chat",
-      record: { activity: "stopped" },
-    });
-  });
-
-  // Fix-first (review c5714a22): a not-live target — no open attachment, so
-  // nothing for the runtime acts to touch — is refused by name through the
-  // door's ordinary `{ ok: false }` shape, the same as every other mutation's
-  // refusal, and NOT durably recorded as a quiet success.
-  it("refuses a not-live target as an ordinary ok:false, and writes nothing", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    const { sessionId } = await structuredSession(sessionEngine);
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
-    );
-
-    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId });
-
-    expect(result).toEqual({ ok: false, error: expect.stringContaining("is not live") });
-    const projection = await sessionEngine.getSession({ sessionId });
-    expect(projection?.stopped).toBeNull();
-  });
-
-  it("refuses without a runtime, and words an unknown session as the operation does", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
-    expect(
-      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
-    ).toEqual({ ok: false, error: expect.stringContaining("not available this launch") });
-
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
-    );
-    expect(
-      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
-    ).toEqual({ ok: false, error: "Unknown session." });
-    expect(invoke<SessionStopResult>("volli:session-stop", { sessionId: "" })).toEqual({
-      ok: false,
-      error: "Invalid session stop",
-    });
-  });
-});
-
 describe("volli:session-rename auto-title rider", () => {
   /** A renameable session plus a recorder for whatever titling it asks for. */
   function renameHarness(): AutoTitleRequest[] {
@@ -4883,6 +4748,34 @@ describe("descriptor guard rejections reach the caller through the envelope, one
       ok: false,
       error: "Invalid app state",
     });
+  });
+
+  it("refuses a renderer write to the database's schema floor (VC-602)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", MIN_READER_VERSION_KEY, "999")).toEqual(
+      { ok: false, error: "This app state key is owned by the database." },
+    );
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:other", "1")).toEqual({
+      ok: true,
+    });
+  });
+
+  it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    const result = invoke<{ ok: boolean }>("volli:legacy-import", {
+      projects: [],
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:imported": "1" },
+      rawBackup: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(
+      ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:imported'").get(),
+    ).toEqual({ value: "1" });
   });
 
   it("optional-object-arg shape: rejects a non-object argument", () => {

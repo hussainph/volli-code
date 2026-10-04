@@ -16,7 +16,7 @@ import {
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -70,18 +70,15 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "../ipc/contract";
-import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
-import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
-import { desktopMcpDispatch } from "./mcp/dispatch-policy";
-import { McpOAuthBroker } from "./mcp/oauth";
+import type { HarnessUninstallResult, ManagedConflict } from "@volli/host-core/harness-install";
+import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
 import {
   closeAllMcpSessionHosts,
   McpSessionHost,
   serversForFrozenMcpTools,
-} from "./mcp/session-host";
-import { desktopCodeMode } from "./codemode/dev-config";
-import { codeModeSandboxAssets } from "./codemode/sandbox-assets";
-import { McpSettingsService } from "./mcp/settings";
+} from "@volli/host-core/mcp/session-host";
+import { desktopCodeMode } from "@volli/host-core/codemode/dev-config";
+import { codeModeSandboxAssets } from "@volli/host-core/codemode/sandbox-assets";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -104,136 +101,87 @@ import {
 } from "./quiet-windows";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { openVolliDb } from "./db";
-import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { createSessionConcurrencyEnvReader } from "./session-concurrency";
-import type { SessionConcurrencyEnvReader } from "./session-concurrency";
 import {
-  getAutomation,
-  getAutomationRun,
-  listAllAutomations,
-  listAutomationsForProject,
-  listColumnArmings,
-  listProjectRunsForAutomation,
-  listRunsForProject,
-  listRunsForTicket,
-  listSkippedOccurrencesForAutomation,
-  listSkippedOccurrencesForProject,
-} from "./db/automations-repo";
+  createHostCore,
+  defaultDatabasePath,
+  logTransactionViolation,
+  throwTransactionViolation,
+  type HostCorePorts,
+} from "@volli/host-core";
+import { createElectronClientCapabilities } from "./client-capabilities";
+import {
+  getProjectAuthorityPolicy,
+  getProjectById,
+  listProjects,
+} from "@volli/host-core/db/projects-repo";
+import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import { listAutomationsForProject } from "@volli/host-core/db/automations-repo";
 import {
   getTicket,
   getTicketBrief,
-  getTicketRow,
   listWorktreeHoldersForSessions,
   listWorktreeRefs,
-} from "./db/tickets-repo";
-import { listMaterializableLinks } from "./db/blobs-repo";
-import { recordSessionStartedOnce } from "./db/events-repo";
-import {
-  catchUpSessionResumptions,
-  observeSessionResumptions,
-} from "./session-runtime/session-resumptions";
+} from "@volli/host-core/db/tickets-repo";
+import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
+import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
+import { catchUpSessionResumptions } from "@volli/host-core/session-runtime/session-resumptions";
 import type { SessionOrigin } from "@volli/shared";
-import { readSessionProvenance } from "./db/session-provenance-repo";
-import { readAutomationRunAttendance } from "./db/automations-repo";
-import {
-  beginPendingArmedRunAttempt,
-  deletePendingArmedRun,
-  deletePendingArmedRunAttempt,
-  deletePendingArmedRunForTicket,
-  getPendingArmedRun,
-  getPendingArmedRunAttempt,
-  listPendingArmedRunAttempts,
-  listPendingArmedRuns,
-  putPendingArmedRun,
-  updatePendingArmedRunAttemptError,
-} from "./db/pending-armed-runs-repo";
-import { enabledAutomationIds } from "./automations/enablement";
-import {
-  createPendingArmedRunCoordinator,
-  type PendingArmedRunCoordinator,
-} from "./automations/pending-armed-runs";
-import { createRunAttentionWatch } from "./automations/run-attention";
+import { type PendingArmedRunCoordinator } from "@volli/host-core/automations/pending-armed-runs";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
-  createCheckpointFailureReporter,
-  createSqliteSessionLedger,
   createScheduledResumeHost,
-  createSessionReadWatch,
   createSessionWatchdog,
   createSuspendClock,
-  publishSessionListingRow,
-  watchSessionActivity,
   type ScheduledResumeHost,
-} from "./session-control";
-import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
-import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
+} from "@volli/host-core/session-control";
+import { listScheduledResumeSessionIds } from "@volli/host-core/db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
   repackLegacyTranscriptArtifacts,
   sessionTranscriptsRoot,
-} from "./session-runtime";
-import { createSessionTokenRegistry } from "./session-tokens";
-import { closeStaleAttachments } from "./session-runtime/boot-recovery";
-import { createSessionEngine, sessionRootThreadId } from "@volli/session-engine";
-import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
-import { createSqliteHostNoticeOutbox } from "./session-runtime/sqlite-host-notice-outbox";
+} from "@volli/host-core/session-runtime";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
+import { sessionRootThreadId } from "@volli/session-engine";
+import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
 import type { OpenNativeBinding } from "@volli/session-engine";
-import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
-import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
-import { createModelAutoSelect } from "./decision/auto-select";
-import { createDesktopDecisions } from "./decision/desktop";
+import { createModelAutoSelect } from "@volli/host-core/decision/auto-select";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  EXA_SEARCH_KEY_SECRET,
-  WebCredentialStore,
-} from "./web/credential";
 import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
-import { WebAccessSettings } from "./web/settings";
-import { webPortsFor } from "./web/ports";
-import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
-import { SecretStore } from "./secrets/store";
+import { webPortsFor } from "@volli/host-core/web/ports";
+import { createPiRuntimeHost, PI_TOOLS } from "@volli/host-core/session-runtime/pi-adapter";
+import { SecretStore } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
 import { retiresSessionSecrets } from "./secrets/lifetime";
 import { registerSecretIpc } from "./secrets/ipc";
 import { refusingCredentialReads } from "@volli/agent-runtime";
-import { createConnectivityPort } from "./session-runtime/connectivity";
-import { createAutoTitler } from "./session-runtime/auto-title";
-import { createPeekSummarizer } from "./session-control/peek-summary";
-import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
+import { createConnectivityPort } from "@volli/host-core/session-runtime/connectivity";
+import { createAutoTitler } from "@volli/host-core/session-runtime/auto-title";
+import { createPeekSummarizer } from "@volli/host-core/session-control/peek-summary";
+import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
 import {
   createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
   type SessionToolSurfacePorts,
-} from "./session-runtime/sessions";
-import { loadSkills } from "./skills";
-import { loadPromptTemplates } from "./prompt-templates";
+} from "@volli/host-core/session-runtime/sessions";
+import { loadSkills } from "@volli/host-core/skills";
+import { loadPromptTemplates } from "@volli/host-core/prompt-templates";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
-import { createAutomationEngine } from "./automations/engine";
-import { createAutomationRunner } from "./automations/run";
-import type { AutomationRunner } from "./automations/run";
-import { createAutomationService } from "./automations/service";
-import { createAutomationScheduler } from "./automations/scheduler";
-import type { AutomationScheduler } from "./automations/scheduler";
-import {
-  advanceScheduleCursor,
-  readScheduleCursors,
-  rebaseScheduleCursor,
-} from "./automations/schedule-cursor";
-import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
+import type { AutomationRunner } from "@volli/host-core/automations/run";
+import type { AutomationScheduler } from "@volli/host-core/automations/scheduler";
 import {
   assertDefaultModelAvailable,
   readCodeModePolicy,
@@ -247,46 +195,49 @@ import {
   writeHiddenModels,
   writeModelAccessDefault,
   writeModelPickerView,
-} from "./session-runtime/model-access-preferences";
+} from "@volli/host-core/session-runtime/model-access-preferences";
 import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
 } from "./session-rpc-ipc";
-import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
-import { listRegisteredHarnesses } from "./db/harness-registry-repo";
+import { piExecutionEnv, piSignIn } from "@volli/agent-runtime";
+import {
+  ExperimentalSettings,
+  installExperimentalSettings,
+  readExperiments,
+  setExperiment,
+} from "./experiments";
+import { listRegisteredHarnesses } from "@volli/host-core/db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
-import type { AgentRuntimeEnvironment, PtyManager } from "./pty";
+import { clientEventSink } from "./client-event-sink";
+import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty/manager";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
+import {
+  getFirstPaintHint,
+  getGlobalAppearance,
+  getGlobalCanvas,
+} from "@volli/host-core/db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
-import { registerFileIpcHandlers } from "./volli-fs";
+import { registerFileIpcHandlers } from "./volli-fs-ipc";
 import {
   broadcastDataChanged,
-  broadcastHarnessEvent,
-  broadcastPendingArmedRuns,
-  broadcastPendingArmedRunSettled,
-  broadcastSessionActivity,
-  broadcastSessionHarness,
   broadcastSessionRetitled,
   broadcastSessionsInterrupted,
-  broadcastSessionStarted,
   broadcastSystemAppearance,
   broadcastUpdateState,
+  windowEventBus,
 } from "./broadcast";
-import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
-import { createAgentToolDoor } from "./agent-tool-door";
-import { createDelegations } from "./session-runtime/delegate-session";
-import type { Delegations } from "./session-runtime/delegate-session";
-import type { AgentToolDoor } from "./agent-tool-door";
-import { createSessionWakeBus } from "./session-wake";
-import { subscribeTicketWake } from "./ticket-wake";
-import { createWatches } from "./watches";
-import type { Watches } from "./watches";
-import { getComment } from "./db/comments-repo";
+import { actorSessionTicketDisplay } from "@volli/host-core/agent-dispatch/resolution";
+import { createDelegations } from "@volli/host-core/session-runtime/delegate-session";
+import type { Delegations } from "@volli/host-core/session-runtime/delegate-session";
+import type { AgentToolDoor } from "@volli/host-core/agent-tool-door";
+import { subscribeTicketWake } from "@volli/host-core/ticket-wake";
+import type { Watches } from "@volli/host-core/watches";
+import { getComment } from "@volli/host-core/db/comments-repo";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -294,39 +245,40 @@ import {
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
-} from "./worktree";
-import type { AgentSiteReleaseReport } from "./worktree";
-import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
+} from "@volli/host-core/worktree";
+import type { AgentSiteReleaseReport } from "@volli/host-core/worktree";
+import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
   composeSubagentBrief,
   composeTicketBrief,
-  createAgentCommandService,
-} from "./agent-commands";
-import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+} from "@volli/host-core/agent-commands";
+import {
+  acquireVolliAppProfile,
+  ensureVolliCliShim,
+  volliRuntimePaths,
+} from "@volli/host-core/agent-runtime";
 import {
   decideRegisteredHarnesses,
   scanHarnessManifests,
   trustedHarnessAdapters,
-} from "./harness-registry";
+} from "@volli/host-core/harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
+import { installSmokeBootCapture } from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
-import {
-  createAgentSocketLifecycle,
-  registerAgentSocketWillQuit,
-  startAgentSocket,
-} from "./agent-socket";
+import { createHostAgentSocket } from "@volli/host-core/agent-services";
+import { registerAgentSocketWillQuit } from "./agent-socket-quit";
 import { createLoginPathBootstrap } from "./login-path-adoption";
 import {
   ADOPTION_PROBE,
   loginShellPath,
   probeLoginShellPath,
   resetLoginShellPathCache,
-} from "./login-shell-path";
-import { buildSessionEnvReport } from "./session-env";
+} from "@volli/host-core/login-shell-path";
+import { buildSessionEnvReport } from "@volli/host-core/session-env";
 import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
   cleanupLegacyGlobalCliLink,
@@ -339,12 +291,12 @@ import {
   resolveOnPath,
   uninstallAllHarnessSkills,
   userCliLinkPath,
-} from "./agent-tools";
+} from "@volli/host-core/agent-tools";
 import { registerCliIpcHandlers } from "./cli-ipc";
 import { registerSupportIpcHandlers } from "./support-info";
 import { probeCliDoctor } from "./cli-doctor";
 import { readCliStatus } from "./cli-status";
-import { getAllAppState, setAppState } from "./db/app-state-repo";
+import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 import {
   readAllowPrerelease,
   readUpdateChannel,
@@ -359,12 +311,13 @@ import {
   PACKAGED_RENDERER_SCHEME,
   resolvePackagedRendererAsset,
 } from "./app-protocol";
-import { collectUnlinkedBlobs } from "./blob-collect";
-import { prepareTurnAttachments } from "./turn-attachments";
-import { blobProtocolResponse } from "./blob-protocol";
-import { blobsRoot } from "./blob-store";
-import { getBlob } from "./db/blobs-repo";
-import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
+import { collectUnlinkedBlobs } from "@volli/host-core/blob-collect";
+import { prepareTurnAttachments } from "@volli/host-core/turn-attachments";
+import { blobProtocolResponse } from "@volli/host-core/blob-protocol";
+import { blobsRoot } from "@volli/host-core/blob-store";
+import { getBlob } from "@volli/host-core/db/blobs-repo";
+import { BROWSER_DEFAULT_BOUNDS } from "@volli/host-core/browser/backend";
+import { BrowserTabHost } from "./browser/tab-host";
 import { getAutoReapPolicy } from "./process/auto-reap-settings";
 import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
@@ -374,19 +327,19 @@ import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/backgro
 import { createAgentShellPort } from "./shell/agent-port";
 import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
-import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
+import { createAttachmentIdentities } from "@volli/host-core/session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
-import { desktopBrowserPort } from "./browser/agent-port";
+import { browserAgentPort } from "@volli/host-core/browser/agent-port";
 import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
   createCursorOverlay,
   type CursorOverlay,
 } from "./browser/cursor-overlay";
-import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
-import { BrowserPictureStore } from "./browser/picture-store";
-import { browserTraceDisk, browserTracesRoot } from "./browser/trace-disk";
-import { BrowserTraceStore } from "./browser/trace-store";
+import { browserPictureDisk, browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
+import { BrowserPictureStore } from "@volli/host-core/browser/picture-store";
+import { browserTraceDisk, browserTracesRoot } from "@volli/host-core/browser/trace-disk";
+import { BrowserTraceStore } from "@volli/host-core/browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
@@ -428,6 +381,10 @@ protocol.registerSchemesAsPrivileged([
 // stores/projects.ts for the localStorage-origin version of this same split.
 app.setName("Volli Code");
 
+// Capture smoke boot output before any readiness work, in built AND packaged
+// launches. Ordinary launches have no capture env var and do no extra work.
+installSmokeBootCapture(process.env, app, process.stdout, process.stderr);
+
 // Packed-app smokes need the real compositor, but not the native app activation
 // that a normal Volli launch owns. This env-only seam is deliberately resolved
 // before the profile lock or any BrowserWindow: packaged binaries honour it too,
@@ -437,12 +394,7 @@ const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
 applyQuietAppPolicy(app, nativeWindowPolicy);
 
 const isDev = !app.isPackaged;
-const agentSocket = createAgentSocketLifecycle({
-  start: startAgentSocket,
-  reportFailure: (error) => {
-    console.error("[volli] failed to close agent socket:", errorMessage(error));
-  },
-});
+const agentSocket = createHostAgentSocket();
 const shutdownAgentSocket = agentSocket.shutdown;
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
@@ -728,7 +680,7 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
-    const busy = ptyManager.busySessions(mainWindow.webContents);
+    const busy = ptyManager.busySessions(clientEventSink(mainWindow.webContents));
     if (unsavedStep === "quit" && busy.length === 0) return;
 
     // Something is at stake, so hold the close while the questions are asked;
@@ -898,33 +850,49 @@ app.whenReady().then(async () => {
   // empty `VOLLI_DB_PATH=` (not nullish, so it wins and yields an empty path)
   // and blame userData for a failure the override caused.
   const dbOverride = isDev ? process.env["VOLLI_DB_PATH"] : undefined;
-  const dbPath = dbOverride ?? join(app.getPath("userData"), "volli.db");
+  const dbPath = dbOverride ?? defaultDatabasePath(app.getPath("userData"));
   // Log the resolved db up front: a `pnpm dev` boot lands on the empty
   // `Volli Code-dev/volli.db` while your real data sits in the packaged app's
   // `Volli Code/volli.db`. Without this line an empty dev UI is
   // indistinguishable from a broken data pointer — surface which db is live.
   const dbSource = dbOverride === undefined ? "userData" : "VOLLI_DB_PATH";
   console.info(`[volli] db: mode=${isDev ? "dev" : "packaged"} source=${dbSource} path=${dbPath}`);
-  let dbHandle: DbHandle;
-  try {
-    mkdirSync(dirname(dbPath), { recursive: true });
-    const db = openVolliDb(dbPath);
-    dbHandle = { ok: true, db };
-  } catch (error) {
-    // The recorded reason is what every degraded handler answers with, so it
-    // is classified here, once: a native-ABI failure names the Node
-    // incompatibility and a fix its reader can carry out instead of a bare
-    // NODE_MODULE_VERSION number (VC-76). Which fix that is depends on who is
-    // looking, so the audience is stated rather than assumed (VC-160) — and the
-    // log keeps the raw message plus the dev-loop remedy either way, so a
-    // packaged user's report is still diagnosable.
-    dbHandle = { ok: false, error: describeDbOpenFailure(error, { dev: isDev }) };
-    console.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
-  }
+  // The host's persistence comes out of host-core (VC-553): this file only
+  // states the policy. Packaged builds log a transaction-ownership violation;
+  // dev and tests throw (VC-551) — chosen from `app.isPackaged`, never NODE_ENV.
+  // The runtime and notification registry are installed below. Session
+  // construction only captures these adapters; it never calls them at boot.
+  let listOpenNativeBindings = noOpenNativeBindings;
+  let scheduledResumeHost: ScheduledResumeHost | null = null;
+  // The Electron adapters for host-core's ports (VC-554). Code still composed
+  // below reads power, connectivity and the client through them too.
+  const hostPorts: HostCorePorts = {
+    log: console,
+    events: windowEventBus,
+    attention: {
+      deliver: (request) => notifications.deliver(request),
+      focusedSessionIds: () => notifications.focusedSessionIds(),
+    },
+    power: powerMonitor,
+    connectivity: createConnectivityPort({ net, powerMonitor }),
+    client: createElectronClientCapabilities(),
+    trash: { trashItem: (path) => shell.trashItem(path) },
+    listOpenNativeBindings: () => listOpenNativeBindings(),
+    observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
+  };
+  const hostCore = createHostCore(hostPorts, {
+    dataDir: app.getPath("userData"),
+    databasePath: dbPath,
+    onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
+    devDiagnostics: isDev,
+  });
+  const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
     dbPath,
     userData: app.getPath("userData"),
     degraded: !dbHandle.ok,
+    // A database from a newer Volli gets its own recovery screen (VC-602).
+    fault: hostCore.databaseFailure?.kind === "newer-version" ? "newer-version" : "unreadable",
     restart: () => {
       // Let the IPC reply paint success before restarting the entire service
       // graph; degraded handlers must not be replaced with partially live ones.
@@ -933,124 +901,24 @@ app.whenReady().then(async () => {
         app.quit();
       }, 750);
     },
+    quit: () => setTimeout(() => app.quit(), 0),
   });
-  // The one Session Engine in the process, wrapped once so every durable write
-  // anywhere downstream — the runtime's turns, the agent socket's commands, the
-  // IPC handlers' retitles — re-publishes the affected Session's listing row to
-  // every window. Wrapping HERE is what makes that claim true: this is the only
-  // construction site, so there is no unwatched engine for a caller to hold.
-  // See `session-control/activity-watch.ts`.
-  //
-  // The handle is captured into a const first because `dbHandle` is a `let`
-  // that a later branch may reassign: a narrowing on it does not survive into
-  // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
-  // One transaction queue for Session facts AND host notices. put() must
-  // commit before submission, never ride inside another writer's transaction.
-  const sessionLedger = watchedDb === null ? null : createSqliteSessionLedger(watchedDb);
-  const hostNoticeOutbox =
-    watchedDb === null || sessionLedger === null
-      ? null
-      : createSqliteHostNoticeOutbox(watchedDb, sessionLedger);
+  installExperimentalSettings(
+    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"]),
+  );
+  const { hostNoticeOutbox, sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore;
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
   // than a convention. Built here, right after the database handle is known,
-  // because the run-attention watch below is the first thing that needs it; the
+  // because host-core's run-attention adapter is the first thing that needs it; the
   // window opener is bound later, when the window factory exists.
   //
   // Deliberately built even for a degraded database: with no stored
   // preferences the all-on default applies, so a broken db costs the app its
   // settings, never its voice.
   const notifications = createNotificationRuntime({ db: watchedDb });
-  // The Notification rule (VC-112, VC-133): an unattended Run that enters
-  // `waiting` or `error` says so, and nothing else does. It hangs off the
-  // activity watch below because that is the one place every durable Session
-  // write in this process is already seen — see `automations/run-attention.ts`.
-  const runAttention =
-    watchedDb !== null
-      ? createRunAttentionWatch({
-          attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
-          // The preference is read per alert inside the delivery path, so this
-          // observer names the producer and the target and nothing else.
-          notify: (request) => notifications.deliver(request),
-        })
-      : null;
-  // The runtime is composed from the watched Engine below, so this reader is
-  // installed in two steps: the watch closes over the indirection now, and the
-  // real process-local binding list replaces the empty boot answer once the
-  // runtime exists. Durable attachments alone never enter this list.
-  let listOpenNativeBindings = noOpenNativeBindings;
-  // The scheduled-resume host needs the runtime, which is composed from the
-  // watched engine below — so the watch closes over this indirection and the
-  // host is installed once the runtime exists.
-  let scheduledResumeHost: ScheduledResumeHost | null = null;
-  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
-  // watch: a write returns from the engine, the bus fans the committed event
-  // out to its listeners (the Watch registry, the resumed-subagent re-arm —
-  // VC-457), and only then does the
-  // watch mark the row dirty. Same construction-site rule as the watch — this
-  // is the only place the engine is made, so no caller can hold an unwatched
-  // one. See `session-wake.ts`.
-  const sessionWakeBus =
-    watchedDb !== null && sessionLedger !== null
-      ? createSessionWakeBus(
-          createSessionEngine({
-            ledger: sessionLedger,
-            clock: { now: Date.now },
-            ids: { next: () => randomUUID() },
-            onProjectionCheckpointFailure: createCheckpointFailureReporter(),
-            yieldToHost: () => new Promise<void>((resolve) => setImmediate(resolve)),
-          }),
-          { db: watchedDb },
-        )
-      : null;
-  // Unread, decided here because main is the only process that sees every turn
-  // boundary AND honestly knows which window is focused and what it is showing
-  // (VC-30). Both edges live in one watch: a turn that ended with nobody
-  // looking becomes unread, and a Session that comes into view becomes read.
-  //
-  // `publishSessionRow` is what makes the second edge visible. Marking read
-  // moves no ledger fact, so the activity watch below has nothing to notice —
-  // the row has to be re-published by hand, through the same broadcast and the
-  // same builder, or one window's dot would outlive the other's.
-  const publishSessionRow = (sessionId: string): void => {
-    if (watchedDb === null || sessionEngine === null) return;
-    void publishSessionListingRow(
-      {
-        db: watchedDb,
-        getSession: (query) => sessionEngine.getSession(query),
-        liveAttachmentIds: () =>
-          new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
-        publish: broadcastSessionActivity,
-      },
-      sessionId,
-    ).catch((error: unknown) => {
-      console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
-    });
-  };
-  const sessionReadWatch =
-    watchedDb !== null
-      ? createSessionReadWatch({
-          // The same registry the alert suppression asks, so a turn can never
-          // be both loud and unread.
-          focusedSessionIds: () => notifications.focusedSessionIds(),
-          markUnread: (sessionId, at) => {
-            markSessionUnread(watchedDb, sessionId, at);
-            // No publish here: the activity watch is already mid-fold for this
-            // Session and reads the receipt below, so the row it is about to
-            // publish carries the mark this write just made.
-          },
-          markRead: (sessionId) => {
-            // A Session that is already read must not cost a broadcast: this
-            // fires for everything in front of a focused window, which on an
-            // ordinary switch is a Session nobody has left work in.
-            if (readSessionUnread(watchedDb, sessionId).unreadSince === null) return;
-            writeSessionUnread(watchedDb, sessionId, null);
-            publishSessionRow(sessionId);
-          },
-        })
-      : null;
   // A1: a Session that BECOMES in front of a focused window is read — the
   // renderer's active target changed to it, or its window took focus while
   // already showing it. Without this, returning to a window that has a finished
@@ -1060,41 +928,6 @@ app.whenReady().then(async () => {
       sessionReadWatch.observeFocused(sessionIds),
     );
   }
-  const sessionActivityWatch =
-    watchedDb !== null && sessionWakeBus !== null
-      ? watchSessionActivity(sessionWakeBus.engine, {
-          publish: broadcastSessionActivity,
-          // Read on the push path as well as the fetch path, so a Run's bolt
-          // survives its Session's first turn (VC-131): the renderer upserts
-          // the whole row, so a push without provenance would erase the mark.
-          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
-          // Read AFTER `observe` below has run for this fold, so the row a turn
-          // boundary publishes already carries the mark that boundary earned
-          // (VC-30).
-          readOf: (sessionId) => readSessionUnread(watchedDb, sessionId),
-          listOpenNativeBindings: () => listOpenNativeBindings(),
-          observe: (projection) => {
-            observeSessionResumptions(watchedDb, projection, {
-              publish: broadcastDataChanged,
-              report: (error) =>
-                console.error("[volli] failed to record Session resumption:", errorMessage(error)),
-            });
-            runAttention?.observe(projection);
-            // A schedule made (or settled) anywhere reaches the timer here.
-            scheduledResumeHost?.observe(projection);
-            // Did a turn just end with nobody looking? (VC-30)
-            sessionReadWatch?.observe(projection);
-          },
-          // The baseline for the rule above: a Session minted in this process
-          // began with no need, which is what makes its first fold an edge
-          // rather than a first sighting (VC-133).
-          observeBirth: (sessionId) => {
-            runAttention?.observeBirth(sessionId);
-            sessionReadWatch?.observeBirth(sessionId);
-          },
-        })
-      : null;
-  const sessionEngine = sessionActivityWatch?.engine ?? null;
   // Attachment bytes reach the renderer here (VC-50). Registered after the db
   // opens because the media type is a `blobs` column, and read through the
   // handle at request time rather than captured: a degraded db still serves
@@ -1179,38 +1012,14 @@ app.whenReady().then(async () => {
   // cross-process and already survives the `pi` CLI writing alongside us, but
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
-  const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  const piModelAccess = hostCore.runtimeServices.createModelAccess();
   // Decision models (VC-478): the host decision service every feature that
   // asks a classifier goes through, the `classify` tool's per-Session port,
   // and the Settings owner. Built over the same Pi collection as chat, so a
   // cloud classifier's key is the one a person signed in with under Model
   // Access. Its usage is billed into the Session it was asked for, as
   // `usage.recorded` with cause `decision` and the purpose in the provenance.
-  const desktopDecisions =
-    dbHandle.ok && piModelAccess !== null
-      ? createDesktopDecisions({
-          db: dbHandle.db,
-          models: piModelAccess.models,
-          catalogReady: piModelAccess.catalogReady,
-          recordUsage: async (sessionId, usage, purpose) => {
-            if (sessionEngine === null) return;
-            await sessionEngine.observe({
-              // A fresh id per call: every decision is its own bill.
-              id: `usage:decision:${randomUUID()}`,
-              kind: "usage.recorded",
-              sessionId,
-              occurredAt: Date.now(),
-              provenance: {
-                source: { kind: "system", id: "decision-service", detail: { purpose } },
-                venue: { id: "local", kind: "local" },
-              },
-              attachmentId: null,
-              turnId: null,
-              usage,
-            });
-          },
-        })
-      : null;
+  const desktopDecisions = hostCore.runtimeServices.createDecisions(piModelAccess);
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -1253,21 +1062,7 @@ app.whenReady().then(async () => {
     expected.hash = "";
     return actual.href === expected.href;
   });
-  const mcpCredentials = new FileMcpCredentialStore(
-    join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
-  );
-  const mcpSettings = dbHandle.ok
-    ? new McpSettingsService({
-        db: dbHandle.db,
-        credentials: mcpCredentials,
-        oauth: new McpOAuthBroker({
-          store: mcpCredentials,
-          // Only ever an authorization page the server's own metadata named,
-          // already checked to be https (or loopback) by the broker.
-          openExternal: (url) => shell.openExternal(url),
-        }),
-      })
-    : null;
+  const { settings: mcpSettings } = hostCore.runtimeServices.createMcp();
   // How MCP calls are dispatched and bounded (VC-454): the developer-only
   // parallel-read opt-in, read once from an unpackaged build's environment
   // (no setting, no UI), and one per-server bound every Session shares.
@@ -1297,21 +1092,7 @@ app.whenReady().then(async () => {
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
-  const webAccess = dbHandle.ok
-    ? new WebAccessSettings({
-        db: dbHandle.db,
-        credentials: {
-          brave: new WebCredentialStore({
-            db: dbHandle.db,
-            secretName: BRAVE_SEARCH_KEY_SECRET,
-          }),
-          exa: new WebCredentialStore({
-            db: dbHandle.db,
-            secretName: EXA_SEARCH_KEY_SECRET,
-          }),
-        },
-      })
-    : null;
+  const webAccess = hostCore.runtimeServices.createWebAccess();
   // Assigned once the BrowserTabHost is built inside the ready path below; the
   // attach-time browser-port resolver reads it lazily, long after boot — the
   // same bargain ptyManagerRef strikes with the worktree guards.
@@ -1585,7 +1366,7 @@ app.whenReady().then(async () => {
           // A closed lid or a missing Wi-Fi is waited out rather than charged
           // to a turn's retry budget, and a request open across a sleep is
           // re-sent instead of hanging on a dead socket (VC-443).
-          connectivity: createConnectivityPort({ net, powerMonitor }),
+          connectivity: hostPorts.connectivity,
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here
@@ -1733,9 +1514,9 @@ app.whenReady().then(async () => {
               throw new Error("The Browser host is not ready; retry the attachment.");
             }
             // The wake hold (VC-252) and the cursor (VC-239) ride the one
-            // desktop composition; see `desktopBrowserPort`.
-            return desktopBrowserPort({
-              host,
+            // composition every caller shares; see `browserAgentPort`.
+            return browserAgentPort({
+              backend: host,
               scope: { projectId: scope.projectId, ticketId: scope.ticketId },
               // The hold is taken in this name and judged against it (VC-239):
               // the adapter states it from the attachment, never the model.
@@ -1921,6 +1702,8 @@ app.whenReady().then(async () => {
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
+          events: hostPorts.events,
+          dataDir: hostCore.dataDir,
           transcriptDirectory,
           executor: piRuntimeHost.adapter,
           sessionEngine,
@@ -1934,44 +1717,16 @@ app.whenReady().then(async () => {
   // Automations own a transport-neutral command/event/projection core. Keep
   // the runner mutable until below: Session RPC's attach door closes over it,
   // so a human Retry can resume a durable first-message intent too.
-  const automationEngine =
-    sessionDb === null
-      ? null
-      : createAutomationEngine({
-          ledger: new SqliteAutomationLedger(sessionDb),
-          now: Date.now,
-          nextId: randomUUID,
-        });
-  const automationService =
-    sessionDb === null || automationEngine === null
-      ? null
-      : createAutomationService({
-          engine: automationEngine,
-          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
-          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
-          listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
-          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
-          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
-          skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
-          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
-          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
-          ...(piRuntimeHost === null
-            ? {}
-            : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
-          onMutation: (change) => broadcastDataChanged(change),
-          // Create, enable, and schedule-changing commands establish the new
-          // lifecycle before the scheduler's asynchronous refresh. Relaunch
-          // can therefore still account for a due time missed in that gap.
-          rebaseScheduleCursor: (automationId, through) => {
-            rebaseScheduleCursor(sessionDb, { automationId, through }, Date.now());
-          },
-          // Every record write can add, retime or remove a schedule, and the
-          // enabled switch decides whether one may fire here at all — so the
-          // timer re-reads after each rather than waiting out its own tick.
-          onAutomationsChanged: () => {
-            void automationScheduler?.refresh();
-          },
-        });
+  const automationEngine = hostCore.automations.createEngine();
+  const automationService = hostCore.automations.createService(automationEngine, {
+    ...(piRuntimeHost === null
+      ? {}
+      : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
+    // Every record write can retime a schedule or switch it off.
+    onAutomationsChanged: () => {
+      void automationScheduler?.refresh();
+    },
+  });
   let automationRunner: AutomationRunner | null = null;
   let automationScheduler: AutomationScheduler | null = null;
   let pendingArmedRuns: PendingArmedRunCoordinator | null = null;
@@ -2198,6 +1953,8 @@ app.whenReady().then(async () => {
       ? null
       : registerSessionRpcIpcHandlers({
           runtime: sessionRuntime,
+          readExperiments,
+          writeExperiment: setExperiment,
           inspectModelAccess:
             piRuntimeHost === null
               ? undefined
@@ -2470,9 +2227,8 @@ app.whenReady().then(async () => {
       return null;
     }
     const db = sessionDb;
-    watches = createWatches({
+    watches = hostCore.agentServices.createWatches({
       subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
-      subscribeTicketWake,
       runtime: sessionRuntime,
       sessionEngine,
       readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
@@ -2515,7 +2271,7 @@ app.whenReady().then(async () => {
   agentToolDoor =
     sessionDb === null || sessionDelegation === null
       ? null
-      : createAgentToolDoor({
+      : hostCore.agentServices.createToolDoor({
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
@@ -2557,8 +2313,6 @@ app.whenReady().then(async () => {
           ...(autoTitler === null
             ? {}
             : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-          onMutation: (change) => broadcastDataChanged(change),
-          onSessionStarted: (notice) => broadcastSessionStarted(notice),
           actorTicketDisplay: (ticketId) =>
             actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
           now: () => Date.now(),
@@ -2584,7 +2338,7 @@ app.whenReady().then(async () => {
   registerModelAccessIpcHandlers(
     piModelAccess === null
       ? null
-      : new ModelAccessSignInService({
+      : hostCore.runtimeServices.createSignIn({
           // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
           pi: piSignIn(piModelAccess.models, {
             deviceId: () => {
@@ -2662,11 +2416,11 @@ app.whenReady().then(async () => {
     sessionRuntime !== null && sessionEngine !== null
       ? createSessionWatchdog({
           listBindings: () => sessionRuntime.openNativeBindings(),
-          suspendedMsWithin: createSuspendClock(powerMonitor).suspendedMsWithin,
+          suspendedMsWithin: createSuspendClock(hostPorts.power).suspendedMsWithin,
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
-          notify: (request) => notifications.deliver(request),
+          notify: (request) => hostPorts.attention.deliver(request),
         })
       : null;
   sessionWatchdog?.start();
@@ -2684,7 +2438,7 @@ app.whenReady().then(async () => {
           ticketSessions: ({ projectId, ticketId }) =>
             sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
           command: (request) => sessionRuntime.command(request),
-          notify: (request) => notifications.deliver(request),
+          notify: (request) => hostPorts.attention.deliver(request),
         })
       : null;
   // From this point onward the native Session control plane exists. Install
@@ -2868,7 +2622,7 @@ app.whenReady().then(async () => {
   if (scheduledResumeHost !== null) {
     const host = scheduledResumeHost;
     void host.start();
-    powerMonitor.on("resume", () => void host.pass());
+    hostPorts.power.on("resume", () => void host.pass());
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
@@ -3105,10 +2859,14 @@ app.whenReady().then(async () => {
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
-  registerFileIpcHandlers(dbHandle, {
-    globalCommandsDir: join(fsDeps.userDataDir, "commands"),
-    globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
-  });
+  registerFileIpcHandlers(
+    dbHandle,
+    {
+      globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+      globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+    },
+    hostCore.fileServices,
+  );
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the
   // `userData` root is where Volli's overlay files live (never the user's own
@@ -3137,14 +2895,8 @@ app.whenReady().then(async () => {
   // and resumes this same runner's durable message intent.
   automationRunner =
     sessions !== null && sessionRuntime !== null && sessionDb !== null && automationEngine !== null
-      ? createAutomationRunner({
+      ? hostCore.automations.createRunner({
           engine: automationEngine,
-          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
-          findRun: (runId) => getAutomationRun(sessionDb, runId),
-          findTicket: (ticketId) => getTicket(sessionDb, ticketId),
-          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
-          listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
-          listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
           sessions,
           promptSupply: async (projectId) => {
             const project = getProjectById(sessionDb, projectId);
@@ -3203,14 +2955,6 @@ app.whenReady().then(async () => {
           ...(autoTitler === null
             ? {}
             : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
-          // property rather than sending `undefined` for it: the Electron
-          // transport would carry that by structured clone, and an HTTP one
-          // would mangle it (docs/BOUNDARIES.md rule 3).
-          onRunStarted: ({ projectId, run }) =>
-            broadcastDataChanged(
-              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
-            ),
         })
       : null;
 
@@ -3218,63 +2962,7 @@ app.whenReady().then(async () => {
   // renderer. Its SQLite row survives window count (and a relaunch), one timer
   // serves that row, and every renderer receives the same full projection.
   if (sessionDb !== null) {
-    const pendingDb = sessionDb;
-    pendingArmedRuns = createPendingArmedRunCoordinator({
-      now: Date.now,
-      nextId: randomUUID,
-      listPending: () => listPendingArmedRuns(pendingDb),
-      getPending: (id) => getPendingArmedRun(pendingDb, id),
-      putPending: (pending) => putPendingArmedRun(pendingDb, pending),
-      deletePending: (id) => deletePendingArmedRun(pendingDb, id),
-      deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
-      beginAttempt: (id, commandId, fallbackError) =>
-        beginPendingArmedRunAttempt(pendingDb, id, commandId, fallbackError),
-      listAttempts: () => listPendingArmedRunAttempts(pendingDb),
-      getAttempt: (id) => getPendingArmedRunAttempt(pendingDb, id),
-      updateAttemptError: (id, error) => updatePendingArmedRunAttemptError(pendingDb, id, error),
-      deleteAttempt: (id) => deletePendingArmedRunAttempt(pendingDb, id),
-      readTicket: (ticketId) => {
-        const row = getTicketRow(pendingDb, ticketId);
-        if (row === undefined || row.archived_at !== null) return undefined;
-        const ticket = getTicket(pendingDb, ticketId);
-        const project = getProjectById(pendingDb, row.project_id);
-        if (ticket === undefined || project === undefined) return undefined;
-        return {
-          projectId: ticket.projectId,
-          status: ticket.status,
-          displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
-        };
-      },
-      readPlanning: (projectId) => ({
-        automations: listAutomationsForProject(pendingDb, projectId),
-        armings: listColumnArmings(pendingDb, projectId),
-        enabledAutomationIds: enabledAutomationIds(pendingDb),
-      }),
-      run: async ({ commandId, automationId, ticketId }) => {
-        const runner = automationRunner;
-        if (runner === null) {
-          return {
-            ok: false,
-            code: "RUN_FAILED",
-            error: "The Session runtime is not available this launch.",
-          };
-        }
-        // A Deliberate column move retains the attended semantics its renderer
-        // expiry door had. Only ownership of the timer moved into main.
-        return runner.run({
-          commandId,
-          target: { kind: "automation", automationId },
-          ticketId,
-          modelOverride: null,
-          attendance: "attended",
-        });
-      },
-      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
-      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-      onPendingChanged: broadcastPendingArmedRuns,
-      onSettled: broadcastPendingArmedRunSettled,
-      log: (message) => console.error(message),
-    });
+    pendingArmedRuns = hostCore.automations.createPendingArmedRuns(() => automationRunner)!;
     pendingArmedRuns.start();
     app.on("before-quit", () => pendingArmedRuns?.stop());
   }
@@ -3295,50 +2983,8 @@ app.whenReady().then(async () => {
   // be recorded as skips by the next launch that can.
   const runnerForSchedule = automationRunner;
   if (runnerForSchedule !== null && automationEngine !== null && sessionDb !== null) {
-    const scheduleDb = sessionDb;
     const scheduleEngine = automationEngine;
-    automationScheduler = createAutomationScheduler({
-      now: Date.now,
-      listAutomations: () => Promise.resolve(listAllAutomations(scheduleDb)),
-      enabledAutomationIds: () => scheduleEngine.enabledAutomationIds(),
-      readCursors: () => Promise.resolve(readScheduleCursors(scheduleDb)),
-      advanceCursor: (input) => {
-        advanceScheduleCursor(scheduleDb, input, Date.now());
-        return Promise.resolve();
-      },
-      recordSkip: async (input) => {
-        const outcome = await scheduleEngine.recordSkip(input);
-        if (!outcome.ok) {
-          // Fail the step rather than resolving over it. The scheduler advances
-          // its cursor only after a step settles, so a refused write leaves the
-          // occurrence owed and the next pass records it again under the same
-          // derived command id. Swallowing it here would step past a skip that
-          // never reached the ledger — a skip that looks exactly like a
-          // silence, which is the one outcome VC-112 forbids.
-          throw new Error(outcome.error);
-        }
-        // The Automations page reads its history on arrival and on every
-        // planning change, so a skip recorded while it is open lands without
-        // anyone reloading.
-        broadcastDataChanged({ projectId: input.skip.projectId });
-      },
-      startRun: async (input) => {
-        // UNATTENDED (VC-133), and this is the case VC-112 names outright:
-        // "a column move is attended because a person is right there; a
-        // schedule is not." A timer fired this; the app may not even have a
-        // window open. If its Session stops for a person, this is how they
-        // find out.
-        const outcome = await runnerForSchedule.runForProject({
-          ...input,
-          attendance: "unattended",
-        });
-        return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
-      },
-      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
-      clearTimer: (handle) => {
-        clearTimeout(handle);
-      },
-    });
+    automationScheduler = hostCore.automations.createScheduler(scheduleEngine, runnerForSchedule)!;
     const scheduler = automationScheduler;
     void scheduler.start().catch((error: unknown) => {
       console.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`);
@@ -3572,15 +3218,15 @@ app.whenReady().then(async () => {
   // A smoke seam (VC-239), unset in every ordinary launch: `browser-tab-smoke.mjs`
   // starts no Session and takes no model turn, yet has to prove a hold and a
   // visible cursor. It builds the SAME port the adapter builds — one factory,
-  // `desktopBrowserPort`, so the two cannot drift — in a Session's name it
+  // `browserAgentPort`, so the two cannot drift — in a Session's name it
   // invents, and drives a tab exactly as a Session would. Gated on the
   // variable AND on an unpackaged app, like the other dev-only doors: a
   // shipped build exposes nothing whatever its environment says.
   if (isDev && process.env["VOLLI_BROWSER_PROBE"] === "1") {
     (globalThis as { volliBrowserProbe?: unknown }).volliBrowserProbe = {
       port: (scope: { projectId: string; ticketId: string | null }, sessionId: string) =>
-        desktopBrowserPort({
-          host: browserTabs,
+        browserAgentPort({
+          backend: browserTabs,
           scope,
           session: { sessionId, attachmentId: `${sessionId}:probe` },
           cursorFor: (tabId) => cursorOverlay.driverFor(tabId),
@@ -3730,7 +3376,7 @@ app.whenReady().then(async () => {
       // rather than described as work nobody attempted (review C3). Read-only,
       // and never fatal to a launch.
       void reconcileInterruptedCleanups({
-        worktree: worktreeDeps(db),
+        worktree: hostCore.worktrees.deps(db),
         engine: orphanCleanupEngine(db),
       })
         .then((runs) => {
@@ -3744,7 +3390,7 @@ app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] cleanup history unreadable:", errorMessage(error));
         });
-      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
+      startOrphanScan(hostCore.worktrees.deps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
             `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
@@ -4172,7 +3818,7 @@ app.whenReady().then(async () => {
 
   try {
     const execute = dbHandle.ok
-      ? createAgentCommandService({
+      ? hostCore.agentServices.createCommands({
           db: dbHandle.db,
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
@@ -4184,7 +3830,6 @@ app.whenReady().then(async () => {
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
           readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
-          notify: (request) => notifications.deliver(request),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
@@ -4252,34 +3897,14 @@ app.whenReady().then(async () => {
           ...(autoTitler !== null
             ? { refineAutoTitle: (input) => void autoTitler.refine(input) }
             : {}),
-          // The no-redirect rule (VC-13 decision 2): a start pushes a toast
-          // notice; the toast's action is the only thing that ever opens the
-          // new session's tab.
-          onSessionStarted: (notice) => broadcastSessionStarted(notice),
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
           interruptTicketSessions: interruptTicketSessionsAnnounced,
-          // A socket command that commits a planning mutation reaches the
-          // renderer via this broadcast. The service reports the exact ticket it
-          // resolved and touched (CONCEPT #42 — it owns the display-id→ticket
-          // resolution), so a CLI `ticket comment`/`ticket move`/… lands on THAT
-          // ticket's open surfaces promptly while other tickets' readers stand
-          // down. Read-only commands and no-ops (e.g. a same-column move) never
-          // fire it, so a stray broadcast can't slip through.
-          onMutation: (change) => broadcastDataChanged(change),
           // An explicit `volli ticket move` is the other Deliberate-move door.
           // It reaches the same one main-owned pending arrival as renderer IPC;
           // no renderer has to exist for the timer to fire.
           onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
-          // The involuntary channel's fan-out (harness-events): every canonical
-          // event a hook reports reaches every window, so a session's activity
-          // state stops being guessed from PTY output alone.
-          onHarnessEvent: (notice) => broadcastHarnessEvent(notice),
-          // The other involuntary channel: a harness's own wrapper announced
-          // that IT is what is now running in that terminal. Fired only on a
-          // change, so this is never chatter.
-          onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // The `env` block `volli identify` prints (VC-94): the PATH main
           // adopted, its latest non-interactive provenance, the measured tools
           // resolved against it (and which of them this workspace implies),

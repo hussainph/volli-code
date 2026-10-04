@@ -610,13 +610,13 @@ async function seedLedger(projectPath) {
   });
   let db;
   try {
-    const { openVolliDb } = await vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts");
+    const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
     const { insertProject } = await vite.ssrLoadModule(
-      "/apps/desktop/src/main/db/projects-repo.ts",
+      "/packages/host-core/src/db/projects-repo.ts",
     );
-    const { insertTicket } = await vite.ssrLoadModule("/apps/desktop/src/main/db/tickets-repo.ts");
+    const { insertTicket } = await vite.ssrLoadModule("/packages/host-core/src/db/tickets-repo.ts");
     const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-      "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+      "/packages/host-core/src/session-control/sqlite-ledger.ts",
     );
 
     db = openVolliDb(dbPath);

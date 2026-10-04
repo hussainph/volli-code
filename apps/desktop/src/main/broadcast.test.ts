@@ -7,10 +7,15 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => windows },
 }));
 
+import type { HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import {
   broadcastDataChanged,
   broadcastPendingArmedRuns,
+  broadcastSessionRetitled,
+  broadcastSessionsInterrupted,
+  broadcastSystemAppearance,
   flushDataChangedForTest,
+  windowEventBus,
 } from "./broadcast";
 import { DATA_CHANGED_BATCH_WINDOW_MS } from "./data-change-coalescer";
 
@@ -148,5 +153,64 @@ describe("pending armed Run broadcast", () => {
       [PENDING],
     );
     expect(destroyed.webContents.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("the host event bus over every window (VC-554)", () => {
+  // One payload per topic, sent on the channel the topic names. `data-changed`
+  // is the one that coalesces, and is covered above.
+  const SENT: { [T in Exclude<HostBroadcastEventTopic, "data-changed">]: HostEventMap[T] } = {
+    "session-activity": { projectId: "p", ticketId: null } as HostEventMap["session-activity"],
+    "session-retitled": { sessionId: "s", title: "Named" },
+    "sessions-interrupted": { ticketId: "t", sessionIds: ["s"] },
+    "session-started": { sessionId: "s" } as HostEventMap["session-started"],
+    "harness-event": { sessionId: "s" } as HostEventMap["harness-event"],
+    "session-harness": { sessionId: "s" } as HostEventMap["session-harness"],
+    "pending-armed-runs-changed": [PENDING],
+    "pending-armed-run-settled": { kind: "failed", pending: PENDING, error: "no" },
+    "worktree-phase": { ticketId: "t", phase: "ready" },
+  };
+
+  it("sends each topic on its own volli: channel to every live window, at once", () => {
+    const live = windowFixture();
+    const destroyed = windowFixture(true);
+    windows.push(live, destroyed);
+
+    for (const [topic, payload] of Object.entries(SENT)) {
+      windowEventBus.publish(topic as keyof typeof SENT, payload as never);
+      expect(live.webContents.send).toHaveBeenLastCalledWith(`volli:${topic}`, payload);
+    }
+    expect(live.webContents.send).toHaveBeenCalledTimes(Object.keys(SENT).length);
+    expect(destroyed.webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("coalesces data-changed through the same window as broadcastDataChanged", () => {
+    const window = windowFixture();
+    windows.push(window);
+
+    windowEventBus.publish("data-changed", { ticketId: "ticket-1" });
+    broadcastDataChanged({ ticketId: "ticket-1" });
+    expect(window.webContents.send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS);
+
+    expect(window.webContents.send).toHaveBeenCalledExactlyOnceWith("volli:data-changed", {
+      entity: "tickets",
+      ticketId: "ticket-1",
+    });
+  });
+
+  it("keeps the desktop spellings' payloads, and sends window-only facts directly", () => {
+    const window = windowFixture();
+    windows.push(window);
+
+    broadcastSessionRetitled("s", "Named");
+    broadcastSessionsInterrupted("t", ["s"]);
+    broadcastSystemAppearance(true);
+
+    expect(window.webContents.send.mock.calls).toEqual([
+      ["volli:session-retitled", { sessionId: "s", title: "Named" }],
+      ["volli:sessions-interrupted", { ticketId: "t", sessionIds: ["s"] }],
+      ["volli:system-appearance-changed", true],
+    ]);
   });
 });

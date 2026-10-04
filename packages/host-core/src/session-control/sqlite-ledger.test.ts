@@ -1,0 +1,2336 @@
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { createSessionEngine } from "@volli/session-engine";
+import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
+import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
+import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { workingSessionCount } from "../session-concurrency";
+import { createSqliteSessionLedger } from "./sqlite-ledger";
+
+let ctx: TestDb;
+
+afterEach(() => {
+  ctx.cleanup();
+});
+
+function setup(clock?: () => number): {
+  ledger: SessionLedger;
+  control: ReturnType<typeof createSessionEngine>;
+  projectId: string;
+} {
+  ctx = openTestDb();
+  const project = testProject({ id: "project" });
+  insertProject(ctx.db, project);
+  let id = 0;
+  const ledger = createSqliteSessionLedger(ctx.db);
+  return {
+    ledger,
+    control: createSessionEngine({
+      ledger,
+      clock: clock === undefined ? { now: () => 100 + id } : { now: clock },
+      ids: { next: (kind) => `${kind}-${++id}` },
+    }),
+    projectId: project.id,
+  };
+}
+
+const provenance = {
+  source: { kind: "system" as const, id: "desktop", detail: null },
+  venue: { id: "local", kind: "local" as const },
+};
+
+function provenanceId(): number {
+  return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
+}
+
+describe("SqliteSessionLedger", () => {
+  it("stores and reads back the Role and the parent link as Session columns (VC-9)", async () => {
+    const { control, projectId } = setup();
+    const parent = await control.createSession({
+      commandId: "create-parent",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Parent",
+      provenance,
+    });
+    const helper = await control.createSession({
+      commandId: "create-helper",
+      projectId,
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: parent.session.id,
+      title: "Helper",
+      provenance,
+    });
+
+    const read = await control.getSession({ sessionId: helper.session.id });
+    expect(read?.session).toMatchObject({
+      role: "subagent",
+      parentSessionId: parent.session.id,
+    });
+    expect((await control.getSession({ sessionId: parent.session.id }))?.session).toMatchObject({
+      role: "project",
+      parentSessionId: null,
+    });
+    // The listing reads the same columns, so a rail never has to fold events
+    // to learn which of its rows is a helper and whose.
+    expect(
+      (await control.listSessions({ projectId, scope: "all" })).map(({ session }) => [
+        session.id,
+        session.parentSessionId,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        [parent.session.id, null],
+        [helper.session.id, parent.session.id],
+      ]),
+    );
+  });
+
+  it("round-trips a rebuildable projection checkpoint and rejects corrupt or ahead rows", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-checkpoint",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Checkpoint",
+      provenance,
+    });
+    const events = await control.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+
+    await control.saveProjectionCheckpoint(checkpoint);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toEqual(checkpoint);
+
+    ctx.db
+      .prepare(
+        "UPDATE session_projection_checkpoints SET checkpoint = json_set(checkpoint, '$.sessionId', 'corrupt') WHERE session_id = ?",
+      )
+      .run(created.session.id);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
+
+    await control.saveProjectionCheckpoint(checkpoint);
+    ctx.db
+      .prepare(
+        "UPDATE session_projection_checkpoints SET through_sequence = 999 WHERE session_id = ?",
+      )
+      .run(created.session.id);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
+  });
+
+  it("rolls a checkpoint back with its transaction", async () => {
+    const { control, ledger, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-checkpoint-rollback",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance,
+    });
+    const checkpoint = createSessionProjectionCheckpoint(
+      created.session,
+      await control.listEvents({ sessionId: created.session.id }),
+    );
+
+    await expect(
+      ledger.transaction((transaction) => {
+        transaction.saveProjectionCheckpoint(checkpoint);
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(
+      ctx.db
+        .prepare("SELECT 1 FROM session_projection_checkpoints WHERE session_id = ?")
+        .get(created.session.id),
+    ).toBeUndefined();
+  });
+
+  it("commits a complete create fact set once, replays it idempotently, and orders cloned reads", async () => {
+    const { control, projectId } = setup();
+    const first = await control.createSession({
+      commandId: "create-a",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance,
+    });
+    const replay = await control.createSession({
+      commandId: "create-a",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance,
+    });
+    const second = await control.createSession({
+      commandId: "create-b",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Two",
+      provenance,
+    });
+
+    expect(replay).toEqual(first);
+    expect(
+      (await control.listSessions({ projectId, scope: "all" })).map((item) => item.session.id),
+    ).toEqual([second.session.id, first.session.id]);
+    const page = await control.listEvents({
+      sessionId: first.session.id,
+      afterSequence: 1,
+      limit: 2,
+    });
+    expect(page.map((event) => event.sequence)).toEqual([2, 3]);
+    page[0]!.payload = { kind: "session.archived" };
+    expect((await control.listEvents({ sessionId: first.session.id }))[1]!.payload.kind).toBe(
+      "session.created",
+    );
+  });
+
+  it("reads Session start stamps across every project from the window's edge", async () => {
+    const { control, projectId } = setup();
+    const other = testProject({ id: "project-2", name: "Other", ticketPrefix: "OT" });
+    insertProject(ctx.db, other);
+    // The injected clock steps by one per id, so each create lands on its own
+    // stamp: 101, 102, 103 in creation order.
+    const first = await control.createSession({
+      commandId: "create-a",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance,
+    });
+    const elsewhere = await control.createSession({
+      commandId: "create-b",
+      projectId: other.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Two",
+      provenance,
+    });
+
+    const starts = await control.listSessionStarts({ sinceMs: 0 });
+    expect(starts).toEqual([first.session.createdAt, elsewhere.session.createdAt]);
+    await expect(
+      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt }),
+    ).resolves.toEqual([elsewhere.session.createdAt]);
+    await expect(
+      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt + 1 }),
+    ).resolves.toEqual([]);
+  });
+
+  it("finishes transactions synchronously and rolls a failed transaction back", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance,
+    });
+    const order: string[] = [];
+    const first = ledger.transaction((tx) => {
+      expect(tx.getSession(created.session.id)?.id).toBe(created.session.id);
+      order.push("first");
+    });
+    const second = ledger.transaction((tx) => {
+      expect(tx.getSession(created.session.id)?.id).toBe(created.session.id);
+      order.push("second");
+    });
+    expect(order).toEqual(["first", "second"]);
+    await Promise.all([first, second]);
+
+    await expect(
+      ledger.transaction((tx) => {
+        tx.appendEvent({
+          id: "bad-event",
+          sessionId: created.session.id,
+          sequence: 99,
+          occurredAt: 1,
+          recordedAt: 1,
+          provenance,
+          payload: { kind: "session.archived" },
+        });
+      }),
+    ).rejects.toThrow("sequence must be monotonic");
+    expect(await control.listEvents({ sessionId: created.session.id })).toHaveLength(3);
+  });
+
+  it("round-trips the immutable Runtime Brief input through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-brief",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Brief",
+      provenance,
+    });
+
+    await expect(
+      control.getOrRecordSessionInput({
+        sessionId: created.session.id,
+        input: { kind: "runtime-brief", text: "original bytes" },
+        provenance,
+      }),
+    ).resolves.toEqual({ kind: "runtime-brief", text: "original bytes" });
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        payload: {
+          kind: "session.input.recorded",
+          input: { kind: "runtime-brief", text: "original bytes" },
+        },
+      }),
+    ]);
+  });
+
+  it("round-trips the prompt-resources input through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-resources",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Skills",
+      provenance,
+    });
+    const input = {
+      kind: "prompt-resources" as const,
+      resources: [{ name: "svg-logo-designer", text: "# Logos\n\nDo the thing." }],
+    };
+
+    await expect(
+      control.getOrRecordSessionInput({ sessionId: created.session.id, input, provenance }),
+    ).resolves.toEqual(input);
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([expect.objectContaining({ payload: { kind: "session.input.recorded", input } })]);
+  });
+
+  it("round-trips the immutable Agent Tool Surface without credential data", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-tool-surface",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Tools",
+      provenance,
+    });
+    const input = {
+      kind: "tool-surface" as const,
+      tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"] as const,
+    };
+
+    await expect(
+      control.getOrRecordSessionInput({ sessionId: created.session.id, input, provenance }),
+    ).resolves.toEqual(input);
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([expect.objectContaining({ payload: { kind: "session.input.recorded", input } })]);
+  });
+
+  it("round-trips durable model selection through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-model-selection",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Model selection",
+      provenance,
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    await control.submit({
+      commandId: "select-model",
+      sessionId: created.session.id,
+      intent: { kind: "model.select", selection },
+      provenance,
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection?.modelSelection).toEqual(selection);
+    expect(projection?.commands.map((command) => command.intent.kind)).toEqual([
+      "session.create",
+      "model.select",
+    ]);
+    expect(
+      projection?.receipts.some(
+        (receipt) => receipt.status === "completed" && receipt.result.kind === "model.selected",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an unsupported persisted model reasoning level", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-invalid-model-selection",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Invalid model selection",
+      provenance,
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    await control.submit({
+      commandId: "select-invalid-model",
+      sessionId: created.session.id,
+      intent: { kind: "model.select", selection },
+      provenance,
+    });
+    const selected = (await control.listEvents({ sessionId: created.session.id })).find(
+      (event) => event.payload.kind === "model.selected",
+    );
+    expect(selected).toBeDefined();
+    ctx.db.prepare("UPDATE session_events SET payload = ? WHERE id = ?").run(
+      JSON.stringify({
+        kind: "model.selected",
+        selection: { ...selection, reasoningLevel: "extreme" },
+      }),
+      selected!.id,
+    );
+
+    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+      "payload.selection.reasoningLevel has an unsupported value",
+    );
+  });
+
+  it("round-trips an explicit executor retry command and receipt", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retry",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Retry",
+      provenance,
+    });
+    await ledger.transaction((transaction) => {
+      const command = {
+        id: "retry-command",
+        sessionId: created.session.id,
+        createdAt: 200,
+        intent: { kind: "executor.retry" as const, attachmentId: "attachment-1" },
+        route: { adapterId: "pi", attachmentId: "attachment-1" },
+      };
+      transaction.saveCommand(command);
+      transaction.appendEvent({
+        id: "retry-command-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 200,
+        provenance,
+        commandId: "retry-command",
+        payload: {
+          kind: "command.recorded",
+          command,
+        },
+      });
+      const receipt = {
+        id: "retry-receipt",
+        commandId: "retry-command",
+        status: "accepted" as const,
+        acceptedAt: 201,
+        recordedAt: 201,
+        sequence: 5,
+        result: { kind: "executor.retried" as const, sessionId: created.session.id },
+      };
+      transaction.appendReceipt(receipt);
+      transaction.appendEvent({
+        id: "retry-receipt-event",
+        sessionId: created.session.id,
+        sequence: 5,
+        occurredAt: 201,
+        recordedAt: 201,
+        provenance,
+        commandId: "retry-command",
+        payload: {
+          kind: "command.receipt.recorded",
+          receipt,
+        },
+      });
+    });
+
+    expect((await control.listEvents({ sessionId: created.session.id })).slice(-2)).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          command: expect.objectContaining({
+            intent: { kind: "executor.retry", attachmentId: "attachment-1" },
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          receipt: expect.objectContaining({
+            result: { kind: "executor.retried", sessionId: created.session.id },
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("replays omitted and null event envelope ids through a durable SQLite read", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-null-envelope",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Null envelope",
+      provenance,
+    });
+    const observation = {
+      id: "null-envelope-observation",
+      sessionId: created.session.id,
+      occurredAt: 200,
+      provenance,
+      kind: "adapter.observed" as const,
+      name: "session-wide",
+      native: null,
+    };
+
+    const recorded = await control.observe(observation as SessionObservation);
+    const replayed = await control.observe({
+      ...observation,
+      attachmentId: null,
+      commandId: null,
+    });
+
+    expect(replayed).toMatchObject({
+      id: recorded.id,
+      sessionId: recorded.sessionId,
+      sequence: recorded.sequence,
+      payload: recorded.payload,
+    });
+    expect(replayed.attachmentId ?? null).toBeNull();
+    expect(replayed.commandId ?? null).toBeNull();
+  });
+
+  it("round-trips an interrupted turn as its own durable fact", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-interrupted-turn",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Interrupted turn",
+      provenance,
+    });
+
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "turn-interrupted-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 201,
+        provenance,
+        payload: {
+          kind: "turn.interrupted",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+        },
+      });
+    });
+
+    expect((await control.listEvents({ sessionId: created.session.id })).at(-1)?.payload).toEqual({
+      kind: "turn.interrupted",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+    });
+  });
+
+  it("opens a recorded authority denial as inert evidence without rewriting its bytes", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-legacy-denial",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Legacy history",
+      provenance,
+    });
+    const raw = JSON.stringify({
+      kind: "authority.denied",
+      attachmentId: "attachment-1",
+      turnId: null,
+      tool: "bash",
+      cause: "command.destructive-removal",
+      reason: "Recorded refusal",
+    });
+    ctx.db
+      .prepare(`INSERT INTO session_events
+      (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+      VALUES ('legacy-denial', ?, 4, 200, 201, ?, ?)`)
+      .run(created.session.id, provenanceId(), raw);
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).at(-1)?.payload,
+    ).toMatchObject({
+      kind: "adapter.observed",
+      name: "Legacy authority.denied",
+      native: null,
+    });
+    expect(
+      (await control.getSession({ sessionId: created.session.id }))?.interactions.active,
+    ).toEqual([]);
+    expect(
+      ctx.db.prepare("SELECT payload FROM session_events WHERE id = 'legacy-denial'").get(),
+    ).toEqual({ payload: raw });
+  });
+
+  it("does not make an unrelated append transaction fail on pre-existing receipt corruption", async () => {
+    const { control, projectId } = setup();
+    const first = await control.createSession({
+      commandId: "create-corrupt-prior",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Prior",
+      provenance,
+    });
+    ctx.db
+      .prepare("UPDATE session_command_receipts SET receipt_event_id = NULL WHERE id = ?")
+      .run(first.receipt.id);
+
+    await expect(
+      control.createSession({
+        commandId: "create-unrelated",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Unrelated",
+        provenance,
+      }),
+    ).resolves.toMatchObject({ session: { title: "Unrelated" } });
+  });
+
+  it("reads only the latest explicit signal for each ticket without projecting all Session history", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const first = await control.createSession({
+      commandId: "create-signal-first",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "First",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-first",
+      sessionId: first.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "First result" },
+      provenance,
+    });
+    const second = await control.createSession({
+      commandId: "create-signal-second",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Second",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-second",
+      sessionId: second.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Latest result" },
+      provenance,
+    });
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: second.session.id,
+        signal: "blocked",
+        reason: "Latest result",
+        createdAt: 114,
+      },
+    ]);
+  });
+
+  it("keeps the last accepted signal when a clock regression moves occurred_at backwards (VC-512)", async () => {
+    let now = 200;
+    const { control, projectId } = setup(() => now);
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const beforeRegression = await control.createSession({
+      commandId: "create-signal-before-regression",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Before the clock moved",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-before-regression",
+      sessionId: beforeRegression.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Clock said later" },
+      provenance,
+    });
+    // The clock moves backwards — NTP correction, a VM restore, a person — so
+    // the signal ACCEPTED after the first one carries an EARLIER occurred_at.
+    now = 100;
+    const afterRegression = await control.createSession({
+      commandId: "create-signal-after-regression",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "After the clock moved",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-after-regression",
+      sessionId: afterRegression.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Accepted later" },
+      provenance,
+    });
+
+    // The signal accepted last is the latest state this host knows, whatever
+    // its occurred_at claims; an occurred_at ordering would name the older one.
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: afterRegression.session.id,
+        signal: "done",
+        reason: "Accepted later",
+        createdAt: 100,
+      },
+    ]);
+  });
+
+  it("breaks equal-occurred_at signal ties by acceptance order, not Session id (VC-512)", async () => {
+    const { control, projectId } = setup(() => 150);
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const earlierAccepted = await control.createSession({
+      commandId: "create-signal-tie-earlier",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Accepted first",
+      requestedSessionId: "session-z",
+      provenance,
+    });
+    const laterAccepted = await control.createSession({
+      commandId: "create-signal-tie-later",
+      projectId,
+      ticketId: "ticket-a",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Accepted second",
+      requestedSessionId: "session-a",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-tie-earlier",
+      sessionId: earlierAccepted.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Accepted first" },
+      provenance,
+    });
+    // Accepted second, and its Session id sorts LOWER under SQLite BINARY — the
+    // old tie-break would name the first signal "latest" from this alone.
+    await control.submit({
+      commandId: "signal-tie-later",
+      sessionId: laterAccepted.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Accepted second" },
+      provenance,
+    });
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: laterAccepted.session.id,
+        signal: "done",
+        reason: "Accepted second",
+        createdAt: 150,
+      },
+    ]);
+  });
+
+  it("ignores a malformed persisted signal instead of failing the ticket projection", async () => {
+    const { control, projectId } = setup();
+    insertTicket(
+      ctx.db,
+      testTicket(projectId, { id: "ticket-invalid-signal", usesWorktree: false }),
+    );
+    const created = await control.createSession({
+      commandId: "create-invalid-signal",
+      projectId,
+      ticketId: "ticket-invalid-signal",
+      role: "ticket",
+      parentSessionId: null,
+      title: "Invalid signal",
+      provenance,
+    });
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+         VALUES ('invalid-signal', ?, 4, 104, 104, ?, NULL, NULL, ?)`,
+      )
+      .run(
+        created.session.id,
+        provenanceId(),
+        JSON.stringify({ kind: "session.signaled", signal: "unexpected", reason: "Corrupt row" }),
+      );
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([]);
+  });
+
+  it("persists attachment evidence atomically and refuses a corrupt JSON row on read", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+      provenance,
+    });
+    await control.observe({
+      id: "opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance,
+      attachment: {
+        id: "attachment",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } },
+        authority: null,
+      },
+    });
+    expect(
+      ctx.db.prepare("SELECT created_sequence, observed_kind FROM session_attachments").get(),
+    ).toEqual({ created_sequence: 5, observed_kind: "opened" });
+
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db
+      .prepare(
+        `UPDATE session_provenances
+            SET provenance = '{'
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
+    ctx.db.pragma("ignore_check_constraints = OFF");
+    await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
+      "contains invalid JSON",
+    );
+  });
+
+  it("fails loudly instead of dropping events whose provenance row is missing", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-missing-provenance",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Missing provenance",
+      provenance,
+    });
+    ctx.db.pragma("foreign_keys = OFF");
+    ctx.db
+      .prepare(
+        `DELETE FROM session_provenances
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
+
+    await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
+      /missing.*provenance/i,
+    );
+  });
+
+  it("round-trips interaction facts through strict SQLite decoding", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-structured",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Structured",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-structured",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-structured",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-structured",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-1", detail: null },
+        authority: null,
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-structured",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "permission-1",
+        attachmentId: "attachment-structured",
+        kind: "permission",
+        title: "Allow write?",
+        detail: null,
+        // The shape every real adapter writes: `description` is `string | null`
+        // and OpenCode's own permission options carry the null. Covering this
+        // only with a string is what let a decoder that rejected null survive —
+        // and rejecting it killed the event, so no permission was ever durable.
+        options: [
+          { id: "once", label: "Allow once", description: null },
+          { id: "reject", label: "Reject", description: "Refuse this request" },
+        ],
+        multiple: false,
+        native: { id: "native-permission-1", detail: null },
+      },
+    });
+    const resolution = await control.submit({
+      commandId: "resolve-structured",
+      sessionId: created.session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: "attachment-structured",
+        interactionId: "permission-1",
+        resolution: { optionIds: ["once"], response: null },
+        reference: {
+          id: "sha256:resolution",
+          digest: "sha256:resolution",
+          mediaType: "application/vnd.volli.ui-message+json;version=1",
+        },
+      },
+      provenance,
+    });
+    await control.observe({
+      id: "interaction-resolved-structured",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 203,
+      provenance: adapterProvenance,
+      commandId: resolution.command.id,
+      interactionId: "permission-1",
+      resolution: { optionIds: ["once"], response: null },
+    });
+    await control.observe({
+      id: "resolution-receipt-structured",
+      kind: "command.receipt",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 204,
+      provenance: adapterProvenance,
+      receipt: {
+        id: "receipt-resolution-structured",
+        commandId: resolution.command.id,
+        status: "accepted",
+        acceptedAt: 204,
+        result: { kind: "interaction.resolved", sessionId: created.session.id },
+      },
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection).toMatchObject({
+      interactions: { active: [], resolved: [{ interaction: { id: "permission-1" } }] },
+    });
+    // Both option shapes survive the round trip to SQLite and back.
+    expect(projection?.interactions.resolved[0]?.interaction.options).toEqual([
+      { id: "once", label: "Allow once", description: null },
+      { id: "reject", label: "Reject", description: "Refuse this request" },
+    ]);
+    expect(projection?.commands.at(-1)).toMatchObject({
+      intent: { kind: "interaction.resolve", interactionId: "permission-1" },
+    });
+    expect(projection?.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          result: expect.objectContaining({ kind: "interaction.resolved" }),
+        }),
+      ]),
+    );
+    // A record written before interactions carried per-question detail decodes
+    // back without the keys — not with an empty array, and not with one
+    // synthesised from the flat fields. `readInteractionPrompts` is what turns
+    // absence into a single prompt, and only at the read seam.
+    const resolved = projection?.interactions.resolved[0];
+    expect(resolved && "prompts" in resolved.interaction).toBe(false);
+    expect(resolved && "answers" in resolved.resolution).toBe(false);
+    expect(resolved?.resolution).toEqual({ optionIds: ["once"], response: null });
+  });
+
+  it("round-trips an interaction's prompts and a resolution's answers through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-prompts",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Prompts",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-prompts",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-prompts",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 300,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-prompts",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-2", detail: null },
+        authority: null,
+      },
+    });
+    const prompts = [
+      {
+        id: "prompt:0",
+        label: "Which files?",
+        detail: "Pick every file the change touches",
+        options: [
+          { id: "prompt:0:src", label: "src", description: null },
+          { id: "prompt:0:docs", label: "docs", description: "Documentation only" },
+        ],
+        multiple: true,
+        custom: false,
+      },
+      {
+        id: "prompt:1",
+        label: "Anything else?",
+        detail: null,
+        options: [{ id: "prompt:1:no", label: "No", description: null }],
+        multiple: false,
+        custom: true,
+      },
+    ];
+    const interaction = {
+      id: "question-1",
+      attachmentId: "attachment-prompts",
+      kind: "question" as const,
+      title: "Two questions",
+      detail: null,
+      // The flat set stays the union of every prompt's options, because that is
+      // what a reader written before prompts falls back to.
+      options: [...prompts[0]!.options, ...prompts[1]!.options],
+      multiple: true,
+      prompts,
+      native: { id: "native-question-1", detail: null },
+    };
+    await control.observe({
+      id: "interaction-opened-prompts",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-prompts",
+      occurredAt: 301,
+      provenance: adapterProvenance,
+      interaction,
+    });
+    const answered = {
+      optionIds: ["prompt:0:src", "prompt:1:no"],
+      response: null,
+      answers: [
+        { promptId: "prompt:0", optionIds: ["prompt:0:src"], response: null },
+        { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "nothing further" },
+      ],
+    };
+    const resolution = await control.submit({
+      commandId: "resolve-prompts",
+      sessionId: created.session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: "attachment-prompts",
+        interactionId: "question-1",
+        resolution: answered,
+        reference: {
+          id: "sha256:answers",
+          digest: "sha256:answers",
+          mediaType: "application/vnd.volli.ui-message+json;version=1",
+        },
+      },
+      provenance,
+    });
+    await control.observe({
+      id: "interaction-resolved-prompts",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-prompts",
+      occurredAt: 302,
+      provenance: adapterProvenance,
+      commandId: resolution.command.id,
+      interactionId: "question-1",
+      resolution: answered,
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    const resolved = projection?.interactions.resolved[0];
+    // Encode then decode returns the identical record, both fields intact.
+    expect(resolved?.interaction).toEqual(interaction);
+    expect(resolved?.resolution).toEqual(answered);
+    // The command intent carries the same answers to the adapter on replay.
+    expect(projection?.commands.at(-1)).toMatchObject({
+      intent: { kind: "interaction.resolve", resolution: answered },
+    });
+  });
+
+  it("rejects an interaction whose prompts or answers are structurally wrong", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-invalid",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Invalid",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-invalid",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-invalid",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 400,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-invalid",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-3", detail: null },
+        authority: null,
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-invalid",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-invalid",
+      occurredAt: 401,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "question-2",
+        attachmentId: "attachment-invalid",
+        kind: "question",
+        title: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        prompts: [
+          {
+            id: "prompt:0",
+            label: "One question",
+            detail: null,
+            options: [{ id: "yes", label: "Yes", description: null }],
+            multiple: false,
+            custom: false,
+          },
+        ],
+        native: { id: "native-question-2", detail: null },
+      },
+    });
+    await control.observe({
+      id: "interaction-resolved-invalid",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-invalid",
+      occurredAt: 402,
+      provenance: adapterProvenance,
+      interactionId: "question-2",
+      resolution: {
+        optionIds: ["yes"],
+        response: null,
+        answers: [{ promptId: "prompt:0", optionIds: ["yes"], response: null }],
+      },
+    });
+
+    // Decode is a trust boundary: this data came off disk, so a stored record
+    // whose optional structure is not the declared shape fails loudly rather
+    // than projecting a half-read interaction.
+    ctx.db.pragma("ignore_check_constraints = ON");
+    const rewrite = (id: string, payload: unknown) =>
+      ctx.db
+        .prepare("UPDATE session_events SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(payload), id);
+    const read = (id: string) =>
+      JSON.parse(
+        (
+          ctx.db.prepare("SELECT payload FROM session_events WHERE id = ?").get(id) as {
+            payload: string;
+          }
+        ).payload,
+      ) as { interaction?: { prompts: unknown }; resolution?: { answers: unknown } };
+    const project = () => control.getSession({ sessionId: created.session.id });
+
+    const opened = read("interaction-opened-invalid");
+    opened.interaction!.prompts = "prompt:0";
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts must be an array");
+
+    opened.interaction!.prompts = [{ id: "prompt:0", label: "One question", detail: null }];
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts[0].options must be an array");
+
+    opened.interaction!.prompts = [
+      {
+        id: "prompt:0",
+        label: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        custom: "no",
+      },
+    ];
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts[0].custom must be a boolean");
+
+    opened.interaction!.prompts = [
+      {
+        id: "prompt:0",
+        label: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        custom: false,
+      },
+    ];
+    rewrite("interaction-opened-invalid", opened);
+
+    const answered = read("interaction-resolved-invalid");
+    answered.resolution!.answers = { "prompt:0": ["yes"] };
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers must be an array");
+
+    answered.resolution!.answers = [{ promptId: "prompt:0", optionIds: "yes", response: null }];
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers[0].optionIds must be an array");
+
+    answered.resolution!.answers = [{ promptId: 0, optionIds: ["yes"], response: null }];
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers[0].promptId must be a string");
+    ctx.db.pragma("ignore_check_constraints = OFF");
+  });
+
+  it("round-trips a cancelled interaction without a resolution and rejects an unknown reason", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-cancelled",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Cancelled",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-cancelled",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-cancelled",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 500,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-cancelled",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-4", detail: null },
+        authority: null,
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-cancelled",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-cancelled",
+      occurredAt: 501,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "question-3",
+        attachmentId: "attachment-cancelled",
+        kind: "question",
+        title: "Which files?",
+        detail: null,
+        options: [{ id: "all", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-3", detail: null },
+      },
+    });
+    // The user walked away, so the fact carries Volli's own provenance rather
+    // than the adapter's: no harness reported this.
+    await control.observe({
+      id: "interaction-cancelled",
+      kind: "interaction.cancelled",
+      sessionId: created.session.id,
+      attachmentId: "attachment-cancelled",
+      occurredAt: 502,
+      provenance,
+      interactionId: "question-3",
+      reason: "abandoned",
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection?.interactions).toEqual({ active: [], resolved: [] });
+    const events = await control.listEvents({ sessionId: created.session.id });
+    expect(events.find(({ id }) => id === "interaction-cancelled")?.payload).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId: "attachment-cancelled",
+      interactionId: "question-3",
+      reason: "abandoned",
+    });
+
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db.prepare("UPDATE session_events SET payload = ? WHERE id = ?").run(
+      JSON.stringify({
+        kind: "interaction.cancelled",
+        attachmentId: "attachment-cancelled",
+        interactionId: "question-3",
+        reason: "resolved",
+      }),
+      "interaction-cancelled",
+    );
+    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+      "reason has an unsupported value",
+    );
+    ctx.db.pragma("ignore_check_constraints = OFF");
+  });
+
+  it("drops a row whose payload kind this build does not recognise, keeping the rest of the Session readable", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-kind",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Retired kind",
+      provenance,
+    });
+    // "capabilities.retired" stands in for a Session event kind this build has
+    // since dropped support for, like the real capabilities.updated retirement
+    // this groundwork exists for. Written with raw SQL because appendEvent
+    // rejects it, and existing databases already carry rows like it.
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+         VALUES ('retired-kind-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
+      )
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "after-retired-kind-event",
+        sessionId: created.session.id,
+        sequence: 5,
+        occurredAt: 500,
+        recordedAt: 500,
+        provenance,
+        payload: { kind: "session.archived" },
+      });
+    });
+
+    const events = await control.listEvents({ sessionId: created.session.id });
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 5]);
+    expect(events.map((event) => event.payload.kind)).toEqual([
+      "command.recorded",
+      "session.created",
+      "command.receipt.recorded",
+      "session.archived",
+    ]);
+  });
+
+  it("fills a page past retired rows instead of returning it short", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-page",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Retired page",
+      provenance,
+    });
+    // A whole page of retired kinds. The limit counts events this build can
+    // return, so asking for one after sequence 3 must reach sequence 6 rather
+    // than come back empty — a caller advances its cursor from the last event
+    // it was handed, so an empty page would read as the end of the Session.
+    for (const sequence of [4, 5]) {
+      ctx.db
+        .prepare(
+          `INSERT INTO session_events
+             (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+        )
+        .run(
+          `retired-page-${sequence}`,
+          created.session.id,
+          sequence,
+          sequence * 100,
+          sequence * 100,
+          provenanceId(),
+          JSON.stringify({ kind: "capabilities.retired" }),
+        );
+    }
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "after-retired-page",
+        sessionId: created.session.id,
+        sequence: 6,
+        occurredAt: 600,
+        recordedAt: 600,
+        provenance,
+        payload: { kind: "session.archived" },
+      });
+    });
+
+    const page = await control.listEvents({
+      sessionId: created.session.id,
+      afterSequence: 3,
+      limit: 1,
+    });
+    expect(page.map((event) => event.sequence)).toEqual([6]);
+  });
+
+  it("returns null from getEvent for a row whose payload kind this build does not recognise", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-kind-get-event",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Retired kind get event",
+      provenance,
+    });
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+         VALUES ('retired-kind-get-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
+      )
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
+
+    const event = await ledger.transaction((transaction) =>
+      transaction.getEvent("retired-kind-get-event"),
+    );
+    expect(event).toBeNull();
+  });
+
+  it("rejects appendEvent for an unrecognised payload kind, keeping the write path strict", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-strict-write",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Strict write",
+      provenance,
+    });
+
+    await expect(
+      ledger.transaction((transaction) => {
+        transaction.appendEvent({
+          id: "unknown-kind-event",
+          sessionId: created.session.id,
+          sequence: 4,
+          occurredAt: 400,
+          recordedAt: 400,
+          provenance,
+          payload: { kind: "capabilities.retired" } as unknown as SessionEvent["payload"],
+        });
+      }),
+    ).rejects.toThrow("is not a known Session event payload");
+  });
+});
+
+function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+describe("the Session usage projection", () => {
+  async function meteredSession(
+    control: ReturnType<typeof createSessionEngine>,
+    options: { projectId: string; ticketId: string | null; commandId: string },
+  ): Promise<string> {
+    const created = await control.createSession({
+      commandId: options.commandId,
+      projectId: options.projectId,
+      ticketId: options.ticketId,
+      role: roleImpliedByTicket(options.ticketId),
+      parentSessionId: null,
+      title: options.commandId,
+      provenance,
+    });
+    return created.session.id;
+  }
+
+  async function record(
+    control: ReturnType<typeof createSessionEngine>,
+    sessionId: string,
+    id: string,
+    occurredAt: number,
+    usage: SessionUsage,
+  ): Promise<void> {
+    await control.observe({
+      id,
+      kind: "usage.recorded",
+      sessionId,
+      occurredAt,
+      provenance,
+      attachmentId: null,
+      turnId: null,
+      usage,
+    });
+  }
+
+  it("indexes a usage fact as it is appended, without re-reading the event log", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-metered",
+    });
+
+    await record(control, sessionId, "usage-1", 1_000, metered({ costUsd: 0.25 }));
+
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                  cost_usd, cost_basis
+             FROM session_usage`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_id: sessionId,
+        project_id: projectId,
+        ticket_id: "ticket-a",
+        occurred_at: 1_000,
+        cause: "assistant",
+        provider_id: "anthropic",
+        model_id: "claude-opus-4-1",
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_tokens: 400,
+        cache_write_tokens: 0,
+        cost_usd: 0.25,
+        cost_basis: "catalog-estimate",
+      },
+    ]);
+  });
+
+  it("keeps an unmeasured token count null rather than storing it as zero", async () => {
+    const { control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-unmeasured",
+    });
+
+    await record(
+      control,
+      sessionId,
+      "usage-null",
+      1_000,
+      metered({
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      }),
+    );
+
+    expect(
+      ctx.db.prepare("SELECT cache_read_tokens, cost_usd, cost_basis FROM session_usage").get(),
+    ).toEqual({ cache_read_tokens: null, cost_usd: null, cost_basis: "unavailable" });
+  });
+
+  it("reads a Ticket's whole bill across its Sessions, in one indexed pass", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const first = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-first",
+    });
+    const second = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-second",
+    });
+    const elsewhere = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-elsewhere",
+    });
+
+    await record(control, first, "u1", 1_000, metered({ costUsd: 1 }));
+    await record(control, second, "u2", 2_000, metered({ costUsd: 2 }));
+    await record(control, elsewhere, "u3", 3_000, metered({ costUsd: 4 }));
+
+    const report = await control.reportUsage({
+      scope: { kind: "ticket", ticketId: "ticket-a" },
+      groupBy: "session",
+    });
+    expect(report.total.knownCostUsd).toBe(3);
+    expect(report.meteredSessionCount).toBe(2);
+    expect(report.groups.map((group) => group.key)).toEqual([second, first]);
+  });
+
+  it("bounds a report by when the spending happened", async () => {
+    const { control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-windowed",
+    });
+
+    await record(control, sessionId, "old", 1_000, metered({ costUsd: 1 }));
+    await record(control, sessionId, "new", 5_000, metered({ costUsd: 2 }));
+
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, since: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 2, requestCount: 1 } });
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, until: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 1, requestCount: 1 } });
+  });
+
+  // `sessions.ticket_id` is ON DELETE SET NULL. Reading attribution live would
+  // move a deleted Ticket's whole bill into unticketed Project spend, which is
+  // a quieter lie than showing an id that no longer resolves.
+  it("keeps spend attributed to the Ticket it was spent on after that Ticket is deleted", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-doomed", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-doomed",
+      commandId: "create-doomed",
+    });
+    await record(control, sessionId, "u-doomed", 1_000, metered({ costUsd: 3 }));
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("ticket-doomed");
+
+    const report = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+    expect(report.groups.map((group) => group.key)).toEqual(["ticket-doomed"]);
+  });
+
+  it("can be rebuilt from the facts alone, byte for byte", async () => {
+    const { ledger, control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-rebuildable",
+    });
+    await record(control, sessionId, "r1", 1_000, metered({ costUsd: 1 }));
+    await record(control, sessionId, "r2", 2_000, metered({ costUsd: 2, modelId: "gpt-5" }));
+
+    const live = await control.reportUsage({ scope: { kind: "all" }, groupBy: "model" });
+    ctx.db.exec("DELETE FROM session_usage");
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, groupBy: "model" }),
+    ).resolves.toEqual(live);
+  });
+
+  /**
+   * The case that decides whether "rebuildable" is true.
+   *
+   * Deleting the Ticket nulls `sessions.ticket_id`, so a rebuild that read
+   * attribution from the Session row would move this bill into unticketed
+   * spend — the projection would answer one thing before a rebuild and another
+   * after, with no fact having changed. Attribution is on the event, so the
+   * two answers are the same answer.
+   */
+  it("rebuilds a deleted Ticket's spend back onto that Ticket, not into unticketed", async () => {
+    const { ledger, control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-gone", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-gone",
+      commandId: "create-rebuild-after-delete",
+    });
+    await record(control, sessionId, "rd1", 1_000, metered({ costUsd: 4 }));
+    const before = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("ticket-gone");
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+
+    const after = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+    expect(after).toEqual(before);
+    expect(after.groups.map((group) => group.key)).toEqual(["ticket-gone"]);
+    // And the Ticket-scoped read still finds it, which is what an orchestrator
+    // asking `volli cost --ticket` after a cleanup actually does.
+    await expect(
+      control.reportUsage({ scope: { kind: "ticket", ticketId: "ticket-gone" } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 4, requestCount: 1 } });
+  });
+
+  it("routes reads through the per-handle prepared-statement cache (VC-355)", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project" }));
+    const prepare = vi.spyOn(ctx.db, "prepare");
+    const ledger = createSqliteSessionLedger(ctx.db);
+    // Each distinct SQL text prepares once; repeats are cache hits.
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.countSessions({ scope: "project", projectId: "project" }));
+    const preparesAfterWarmup = prepare.mock.calls.length;
+    expect(preparesAfterWarmup).toBeGreaterThan(0);
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.countSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    expect(prepare.mock.calls.length).toBe(preparesAfterWarmup);
+  });
+
+  // The test above proves the cache works for two read statements. This one is
+  // the Ticket's actual requirement — that this FILE no longer prepares outside
+  // the cache — which two reads cannot show: the direct `.prepare(...)` calls
+  // that VC-355 removed were on the receipt-link, receipt-pairing, and
+  // foreign-key paths, all of which run only while WRITING an event.
+  it("prepares no statement twice across a whole write/read cycle (VC-355)", async () => {
+    const { ledger, control, projectId } = setup();
+    const exercise = async (suffix: string): Promise<void> => {
+      const created = await control.createSession({
+        commandId: `create-prepared-${suffix}`,
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: `Prepared ${suffix}`,
+        provenance,
+      });
+      // A command with a receipt: this is what exercises the receipt link and
+      // the receipt/event pairing assertions on the write path.
+      await control.submit({
+        commandId: `retitle-prepared-${suffix}`,
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: `Renamed ${suffix}` },
+        provenance,
+      });
+      await ledger.transaction((transaction) => {
+        transaction.listEvents({ sessionId: created.session.id });
+        transaction.listProjectionEvents({ sessionId: created.session.id });
+        transaction.latestEventSequence(created.session.id);
+        transaction.getProjectionCheckpoint(created.session.id);
+        transaction.listSessions({ scope: "project", projectId });
+        transaction.countSessions({ scope: "project", projectId });
+      });
+      await control.getSession({ sessionId: created.session.id });
+      await control.listSessions({ scope: "project", projectId });
+    };
+
+    await exercise("warmup");
+    const prepare = vi.spyOn(ctx.db, "prepare");
+    await exercise("measured");
+    // Every statement this cycle needs was already prepared by the warm-up, so
+    // a single call here means some site still calls `db.prepare` directly.
+    expect(prepare.mock.calls.map(([sql]) => sql)).toEqual([]);
+  });
+
+  describe("listProjectionEvents (VC-355)", () => {
+    it("returns the same facts in the same order without the provenance field", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-events",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection events",
+        provenance,
+      });
+      await control.submit({
+        commandId: "retitle-projection-events",
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: "Renamed" },
+        provenance,
+      });
+
+      const { audit, fold } = await ledger.transaction((transaction) => ({
+        audit: transaction.listEvents({ sessionId: created.session.id }),
+        fold: transaction.listProjectionEvents({ sessionId: created.session.id }),
+      }));
+
+      expect(fold.length).toBeGreaterThan(1);
+      expect(fold).toEqual(audit.map(({ provenance: _provenance, ...event }) => event));
+      for (const event of fold) expect("provenance" in event).toBe(false);
+      // The point of the split: the audit field is never fetched, so the same
+      // rows fold to the same state without decoding one provenance per event.
+      expect(createSessionProjectionCheckpoint(created.session, fold).projection).toEqual(
+        createSessionProjectionCheckpoint(created.session, audit).projection,
+      );
+    });
+
+    it("keeps the pagination contract when a page is entirely retired kinds", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-retired",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection retired",
+        provenance,
+      });
+      for (const sequence of [4, 5]) {
+        ctx.db
+          .prepare(
+            `INSERT INTO session_events
+               (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+          )
+          .run(
+            `projection-retired-${sequence}`,
+            created.session.id,
+            sequence,
+            sequence * 100,
+            sequence * 100,
+            provenanceId(),
+            JSON.stringify({ kind: "capabilities.retired" }),
+          );
+      }
+      await ledger.transaction((transaction) => {
+        transaction.appendEvent({
+          id: "after-projection-retired",
+          sessionId: created.session.id,
+          sequence: 6,
+          occurredAt: 600,
+          recordedAt: 600,
+          provenance,
+          payload: { kind: "session.archived" },
+        });
+      });
+
+      const page = await ledger.transaction((transaction) =>
+        transaction.listProjectionEvents({
+          sessionId: created.session.id,
+          afterSequence: 3,
+          limit: 1,
+        }),
+      );
+      expect(page.map((event) => event.sequence)).toEqual([6]);
+    });
+
+    it("reads facts whose interned provenance row would fail the audit read", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-unjoined",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection unjoined",
+        provenance,
+      });
+      // Point one event at a provenance id that does not exist. Only a read
+      // that JOINS provenance can notice, so this is the sharpest available
+      // proof that the fold read does not perform that join.
+      ctx.db.pragma("foreign_keys = OFF");
+      ctx.db
+        .prepare("UPDATE session_events SET provenance_id = 999999 WHERE session_id = ? ")
+        .run(created.session.id);
+      ctx.db.pragma("foreign_keys = ON");
+
+      await expect(
+        ledger.transaction((transaction) =>
+          transaction.listEvents({ sessionId: created.session.id }),
+        ),
+      ).rejects.toThrow("missing its referenced provenance row");
+      const fold = await ledger.transaction((transaction) =>
+        transaction.listProjectionEvents({ sessionId: created.session.id }),
+      );
+      expect(fold.map((event) => event.payload.kind)).toEqual([
+        "command.recorded",
+        "session.created",
+        "command.receipt.recorded",
+      ]);
+    });
+  });
+});
+
+/**
+ * The concurrency budget's narrowing (VC-403).
+ *
+ * The budget asks one question — who is working — and used to answer it by
+ * folding every Session of every project. These hold the ledger's replacement:
+ * an indexed read of the Sessions holding an OPEN attachment, which is a
+ * superset of the working ones and never a subset, so the count that folds
+ * only these is the same count.
+ */
+describe("listAttachedSessions (VC-403)", () => {
+  /** Opens an attachment on a fresh Session and hands back both ids. */
+  async function sessionWithAttachment(
+    control: ReturnType<typeof createSessionEngine>,
+    projectId: string,
+    name: string,
+    adapterId: "terminal" | "opencode",
+  ): Promise<{ sessionId: string; attachmentId: string }> {
+    const created = await control.createSession({
+      commandId: `create-${name}`,
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: name,
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: `start-${name}`,
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId, continuity: "fresh" },
+      provenance,
+    });
+    const attachmentId = `attachment-${name}`;
+    await control.observe({
+      id: `opened-${name}`,
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance,
+      attachment: {
+        id: attachmentId,
+        sessionId: created.session.id,
+        adapterId,
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native:
+          adapterId === "terminal"
+            ? { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } }
+            : null,
+        authority: null,
+      },
+    });
+    return { sessionId: created.session.id, attachmentId };
+  }
+
+  it("returns a Session while its attachment is open and drops it once closed", async () => {
+    const { ledger, control, projectId } = setup();
+    const open = await sessionWithAttachment(control, projectId, "open", "terminal");
+    const closed = await sessionWithAttachment(control, projectId, "closed", "terminal");
+    // A Session that never attached at all: the case the narrowing exists for.
+    await control.createSession({
+      commandId: "create-bare",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Never attached",
+      provenance,
+    });
+
+    await expect(
+      ledger.transaction((transaction) => transaction.listAttachedSessions().map(({ id }) => id)),
+    ).resolves.toEqual(expect.arrayContaining([open.sessionId, closed.sessionId]));
+
+    await control.observe({
+      id: "closed-closed",
+      kind: "attachment.closed",
+      sessionId: closed.sessionId,
+      occurredAt: 300,
+      provenance,
+      attachmentId: closed.attachmentId,
+      outcome: "completed",
+    });
+
+    const attached = await ledger.transaction((transaction) =>
+      transaction.listAttachedSessions().map(({ id }) => id),
+    );
+    expect(attached).toEqual([open.sessionId]);
+  });
+
+  it("agrees with the fold it replaces, for terminals and chats alike", async () => {
+    const { ledger, control, projectId } = setup();
+    const terminal = await sessionWithAttachment(control, projectId, "terminal", "terminal");
+    const chat = await sessionWithAttachment(control, projectId, "chat", "opencode");
+    await control.createSession({
+      commandId: "create-quiet",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Never attached",
+      provenance,
+    });
+
+    // The narrow read and the full listing must agree about who is attached:
+    // every Session the fold shows holding an open attachment is here, and
+    // nothing else is. This is the property the budget's correctness rests on.
+    const folded = await control.listSessions({ projectId, scope: "all" });
+    const attachedByFold = folded
+      .filter((projection) =>
+        projection.attachments.some((attachment) => attachment.status === "open"),
+      )
+      .map((projection) => projection.session.id);
+    const narrow = await ledger.transaction((transaction) =>
+      transaction.listAttachedSessions().map(({ id }) => id),
+    );
+
+    expect(narrow.toSorted()).toEqual(attachedByFold.toSorted());
+    expect(narrow.toSorted()).toEqual([terminal.sessionId, chat.sessionId].toSorted());
+  });
+
+  it("counts the same as folding the whole fleet, which is the point", async () => {
+    const { control, projectId } = setup();
+    const live = await sessionWithAttachment(control, projectId, "live", "terminal");
+    const exited = await sessionWithAttachment(control, projectId, "exited", "terminal");
+    await control.observe({
+      id: "closed-exited",
+      kind: "attachment.closed",
+      sessionId: exited.sessionId,
+      occurredAt: 300,
+      provenance,
+      attachmentId: exited.attachmentId,
+      outcome: "completed",
+    });
+    // Sessions that never attached at all: the bulk of any real machine, and
+    // the whole set the narrowing drops.
+    for (const name of ["quiet-one", "quiet-two", "quiet-three"]) {
+      await control.createSession({
+        commandId: `create-${name}`,
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: name,
+        provenance,
+      });
+    }
+
+    // The invariant the budget rests on: counting the narrow read and counting
+    // the entire fleet give the same number, because every Session the narrow
+    // read omits contributes zero. If this ever parts, the budget is fast and
+    // wrong, which is worse than slow and right.
+    const narrow = workingSessionCount({ projections: await control.listAttachedSessions() });
+    const whole = workingSessionCount({
+      projections: await control.listSessions({ projectId, scope: "all" }),
+    });
+
+    expect(narrow).toBe(whole);
+    // Not vacuously equal at zero: the live terminal is counted, the exited one
+    // is not, and the three that never attached are not.
+    expect(narrow).toBe(1);
+    expect(live.sessionId).not.toBe(exited.sessionId);
+  });
+
+  it("keeps a failed attachment out: it never opened", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-failed",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Failed",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-failed",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+      provenance,
+    });
+    await control.observe({
+      id: "failed",
+      kind: "attachment.failed",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance,
+      attachment: {
+        id: "attachment-failed",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+      failure: { code: "terminal_start_failed", detail: "no pty", diagnostic: null },
+    });
+
+    await expect(
+      ledger.transaction((transaction) => transaction.listAttachedSessions()),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe("origin storage and checkpoint upgrade", () => {
+  it("extracts command origin for slim folds and invalidates v2 checkpoints", async () => {
+    const { ledger, control, projectId } = setup();
+    const origin = {
+      kind: "automation",
+      automationRunId: "run-exact",
+      automationName: "Review",
+    } as const;
+    const created = await control.createSession({
+      commandId: "origin-create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance: {
+        ...provenance,
+        source: { ...provenance.source, detail: { sessionOrigin: origin } },
+      },
+    });
+    await control.observe({
+      id: "origin-attachment",
+      sessionId: created.session.id,
+      occurredAt: 20,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "origin-a",
+        sessionId: created.session.id,
+        adapterId: "pi",
+        venue: provenance.venue,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+    await control.submit({
+      commandId: "origin-stop",
+      sessionId: created.session.id,
+      provenance,
+      intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
+    });
+    await control.observe({
+      id: "origin-detached",
+      sessionId: created.session.id,
+      occurredAt: 28,
+      provenance,
+      kind: "attachment.closed",
+      attachmentId: "origin-a",
+      outcome: "interrupted",
+    });
+    const resumed = await control.submit({
+      commandId: "origin-reattach",
+      sessionId: created.session.id,
+      provenance: {
+        ...provenance,
+        source: { ...provenance.source, detail: { sessionOrigin: origin } },
+      },
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+    });
+    await control.observe({
+      id: "origin-reattachment",
+      sessionId: created.session.id,
+      commandId: resumed.command.id,
+      occurredAt: 29,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "origin-b",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: provenance.venue,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+    await ledger.transaction((tx) => {
+      const sequence = tx.latestEventSequence(created.session.id) + 1;
+      const command = {
+        id: "origin-submit",
+        sessionId: created.session.id,
+        createdAt: 30,
+        intent: {
+          kind: "message.submit" as const,
+          reference: { id: "message", mediaType: null, digest: null },
+        },
+        route: null,
+      };
+      tx.saveCommand(command);
+      tx.appendEvent({
+        id: "origin-command",
+        sessionId: created.session.id,
+        sequence,
+        occurredAt: 30,
+        recordedAt: 30,
+        commandId: command.id,
+        provenance: {
+          ...provenance,
+          source: { ...provenance.source, detail: { sessionOrigin: origin } },
+        },
+        payload: { kind: "command.recorded", command },
+      });
+      tx.appendEvent({
+        id: "origin-turn",
+        sessionId: created.session.id,
+        sequence: sequence + 1,
+        occurredAt: 31,
+        recordedAt: 31,
+        provenance,
+        attachmentId: "origin-b",
+        commandId: null,
+        payload: { kind: "turn.started", attachmentId: "origin-b", turnId: "origin-t" },
+      });
+    });
+    const audit = await control.listEvents({ sessionId: created.session.id });
+    await ledger.transaction((tx) => {
+      const slim = tx.listProjectionEvents({ sessionId: created.session.id });
+      expect(slim[0]?.commandOrigin).toEqual(origin);
+      expect("provenance" in slim[0]!).toBe(false);
+      expect(audit[0]?.provenance.source.detail).toEqual({ sessionOrigin: origin });
+      const checkpoint = createSessionProjectionCheckpoint(created.session, audit);
+      expect(checkpoint.version).toBe(4);
+      tx.saveProjectionCheckpoint(checkpoint);
+    });
+    ctx.db
+      .prepare("UPDATE session_projection_checkpoints SET schema_version = 2 WHERE session_id = ?")
+      .run(created.session.id);
+    await ledger.transaction((tx) =>
+      expect(tx.getProjectionCheckpoint(created.session.id)).toBeNull(),
+    );
+    const rebuilt = await control.getSession({ sessionId: created.session.id });
+    expect(rebuilt?.latestTurnOrigin).toEqual(origin);
+    expect(rebuilt?.resumptions).toEqual([{ attachmentId: "origin-b", origin, startedAt: 29 }]);
+    expect(rebuilt).toEqual(createSessionProjectionCheckpoint(created.session, audit).projection);
+  });
+});

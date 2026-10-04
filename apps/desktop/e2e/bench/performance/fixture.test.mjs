@@ -11,7 +11,10 @@ import {
   seededRandom,
   verifyFixture,
 } from "./fixture.mjs";
-import { CURRENT_DB_SCHEMA_VERSION, DEFAULT_SEED, PRESETS } from "./presets.mjs";
+import { DEFAULT_SEED, PRESETS } from "./presets.mjs";
+import { MIGRATIONS } from "@volli/host-core/db/migrations";
+
+const CURRENT_DB_SCHEMA_VERSION = MIGRATIONS.at(-1).version;
 
 describe("performance fixture allocation", () => {
   it("is deterministic, exact, bounded, and long-tailed", () => {

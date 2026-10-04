@@ -26,7 +26,8 @@
  * for the app to fill when it next creates the resource.
  */
 
-import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";
@@ -311,6 +312,36 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "The append-only audit of MCP installs and removals (VC-380). Included because it is the only record of a server that was REMOVED, which is exactly the one a restored profile cannot reconstruct from configuration; it holds provenance notes and outcomes, never a credential.",
   },
+  // ---- Volli Cloud identity (VC-550, docs/plans/host-identity.md) ----------
+  {
+    table: "workspace_epochs",
+    decision: "include",
+    reason:
+      "Which host held authority over each workspace at each epoch. The counter must never restart, or a restored workspace could reissue an epoch the old host already used.",
+  },
+  {
+    table: "host_identity",
+    decision: "exclude",
+    reason:
+      "This install's host id. A restored profile is a new host, so a copy can never pass itself off as the host it came from.",
+  },
+  {
+    table: "workers",
+    decision: "exclude",
+    reason:
+      "Worker registrations with this host. A restored host is a new host, and workers register with it again.",
+  },
+  {
+    table: "checkout_leases",
+    decision: "exclude",
+    reason:
+      "Live grants to the source host's workers. A restored workspace grants again under a higher workspace epoch, which fences every old grant.",
+  },
+  {
+    table: "devices",
+    decision: "exclude",
+    reason: "Clients paired with this host. A restored host is a new host, so devices pair again.",
+  },
   // ---- Rebuilt -------------------------------------------------------------
   {
     table: "session_usage",
@@ -387,6 +418,8 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
  */
 export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "projects",
+  // After `projects`, which it references and cascades with.
+  "workspace_epochs",
   "mcp_servers",
   // After `projects`, which it references; it deliberately has no foreign key
   // to `mcp_servers`, so it does not depend on that table being restored.
@@ -551,9 +584,17 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "MCP secrets a person stored and OAuth tokens (VC-470). Credentials never travel in a backup; a restored profile signs in again.",
   },
   {
-    area: "session-secrets.enc*",
+    area: `${SECRET_STORE_FILE_NAME}*`,
     decision: "exclude",
     reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
+  },
+  {
+    // A headless host's key (VC-559). A bundle that carried it would carry the
+    // one thing that opens the ciphertext beside it, on any machine.
+    area: `${SECRET_KEY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "A headless host's secret key (VC-559); a backup never carries what opens a credential.",
   },
   {
     area: "browser-pictures",

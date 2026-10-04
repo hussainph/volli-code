@@ -49,7 +49,7 @@ import {
   type NotificationPreferences,
 } from "@volli/shared";
 
-import { getAppState, setAppState } from "./db/app-state-repo";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 
 /**
  * The `app_state` key. A frozen string: it names a durable row, so changing it

@@ -1,12 +1,23 @@
 /**
- * The ONE `volli:data-changed` fan-out. Any main-side mutation that changes
- * planning data outside the renderer's own request/response cycle (a
- * socket-originated agent command, a worktree remove/ensure/orphan-delete)
- * calls this so every open window re-hydrates from SQLite. Extracted here so
- * index.ts (agent-socket path) and data-ipc.ts (worktree handlers) share a
- * single implementation rather than each rolling their own.
+ * host-core's event bus, delivered to every open window (VC-554).
+ *
+ * `windowEventBus` is the Electron adapter for `HostEventBus`: each host
+ * topic goes out on its own `volli:` channel to every live window. Host code
+ * publishes through the bus it is handed; desktop code that has not moved yet
+ * calls the `broadcastX` functions below, which publish through the same bus,
+ * so every host announcement reaches a window by one path.
+ *
+ * `volli:data-changed` is the one fan-out for planning invalidations. Any
+ * main-side mutation that changes planning data outside the renderer's own
+ * request/response cycle (a socket-originated agent command, a worktree
+ * remove/ensure/orphan-delete) publishes it so every open window re-hydrates
+ * from SQLite.
+ *
+ * Window-only facts — the OS appearance, the updater's state — are not host
+ * events and are sent directly.
  */
 import { BrowserWindow } from "electron";
+import type { HostEventBus, HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import type { PendingArmedRun } from "@volli/shared";
 import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
 import type {
@@ -14,13 +25,19 @@ import type {
   HarnessEventNotice,
   SessionActivityNotice,
   SessionHarnessNotice,
-  SessionRetitledEvent,
-  SessionsInterruptedEvent,
   SessionStartedNotice,
   PendingArmedRunSettledNotice,
   UpdateUiState,
   VolliIpcEvent,
 } from "../ipc/contract";
+
+/** Sends one message to every window whose page is still alive. */
+function sendToEveryWindow(channel: VolliIpcEvent, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send(channel, payload);
+  }
+}
 
 /**
  * The app's one coalescing window, whose sink is every live window. The rule
@@ -30,18 +47,35 @@ import type {
  */
 const dataChanges = createDataChangeCoalescer({
   send(change) {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (window.webContents.isDestroyed()) continue;
-      window.webContents.send(
-        "volli:data-changed" satisfies VolliIpcEvent,
-        {
-          entity: "tickets",
-          ...change,
-        } satisfies DataChangedEvent,
-      );
-    }
+    sendToEveryWindow("volli:data-changed", {
+      entity: "tickets",
+      ...change,
+    } satisfies DataChangedEvent);
   },
 });
+
+/** How each host topic reaches the windows: its channel, and for one, its cadence. */
+const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[T]) => void } = {
+  "data-changed": (change) => dataChanges.queue(change),
+  "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
+  "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),
+  "sessions-interrupted": (event) => sendToEveryWindow("volli:sessions-interrupted", event),
+  "session-started": (notice) => sendToEveryWindow("volli:session-started", notice),
+  "harness-event": (notice) => sendToEveryWindow("volli:harness-event", notice),
+  "session-harness": (notice) => sendToEveryWindow("volli:session-harness", notice),
+  "pending-armed-runs-changed": (pending) =>
+    sendToEveryWindow("volli:pending-armed-runs-changed", pending),
+  "pending-armed-run-settled": (notice) =>
+    sendToEveryWindow("volli:pending-armed-run-settled", notice),
+  "worktree-phase": (event) => sendToEveryWindow("volli:worktree-phase", event),
+};
+
+/** host-core's `HostEventBus` over every open window. */
+export const windowEventBus: HostEventBus = {
+  publish(topic, payload) {
+    WINDOW_DELIVERY[topic](payload);
+  },
+};
 
 /**
  * Deliver whatever this test's handlers queued, so a NEGATIVE assertion means
@@ -73,7 +107,7 @@ export function resetDataChangedForTest(): void {
  * for why one merged notice is not a weaker guarantee than fifteen.
  */
 export function broadcastDataChanged(change: DataChangeScope = {}): void {
-  dataChanges.queue(change);
+  windowEventBus.publish("data-changed", change);
 }
 
 /**
@@ -87,19 +121,9 @@ export function broadcastDataChanged(change: DataChangeScope = {}): void {
  * `nativeTheme` is the source; this is the only way its change reaches a window.
  */
 export function broadcastSystemAppearance(prefersDark: boolean): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:system-appearance-changed" satisfies VolliIpcEvent, prefersDark);
-  }
+  sendToEveryWindow("volli:system-appearance-changed", prefersDark);
 }
 
-/**
- * Announces a backward-move interrupt (issue #78, CONCEPT #20) to every
- * window: automation may de-escalate a ticket's agents, but never silently —
- * the renderer toasts this where the mover is looking. Callers fire it only
- * when sessions were actually interrupted (`sessionIds` non-empty), mirroring
- * the durable Session interrupt-receipt rule.
- */
 /**
  * Fans one canonical harness event out to every window (harness-events). The
  * involuntary channel's last hop: a hook fired, `volli hook` carried it over
@@ -108,10 +132,7 @@ export function broadcastSystemAppearance(prefersDark: boolean): void {
  * badges are visible in whichever window has that project open.
  */
 export function broadcastHarnessEvent(notice: HarnessEventNotice): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:harness-event" satisfies VolliIpcEvent, notice);
-  }
+  windowEventBus.publish("harness-event", notice);
 }
 
 /**
@@ -122,10 +143,7 @@ export function broadcastHarnessEvent(notice: HarnessEventNotice): void {
  * project is open.
  */
 export function broadcastSessionHarness(notice: SessionHarnessNotice): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:session-harness" satisfies VolliIpcEvent, notice);
-  }
+  windowEventBus.publish("session-harness", notice);
 }
 
 /**
@@ -136,10 +154,7 @@ export function broadcastSessionHarness(notice: SessionHarnessNotice): void {
  * `volli:data-changed` path beside it.
  */
 export function broadcastSessionStarted(notice: SessionStartedNotice): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:session-started" satisfies VolliIpcEvent, notice);
-  }
+  windowEventBus.publish("session-started", notice);
 }
 
 /**
@@ -151,10 +166,7 @@ export function broadcastSessionStarted(notice: SessionStartedNotice): void {
  * transitions (it was still loading) is whole again on the next one.
  */
 export function broadcastUpdateState(state: UpdateUiState): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:update-state" satisfies VolliIpcEvent, state);
-  }
+  sendToEveryWindow("volli:update-state", state);
 }
 
 /**
@@ -173,10 +185,7 @@ export function broadcastUpdateState(state: UpdateUiState): void {
  * stale in another makes "what is running?" depend on where you are looking.
  */
 export function broadcastSessionActivity(notice: SessionActivityNotice): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:session-activity" satisfies VolliIpcEvent, notice);
-  }
+  windowEventBus.publish("session-activity", notice);
 }
 
 /**
@@ -190,13 +199,7 @@ export function broadcastSessionActivity(notice: SessionActivityNotice): void {
  * the whole feature failing to appear.
  */
 export function broadcastSessionRetitled(sessionId: string, title: string): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send(
-      "volli:session-retitled" satisfies VolliIpcEvent,
-      { sessionId, title } satisfies SessionRetitledEvent,
-    );
-  }
+  windowEventBus.publish("session-retitled", { sessionId, title });
 }
 
 /**
@@ -208,29 +211,21 @@ export function broadcastSessionRetitled(sessionId: string, title: string): void
  * primes itself through the matching list IPC.
  */
 export function broadcastPendingArmedRuns(pending: readonly PendingArmedRun[]): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:pending-armed-runs-changed" satisfies VolliIpcEvent, pending);
-  }
+  windowEventBus.publish("pending-armed-runs-changed", pending);
 }
 
 /** Announces the one main-owned countdown's outcome without giving a renderer a Run door. */
 export function broadcastPendingArmedRunSettled(notice: PendingArmedRunSettledNotice): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:pending-armed-run-settled" satisfies VolliIpcEvent, notice);
-  }
+  windowEventBus.publish("pending-armed-run-settled", notice);
 }
 
+/**
+ * Announces a backward-move interrupt (issue #78, CONCEPT #20) to every
+ * window: automation may de-escalate a ticket's agents, but never silently —
+ * the renderer toasts this where the mover is looking. Callers fire it only
+ * when sessions were actually interrupted (`sessionIds` non-empty), mirroring
+ * the durable Session interrupt-receipt rule.
+ */
 export function broadcastSessionsInterrupted(ticketId: string, sessionIds: string[]): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send(
-      "volli:sessions-interrupted" satisfies VolliIpcEvent,
-      {
-        ticketId,
-        sessionIds,
-      } satisfies SessionsInterruptedEvent,
-    );
-  }
+  windowEventBus.publish("sessions-interrupted", { ticketId, sessionIds });
 }

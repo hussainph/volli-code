@@ -10,7 +10,7 @@ import type {
   PiSessionOrphanScanResult,
   VolliIpcChannel,
 } from "../ipc/contract";
-import { openTestDb, type TestDb } from "./db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { PI_SESSION_ORPHAN_CHANNELS } from "./ipc-descriptors";
 
 const { handlers } = vi.hoisted(() => ({

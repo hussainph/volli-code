@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { SecretStore } from "./store";
+import { SecretStore } from "@volli/host-core/secrets";
 import { SecretService } from "./service";
 import { registerSecretIpc } from "./ipc";
 

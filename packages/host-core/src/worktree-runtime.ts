@@ -1,0 +1,112 @@
+/**
+ * The host-side construction of the worktree module's injected deps (§2's
+ * seam): the open database, the stderr-capturing git runner, and the phase
+ * broadcast to every window over `volli:worktree-phase`. Both consumers —
+ * `pty.ts` (ensure on session boot) and `data-ipc.ts` (state/remove/branches/
+ * orphans) — build their deps HERE so phases always reach the renderer no
+ * matter which entrypoint moved them.
+ */
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type Database from "better-sqlite3";
+
+import { blobsRoot } from "./blob-store";
+import type { HostEventBus } from "./ports";
+import {
+  createOrphanCleanupEngine,
+  runGitCapturing,
+  runGitCapturingAsync,
+  SqliteOrphanCleanupLedger,
+} from "./worktree";
+import type { OrphanCleanupEngine, WorktreeDeps, WorktreePhase } from "./worktree";
+
+/** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
+function broadcastPhase(events: HostEventBus, ticketId: string, phase: WorktreePhase): void {
+  events.publish("worktree-phase", { ticketId, phase });
+}
+
+/**
+ * The `~` the worktree tree lives under. `VOLLI_WORKTREE_HOME_DIR` overrides it
+ * for the e2e smokes ONLY — a real user's `~/.volli/worktrees` must never be
+ * touched by a test run. Threaded as `deps.home` so the module's identity/sweep
+ * paths and {@link worktreesHome} always agree.
+ */
+function resolveHome(): string {
+  const override = process.env["VOLLI_WORKTREE_HOME_DIR"];
+  return override !== undefined && override.length > 0 ? override : homedir();
+}
+
+/**
+ * The `~` every worktree path is built from — the same value `deps.home`
+ * carries, exposed for the callers that need to ask an ownership question
+ * (containers.ts) outside a `WorktreeDeps` bundle.
+ */
+export function worktreeHomeDir(): string {
+  return resolveHome();
+}
+
+/**
+ * The standard runtime deps bundle for every worktree module call.
+ * `blobsRoot` — the userData Blob-bytes root the post-copy
+ * materialize step reads from (issue #77 PR 2) — resolves off
+ * the host's explicit `dataDir` exactly like {@link resolveHome} resolves `~`: one
+ * production resolution point every worktree-module consumer shares, even the
+ * ones (remove/sweep/publish/…) that never read the field.
+ */
+export function worktreeDeps(
+  db: Database.Database,
+  ports: { events: HostEventBus },
+  options: { dataDir: string },
+): WorktreeDeps {
+  return {
+    db,
+    git: runGitCapturing,
+    gitAsync: runGitCapturingAsync,
+    home: resolveHome(),
+    onPhase: (ticketId, phase) => broadcastPhase(ports.events, ticketId, phase),
+    blobsRoot: blobsRoot(options.dataDir),
+  };
+}
+
+/**
+ * The orphan-cleanup command core, one per database handle (VC-284 review S1).
+ *
+ * Memoized on the handle rather than rebuilt per call, because the SQLite
+ * ledger serializes its transactions through an instance-local promise tail: a
+ * second engine over the same file would be a second writer with no idea the
+ * first exists. A WeakMap key means a test's throwaway handle gets its own core
+ * and is collected with it.
+ */
+const cleanupEngines = new WeakMap<Database.Database, OrphanCleanupEngine>();
+
+export function orphanCleanupEngine(db: Database.Database): OrphanCleanupEngine {
+  let engine = cleanupEngines.get(db);
+  if (engine === undefined) {
+    engine = createOrphanCleanupEngine({
+      ledger: new SqliteOrphanCleanupLedger(db),
+      now: () => Date.now(),
+      nextId: randomUUID,
+    });
+    cleanupEngines.set(db, engine);
+  }
+  return engine;
+}
+
+/**
+ * The app-owned worktree home (`<home>/.volli/worktrees`) — the cwd allowance
+ * for worktree PTYs and the orphan-delete channel's containment root.
+ */
+export function worktreesHome(): string {
+  return join(resolveHome(), ".volli", "worktrees");
+}
+
+/** Captures the host's event port and data-directory policy for its worktree calls. */
+export function createWorktreeRuntime(
+  ports: { events: HostEventBus },
+  options: { dataDir: string },
+) {
+  return { deps: (db: Database.Database) => worktreeDeps(db, ports, options) };
+}
+
+export type WorktreeRuntime = ReturnType<typeof createWorktreeRuntime>;

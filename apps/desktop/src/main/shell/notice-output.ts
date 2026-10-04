@@ -1,6 +1,6 @@
 import { StringDecoder } from "node:string_decoder";
 import { pemSecretSpans } from "@volli/shared";
-import { pendingNoticeSecretStart } from "../secrets/pending-notice-secret";
+import { pendingNoticeSecretStart } from "@volli/host-core/secrets";
 
 /**
  * One pipe's redaction context. Never cut raw input to produce a notice: a

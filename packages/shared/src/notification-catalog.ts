@@ -233,6 +233,61 @@ export type NotificationTarget =
   | UpdateNotificationTarget;
 
 /**
+ * The one KIND of target each producer can have.
+ *
+ * A total record, so a new producer must say where its alert points before it
+ * compiles — and a producer cannot be given the wrong sort of target. Round 1
+ * only distinguished "has a target" from "has none", which left a harness alert
+ * free to carry a ticket target: a deep link that opens the board instead of the
+ * terminal that is waiting, and nothing to catch it.
+ *
+ * `null` is not an oversight where it appears. A free-form `volli notify` and a
+ * dead CLI socket have nowhere to point, and an invented destination is worse
+ * than none — it spends the interruption and takes the person somewhere
+ * unrelated.
+ */
+export interface NotificationProducerTargets {
+  "run-attention": SessionNotificationTarget;
+  "session-watchdog": SessionNotificationTarget;
+  "harness-input-needed": SessionNotificationTarget;
+  "scheduled-resume-skipped": SessionNotificationTarget;
+  "pull-request-merged": TicketNotificationTarget;
+  "worktree-reclaimed": TicketNotificationTarget;
+  // No target: one reap can take processes from several Tickets at once, and
+  // an alert that opened whichever one happened to be first would spend the
+  // interruption taking a person somewhere arbitrary.
+  "orphan-processes-reaped": null;
+  "worktree-record-failed": TicketNotificationTarget;
+  "ticket-moved-to-doing": TicketNotificationTarget;
+  "update-ready": UpdateNotificationTarget;
+  "agent-notify": null;
+  "cli-socket-failed": null;
+}
+
+/**
+ * The producers whose alert always knows where it points — derived from the
+ * table above rather than listed again, so the two cannot disagree.
+ */
+export type TargetedNotificationProducer = {
+  [P in NotificationProducer]: NotificationProducerTargets[P] extends null ? never : P;
+}[NotificationProducer];
+
+/** One alert, as its producer describes it. */
+export type NotificationRequest = {
+  [P in NotificationProducer]: {
+    producer: P;
+    title: string;
+    body: string;
+    target: NotificationProducerTargets[P];
+  };
+}[NotificationProducer];
+
+/** Why an alert was not posted, or that it was. */
+export type NotificationOutcome =
+  | { delivered: true }
+  | { delivered: false; reason: "muted" | "unsupported" | "focused-target" | "failed" };
+
+/**
  * The one thing in a Session a person is being sent to — the open question, or
  * the failure that stopped it.
  *

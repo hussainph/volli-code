@@ -1,0 +1,1128 @@
+import { readSessionOrigin } from "@volli/shared";
+import { createHash } from "node:crypto";
+import type Database from "better-sqlite3";
+import type {
+  CommandReceipt,
+  ListSessionEventsQuery,
+  ListLatestTicketSignalsQuery,
+  ListSessionStartsQuery,
+  ListSessionsQuery,
+  ListSessionUsageQuery,
+  LatestSessionSignal,
+  Session,
+  SessionCommand,
+  SessionEvent,
+  SessionLedger,
+  SessionLedgerTransaction,
+  SessionProjectionCheckpoint,
+  SessionProjectionEvent,
+  SessionUsage,
+  SessionUsageAttribution,
+  SessionUsageEntry,
+  Synchronous,
+} from "@volli/shared";
+import {
+  COST_BASES,
+  SESSION_PROJECTION_CHECKPOINT_VERSION,
+  SESSION_ROLES,
+  assertSessionProjectionCheckpoint,
+  SESSION_USAGE_CAUSES,
+  assertSession,
+  assertSessionEvent,
+  decodeCommandReceipt,
+  decodeSessionCommandIntent,
+  decodeSessionCommandRoute,
+  decodeSessionEventPayload,
+  decodeSessionEventProvenance,
+  encodeSessionJson,
+  sameCommandReceipt,
+  UnknownSessionEventKindError,
+} from "@volli/shared";
+import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
+import { prepared } from "@volli/host-core/db/prepared";
+import { settleTransaction } from "@volli/host-core/db/transaction-gate";
+
+type SqlRow = Record<string, unknown>;
+
+/**
+ * The desktop's sole durable Session writer. Transaction work is synchronous:
+ * no client or repo call can interleave with a partial fact set.
+ */
+export class SqliteSessionLedger implements SessionLedger {
+  constructor(private readonly db: Database.Database) {}
+
+  transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
+    return settleTransaction(this.db, () => {
+      let open = true;
+      const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
+      try {
+        const value = work(transaction);
+        transaction.assertReceiptEventPairs();
+        return value;
+      } finally {
+        open = false;
+      }
+    });
+  }
+}
+
+export function createSqliteSessionLedger(db: Database.Database): SessionLedger {
+  return new SqliteSessionLedger(db);
+}
+
+class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
+  readonly #touchedSessionIds = new Set<string>();
+
+  constructor(
+    private readonly db: Database.Database,
+    private readonly isOpen: () => boolean,
+  ) {}
+
+  getSession(sessionId: string): Session | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
+    ).get(sessionId) as unknown;
+    return row === undefined ? null : decodeSession(row, "sessions row");
+  }
+
+  listSessions(query: ListSessionsQuery): readonly Session[] {
+    this.assertOpen();
+    const scope =
+      query.scope === "ticket"
+        ? " AND ticket_id = @ticketId"
+        : query.scope === "project"
+          ? " AND ticket_id IS NULL"
+          : "";
+    const rows = prepared(
+      this.db,
+      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at
+           FROM sessions
+          WHERE project_id = @projectId${scope}
+          ORDER BY created_at DESC, id COLLATE BINARY DESC`,
+    ).all(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown[];
+    return rows.map((row) => decodeSession(row, "sessions row"));
+  }
+
+  countSessions(query: ListSessionsQuery): number {
+    this.assertOpen();
+    const scope =
+      query.scope === "ticket"
+        ? " AND ticket_id = @ticketId"
+        : query.scope === "project"
+          ? " AND ticket_id IS NULL"
+          : "";
+    const row = prepared(
+      this.db,
+      `SELECT COUNT(*) AS count
+           FROM sessions
+          WHERE project_id = @projectId${scope}`,
+    ).get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
+    return readInteger(rowValue(row, "count", "session count"), "session count");
+  }
+
+  listSessionStarts(query: ListSessionStartsQuery): readonly number[] {
+    this.assertOpen();
+    // No project predicate, and no join: the practice chart counts Sessions
+    // across every project, and a count per day needs the stamp and nothing
+    // else. `sessions_project(project_id, created_at)` does not serve an
+    // unscoped range, so this is a scan of one integer column over a table with
+    // one row per Session ever started.
+    const rows = prepared(
+      this.db,
+      `SELECT created_at
+           FROM sessions
+          WHERE created_at >= @sinceMs
+          ORDER BY created_at ASC`,
+    ).all(query) as unknown[];
+    return rows.map((row) =>
+      readInteger(rowValue(row, "created_at", "session start"), "session start"),
+    );
+  }
+
+  /**
+   * Each ticket's latest explicit outcome, in this host's LEDGER order.
+   *
+   * "Latest" is the signal this ledger ACCEPTED last, never the largest
+   * `occurred_at`. `occurred_at` is what a source claimed: a clock that moves
+   * backwards would let an older signal win, and two signals can share a
+   * millisecond, which the previous `session_id` tie-break resolved by id
+   * rather than by causality (VC-512). The accept order is migration 044's
+   * `session_event_sequence` — the append trigger's AUTOINCREMENT total order,
+   * which is never reused. `occurred_at` is still what a row REPORTS as its
+   * time; it just no longer selects the row.
+   *
+   * This is provisional LOCAL order (docs/BOUNDARIES.md standing rule 2): it
+   * says what this host learned last, which is honest for one host and is not
+   * a global order. When a relay makes a second host real, it must supply the
+   * final order (server-assigned sequence) or each signal must explicitly
+   * supersede the one it replaces; this read then orders by that instead of by
+   * `session_event_sequence`.
+   */
+  listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
+    this.assertOpen();
+    const rows = prepared(
+      this.db,
+      `WITH latest_session_signals AS (
+           SELECT s.ticket_id AS ticket_id,
+                  s.id AS session_id,
+                  json_extract(e.payload, '$.signal') AS signal,
+                  json_extract(e.payload, '$.reason') AS reason,
+                  e.occurred_at AS occurred_at,
+                  es.sequence AS accepted_sequence,
+                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
+             FROM sessions s
+             JOIN session_events e ON e.session_id = s.id
+             JOIN session_event_sequence es ON es.event_id = e.id
+            WHERE s.project_id = @projectId
+              AND s.ticket_id IS NOT NULL
+              AND json_extract(e.payload, '$.kind') = 'session.signaled'
+              AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
+         ), latest_ticket_signals AS (
+           SELECT ticket_id,
+                  session_id,
+                  signal,
+                  reason,
+                  occurred_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY accepted_sequence DESC
+                  ) AS ticket_rank
+             FROM latest_session_signals
+            WHERE session_rank = 1
+         )
+         SELECT ticket_id, session_id, signal, reason, occurred_at
+           FROM latest_ticket_signals
+          WHERE ticket_rank = 1
+          ORDER BY ticket_id COLLATE BINARY ASC`,
+    ).all(query) as unknown[];
+    return rows.map((row) => {
+      const value = asRecord(row, "latest ticket signal row");
+      return {
+        ticketId: readString(value.ticket_id, "latest ticket signal row.ticket_id"),
+        sessionId: readString(value.session_id, "latest ticket signal row.session_id"),
+        signal: enumValue(value.signal, ["done", "blocked"], "latest ticket signal row.signal"),
+        reason: readNullableString(value.reason, "latest ticket signal row.reason"),
+        createdAt: readInteger(value.occurred_at, "latest ticket signal row.occurred_at"),
+      };
+    });
+  }
+
+  listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[] {
+    this.assertOpen();
+    const scope =
+      query.scope.kind === "all"
+        ? ""
+        : query.scope.kind === "project"
+          ? " AND project_id = @projectId"
+          : query.scope.kind === "ticket"
+            ? " AND ticket_id = @ticketId"
+            : " AND session_id = @sessionId";
+    // Half-open, so two adjacent windows tile without billing a boundary
+    // operation to both of them.
+    const window =
+      (query.since === undefined ? "" : " AND occurred_at >= @since") +
+      (query.until === undefined ? "" : " AND occurred_at < @until");
+    const rows = prepared(
+      this.db,
+      `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                cost_usd, cost_basis
+           FROM session_usage
+          WHERE 1 = 1${scope}${window}
+          ORDER BY occurred_at DESC, event_id COLLATE BINARY DESC`,
+    ).all({
+      ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
+      ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
+      ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
+      ...(query.since === undefined ? {} : { since: query.since }),
+      ...(query.until === undefined ? {} : { until: query.until }),
+    }) as unknown[];
+    return rows.map((row) => decodeUsageEntry(row, "session_usage row"));
+  }
+
+  /**
+   * How far back this profile's index reaches, from the single coverage row
+   * migration 027 wrote.
+   *
+   * Read rather than derived. `MIN(occurred_at)` over the projection would say
+   * when spending happened to start, which for a quiet profile upgraded today
+   * is indistinguishable from a complete history — and that is exactly the
+   * reading the floor exists to refuse.
+   */
+  usageMeteredFrom(): number {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      "SELECT metered_from FROM session_usage_coverage WHERE id = 1",
+    ).get() as unknown;
+    /* v8 ignore next -- migration 027 inserts the row in the same statement that creates the table. */
+    if (row === undefined) return 0;
+    return readInteger(asRecord(row, "session_usage_coverage row").metered_from, "metered_from");
+  }
+
+  /**
+   * One projection row. Shared by the live append and the rebuild, so the two
+   * paths cannot store the same fact two different ways.
+   */
+  private insertUsage(entry: {
+    eventId: string;
+    sessionId: string;
+    attribution: SessionUsageAttribution;
+    occurredAt: number;
+    usage: SessionUsage;
+  }): void {
+    prepared(
+      this.db,
+      `INSERT INTO session_usage
+           (event_id, session_id, project_id, ticket_id, occurred_at, cause,
+            provider_id, model_id, input_tokens, output_tokens,
+            cache_read_tokens, cache_write_tokens, cost_usd, cost_basis)
+         VALUES
+           (@eventId, @sessionId, @projectId, @ticketId, @occurredAt, @cause,
+            @providerId, @modelId, @inputTokens, @outputTokens,
+            @cacheReadTokens, @cacheWriteTokens, @costUsd, @costBasis)`,
+    ).run({
+      eventId: entry.eventId,
+      sessionId: entry.sessionId,
+      projectId: entry.attribution.projectId,
+      ticketId: entry.attribution.ticketId,
+      occurredAt: entry.occurredAt,
+      cause: entry.usage.cause,
+      providerId: entry.usage.providerId,
+      modelId: entry.usage.modelId,
+      inputTokens: entry.usage.inputTokens,
+      outputTokens: entry.usage.outputTokens,
+      cacheReadTokens: entry.usage.cacheReadTokens,
+      cacheWriteTokens: entry.usage.cacheWriteTokens,
+      costUsd: entry.usage.costUsd,
+      costBasis: entry.usage.costBasis,
+    });
+  }
+
+  /**
+   * Derive the projection again from the events alone.
+   *
+   * NO JOIN TO `sessions`, deliberately. Attribution comes out of the event's
+   * own payload, exactly as the live append path takes it, so the two produce
+   * the same rows for the same history — including after a Ticket delete, which
+   * nulls `sessions.ticket_id` and would otherwise move that Ticket's whole
+   * bill into unticketed Project spend on the next rebuild.
+   */
+  rebuildUsageProjection(): void {
+    this.assertOpen();
+    this.db.exec("DELETE FROM session_usage");
+    const pageSize = 512;
+    const events = prepared<[Record<string, unknown>], SqlRow>(
+      this.db,
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.payload
+           FROM session_events e
+          WHERE json_extract(e.payload, '$.kind') = 'usage.recorded'
+            AND (
+              @cursorSessionId IS NULL
+              OR e.session_id COLLATE BINARY > @cursorSessionId
+              OR (e.session_id = @cursorSessionId AND e.sequence > @cursorSequence)
+            )
+          ORDER BY e.session_id COLLATE BINARY ASC, e.sequence ASC
+          LIMIT @limit`,
+    );
+    let cursorSessionId: string | null = null;
+    let cursorSequence = 0;
+    for (;;) {
+      // Finish this bounded iterator before writing the projection rows. SQLite
+      // does not permit a write while the same connection has an active query.
+      const page = [...events.iterate({ cursorSessionId, cursorSequence, limit: pageSize })];
+      if (page.length === 0) break;
+      for (const row of page) {
+        const value = asRecord(row, "usage rebuild row");
+        const payload = decodeSessionEventPayload(
+          JSON.parse(readString(value.payload, "usage rebuild row.payload")),
+          "usage rebuild row.payload",
+        );
+        /* v8 ignore next -- the query selects this kind and nothing else. */
+        if (payload.kind !== "usage.recorded") continue;
+        this.insertUsage({
+          eventId: readString(value.id, "usage rebuild row.id"),
+          sessionId: readString(value.session_id, "usage rebuild row.session_id"),
+          attribution: payload.attribution,
+          occurredAt: readInteger(value.occurred_at, "usage rebuild row.occurred_at"),
+          usage: payload.usage,
+        });
+      }
+      const last = asRecord(page.at(-1), "last usage rebuild row");
+      cursorSessionId = readString(last.session_id, "last usage rebuild row.session_id");
+      cursorSequence = readInteger(last.sequence, "last usage rebuild row.sequence");
+      if (page.length < pageSize) break;
+    }
+  }
+
+  insertSession(session: Session): void {
+    this.assertOpen();
+    assertSession(session, "Session");
+    this.assertGloballyUnusedId(session.id);
+    prepared(
+      this.db,
+      `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
+         VALUES (@id, @projectId, @ticketId, @role, @parentSessionId, @title, @createdAt)`,
+    ).run(session);
+  }
+
+  getEvent(eventId: string): SessionEvent | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+                p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+           FROM session_events e
+           LEFT JOIN session_provenances p ON p.id = e.provenance_id
+          WHERE e.id = ?`,
+    ).get(eventId) as unknown;
+    if (row === undefined) return null;
+    try {
+      return decodeEvent(row, "session_events row");
+    } catch (error) {
+      if (error instanceof UnknownSessionEventKindError) return null;
+      throw error;
+    }
+  }
+
+  appendEvent(event: SessionEvent): void {
+    this.assertOpen();
+    assertSessionEvent(event, "Session event");
+    this.#touchedSessionIds.add(event.sessionId);
+    this.assertGloballyUnusedId(event.id);
+    const prior = prepared(
+      this.db,
+      "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM session_events WHERE session_id = ?",
+    ).get(event.sessionId) as unknown;
+    const previousSequence = readInteger(
+      rowValue(prior, "sequence", "event sequence"),
+      "event sequence",
+    );
+    if (event.sequence !== previousSequence + 1) {
+      throw new Error(`Session ${event.sessionId} event sequence must be monotonic`);
+    }
+    this.insertAttachmentEvidence(event);
+    this.assertEventForeignKeys(event);
+    const provenanceId = internSessionEventProvenance(this.db, encodeSessionJson(event.provenance));
+    prepared(
+      this.db,
+      `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+         VALUES
+           (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, @commandId, @payload)`,
+    ).run({
+      id: event.id,
+      sessionId: event.sessionId,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      recordedAt: event.recordedAt,
+      provenanceId,
+      attachmentId: event.attachmentId ?? null,
+      commandId: event.commandId ?? null,
+      payload: encodeSessionJson(event.payload),
+    });
+    this.projectAttachmentClosure(event);
+    // Projected in the same transaction that appends the fact. A projection
+    // written afterwards would have a window in which the ledger and its read
+    // model disagree, and the disagreement would survive a crash.
+    if (event.payload.kind === "usage.recorded") {
+      this.insertUsage({
+        eventId: event.id,
+        sessionId: event.sessionId,
+        // Straight off the fact, which is the only reason `rebuildUsageProjection`
+        // can promise the same rows: both paths read one immutable source, so
+        // neither can be told a different story later by `sessions.ticket_id`
+        // going null under a deleted Ticket.
+        attribution: event.payload.attribution,
+        occurredAt: event.occurredAt,
+        usage: event.payload.usage,
+      });
+    }
+    if (event.payload.kind === "command.receipt.recorded") {
+      const receipt = this.getReceipt(event.payload.receipt.id);
+      if (!receipt || !sameCommandReceipt(receipt, event.payload.receipt)) {
+        throw new Error(`Receipt ${event.payload.receipt.id} does not match its event`);
+      }
+      const linked = prepared(
+        this.db,
+        `UPDATE session_command_receipts
+            SET receipt_event_id = @eventId
+          WHERE id = @receiptId
+            AND session_id = @sessionId
+            AND command_id = @commandId
+            AND sequence = @sequence
+            AND recorded_at = @recordedAt`,
+      ).run({
+        eventId: event.id,
+        receiptId: receipt.id,
+        sessionId: event.sessionId,
+        commandId: receipt.commandId,
+        sequence: event.sequence,
+        recordedAt: event.recordedAt,
+      });
+      if (linked.changes !== 1) {
+        throw new Error(`Receipt ${receipt.id} cannot be linked to event ${event.id}`);
+      }
+    }
+  }
+
+  listEvents(query: ListSessionEventsQuery): readonly SessionEvent[] {
+    // The audit read: provenance is joined back and decoded per row.
+    return this.#readEvents(
+      query,
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+              p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+         FROM session_events e
+         LEFT JOIN session_provenances p ON p.id = e.provenance_id`,
+      decodeEvent,
+    );
+  }
+
+  /**
+   * The fold read (VC-355): same rows, same order, no provenance.
+   *
+   * Neither the join nor the per-row `JSON.parse` of the interned provenance
+   * text is performed, because a projection fold never reads the field. Every
+   * other guarantee of {@link listEvents} — ordering, the pagination contract,
+   * and skipping retired kinds without truncating a page — is the same code.
+   */
+  listProjectionEvents(query: ListSessionEventsQuery): readonly SessionProjectionEvent[] {
+    return this.#readEvents(
+      query,
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+              e.attachment_id, e.command_id, e.payload,
+              CASE WHEN json_extract(e.payload, '$.kind') = 'command.recorded'
+                THEN (SELECT json_extract(provenance, '$.source.detail.sessionOrigin') FROM session_provenances WHERE id = e.provenance_id)
+                ELSE NULL END AS command_origin
+         FROM session_events e`,
+      decodeProjectionEvent,
+    );
+  }
+
+  #readEvents<T extends SessionProjectionEvent>(
+    query: ListSessionEventsQuery,
+    selection: string,
+    decode: (row: unknown, context: string) => T,
+  ): readonly T[] {
+    this.assertOpen();
+    const afterSequence = query.afterSequence ?? 0;
+    if (!Number.isInteger(afterSequence) || afterSequence < 0) {
+      throw new Error("Event pagination cursor must be a non-negative integer");
+    }
+    if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 0)) {
+      throw new Error("Event pagination limit must be a non-negative integer");
+    }
+    const statement = prepared(
+      this.db,
+      `${selection}
+        WHERE e.session_id = @sessionId AND e.sequence > @afterSequence
+        ORDER BY e.sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
+    );
+    const decoded: T[] = [];
+    let dropped = 0;
+    const retiredKinds = new Set<string>();
+    // The limit counts events this build can return, not rows SQLite matched.
+    // A page made entirely of retired kinds would otherwise come back empty
+    // while later history still existed, and callers advance their cursor from
+    // the last event they were handed — so an empty page reads as "the end"
+    // and silently truncates the Session. Keep pulling until the page is full
+    // or the rows run out.
+    const wanted = query.limit;
+    let cursor = afterSequence;
+    for (;;) {
+      const remaining = wanted === undefined ? undefined : wanted - decoded.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      // `iterate()` avoids materialising a second full raw-row array while the
+      // decoded events are accumulated for the caller. This matters when an
+      // unbounded maintenance read walks the whole log; bounded runtime pages
+      // keep the same semantics and simply stop after `remaining` rows.
+      const rows = statement.iterate({
+        sessionId: query.sessionId,
+        afterSequence: cursor,
+        limit: remaining,
+      }) as Iterable<unknown>;
+      let rowCount = 0;
+      for (const row of rows) {
+        rowCount += 1;
+        // Advanced from the row, not from the decoded event, so a dropped row
+        // still moves the cursor past itself.
+        const sequence = rowValue(row, "sequence", "session_events row");
+        if (typeof sequence === "number") cursor = Math.max(cursor, sequence);
+        try {
+          decoded.push(decode(row, "session_events row"));
+        } catch (error) {
+          if (!(error instanceof UnknownSessionEventKindError)) throw error;
+          dropped += 1;
+          retiredKinds.add(error.payloadKind);
+        }
+      }
+      // No limit means the single pass already read every matching row. With a
+      // limit, a short page is the only honest signal that nothing is left;
+      // a full one means at least one row was consumed, so the cursor moved
+      // and the next pass makes progress.
+      if (remaining === undefined || rowCount < remaining) break;
+    }
+    if (dropped > 0) {
+      // Named, not just counted: the whole point of dropping is that this build
+      // no longer knows the kind, so the kind is the only thing that identifies
+      // what a reader is missing.
+      const names = [...retiredKinds].toSorted().join(", ");
+      console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
+    }
+    return decoded;
+  }
+
+  latestEventSequence(sessionId: string): number {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM session_events WHERE session_id = ?",
+    ).get(sessionId) as unknown;
+    return readInteger(rowValue(row, "sequence", "latest event sequence"), "latest event sequence");
+  }
+
+  getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      `SELECT c.schema_version, c.through_sequence, c.checkpoint, c.digest
+         FROM session_projection_checkpoints c
+        WHERE c.session_id = ?
+          AND c.through_sequence <= COALESCE(
+            (SELECT MAX(e.sequence) FROM session_events e WHERE e.session_id = c.session_id),
+            0
+          )`,
+    ).get(sessionId) as unknown;
+    if (row === undefined) return null;
+    try {
+      const value = asRecord(row, "session projection checkpoint row");
+      const schemaVersion = readInteger(value.schema_version, "checkpoint schema version");
+      const throughSequence = readInteger(value.through_sequence, "checkpoint sequence");
+      const encoded = readString(value.checkpoint, "checkpoint JSON");
+      const digest = readString(value.digest, "checkpoint digest");
+      if (
+        schemaVersion !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+        checkpointDigest(encoded) !== digest
+      ) {
+        return null;
+      }
+      const checkpoint: unknown = JSON.parse(encoded);
+      // The shared contract (version, event-kind vocabulary, Session identity,
+      // cursor, exact-cost shape) is asserted rather than re-stated here, so
+      // this adapter cannot drift from the in-memory one. It throws, and the
+      // catch below turns that into the cache miss a malformed row deserves.
+      assertSessionProjectionCheckpoint(checkpoint, { expectedSessionId: sessionId });
+      // SQLite-specific on top of it: the indexed column must agree with the
+      // encoded cursor, or the monotonic upsert guard was comparing a number
+      // that the payload does not actually contain.
+      if (checkpoint.throughSequence !== throughSequence) return null;
+      return checkpoint;
+    } catch {
+      // Derived cache only. A malformed row is indistinguishable from a miss;
+      // immutable events are the recovery path and overwrite it after folding.
+      return null;
+    }
+  }
+
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
+    this.assertOpen();
+    // One shared cascade for both adapters: a checkpoint this build would
+    // refuse to READ must never become a row it wrote (VC-355).
+    assertSessionProjectionCheckpoint(checkpoint, {
+      latestSequence: this.latestEventSequence(checkpoint.sessionId),
+      invalidMessage: "Session projection checkpoint is invalid",
+    });
+    const encoded = encodeSessionJson(checkpoint);
+    prepared(
+      this.db,
+      `INSERT INTO session_projection_checkpoints
+         (session_id, schema_version, through_sequence, checkpoint, digest, updated_at)
+       VALUES (
+         @sessionId, @schemaVersion, @throughSequence, @checkpoint, @digest,
+         COALESCE(
+           (SELECT MAX(recorded_at) FROM session_events WHERE session_id = @sessionId),
+           (SELECT created_at FROM sessions WHERE id = @sessionId)
+         )
+       )
+       ON CONFLICT(session_id) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         through_sequence = excluded.through_sequence,
+         checkpoint = excluded.checkpoint,
+         digest = excluded.digest,
+         updated_at = excluded.updated_at
+       WHERE excluded.through_sequence >= session_projection_checkpoints.through_sequence`,
+    ).run({
+      sessionId: checkpoint.sessionId,
+      schemaVersion: checkpoint.version,
+      throughSequence: checkpoint.throughSequence,
+      checkpoint: encoded,
+      digest: checkpointDigest(encoded),
+    });
+  }
+
+  getCommand(commandId: string): SessionCommand | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      "SELECT id, session_id, created_at, intent, route FROM session_commands WHERE id = ?",
+    ).get(commandId) as unknown;
+    return row === undefined ? null : decodeCommand(row, "session_commands row");
+  }
+
+  saveCommand(command: SessionCommand): void {
+    this.assertOpen();
+    assertCommand(command, "Session command");
+    this.assertGloballyUnusedId(command.id);
+    prepared(
+      this.db,
+      `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+         VALUES (@id, @sessionId, @createdAt, @intent, @route)`,
+    ).run({
+      id: command.id,
+      sessionId: command.sessionId,
+      createdAt: command.createdAt,
+      intent: encodeSessionJson(command.intent),
+      route: command.route === null ? null : encodeSessionJson(command.route),
+    });
+  }
+
+  getReceipt(receiptId: string): CommandReceipt | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      `SELECT id, session_id, command_id, sequence, recorded_at, receipt
+           FROM session_command_receipts WHERE id = ?`,
+    ).get(receiptId) as unknown;
+    return row === undefined ? null : decodeReceiptRow(row, "session_command_receipts row");
+  }
+
+  listReceipts(commandId: string): readonly CommandReceipt[] {
+    this.assertOpen();
+    const rows = prepared(
+      this.db,
+      `SELECT id, session_id, command_id, sequence, recorded_at, receipt
+           FROM session_command_receipts
+          WHERE command_id = ?
+          ORDER BY sequence ASC, id COLLATE BINARY ASC`,
+    ).all(commandId) as unknown[];
+    return rows.map((row) => decodeReceiptRow(row, "session_command_receipts row"));
+  }
+
+  appendReceipt(receipt: CommandReceipt): void {
+    this.assertOpen();
+    decodeCommandReceipt(receipt, "Command receipt");
+    this.assertGloballyUnusedId(receipt.id);
+    const command = this.getCommand(receipt.commandId);
+    if (!command) throw new Error(`Command ${receipt.commandId} was not found`);
+    this.#touchedSessionIds.add(command.sessionId);
+    prepared(
+      this.db,
+      `INSERT INTO session_command_receipts
+           (id, session_id, command_id, sequence, recorded_at, receipt)
+         VALUES (@id, @sessionId, @commandId, @sequence, @recordedAt, @receipt)`,
+    ).run({
+      id: receipt.id,
+      sessionId: command.sessionId,
+      commandId: receipt.commandId,
+      sequence: receipt.sequence,
+      recordedAt: receipt.recordedAt,
+      receipt: encodeSessionJson(receipt),
+    });
+  }
+
+  /** Called at the transaction boundary, after every append has happened. */
+  assertReceiptEventPairs(): void {
+    this.assertOpen();
+    for (const sessionId of this.#touchedSessionIds) {
+      const unpaired = prepared(
+        this.db,
+        `SELECT r.id
+           FROM session_command_receipts r
+           JOIN session_commands c ON c.id = r.command_id
+           LEFT JOIN session_events e ON e.id = r.receipt_event_id
+          WHERE r.session_id = @sessionId
+            AND (r.receipt_event_id IS NULL
+                 OR e.id IS NULL
+                 OR e.session_id <> r.session_id
+                 OR c.session_id <> r.session_id
+                 OR e.command_id <> r.command_id
+                 OR e.sequence <> r.sequence
+                 OR e.recorded_at <> r.recorded_at)
+          LIMIT 1`,
+      ).get({ sessionId }) as unknown;
+      if (unpaired !== undefined) {
+        throw new Error(
+          `Receipt ${readString(rowValue(unpaired, "id", "receipt"), "receipt id")} has no matching event`,
+        );
+      }
+      const orphanEvent = prepared(
+        this.db,
+        `SELECT e.id
+           FROM session_events e
+           LEFT JOIN session_command_receipts r
+             ON r.id = json_extract(e.payload, '$.receipt.id')
+          WHERE e.session_id = @sessionId
+            AND json_extract(e.payload, '$.kind') = 'command.receipt.recorded'
+            AND (r.id IS NULL OR r.session_id <> e.session_id OR r.command_id <> e.command_id)
+          LIMIT 1`,
+      ).get({ sessionId }) as unknown;
+      if (orphanEvent !== undefined) {
+        throw new Error(
+          `Receipt event ${readString(rowValue(orphanEvent, "id", "receipt event"), "receipt event id")} has no matching receipt`,
+        );
+      }
+    }
+  }
+
+  private insertAttachmentEvidence(event: SessionEvent): void {
+    const payload = event.payload;
+    if (payload.kind !== "attachment.opened" && payload.kind !== "attachment.failed") return;
+    const attachment = payload.attachment;
+    if (attachment.sessionId !== event.sessionId) {
+      throw new Error(`Attachment ${attachment.id} belongs to another Session`);
+    }
+    const existing = prepared(this.db, "SELECT id FROM session_attachments WHERE id = ?").get(
+      attachment.id,
+    ) as unknown;
+    if (existing !== undefined) throw new Error(`Attachment ${attachment.id} already exists`);
+    prepared(
+      this.db,
+      `INSERT INTO session_attachments
+           (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+            native_detail, observed_kind, failure, created_sequence)
+         VALUES
+           (@id, @sessionId, @adapterId, @venueId, @venueKind, @continuity, @nativeId,
+            @nativeDetail, @observedKind, @failure, @createdSequence)`,
+    ).run({
+      id: attachment.id,
+      sessionId: attachment.sessionId,
+      adapterId: attachment.adapterId,
+      venueId: attachment.venue.id,
+      venueKind: attachment.venue.kind,
+      continuity: attachment.continuity,
+      nativeId: attachment.native?.id ?? null,
+      nativeDetail: attachment.native === null ? null : encodeSessionJson(attachment.native.detail),
+      observedKind: payload.kind === "attachment.opened" ? "opened" : "failed",
+      failure: payload.kind === "attachment.failed" ? encodeSessionJson(payload.failure) : null,
+      createdSequence: event.sequence,
+    });
+  }
+
+  /**
+   * Projects an `attachment.closed` fact onto the attachment it names (VC-403).
+   *
+   * Written in the same transaction that appends the fact, for the same reason
+   * the usage projection is: a read model written afterwards would have a
+   * window in which the ledger and its index disagree, and the disagreement
+   * would survive a crash.
+   *
+   * A close naming an attachment this Session never opened updates nothing.
+   * That is not a silent loss — the fold ignores such a close too (`if
+   * (existing)`), so both readings agree that it closed nothing.
+   */
+  private projectAttachmentClosure(event: SessionEvent): void {
+    if (event.payload.kind !== "attachment.closed") return;
+    prepared(
+      this.db,
+      `UPDATE session_attachments
+          SET closed_sequence = @sequence
+        WHERE id = @attachmentId AND session_id = @sessionId`,
+    ).run({
+      sequence: event.sequence,
+      attachmentId: event.payload.attachmentId,
+      sessionId: event.sessionId,
+    });
+  }
+
+  /**
+   * Every Session holding at least one OPEN attachment, across EVERY project.
+   *
+   * Unscoped on purpose, and for the same reason {@link listSessionStarts} is:
+   * this answers a question about the MACHINE rather than about any one
+   * project — a build in another project's Session competes for the same cores
+   * (VC-339). Ordered like {@link listSessions} so both reads hand a caller
+   * Sessions in one order.
+   *
+   * This is the concurrency budget's narrowing (VC-403), and it is exact rather
+   * than a heuristic: a Session counts as working only if its latest terminal
+   * attachment is open, or if it is a chat whose structured attachment is open
+   * and mid-turn. Both require an open attachment, so a Session with none
+   * cannot be working and is dropped here without folding it at all. The few
+   * that survive are folded by the caller through the ordinary projection path,
+   * which is what keeps the count's terminal/chat precedence identical to the
+   * one `volli session list` shows a person.
+   *
+   * `session_attachments_open` is a PARTIAL index over exactly the rows this
+   * predicate keeps, so the read is the size of the answer rather than of the
+   * ledger.
+   */
+  listAttachedSessions(): readonly Session[] {
+    this.assertOpen();
+    const rows = prepared(
+      this.db,
+      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at
+           FROM sessions s
+          WHERE EXISTS (
+                SELECT 1
+                  FROM session_attachments a
+                 WHERE a.session_id = s.id
+                   AND a.observed_kind = 'opened'
+                   AND a.closed_sequence IS NULL
+                )
+          ORDER BY s.created_at DESC, s.id COLLATE BINARY DESC`,
+    ).all() as unknown[];
+    return rows.map((row) => decodeSession(row, "sessions row"));
+  }
+
+  private assertEventForeignKeys(event: SessionEvent): void {
+    if (event.attachmentId !== null && event.attachmentId !== undefined) {
+      const attachment = prepared(
+        this.db,
+        "SELECT session_id FROM session_attachments WHERE id = ?",
+      ).get(event.attachmentId) as unknown;
+      if (attachment === undefined)
+        throw new Error(`Attachment ${event.attachmentId} was not found`);
+      if (rowValue(attachment, "session_id", "attachment") !== event.sessionId) {
+        throw new Error(`Attachment ${event.attachmentId} belongs to another Session`);
+      }
+    }
+    if (event.commandId !== null && event.commandId !== undefined) {
+      const command = this.getCommand(event.commandId);
+      if (!command) throw new Error(`Command ${event.commandId} was not found`);
+      if (command.sessionId !== event.sessionId) {
+        throw new Error(`Command ${event.commandId} belongs to another Session`);
+      }
+    }
+  }
+
+  private assertGloballyUnusedId(id: string): void {
+    const row = prepared(
+      this.db,
+      `SELECT id FROM sessions WHERE id = @id
+         UNION ALL SELECT id FROM session_attachments WHERE id = @id
+         UNION ALL SELECT id FROM session_commands WHERE id = @id
+         UNION ALL SELECT id FROM session_events WHERE id = @id
+         UNION ALL SELECT id FROM session_command_receipts WHERE id = @id
+         LIMIT 1`,
+    ).get({ id }) as unknown;
+    if (row !== undefined) throw new Error(`Ledger id ${id} already exists`);
+  }
+
+  private assertOpen(): void {
+    if (!this.isOpen()) throw new Error("Session ledger transaction is closed");
+  }
+}
+
+/**
+ * One projection row, read back into the domain shape.
+ *
+ * Null survives as null through every measured column. Healing an absent token
+ * count to zero here would be the one place a reader could never detect it:
+ * the row would claim a provider reported nothing consumed, rather than that
+ * it reported nothing at all.
+ */
+function decodeUsageEntry(row: unknown, context: string): SessionUsageEntry {
+  const value = asRecord(row, context);
+  return {
+    sessionId: readString(value.session_id, `${context}.session_id`),
+    projectId: readString(value.project_id, `${context}.project_id`),
+    ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),
+    occurredAt: readInteger(value.occurred_at, `${context}.occurred_at`),
+    cause: enumValue(value.cause, SESSION_USAGE_CAUSES, `${context}.cause`),
+    providerId: readString(value.provider_id, `${context}.provider_id`),
+    modelId: readString(value.model_id, `${context}.model_id`),
+    inputTokens: readNullableInteger(value.input_tokens, `${context}.input_tokens`),
+    outputTokens: readNullableInteger(value.output_tokens, `${context}.output_tokens`),
+    cacheReadTokens: readNullableInteger(value.cache_read_tokens, `${context}.cache_read_tokens`),
+    cacheWriteTokens: readNullableInteger(
+      value.cache_write_tokens,
+      `${context}.cache_write_tokens`,
+    ),
+    costUsd: readNullableNumber(value.cost_usd, `${context}.cost_usd`),
+    costBasis: enumValue(value.cost_basis, COST_BASES, `${context}.cost_basis`),
+  };
+}
+
+function decodeSession(row: unknown, context: string): Session {
+  const value = asRecord(row, context);
+  const session: Session = {
+    id: readString(value.id, `${context}.id`),
+    projectId: readString(value.project_id, `${context}.project_id`),
+    ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),
+    // Stored since migration 040 and pinned there by a CHECK; a value outside
+    // the vocabulary is corruption and fails loudly like any other column.
+    role: enumValue(value.role, SESSION_ROLES, `${context}.role`),
+    parentSessionId: readNullableString(value.parent_session_id, `${context}.parent_session_id`),
+    title: readNullableString(value.title, `${context}.title`),
+    createdAt: readInteger(value.created_at, `${context}.created_at`),
+  };
+  assertSession(session, context);
+  return session;
+}
+
+function decodeCommand(row: unknown, context: string): SessionCommand {
+  const value = asRecord(row, context);
+  const command: SessionCommand = {
+    id: readString(value.id, `${context}.id`),
+    sessionId: readString(value.session_id, `${context}.session_id`),
+    createdAt: readInteger(value.created_at, `${context}.created_at`),
+    intent: decodeSessionCommandIntent(
+      parseJson(value.intent, `${context}.intent`),
+      `${context}.intent`,
+    ),
+    route:
+      value.route === null
+        ? null
+        : decodeSessionCommandRoute(parseJson(value.route, `${context}.route`), `${context}.route`),
+  };
+  assertCommand(command, context);
+  return command;
+}
+
+function decodeReceiptRow(row: unknown, context: string): CommandReceipt {
+  const value = asRecord(row, context);
+  const receipt = decodeCommandReceipt(
+    parseJson(value.receipt, `${context}.receipt`),
+    `${context}.receipt`,
+  );
+  const id = readString(value.id, `${context}.id`);
+  const commandId = readString(value.command_id, `${context}.command_id`);
+  const sequence = readInteger(value.sequence, `${context}.sequence`);
+  const recordedAt = readInteger(value.recorded_at, `${context}.recorded_at`);
+  if (
+    receipt.id !== id ||
+    receipt.commandId !== commandId ||
+    receipt.sequence !== sequence ||
+    receipt.recordedAt !== recordedAt
+  ) {
+    throw new Error(`${context} columns do not match receipt JSON`);
+  }
+  return receipt;
+}
+
+function decodeEvent(row: unknown, context: string): SessionEvent {
+  const value = asRecord(row, context);
+  if (value.provenance === null) {
+    throw new Error(`${context} is missing its referenced provenance row`);
+  }
+  const event: SessionEvent = {
+    ...decodeProjectionEvent(row, context),
+    provenance: decodeSessionEventProvenance(
+      parseJson(value.provenance, `${context}.provenance`),
+      `${context}.provenance`,
+    ),
+  };
+  assertSessionEvent(event, context);
+  return event;
+}
+
+/**
+ * The same envelope and payload without the provenance column (VC-355).
+ *
+ * The payload decode is the shared correctness boundary — including the
+ * retired-kind signal the pagination loop depends on — so it is unchanged.
+ * Only the audit field, which no fold reads, is absent. `assertSessionEvent`
+ * is deliberately NOT run here: it validates provenance, and this row
+ * intentionally has none. The envelope checks it would perform are the field
+ * readers below, which already throw on the same malformed values.
+ */
+function decodeProjectionEvent(row: unknown, context: string): SessionProjectionEvent {
+  const value = asRecord(row, context);
+  const attachmentId = readNullableString(value.attachment_id, `${context}.attachment_id`);
+  const commandId = readNullableString(value.command_id, `${context}.command_id`);
+  const event: SessionProjectionEvent = {
+    ...(typeof value.command_origin === "string"
+      ? {
+          commandOrigin: readSessionOrigin(
+            parseJson(value.command_origin, `${context}.command_origin`),
+          ),
+        }
+      : {}),
+    id: readString(value.id, `${context}.id`),
+    sessionId: readString(value.session_id, `${context}.session_id`),
+    sequence: readInteger(value.sequence, `${context}.sequence`),
+    occurredAt: readInteger(value.occurred_at, `${context}.occurred_at`),
+    recordedAt: readInteger(value.recorded_at, `${context}.recorded_at`),
+    payload: decodeSessionEventPayload(
+      parseJson(value.payload, `${context}.payload`),
+      `${context}.payload`,
+    ),
+  };
+  if (attachmentId !== null) event.attachmentId = attachmentId;
+  if (commandId !== null) event.commandId = commandId;
+  return event;
+}
+
+function assertCommand(value: SessionCommand, context: string): void {
+  if (!value.id || !value.sessionId || !Number.isInteger(value.createdAt)) {
+    throw new Error(`${context} is not a valid Session command`);
+  }
+  decodeSessionCommandIntent(value.intent, `${context}.intent`);
+  if (value.route !== null) decodeSessionCommandRoute(value.route, `${context}.route`);
+}
+
+function parseJson(value: unknown, context: string): unknown {
+  if (typeof value !== "string") throw new Error(`${context} must be JSON text`);
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error(`${context} contains invalid JSON`);
+  }
+}
+
+function asRecord(value: unknown, context: string): SqlRow {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  return value as SqlRow;
+}
+
+function rowValue(row: unknown, key: string, context: string): unknown {
+  return asRecord(row, context)[key];
+}
+
+function readString(value: unknown, context: string): string {
+  if (typeof value !== "string") throw new Error(`${context} must be a string`);
+  return value;
+}
+
+function readNullableString(value: unknown, context: string): string | null {
+  return value === null ? null : readString(value, context);
+}
+
+function readNullableInteger(value: unknown, context: string): number | null {
+  return value === null ? null : readInteger(value, context);
+}
+
+/** A money amount: the one stored number that is not whole, and never NaN. */
+function readNullableNumber(value: unknown, context: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a finite number`);
+  }
+  return value;
+}
+
+function checkpointDigest(encoded: string): string {
+  return createHash("sha256").update(encoded).digest("hex");
+}
+
+function readInteger(value: unknown, context: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${context} must be an integer`);
+  }
+  return value;
+}
+
+function enumValue<const T extends readonly string[]>(
+  value: unknown,
+  values: T,
+  context: string,
+): T[number] {
+  if (typeof value !== "string" || !values.includes(value)) {
+    throw new Error(`${context} has an unsupported value`);
+  }
+  return value as T[number];
+}

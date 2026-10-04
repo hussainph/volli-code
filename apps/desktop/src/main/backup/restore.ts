@@ -28,14 +28,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } fro
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
-import { blobsRoot, writeBlob } from "../blob-store";
-import { MIGRATIONS, migrate } from "../db/migrations";
-import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
+import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import {
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,
   transcriptReferenceForId,
-} from "../session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/transcript-artifacts";
 import {
   BLOB_PREFIX,
   readBackupBundle,
@@ -43,7 +44,7 @@ import {
   type BackupManifest,
   type ReadBackupBundle,
 } from "./bundle";
-import { decodeValue } from "./data-document";
+import { decodeValue, isSchemaMarkerRow } from "./data-document";
 import type { BackupDataDocument, BackupProblem } from "./data-document";
 import { BACKUP_INCLUDED_TABLES } from "./decisions";
 
@@ -62,6 +63,50 @@ export interface RestoreRequest {
   now: number;
 }
 
+/**
+ * What a restore says about credentials (VC-559).
+ *
+ * No bundle carries a credential, encrypted or not, whichever secret-key
+ * adapter sealed them on the machine that wrote it: the macOS keychain, a
+ * headless host's key file, or one this build has never heard of. So a bundle
+ * from a Mac restores onto a headless host, or back, exactly as it restores
+ * onto the machine that made it, and nothing undecryptable is ever written.
+ * What the restore leaves alone is this profile's own credential files
+ * (`session-secrets.enc`, a headless `session-secrets.key`,
+ * `mcp-credentials.json`) and Pi's `auth.json` outside the profile: they are
+ * not profile entries the swap moves. The person re-enters on this machine
+ * whatever was stored only on the other one.
+ */
+export interface RestoreCredentials {
+  /** Always false. Kept as a field so a reader never has to infer it. */
+  carried: false;
+  /** What to enter or sign in to again here, unless this profile already had it. */
+  reenter: readonly RestoreCredentialKind[];
+  /** The sentence a restore surface shows. */
+  message: string;
+}
+
+export type RestoreCredentialKind =
+  | "session-secrets"
+  | "mcp-credentials"
+  | "web-search-keys"
+  | "model-sign-ins";
+
+export const RESTORE_CREDENTIALS: RestoreCredentials = Object.freeze({
+  carried: false,
+  reenter: Object.freeze([
+    "session-secrets",
+    "mcp-credentials",
+    "web-search-keys",
+    "model-sign-ins",
+  ] as const),
+  message:
+    "Backups never carry credentials. Anything stored only on the machine that made this " +
+    "backup needs entering again here: saved Session secrets, MCP server values and " +
+    "sign-ins, web search keys, and model provider sign-ins. Credentials this profile " +
+    "already had are unchanged.",
+});
+
 export interface RestoreReport {
   /** Where the profile that was there before now sits, untouched. */
   replacedPath: string;
@@ -72,6 +117,8 @@ export interface RestoreReport {
   usage: { rows: number; meteredFrom: number };
   artifactsVerified: number;
   projectPaths: Record<string, string>;
+  /** No credential travelled; what to re-enter. See {@link RestoreCredentials}. */
+  credentials: RestoreCredentials;
 }
 
 export type RestoreResult =
@@ -162,15 +209,18 @@ function writeRows(
     // triggers' guesses go first.
     if (table === "ticket_event_sequence") db.exec("DELETE FROM ticket_event_sequence");
     if (table === "session_event_sequence") db.exec("DELETE FROM session_event_sequence");
-    counts[table] = data.rows.length;
-    if (data.rows.length === 0) continue;
+    // A hand-built or foreign bundle's schema marker is never written back:
+    // the migrations this restore runs own the restored file's floor.
+    const rows = data.rows.filter((row) => !isSchemaMarkerRow(table, data.columns, row));
+    counts[table] = rows.length;
+    if (rows.length === 0) continue;
     const pathIndex = table === "projects" ? data.columns.indexOf("path") : -1;
     const idIndex = table === "projects" ? data.columns.indexOf("id") : -1;
     const statement = db.prepare(
       `INSERT INTO "${table}" (${data.columns.map((column) => `"${column}"`).join(", ")})
        VALUES (${data.columns.map(() => "?").join(", ")})`,
     );
-    for (const row of data.rows) {
+    for (const row of rows) {
       const values = row.map((value, index) => {
         if (index === pathIndex) {
           const id = String(decodeValue(row[idIndex] ?? null));
@@ -231,10 +281,17 @@ async function verifyStagedProfile(
   // that is the intended outcome rather than a false alarm: two writers filling
   // one table during a restore is a question someone has to answer here.
   for (const [table, expected] of Object.entries(counts)) {
-    const actual = (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
-    if (actual !== expected) {
+    // The schema marker is the migrations' own row, not the bundle's.
+    const actual = (
+      table === "app_state"
+        ? db
+            .prepare(`SELECT COUNT(*) AS n FROM app_state WHERE key IS NOT ?`)
+            .get(MIN_READER_VERSION_KEY)
+        : db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get()
+    ) as { n: number };
+    if (actual.n !== expected) {
       problems.push(
-        problem("verify", `${table} restored ${actual} rows; the bundle carried ${expected}.`),
+        problem("verify", `${table} restored ${actual.n} rows; the bundle carried ${expected}.`),
       );
     }
   }
@@ -495,6 +552,7 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
         usage,
         artifactsVerified: countArtifacts(bundle.manifest),
         projectPaths: { ...request.projectPaths },
+        credentials: RESTORE_CREDENTIALS,
       },
     };
   } catch (error) {

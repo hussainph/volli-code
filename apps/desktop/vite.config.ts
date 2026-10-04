@@ -618,10 +618,6 @@ export default defineConfig(({ mode }) => ({
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",
-        "**/src/main/blob-attach.ts",
-        "**/src/main/blob-collect.ts",
-        "**/src/main/blob-protocol.ts",
-        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
@@ -652,23 +648,10 @@ export default defineConfig(({ mode }) => ({
         // IPC handlers and `quit-gate.ts` are, only more so: this is the one
         // place in the app that calls `process.kill`, and every uncovered
         // branch in it is a branch nobody has watched decide whether to signal
-        // a stranger's process. The ledger's storage rides along, because a row
-        // it hands back wrong is what that decision is made from.
+        // a stranger's process. The ledger's storage (`db/spawn-ledger-repo.ts`)
+        // is held to the same bar in @volli/host-core's gate.
         "**/src/main/process/**",
-        "**/src/main/db/spawn-ledger-repo.ts",
-        "**/src/main/project-roots.ts",
-        // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
-        // for the reason the process modules above are: it is a concurrency
-        // guard, so its branches are the ones no screenshot and no manual pass
-        // can show. An uncovered branch here is a `worktree add` and a
-        // `worktree prune` nobody watched decide whether to run against one
-        // repository at the same time, which is a race git's own documentation
-        // names. Its sibling `worktree/git.ts` is deliberately NOT enrolled:
-        // one defensive fallback in it (a child-process failure carrying no
-        // `message`) is not reachable from a test without exporting an
-        // internal purely to satisfy the gate, and a contrived test is worth
-        // less than an honest gap.
-        "**/src/main/worktree/repository-turn.ts",
+        "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
         // guarantee it carries — five fields, one pragma, one app_state key,
@@ -682,10 +665,8 @@ export default defineConfig(({ mode }) => ({
         // inside the set this database recognises as its own. Both are silent
         // when wrong — one duplicates a project, the other strands checkouts
         // that no cleanup surface will ever list again.
-        "**/src/main/project-relink.ts",
-        "**/src/main/prompt-templates.ts",
+        "**/packages/host-core/src/project-relink.ts",
         "**/src/main/pty.ts",
-        "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
         "**/src/main/shutdown-deadline.ts",
@@ -693,33 +674,16 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
-        "**/src/main/session-runtime/boot-recovery.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
-        "**/src/main/db/export.ts",
-        "**/src/main/db/theme-repo.ts",
-        // Where "unread" is written down (VC-30). Enrolled beside the other
-        // named db modules for the reason the notification boundary is: a
-        // receipt read or written wrong is work a person never sees they have,
-        // and nothing on screen says the dot was the part that was broken.
-        "**/src/main/db/session-read-repo.ts",
-        // The Session concurrency budget (VC-339). In the gate because every
-        // branch of it is a rule about a machine nobody watches: a miscount
-        // hands one Session the whole box while three others build, and a
-        // missed no-clobber branch overwrites what a person put in their own
-        // login shell. Neither is visible anywhere until the laptop swaps.
-        "**/src/main/session-concurrency.ts",
+        // The db modules moved to @volli/host-core (VC-553) and took their gate
+        // entries with them; see that package's vite.config.ts. `export.ts`
+        // stays enrolled here because its covering test composes desktop
+        // Session code, and moves when that test can.
+        "**/packages/host-core/src/db/export.ts",
         "**/src/main/session-rpc-ipc.ts",
-        "**/src/main/session-runtime/sessions.ts",
-        "**/src/main/session-control/activity-watch.ts",
-        // The turn boundary that decides unread (VC-30), beside the watch it
-        // decorates: main is the only process that knows both that a turn ended
-        // and whether anyone was looking, so every branch of this is one nobody
-        // else can check. The peek's fold rides here too — it is the whole of
-        // what a card is allowed to say about a Session it never adopted.
-        "**/src/main/session-control/session-read-watch.ts",
-        "**/src/main/session-control/peek-content.ts",
+        "**/src/main/experiments.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

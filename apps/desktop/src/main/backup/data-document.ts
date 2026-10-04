@@ -20,7 +20,8 @@
  * database that no restore output ever touches.
  */
 import Database from "better-sqlite3";
-import { migrate } from "../db/migrations";
+import { migrate, SCHEMA_HEAD } from "@volli/host-core/db/migrations";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import { BACKUP_INCLUDED_TABLES, redactionsForTable } from "./decisions";
 import type { RedactionRule } from "./decisions";
 
@@ -169,14 +170,42 @@ export interface BuildBackupDataOptions {
   now: number;
 }
 
-/** Reads every included table out of `db` into a data document. */
+/**
+ * Whether a row is the database's minimum reader version (VC-602). That is a
+ * fact about one FILE's schema, not data: the migration runner derives it for
+ * whatever database a restore builds, so a bundle never carries it and a
+ * restore never writes one from a bundle.
+ */
+export function isSchemaMarkerRow(
+  table: string,
+  columns: readonly string[],
+  row: readonly unknown[],
+): boolean {
+  return table === "app_state" && row[columns.indexOf("key")] === MIN_READER_VERSION_KEY;
+}
+
+/**
+ * Reads every included table out of `db` into a data document.
+ *
+ * The stamped `schemaVersion` always describes the columns and tables the
+ * document actually carries (VC-602). A database from a newer, compatible
+ * build (`user_version` above this build's head) is stamped with THIS build's
+ * head and carries only the columns this build's schema has: a newer build
+ * restores that bundle by migrating it up. Stamping the file's own version
+ * over this build's table list is how a v57 build once wrote a v58 bundle
+ * without `workspace_epochs` that no build could restore.
+ */
 export function buildBackupDataDocument(
   db: Database.Database,
   options: BuildBackupDataOptions,
 ): BackupDataDocument {
+  const sourceVersion = db.pragma("user_version", { simple: true }) as number;
+  const ownColumns = sourceVersion > SCHEMA_HEAD ? referenceSchema(SCHEMA_HEAD).columns : null;
   const tables: Record<string, BackupTableData> = {};
   for (const table of BACKUP_INCLUDED_TABLES) {
-    const columns = columnsOf(db, table);
+    const columns = columnsOf(db, table).filter(
+      (column) => ownColumns === null || (ownColumns.get(table) ?? []).includes(column.name),
+    );
     // A table a later migration introduces is absent from an older profile.
     // Skipping it is what lets an older build's bundle be a real older
     // profile rather than one with empty tables invented for it; the reader
@@ -192,13 +221,15 @@ export function buildBackupDataDocument(
       .all() as unknown[][];
     tables[table] = {
       columns: names,
-      rows: rows.map((row) =>
-        row.map((value, index) => {
-          const encoded = encodeValue(value);
-          const redaction = redactions.find((entry) => entry.column === names[index]);
-          return redaction === undefined ? encoded : redact(encoded, redaction.rule);
-        }),
-      ),
+      rows: rows
+        .filter((row) => !isSchemaMarkerRow(table, names, row))
+        .map((row) =>
+          row.map((value, index) => {
+            const encoded = encodeValue(value);
+            const redaction = redactions.find((entry) => entry.column === names[index]);
+            return redaction === undefined ? encoded : redact(encoded, redaction.rule);
+          }),
+        ),
     };
   }
   // Migration 027 introduced the coverage row; a profile older than that has
@@ -211,7 +242,7 @@ export function buildBackupDataDocument(
   return {
     format: BACKUP_DATA_FORMAT,
     dataVersion: BACKUP_DATA_VERSION,
-    schemaVersion: db.pragma("user_version", { simple: true }) as number,
+    schemaVersion: Math.min(sourceVersion, SCHEMA_HEAD),
     appVersion: options.appVersion,
     createdAt: new Date(options.now).toISOString(),
     usageCoverage: { meteredFrom: coverage?.metered_from ?? 0 },

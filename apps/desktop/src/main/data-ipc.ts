@@ -1,8 +1,11 @@
+import { clientEventSink } from "./client-event-sink";
 import { randomUUID } from "node:crypto";
+import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import { statSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
+import type { DbHandle } from "@volli/host-core";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
@@ -16,22 +19,21 @@ import {
   validateUniquePrefix,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob, sessionLinkBudgetRefusal } from "./blob-attach";
+import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/blob-attach";
 import {
   createBlobLink,
   deleteBlobLink,
   listLinkViews,
   listMaterializableLinks,
-} from "./db/blobs-repo";
+} from "@volli/host-core/db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import { inspectProjectFolder, relinkProject } from "./project-relink";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { listMcpOperations } from "./db/mcp-operations-repo";
-import { McpSettingsService } from "./mcp/settings";
-import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
-import { removeTicketToolOutput } from "./pi-tool-output";
-import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
+import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
+import { McpSettingsService } from "@volli/host-core/mcp/settings";
+import { removeTicketToolOutput } from "@volli/host-core/pi-tool-output";
+import type { StopSessionByIdPorts } from "@volli/host-core/session-runtime/supervise-session";
 import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -92,8 +94,6 @@ import type {
   SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionStopInput,
-  SessionStopResult,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -141,10 +141,16 @@ import type {
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
-import { getAllAppState, setAppState } from "./db/app-state-repo";
-import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
-import { listAllLabels, listLabelsByProject, setLabelColor } from "./db/labels-repo";
+import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import {
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+} from "@volli/host-core/db/comments-repo";
+import { listTicketEvents, listTicketStatusEntries } from "@volli/host-core/db/events-repo";
+import { listAllLabels, listLabelsByProject, setLabelColor } from "@volli/host-core/db/labels-repo";
 import {
   countProjects,
   deleteProject,
@@ -159,7 +165,7 @@ import {
   updateProjectSessionDefaults,
   updateProjectSetupCommand,
   updateProjectSkillModes,
-} from "./db/projects-repo";
+} from "@volli/host-core/db/projects-repo";
 /**
  * Both listing channels build their rows through one roster-shaped read
  * (VC-131, VC-392). The provenance question lives beside the other Session read
@@ -172,9 +178,9 @@ import {
   readSessionPeekContent,
   sessionListingRowsForRoster,
   type SessionPeekContentPorts,
-} from "./session-control";
-import { readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
-import { prepared } from "./db/prepared";
+} from "@volli/host-core/session-control";
+import { readSessionUnread, writeSessionUnread } from "@volli/host-core/db/session-read-repo";
+import { prepared } from "@volli/host-core/db/prepared";
 import {
   getTicket,
   getTicketBody,
@@ -184,7 +190,7 @@ import {
   listTicketRosterByProject,
   listWorktreePaths,
   setTicketRetentionKeep,
-} from "./db/tickets-repo";
+} from "@volli/host-core/db/tickets-repo";
 import {
   archiveTicketCommand,
   createTicketCommand,
@@ -197,10 +203,10 @@ import {
   setTicketPriorityCommand,
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
-} from "./ticket-commands";
-import { detectProjectBaseBranchAsync } from "./project-base-branch";
+} from "@volli/host-core/ticket-commands";
+import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
 import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
-import { withTicketWake } from "./ticket-wake";
+import { withTicketWake } from "@volli/host-core/ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
@@ -233,22 +239,23 @@ import {
   trimAllWorktrees,
   trimFinishedWorktree,
   WorktreeChangeWatchManager,
-} from "./worktree";
-import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./worktree/coalesce";
-import { getWorktreeSnapshots } from "./worktree/snapshot";
-import { credentialHelperIssues } from "./credential-helper-diagnostics";
+} from "@volli/host-core/worktree";
+import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "@volli/host-core/worktree/coalesce";
+import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
+import { credentialHelperIssues } from "@volli/host-core/credential-helper-diagnostics";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
-} from "./worktree/paths";
-import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
-import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
+} from "@volli/host-core/worktree/paths";
+import { isOwnedWorktreePath, ownedContainers } from "@volli/host-core/worktree/containers";
+import { orphanCleanupEngine, worktreeHomeDir } from "@volli/host-core/worktree-runtime";
+import { worktreeDeps } from "./worktree-host";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
-/** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
-export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
+/** The result of the host's open+migrate attempt (`createHostCore`), fed into {@link registerDataIpcHandlers}. */
+export type { DbHandle };
 
 /**
  * The live SQLite database is its main file plus WAL-mode sidecars. A WAL
@@ -649,7 +656,7 @@ export function registerDataIpcHandlers(
       }
       const legacyProjects = sanitizeLegacyProjects(request.projects);
       const now = Date.now();
-      const run = db.transaction(() => {
+      withTransaction(db, () => {
         // Back up the raw source FIRST, in the same transaction: whatever
         // else happens, once this commits the untouched localStorage strings
         // live in SQLite, so boot can clear localStorage without ever making
@@ -670,10 +677,12 @@ export function registerDataIpcHandlers(
           });
         });
         for (const [key, value] of Object.entries(request.appState)) {
+          // Never the schema floor (VC-602): localStorage never held it, and a
+          // renderer-supplied value could lock builds out or let one in.
+          if (key === MIN_READER_VERSION_KEY) continue;
           setAppState(db, key, value, now);
         }
       });
-      run();
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
@@ -1268,7 +1277,7 @@ export function registerDataIpcHandlers(
         // (VC-358): the Session it names already exists by the time this runs,
         // and its staged blobs must adopt it all-or-nothing — a retry that
         // half-adopted would leave the chat unsure what it is holding.
-        db.transaction(() => {
+        withTransaction(db, () => {
           for (const draft of input.blobs) {
             createBlobLink(
               db,
@@ -1286,7 +1295,7 @@ export function registerDataIpcHandlers(
               now,
             );
           }
-        })();
+        });
         // The caller reads back the owner it named: the Ticket composer its
         // strip, the promoted chat its Session's — the links it just made and
         // any that were already there.
@@ -1446,40 +1455,6 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
-    // The person's stop (VC-269): the agent tool's three acts behind a door
-    // the renderer can reach, with `{ kind: "user" }` as the durable actor.
-    // A refusal the operation words (unknown id, a terminal session, a
-    // not-live target, an unrecorded stop) is the error; anything else is a
-    // bug and throws.
-    "volli:session-stop": async (input: SessionStopInput): Promise<SessionStopResult> => {
-      const runtime = options.sessionRuntime;
-      if (runtime === undefined) {
-        return {
-          ok: false,
-          error: "Volli's Session runtime is not available this launch, so nothing was stopped.",
-        };
-      }
-      try {
-        const outcome = await stopSessionById(
-          { sessionEngine, runtime },
-          {
-            operationId: randomUUID(),
-            sessionId: input.sessionId,
-            ...(input.reason === undefined ? {} : { reason: input.reason.trim() }),
-          },
-        );
-        return {
-          ok: true,
-          interrupted: outcome.interrupted,
-          released: outcome.released,
-          failures: [...outcome.failures],
-        };
-      } catch (error) {
-        if (error instanceof SuperviseSessionError) return { ok: false, error: error.message };
-        throw error;
-      }
-    },
-
     "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {
       const label = setLabelColor(db, input.labelId, input.color, Date.now());
       if (!label) return { ok: false, error: "Unknown label" };
@@ -1487,6 +1462,11 @@ export function registerDataIpcHandlers(
     },
 
     "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+      // The schema floor is the migration runner's alone (VC-602): a renderer
+      // write could lock older builds out of this database, or let them in.
+      if (key === MIN_READER_VERSION_KEY) {
+        return { ok: false, error: "This app state key is owned by the database." };
+      }
       setAppState(db, key, value, Date.now());
       return { ok: true };
     },
@@ -1928,18 +1908,22 @@ export function registerDataIpcHandlers(
         case "missing-on-disk":
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
-          return changeWatchManager.watch(sender, input.ticketId, resolved.target.worktreePath);
+          return changeWatchManager.watch(
+            clientEventSink(sender),
+            input.ticketId,
+            resolved.target.worktreePath,
+          );
       }
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(sender, input.ticketId),
+      changeWatchManager.pause(clientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(sender, input.ticketId),
+      changeWatchManager.resume(clientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(sender, input.ticketId);
+      changeWatchManager.unwatch(clientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 

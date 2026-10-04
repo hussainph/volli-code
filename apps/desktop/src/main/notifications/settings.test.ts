@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { DEFAULT_NOTIFICATION_PREFERENCES } from "@volli/shared";
 
-import { setAppState } from "../db/app-state-repo";
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { setAppState } from "@volli/host-core/db/app-state-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { NOTIFICATION_PREFERENCES_KEY } from "../notification-preferences";
 import {
   createNotificationSettings,

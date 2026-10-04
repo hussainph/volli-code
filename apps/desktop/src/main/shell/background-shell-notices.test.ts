@@ -17,7 +17,7 @@ import {
   type BackgroundShellNotice,
   type BackgroundShellOwner,
 } from "./background-shell-host";
-import { SecretStore } from "../secrets/store";
+import { SecretStore } from "@volli/host-core/secrets";
 
 const owner: BackgroundShellOwner = {
   sessionId: "session-1",

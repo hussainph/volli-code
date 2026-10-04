@@ -3,7 +3,7 @@ packages:
   - packages/*
 
 # Hard-fail `pnpm install` when the running Node is outside the root
-# `engines.node` pin (^24.13.0). Without this, an install under a stray older
+# `engines.node` pin (^24.15.0). Without this, an install under a stray older
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
 # succeeds and quietly builds native modules against the wrong ABI — the
 # desktop app then boots into a dead database with sign-in greyed out (VC-76).
@@ -82,6 +82,13 @@ minimumReleaseAgeExclude:
 
 overrides:
   vite: "catalog:"
+  # VC-598 / GHSA-p98j-92pf-mc4p: Monaco 0.57.0 pins vulnerable 3.4.15
+  # exactly, so re-resolution cannot select patched 3.4.16. Latest stable
+  # Monaco is still 0.57.0; scope this version override to that parent only.
+  # Remove when a stable Monaco update declares a patched DOMPurify.
+  # This fixes its npm dependency, NOT Monaco's embedded DOMPurify source;
+  # that separate upstream blocker is tracked on VC-600.
+  "monaco-editor@0.57.0>dompurify": "3.4.16"
   # One shiki 4 in the tree, ever. streamdown's dist types import bare "shiki"
   # and resolve whatever pnpm's hidden hoist holds — when a transitive range
   # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's then-4.3.1,

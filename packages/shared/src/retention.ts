@@ -1,7 +1,7 @@
 /**
  * The archive-readiness verdict (CONCEPT #16, issue #76) — pure,
  * dependency-free domain logic. Lives here rather than
- * `apps/desktop/src/main/worktree/retention.ts` per the repo's convention
+ * `packages/host-core/src/worktree/retention.ts` per the repo's convention
  * (pure domain computations belong in `@volli/shared`); that main-process
  * module re-exports everything below so the merge-watch and its IPC surface
  * need no changes.

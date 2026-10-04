@@ -31,10 +31,14 @@ vi.mock("electron", () => ({
 
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import { getFirstPaintHint, getGlobalAppearance, getGlobalCanvas } from "./db/theme-repo";
-import { getProjectById, insertProject } from "./db/projects-repo";
-import { openTestDb, testProject } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
+import {
+  getFirstPaintHint,
+  getGlobalAppearance,
+  getGlobalCanvas,
+} from "@volli/host-core/db/theme-repo";
+import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 
 let ctx: TestDb;
 let userDataDir: string;

@@ -82,18 +82,18 @@ try {
   // Loaded one at a time, not with `Promise.all`: `agent-commands.ts` pulls in
   // a large graph, and racing it against the others makes the SSR module
   // runner's fetch time out rather than merely be slow.
-  const { openVolliDb } = await vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts");
+  const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
   const { insertProject, listProjects } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/db/projects-repo.ts",
+    "/packages/host-core/src/db/projects-repo.ts",
   );
   const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+    "/packages/host-core/src/session-control/sqlite-ledger.ts",
   );
   const engineModule = await vite.ssrLoadModule("/packages/session-engine/src/index.ts");
   const concurrencyModule = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-concurrency.ts",
+    "/packages/host-core/src/session-concurrency.ts",
   );
-  const commandsModule = await vite.ssrLoadModule("/apps/desktop/src/main/agent-commands.ts");
+  const commandsModule = await vite.ssrLoadModule("/packages/host-core/src/agent-commands.ts");
 
   db = openVolliDb(join(temporaryDirectory, "volli.db"));
   for (let index = 0; index < PROJECT_COUNT; index += 1) {

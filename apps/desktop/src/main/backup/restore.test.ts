@@ -21,16 +21,24 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { blobFilePath, blobsRoot } from "../blob-store";
+import { blobFilePath, blobsRoot } from "@volli/host-core/blob-store";
 import { packArchive, unpackArchive } from "./archive";
-import { MIGRATIONS } from "../db/migrations";
-import { openRawDb } from "../db/test-helpers";
+import { MIGRATIONS } from "@volli/host-core/db/migrations";
+import { openRawDb } from "@volli/host-core/db/test-helpers";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
-} from "../session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/transcript-artifacts";
+import {
+  fileSecretKey,
+  SECRET_KEY_FILE_NAME,
+  SECRET_STORE_FILE_NAME,
+  SecretStore,
+} from "@volli/host-core/secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 import { createBackupBundle } from "./bundle";
-import { restoreBackupBundle } from "./restore";
+import { RESTORE_CREDENTIALS, restoreBackupBundle } from "./restore";
 import { createFixtureProfile } from "./test-fixture";
 import type { FixtureProfile } from "./test-fixture";
 
@@ -383,6 +391,99 @@ describe("restoreBackupBundle — a clean restore", () => {
   });
 });
 
+/**
+ * A bundle written under one secret-key adapter, restored under another
+ * (VC-559): a Mac whose secrets the keychain sealed, onto a headless host
+ * whose secrets a key file sealed.
+ */
+describe("restoreBackupBundle — across machines and secret-key adapters", () => {
+  /** The head of a keychain envelope, `VSC1`, and a value only the source machine had. */
+  const KEYCHAIN_SEALED = Buffer.concat([Buffer.from("VSC1"), Buffer.from("mac-only-sentinel")]);
+
+  function macBundle(): Buffer {
+    source = createFixtureProfile();
+    writeFileSync(join(source.root, SECRET_STORE_FILE_NAME), KEYCHAIN_SEALED, { mode: 0o600 });
+    writeFileSync(
+      join(source.root, MCP_CREDENTIAL_FILE_NAME),
+      JSON.stringify({ version: 1, servers: { s: { secrets: { "env:K": "mcp-sentinel" } } } }),
+      { mode: 0o600 },
+    );
+    return createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "0.2.0-test",
+      now: 1_700_000_000_000,
+    }).bytes;
+  }
+
+  it("carries no credential, keeps this host's own key and secrets, and says what to re-enter", async () => {
+    const bytes = macBundle();
+    const archive = gunzipSync(bytes).toString("latin1");
+    for (const absent of [
+      "mac-only-sentinel",
+      "mcp-sentinel",
+      SECRET_STORE_FILE_NAME,
+      MCP_CREDENTIAL_FILE_NAME,
+    ]) {
+      expect(archive, `${absent} must not travel`).not.toContain(absent);
+    }
+
+    const target = targetProfile();
+    const keyPath = join(target.root, SECRET_KEY_FILE_NAME);
+    const storePath = join(target.root, SECRET_STORE_FILE_NAME);
+    new SecretStore(storePath, fileSecretKey({ path: keyPath })).put({
+      name: "HOST_TOKEN",
+      value: "headless-host-value",
+      scope: "always",
+    });
+    const keyBefore = readFileSync(keyPath);
+    const storeBefore = readFileSync(storePath);
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.credentials).toEqual(RESTORE_CREDENTIALS);
+    expect(result.report.credentials).toMatchObject({
+      carried: false,
+      reenter: ["session-secrets", "mcp-credentials", "web-search-keys", "model-sign-ins"],
+    });
+    expect(result.report.credentials.message).toMatch(/^Backups never carry credentials\./);
+    // The host's own credential files are not profile entries the swap moves.
+    expect(readFileSync(keyPath).equals(keyBefore)).toBe(true);
+    expect(readFileSync(storePath).equals(storeBefore)).toBe(true);
+    expect(existsSync(join(result.report.replacedPath, SECRET_STORE_FILE_NAME))).toBe(false);
+    expect(existsSync(join(target.root, MCP_CREDENTIAL_FILE_NAME))).toBe(false);
+    // And they still open, in a fresh process, with the key that sealed them.
+    expect(
+      new SecretStore(storePath, fileSecretKey({ path: keyPath })).environment("s", "proj-alpha"),
+    ).toEqual({ HOST_TOKEN: "headless-host-value" });
+  });
+
+  it("writes no credential file into a host that had none", async () => {
+    const bytes = macBundle();
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    for (const name of [SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME, MCP_CREDENTIAL_FILE_NAME]) {
+      expect(existsSync(join(target.root, name)), `${name} must not appear`).toBe(false);
+    }
+  });
+});
+
 describe("restoreBackupBundle — an older bundle from a supported app version", () => {
   it("migrates the bundle's schema up and rebuilds the usage views there", async () => {
     const olderVersion = HEAD_SCHEMA - 1;
@@ -445,6 +546,120 @@ describe("restoreBackupBundle — an older bundle from a supported app version",
       source = createFixtureProfile();
     },
   );
+});
+
+/** The data document a bundle carries, parsed. */
+function dataDocument(bytes: Buffer): {
+  schemaVersion: number;
+  tables: Record<string, { columns: string[]; rows: unknown[][] }>;
+} {
+  const data = unpackArchive(bytes).find((entry) => entry.path === "data.json");
+  if (data === undefined) throw new Error("bundle has no data document");
+  return JSON.parse(data.bytes.toString("utf8")) as ReturnType<typeof dataDocument>;
+}
+
+describe("restoreBackupBundle — a backup of a database from a newer build (VC-602)", () => {
+  /**
+   * What a newer, compatible build leaves behind as far as this build can see:
+   * an additive table, an additive column with data in it, a `user_version`
+   * past this head, and a floor this head satisfies.
+   */
+  function newerCompatibleBundle(): Buffer {
+    source = createFixtureProfile();
+    source.db.exec(`
+      CREATE TABLE future_feature (id TEXT PRIMARY KEY);
+      INSERT INTO future_feature VALUES ('only-the-newer-build-knows');
+      ALTER TABLE tickets ADD COLUMN future_column TEXT DEFAULT 'newer';
+    `);
+    source.db.pragma(`user_version = ${HEAD_SCHEMA + 1}`);
+    source.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
+      .run(MIN_READER_VERSION_KEY, String(HEAD_SCHEMA));
+    return createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "0.2.0-test",
+      now: 1_700_000_000_000,
+    }).bytes;
+  }
+
+  it("stamps this build's head and carries only this build's tables and columns", () => {
+    const document = dataDocument(newerCompatibleBundle());
+
+    expect(document.schemaVersion).toBe(HEAD_SCHEMA);
+    expect(document.tables["future_feature"]).toBeUndefined();
+    expect(document.tables["tickets"]?.columns).not.toContain("future_column");
+    // The floor describes the source file, not data; a restore derives its own.
+    const appState = document.tables["app_state"];
+    const keyIndex = appState?.columns.indexOf("key") ?? -1;
+    expect(appState?.rows.map((row) => row[keyIndex])).not.toContain(MIN_READER_VERSION_KEY);
+  });
+
+  it("restores, which no build could do with a bundle stamped by the file's version", async () => {
+    const target = targetProfile();
+    const result = await restoreBackupBundle({
+      bundle: newerCompatibleBundle(),
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.bundleSchemaVersion).toBe(HEAD_SCHEMA);
+    const db = restoredDb(target.root);
+    try {
+      expect(db.pragma("user_version", { simple: true })).toBe(HEAD_SCHEMA);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM tickets").get()).toEqual({ n: 2 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("never writes a schema marker a bundle carries, and still verifies its counts", async () => {
+    const bytes = bundleBytes();
+    const entries = unpackArchive(bytes);
+    const data = entries.find((entry) => entry.path === "data.json");
+    const manifestEntry = entries.find((entry) => entry.path === "manifest.json");
+    if (data === undefined || manifestEntry === undefined) throw new Error("bundle is incomplete");
+    const document = JSON.parse(data.bytes.toString("utf8")) as {
+      tables: Record<string, { columns: string[]; rows: unknown[][] }>;
+    };
+    const appState = document.tables["app_state"]!;
+    appState.rows.push(
+      appState.columns.map((column) =>
+        column === "key" ? MIN_READER_VERSION_KEY : column === "value" ? "999" : 1,
+      ),
+    );
+    data.bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+    const manifest = JSON.parse(manifestEntry.bytes.toString("utf8")) as {
+      entries: Array<{ path: string; sizeBytes: number; sha256: string }>;
+    };
+    const entry = manifest.entries.find((item) => item.path === "data.json")!;
+    entry.sizeBytes = data.bytes.length;
+    entry.sha256 = createHash("sha256").update(data.bytes).digest("hex");
+    manifestEntry.bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: packArchive(entries),
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      // A forged floor of 999 would lock this very build out of its restore.
+      expect(
+        db.prepare("SELECT value FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
 });
 
 /** The claim every refusal makes: the profile is exactly as it was. */

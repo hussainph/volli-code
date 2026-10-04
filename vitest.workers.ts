@@ -20,7 +20,7 @@
  * ## The budget may lower this cap; it may never raise it
  *
  * `VITEST_MAX_WORKERS` is the vitest entry of the Session concurrency budget
- * (`apps/desktop/src/main/session-concurrency.ts`), and vitest re-reads it
+ * (`packages/host-core/src/session-concurrency.ts`), and vitest re-reads it
  * AFTER config resolution, assigning it over whatever a config said — over a
  * `--maxWorkers` flag too. Left alone, that inverts the point of this file: a
  * Session alone on an 8-core laptop is budgeted 8, and 8 would then overwrite a

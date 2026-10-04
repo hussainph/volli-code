@@ -16,7 +16,11 @@ import { lstat, readlink } from "node:fs/promises";
 import { basename } from "node:path";
 
 import type { CliSessionPathStatus, CliSystemPathIssue, CliToolStatus } from "../ipc/contract";
-import { LEGACY_GLOBAL_CLI_LINK, loginPathHasUserBin, userCliLinkPath } from "./agent-tools";
+import {
+  LEGACY_GLOBAL_CLI_LINK,
+  loginPathHasUserBin,
+  userCliLinkPath,
+} from "@volli/host-core/agent-tools";
 
 export interface CliStatusDeps {
   home: string;

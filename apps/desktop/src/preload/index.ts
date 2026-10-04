@@ -59,6 +59,7 @@ import type {
   ArtifactCreateResult,
   BootstrapResult,
   DatabaseRecoveryListResult,
+  DatabaseRecoveryFaultResult,
   DatabaseRecoveryRestoreResult,
   BrowserPictureInput,
   BrowserPictureResult,
@@ -208,8 +209,6 @@ import type {
   SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionStopInput,
-  SessionStopResult,
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
@@ -424,6 +423,9 @@ const api = {
     list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
     restore: (): Promise<DatabaseRecoveryRestoreResult> =>
       invoke("volli:database-recovery-restore"),
+    /** Which recovery screen to show: a damaged database, or one from a newer Volli (VC-602). */
+    fault: (): Promise<DatabaseRecoveryFaultResult> => invoke("volli:database-recovery-fault"),
+    quit: (): Promise<Result> => invoke("volli:database-recovery-quit"),
   },
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
@@ -697,13 +699,6 @@ const api = {
      */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
-    /**
-     * Stops a Session's work as the person (VC-269): the Activity Island's
-     * armed "Stop subagent". Records the stop with the `user` actor, then
-     * interrupts and releases; the row it moves arrives on `onActivity`.
-     */
-    stop: (input: SessionStopInput): Promise<SessionStopResult> =>
-      invoke("volli:session-stop", input),
     /**
      * Marks a Session read or unread (VC-30) — `U`, the row's context menu,
      * opening it, or answering it from a peek card.

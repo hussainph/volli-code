@@ -82,7 +82,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-import { internSessionEventProvenance } from "../src/main/db/session-event-provenance.ts";
+import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
 import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,

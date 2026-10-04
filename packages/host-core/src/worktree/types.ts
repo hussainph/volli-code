@@ -1,0 +1,86 @@
+/**
+ * Shared types for the worktree module (worktree-support §2). One injected
+ * `deps` object threads the SQLite handle, the git runner seam, an optional
+ * `~` override (tests), and the phase-broadcast callback the later IPC-wiring
+ * stage connects — so nothing in here reaches for a process-global.
+ */
+import type Database from "better-sqlite3";
+import type { WorktreePhase } from "@volli/shared";
+
+import type { RunGit } from "../project-base-branch";
+
+export type { RunGit } from "../project-base-branch";
+
+/**
+ * The async git runner seam. Same discipline as {@link RunGit} — args array,
+ * never a shell string, stderr captured into a `GitError` — but over
+ * `execFile` so a read cannot block the main process. Used by the Change Set
+ * verbs, which run several commands over the whole worktree on every debounced
+ * filesystem event.
+ */
+export type RunGitAsync = (args: readonly string[], cwd: string) => Promise<string>;
+
+/**
+ * Reads a path's mtime in epoch ms, or `null` when it does not exist. A seam for
+ * the same reason {@link RunGit} is: the suite drives it, never the disk.
+ */
+export type StatMtimeMs = (path: string) => number | null;
+// The phase vocabulary lives in @volli/shared; the renderer consumes it over
+// `volli:worktree-phase`. This module re-exports it so
+// internal callers keep one import site.
+export type { WorktreeIdentity } from "@volli/shared";
+export type { WorktreePhase } from "@volli/shared";
+
+/**
+ * The single injected dependency bundle every public entrypoint takes. `home`
+ * overrides `~` so tests can point `.volli/worktrees` at a temp dir; `onPhase`
+ * is the broadcast seam (wired to IPC later) invoked on every phase transition;
+ * `blobsRoot` is the userData Blob-bytes root `ensure`'s post-copy
+ * materialize step reads from (issue #77 PR 2) — tests/scripted harnesses point
+ * it at a temp dir; functions that never touch attachments ignore it.
+ */
+export interface WorktreeDeps {
+  db: Database.Database;
+  git: RunGit;
+  /**
+   * The non-blocking runner every async worktree path uses. It is REQUIRED:
+   * defaulting a missing test or production bundle to a real runner would let a
+   * caller silently stop exercising its injected seam, which is exactly how a
+   * later edit could put VC-383's reads back on Electron main.
+   */
+  gitAsync: RunGitAsync;
+  /**
+   * The mtime reader behind `listBranches`' fetch-age answer. Omitted callers
+   * fall back to the real `statMtimeMs`; it lives here rather than as a trailing
+   * positional argument so one bundle carries every seam the module has.
+   */
+  statMtimeMs?: StatMtimeMs;
+  home?: string;
+  /**
+   * The clock the orphan scan's and cleanup's dwell-time gate reads (VC-113).
+   * Injected for the same reason every other seam here is: a test that has to
+   * wait 14 real days to observe a deletion is not a test. Omitted callers get
+   * `Date.now`.
+   */
+  now?: () => number;
+  onPhase?: (ticketId: string, phase: WorktreePhase) => void;
+  blobsRoot: string;
+}
+
+/**
+ * The worktree module's Result: an explicit tagged union rather than the
+ * shared intersection-style `Result` (which folds `T` into the success object
+ * and can't carry a `void`/`string[]` payload cleanly). The `error` string is
+ * the human-facing message the caller toasts.
+ */
+export type WorktreeResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export function ok<T>(value: T): WorktreeResult<T> {
+  return { ok: true, value };
+}
+
+export function err<T>(error: string): WorktreeResult<T> {
+  return { ok: false, error };
+}
+
+export type { Database };

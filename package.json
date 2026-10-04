@@ -1,6 +1,6 @@
 {
   "name": "volli-code",
-  "version": "0.2.1-canary.6",
+  "version": "0.2.1",
   "private": true,
   "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
   "license": "Apache-2.0",
@@ -38,7 +38,7 @@
     "yaml": "2.9.0"
   },
   "engines": {
-    "node": "^24.13.0"
+    "node": "^24.15.0"
   },
   "packageManager": "pnpm@11.10.0"
 }

@@ -29,7 +29,7 @@
 import { sessionHostNoticeMetadata } from "@volli/shared";
 import type { SessionHostNoticeMetadata } from "@volli/shared";
 
-import type { BrowserHoldEvent } from "./tab-host";
+import type { BrowserHoldEvent } from "@volli/host-core/browser/backend";
 
 /**
  * One line of Volli's own words steered into a Session's live turn, and the

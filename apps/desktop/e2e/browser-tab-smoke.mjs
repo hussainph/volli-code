@@ -808,38 +808,34 @@ async function main() {
       const pillBefore = await holderPill(page).count();
       const cursorBefore = await cursorViewOver(app, secondUrl);
 
-      const alpha = await sessionWrite(app, "a", secondUrl);
-      const pill = await waitUntil("the holder pill for the Session", async () =>
-        (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
-      ).catch(() => false);
+      // Observe each projection as the write starts, not serially after the
+      // others. The pinned label is intentionally transient: a slow holder UI
+      // must not spend its whole visible lifetime before we look for its size.
+      // No write retry, longer timeout, or substitute for the real size report.
+      const [alpha, pill, cursor, labelSized] = await Promise.all([
+        sessionWrite(app, "a", secondUrl),
+        waitUntil("the holder pill for the Session", async () =>
+          (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
+        ).catch(() => false),
+        waitUntil("the cursor view over the plane", async () => {
+          const view = await cursorViewOver(app, secondUrl);
+          return view?.inside === true ? view : null;
+        }).catch(() => null),
+        // The overlay boots lazily. Its size report proves that the drawing
+        // grew around the pinned label; the drawing ACK starts the pin's clock.
+        waitUntil(
+          "the cursor view to grow around its pinned label",
+          async () => {
+            const view = await cursorViewOver(app, secondUrl);
+            return view !== null && view.cursor.width > 60 ? view.cursor : null;
+          },
+          { timeout: 15000 },
+        ).catch(() => null),
+      ]);
       const takeOverOffered = await page
         .getByRole("button", { name: "Take over", exact: true })
         .count();
       const dots = await holderDots(page).count();
-      const cursor = await waitUntil("the cursor view over the plane", async () => {
-        const view = await cursorViewOver(app, secondUrl);
-        return view?.inside === true ? view : null;
-      }).catch(() => null);
-      // The label is pinned for a moment when a hold begins, and the view is
-      // sized to the drawing: wider than the arrow alone while the label shows,
-      // which is the page's size report reaching main.
-      const labelSized = await waitUntil(
-        "the cursor view to grow around its pinned label",
-        async () => {
-          const view = await cursorViewOver(app, secondUrl);
-          return view !== null && view.cursor.width > 60 ? view.cursor : null;
-        },
-        // What this waits on is a renderer BOOT: the overlay's page is built
-        // lazily by the first draw, and only once it is listening can it be
-        // told to show the label and report the size that proves it. A dev Mac
-        // does that inside the label's own pin and a loaded CI runner takes
-        // seconds, so the old 1.5s bound failed on CI for every branch. The
-        // pin now runs from when the page can first draw (cursor-overlay.ts),
-        // which makes the label certain; this bound only has to outlast a slow
-        // boot.
-        { timeout: 15000 },
-      ).catch(() => null);
-
       const beta = await sessionWrite(app, "b", secondUrl);
 
       return {

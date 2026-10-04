@@ -18,8 +18,8 @@ vi.mock("electron", () => ({
 }));
 
 import { writeUpdateChannel } from "./auto-update";
-import { openTestDb, type TestDb } from "./db/test-helpers";
-import { writeSecret } from "./db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { writeSecret } from "@volli/host-core/db/secrets-repo";
 import {
   collectSupportInfo,
   registerSupportIpcHandlers,
