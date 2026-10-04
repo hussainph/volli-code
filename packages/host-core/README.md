@@ -148,8 +148,9 @@ before native exit. Host shutdown stops watches/notices, drains both Session
 owners, closes all MCP process groups and only then flushes observability. Its
 unchanged 15-second aggregate deadline is in `shutdown-deadline.ts`. The existing
 desktop quit/socket tests still hold that file at 100%; process coverage moved
-with its tests at the same 100% gate. Recovery's integration test and backup's
-file-decision test stay desktop because they still compose IPC and browser code.
+with its tests at the same 100% gate. Recovery's integration test stays desktop
+because it still composes IPC. All backup tests now run here: VC-561 moved the
+file-decision test's last desktop dependency, `browser/picture-disk`.
 `quiet-windows.ts` is unchanged, Node-only policy over injected structural
 interfaces; actual native windows and activation still belong to desktop.
 
