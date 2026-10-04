@@ -66,7 +66,8 @@ the entire multi-project profile. VC-588 will split that profile into one SQLite
 file per workspace plus a host-level file. `projects.id` already supplies its
 identity: current main-process project creators mint `randomUUID()`, and the
 pre-SQLite renderer did too (c1b5565ca); legacy import preserves those ids.
-VC-550's real-profile inspection found all six project ids to be UUIDs. No
+VC-550's real-profile inspection found all six project ids to be UUIDs (see
+VC-550's checkpoint and migration-verification comments for the evidence). No
 backfill, rekey or path-based identity is needed. Two projects can point at the
 same checkout and still be different workspaces.
 
@@ -149,7 +150,7 @@ object shape, authorize a worker, schedule it or contact one.
 | `workspace_epoch` | Authority generation under which this grant was made |
 | `granted_at` | Time of the grant, fixed for that generation |
 | `renewed_at` | Last successful renewal; initially equal to `granted_at` |
-| `expires_at` | Host-clock expiry, strictly after the valid renewal time |
+| `expires_at` | Host-clock expiry, strictly after `renewed_at` |
 | `released_at` | Null while unreleased; terminal release time otherwise |
 
 The authority grants 1 on first use; every transfer, re-grant after expiry,
@@ -171,9 +172,9 @@ The SQL UPDATE trigger rejects decreasing either epoch, changing ticket id,
 or changing holder, workspace epoch or grant time without raising lease epoch;
 a released grant cannot be revived in place. SQL cannot police filesystem
 writes, credential scope, expiry, renew-time monotonicity or worker liveness.
-VC-581 must enforce those, validate the workspace's current epoch and worker
-registration, and serialize grant changes through the authority transaction
-gate. Direct DELETE/INSERT or `REPLACE` can bypass the UPDATE trigger; they are
+VC-581 must enforce those, clear `released_at` on every new grant, validate
+the workspace's current epoch and worker registration, and serialize grant
+changes through the authority transaction gate. Direct DELETE/INSERT or `REPLACE` can bypass the UPDATE trigger; they are
 not valid renewal/transfer operations. This is an additive storage foundation,
 not an already-operational distributed lock.
 
@@ -236,6 +237,9 @@ today. 058's ticket-keyed lease does not yet express shared main-checkout
 ownership. VC-581 must settle that case before enabling worker execution there;
 never mint a durable checkout id from its path. VC-583 owns venue-label snapshots
 for history (renaming/revoking a worker must not relabel past execution).
+Restored history may name excluded worker registrations: retain the recorded
+venue id/kind, render its snapshot label or an unavailable-worker fallback, and
+never require a current worker row to read history or infer a live grant.
 
 ## Devices and pairing
 
@@ -266,8 +270,8 @@ mint display ids while disconnected. UUID identity, command idempotency and
 receipts remain separate from number allocation.
 
 Promotion must raise the next number beyond both existing tickets and the
-quarantined, unreplicated tail, and beyond existing `volli/<PREFIX>-<n>` branch
-handles. Do not recycle an abandoned number merely because the replica did not
+quarantined, unreplicated tail, and beyond existing
+`volli/<PREFIX>-<n>[-<slug>]` branch handles. Do not recycle an abandoned number merely because the replica did not
 see its ticket: humans and git refs may already refer to it. VC-591 owns that
 recovery scan. A prefix change affects presentation, not ticket or workspace
 identity.
