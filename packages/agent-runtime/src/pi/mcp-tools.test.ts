@@ -9,15 +9,23 @@ import {
   MCP_RESULT_MAX_BYTES,
   MCP_RESULT_MAX_IMAGES,
   mcpProviderToolName,
+  sanitizeMcpToolDefinition,
   type McpToolDefinition,
   type RuntimeMcpPort,
 } from "@volli/shared";
 
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  validateToolArguments,
+  type Api,
+  type Model,
+} from "@earendil-works/pi-ai";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { build } from "esbuild";
 import sharp from "sharp";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
 import { ToolOutputStore } from "./tool-output";
+import { compactProviderNative } from "./provider-compaction";
 import { createSessionTools, MCP_UNTRUSTED_DATA_WARNING, SAVED_TOOL_OUTPUT_WARNING } from "./tools";
 
 function definition(overrides: Partial<McpToolDefinition> = {}): McpToolDefinition {
@@ -71,7 +79,8 @@ describe("MCP Pi tool wrapper", () => {
     });
     const context = createContext({}, { codeGeneration: { strings: false, wasm: false } });
     // Match the renderer's script-src 'self': importing shared vocabulary must
-    // not compile Ajv validators. Catalog validation runs on the host later.
+    // not compile Ajv validators on import. Discovery and frozen replay invoke
+    // validation later; renderer replay under CSP is a separate issue (VC-636).
     expect(() => runInContext(bundled.outputFiles[0]!.text, context)).not.toThrow();
     expect(runInContext("typeof McpSchema.sanitizeMcpToolDefinition", context)).toBe("function");
   });
@@ -125,26 +134,14 @@ describe("MCP Pi tool wrapper", () => {
   });
 
   it.each([
-    [
-      "http://json-schema.org/draft-07/schema#",
-      { items: [{ type: "string" }], additionalItems: false },
-    ],
-    [
-      "https://json-schema.org/draft/2019-09/schema",
-      { items: [{ type: "string" }], additionalItems: false },
-    ],
+    ["http://json-schema.org/draft-07/schema#", { items: { type: "string" }, maxItems: 1 }],
+    ["https://json-schema.org/draft/2019-09/schema", { items: { type: "string" }, maxItems: 1 }],
     [
       "https://json-schema.org/draft/2020-12/schema",
       { prefixItems: [{ type: "string" }], items: false },
     ],
-    [
-      "https://json-schema.org/draft-07/schema#",
-      { items: [{ type: "string" }], additionalItems: false },
-    ],
-    [
-      "http://json-schema.org/draft/2019-09/schema",
-      { items: [{ type: "string" }], additionalItems: false },
-    ],
+    ["https://json-schema.org/draft-07/schema#", { items: { type: "string" }, maxItems: 1 }],
+    ["http://json-schema.org/draft/2019-09/schema", { items: { type: "string" }, maxItems: 1 }],
     [
       "http://json-schema.org/draft/2020-12/schema",
       { prefixItems: [{ type: "string" }], items: false },
@@ -157,10 +154,13 @@ describe("MCP Pi tool wrapper", () => {
         type: "object",
         properties: { tuple: { type: "array", ...tupleSchema, minItems: 1 } },
         required: ["tuple"],
-        additionalProperties: false,
       } as const;
+      const candidate = definition({ inputSchema });
+      const sanitized = sanitizeMcpToolDefinition({ ...candidate, serverName: "Fixture" });
+      expect(sanitized.ok).toBe(true);
+      if (!sanitized.ok) throw new Error(sanitized.reason);
       const call = vi.fn<RuntimeMcpPort["call"]>(async () => ({ content: [], isError: false }));
-      const registered = tool({ call }, { tool: definition({ inputSchema }) });
+      const registered = tool({ call }, { tool: sanitized.definition });
       expect(registered.parameters).toBe(inputSchema);
       const valid = {
         type: "toolCall" as const,
@@ -178,6 +178,149 @@ describe("MCP Pi tool wrapper", () => {
         expect(() => validateToolArguments(registered, { ...valid, arguments: { tuple } })).toThrow(
           "Validation failed",
         );
+      }
+      expect(registered.parameters).toBe(inputSchema);
+    },
+  );
+
+  it.each([
+    "http://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft/2019-09/schema",
+    "https://json-schema.org/draft-07/schema#",
+    "http://json-schema.org/draft/2019-09/schema",
+  ])(
+    "keeps %s tuples out of provider declarations, even though Pi can validate their arguments",
+    ($schema) => {
+      const inputSchema = {
+        $schema,
+        type: "object",
+        properties: {
+          pair: { type: "array", items: [{ type: "string" }], additionalItems: false },
+        },
+      };
+      const candidate = definition({ inputSchema });
+      expect(sanitizeMcpToolDefinition({ ...candidate, serverName: "Fixture" })).toEqual({
+        ok: false,
+        reason:
+          "input schema uses tuple `items` arrays, which model providers reject; the server should use 2020-12 `prefixItems`",
+      });
+    },
+  );
+
+  it.each([
+    "http://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft/2019-09/schema",
+    "https://json-schema.org/draft/2020-12/schema",
+  ])(
+    "emits a 2020-12-valid %s body through the actual Anthropic adapter and native compaction",
+    async ($schema) => {
+      const inputSchema = {
+        $schema,
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 1 },
+          filter: {
+            type: "object",
+            properties: { limit: { type: "integer", minimum: 1 } },
+            additionalProperties: false,
+          },
+        },
+        required: ["query"],
+      };
+      const candidate = definition({ inputSchema });
+      const sanitized = sanitizeMcpToolDefinition({ ...candidate, serverName: "Fixture" });
+      expect(sanitized.ok).toBe(true);
+      if (!sanitized.ok) throw new Error(sanitized.reason);
+      const registered = tool(
+        { call: async () => ({ content: [], isError: false }) },
+        { tool: sanitized.definition },
+      );
+      const model: Model<Api> = {
+        id: "claude-opus-5",
+        name: "Fixture",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 1_024,
+      };
+      const messages = [{ role: "user" as const, content: "fixture", timestamp: 1 }];
+      const sent: Record<string, unknown>[] = [];
+      // No real credentials or network: exercise Pi's request conversion, then
+      // end its stream with a synthetic error response after capturing the body.
+      const fetch = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => {
+        sent.push(JSON.parse(init!.body as string));
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            error: { type: "invalid_request_error", message: "fixture" },
+          }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+      await streamAnthropic(
+        model as Model<"anthropic-messages">,
+        normalizeContext({ messages, tools: [registered] }),
+        {
+          apiKey: "fixture-only",
+          fetch,
+          maxRetries: 0,
+        },
+      ).result();
+      expect(fetch).toHaveBeenCalledOnce();
+      const emitted = (sent[0]!["tools"] as { input_schema: Record<string, unknown> }[])[0]!
+        .input_schema;
+      expect(emitted).toEqual({
+        type: "object",
+        properties: inputSchema.properties,
+        required: inputSchema.required,
+      });
+      // With no declaration this runs the original 2020-12 meta-schema check.
+      const checkBody = (bodySchema: unknown) =>
+        sanitizeMcpToolDefinition({ ...candidate, serverName: "Fixture", inputSchema: bodySchema });
+      expect(checkBody(emitted).ok).toBe(true);
+      expect(registered.parameters).toBe(inputSchema);
+
+      const compactFetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        sent.push(JSON.parse(init!.body as string));
+        return new Response(
+          JSON.stringify(
+            String(url).endsWith("/count_tokens")
+              ? { input_tokens: 60_000 }
+              : {
+                  stop_reason: "compaction",
+                  content: [{ type: "compaction", content: "fixture summary" }],
+                },
+          ),
+          {
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+      const outcome = await compactProviderNative({
+        model,
+        messages,
+        tools: [registered],
+        enabled: true,
+        fetch: compactFetch,
+        models: {
+          getAuth: async () => ({ auth: { apiKey: "fixture-only" }, source: "test" }),
+        } as never,
+      });
+      expect(outcome.kind).toBe("compacted");
+      expect(compactFetch).toHaveBeenCalledTimes(2);
+      for (const request of sent.slice(1)) {
+        const raw = (request["tools"] as { input_schema: Record<string, unknown> }[])[0]!
+          .input_schema;
+        expect(raw).toEqual(inputSchema);
+        const { $schema: _declaredDialect, ...body } = raw;
+        expect(checkBody(body).ok).toBe(true);
       }
       expect(registered.parameters).toBe(inputSchema);
     },

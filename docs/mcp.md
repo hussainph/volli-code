@@ -565,17 +565,52 @@ or without a trailing empty `#` fragment):
 - 2019-09: `https://json-schema.org/draft/2019-09/schema`
 - 2020-12: `https://json-schema.org/draft/2020-12/schema`
 
-Without a declaration, the existing 2020-12 default applies. Unknown or malformed
-declarations are refused; Volli never downloads a meta-schema or resolves a
-server's `$ref` during discovery. Each recognized draft is checked against its
-own meta-schema: draft-07 and 2019-09 tuple `items` are valid, for instance, but
-2020-12 uses `prefixItems` instead. The published schema, including `$schema`,
-is kept unchanged in the catalog, frozen Session definition and Pi parameters;
-it is not rebuilt through TypeBox. Discovery's meta-schema check is distinct
-from Pi's TypeBox argument validation at call time.
+Without a declaration, the existing 2020-12 default applies. The entire
+pre-VC-621 `Ajv2020.validateSchema` acceptance path is preserved, including an
+empty `$schema` and bundled 2020-12 `/meta/*` URIs. Those declarations can exist
+in older frozen Sessions; refusing them after an upgrade would prevent replay.
+Unknown or malformed declarations still fail validation. Volli never downloads
+a meta-schema, resolves a server's `$ref`, or registers server schemas during
+discovery.
 
-A tool's **output schema** is checked against the same schema limits, but a
-failing one does not make the tool unusable: the schema is left off and the
+Newly admitted draft-07 and 2019-09 **input schemas** must pass both their own
+meta-schema and the 2020-12 meta-schema applied to a validation-only view without
+the root `$schema`. Valid old-draft tuple `items: [...]` arrays are therefore
+**unusable**: model providers reject them, potentially failing every turn in a
+Session. The catalog tells the server to publish 2020-12 `prefixItems` instead;
+Volli does not translate tuples or silently change the tool's meaning.
+
+Dual meta-validation alone is not a provider-compatibility guarantee. Legacy
+`dependencies` and recursive-reference keywords can lose semantics under
+2020-12. Combining `prefixItems` with old-draft `items` can also weaken constraints:
+old drafts ignore `prefixItems` and apply `items` to every element, whereas
+2020-12 applies `items` only after the prefix. Newly admitted old-draft inputs
+therefore cannot use `prefixItems`; the server must declare 2020-12 to use it.
+Pi's non-strict Anthropic adapter retains only root `type`,
+`properties`, and `required`. For newly admitted old-draft inputs, Volli also
+refuses references (`$ref`/`$dynamicRef`, including references into `definitions`
+or `$defs`) and root assertions the adapter drops, such as `additionalProperties`,
+`allOf`, and property dependencies. The reason names the keyword and asks the
+server to inline references, use 2020-12 dependencies, or put supported
+constraints inside `properties`. Literal examples/defaults are not schemas;
+unreferenced definitions and inert `additionalItems` beside non-tuple `items`
+do not add provider constraints. Plain old-draft object/property schemas remain
+usable. An old-draft object with root `additionalProperties: false` is outside
+this new admission subset, even without tuples.
+
+The published schema, including `$schema`, is kept unchanged in the catalog,
+frozen Session definition and Pi parameters; it is not rebuilt through TypeBox.
+Native compaction also receives that unchanged schema. These additional guards
+apply only to newly admitted input dialects, not schemas accepted by the original
+2020-12 check. Pre-existing provider projection limitations are not repaired by
+this change, and full provider/runtime dialect conformance is not promised.
+Discovery's meta-schema check is distinct from Pi's TypeBox argument validation
+at call time.
+
+A tool's **output schema** is checked against the same schema limits and its own
+bundled dialect's meta-schema, but not the provider input subset (output schemas
+are never sent to the model). A failing one does not make the tool unusable: the
+schema is left off and the
 tool works without it, and the main-process log says why. An output schema only
 describes the structured half of a result (see
 [What a call returns](#what-a-call-returns)); the model never sees it.

@@ -138,6 +138,50 @@ describe("discoverMcpServer", () => {
     });
   });
 
+  it("marks old-draft provider hazards unusable while preserving safe plain definitions", async () => {
+    const plain = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: { query: { type: "string" } },
+    };
+    const tuple = {
+      ...plain,
+      properties: { pair: { type: "array", items: [{ type: "string" }], additionalItems: false } },
+    };
+    const connection = client([
+      { name: "plain", inputSchema: plain },
+      { name: "tuple", inputSchema: tuple },
+      { name: "dependencies", inputSchema: { ...plain, dependencies: { query: ["limit"] } } },
+      { name: "unknown", inputSchema: { ...plain, $schema: "https://example.invalid/dialect" } },
+    ]);
+    const catalog = await discoverMcpServer({
+      server,
+      enabledToolNames: ["plain", "tuple", "dependencies", "unknown"],
+      signal: new AbortController().signal,
+      open: async () => connection,
+      workspacePath: "/repo",
+    });
+    expect(catalog[0]).toMatchObject({ enabled: true, error: null });
+    expect(catalog[0]!.definition!.inputSchema).toBe(plain);
+    expect(catalog[1]).toMatchObject({
+      enabled: false,
+      definition: null,
+      error:
+        "input schema uses tuple `items` arrays, which model providers reject; the server should use 2020-12 `prefixItems`",
+    });
+    expect(catalog[2]).toMatchObject({
+      enabled: false,
+      definition: null,
+      error: expect.stringContaining("dependentRequired"),
+    });
+    expect(catalog[3]).toMatchObject({
+      enabled: false,
+      definition: null,
+      error: "input schema must be valid JSON Schema",
+    });
+    expect(connection.close).toHaveBeenCalledOnce();
+  });
+
   it("fails duplicate names and tool-count overflow clearly and always closes the connection", async () => {
     const duplicate = client([
       { name: "echo", inputSchema: { type: "object" } },
