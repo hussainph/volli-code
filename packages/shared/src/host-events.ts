@@ -9,6 +9,7 @@ import type { FileSource } from "./file-ref";
  * desktop contract re-exports every one of them, so its readers are unchanged.
  */
 import type {
+  DeliberateMoveChoice,
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
@@ -16,7 +17,7 @@ import type {
 } from "./automation";
 import type { HarnessEvent } from "./harness/types";
 import type { HarnessEventOrder, SessionListingRow } from "./session";
-import type { HarnessId } from "./ticket";
+import type { TicketStatus, HarnessId } from "./ticket";
 import type { TicketEventActorKind } from "./ticket-events";
 
 /**
@@ -291,4 +292,21 @@ export interface FileChangedEvent extends FinalWatchEvent {
 export interface DirChangedEvent extends FinalWatchEvent {
   projectId: string;
   relPath: string;
+}
+
+/**
+ * A committed Deliberate move as main's armed-arrival coordinator receives it.
+ *
+ * Both move doors report through this one shape after persistence: renderer IPC
+ * may carry the Option-drag choice, while an explicit `volli ticket move`
+ * carries no choice. Same-column no-ops are never reported because they are not
+ * arrivals.
+ */
+export interface TicketMovedNotice {
+  projectId: string;
+  ticketId: string;
+  /** The column it left — the fact a post-commit re-read cannot recover. */
+  from: TicketStatus;
+  to: TicketStatus;
+  choice?: DeliberateMoveChoice;
 }

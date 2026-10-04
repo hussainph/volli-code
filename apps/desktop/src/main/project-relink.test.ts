@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AgentRequest } from "@volli/shared";
 
 import { insertProject, getProjectById, listProjects } from "@volli/host-core/db/projects-repo";
-import { projectForCreate } from "./agent-dispatch/resolution";
+import { projectForCreate } from "@volli/host-core/agent-dispatch/resolution";
 import {
   insertTicket,
   listTicketsByProject,

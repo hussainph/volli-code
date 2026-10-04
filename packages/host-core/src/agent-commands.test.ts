@@ -20,8 +20,8 @@ import type {
   SessionUsage,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
-import type { NotificationOutcome, NotificationRequest } from "./notifications/dispatch";
+import type { HarnessEventNotice, SessionHarnessNotice } from "@volli/shared";
+import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 
 import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot } from "@volli/host-core/blob-store";

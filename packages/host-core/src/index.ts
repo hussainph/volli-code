@@ -25,6 +25,8 @@ import type { PowerPort } from "./ports/power";
 import type { TrashPort } from "./ports/trash";
 import { createHostFileServices, type HostFileServices } from "./file-services";
 import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
+import { createHostAgentServices, type HostAgentServices } from "./agent-services";
+import { createHostAutomationServices, type HostAutomationServices } from "./automation-services";
 import {
   createHostMaintenanceServices,
   type HostMaintenanceServices,
@@ -111,6 +113,8 @@ export interface HostCore extends HostSessionServices {
   readonly runtimeServices: HostRuntimeServices;
   /** Staged durability/process construction, with no window-dependent start. */
   readonly maintenance: HostMaintenanceServices;
+  readonly agentServices: HostAgentServices;
+  readonly automations: HostAutomationServices;
   /** The client's capabilities, or one that refuses each readably when there is none. */
   readonly client: ClientCapabilityPort;
   readonly fileServices: HostFileServices;
@@ -176,6 +180,8 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     database,
     client,
     fileServices: createHostFileServices(ports),
+    agentServices: createHostAgentServices(ports),
+    automations: createHostAutomationServices(database.ok ? database.db : null, ports),
     databaseFailure,
     ...sessionServices,
     runtimeServices: createHostRuntimeServices(

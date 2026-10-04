@@ -207,7 +207,7 @@ import {
 import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
 import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
-import { withTicketWake } from "./ticket-wake";
+import { withTicketWake } from "@volli/host-core/ticket-wake";
 import {
   invalidateOrphanScan,
   orphanScanReport,

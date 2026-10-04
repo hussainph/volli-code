@@ -17,7 +17,7 @@
 import type Database from "better-sqlite3";
 import { displayTicketId, resolveAgentContext } from "@volli/shared";
 import type { AgentRequest, AgentResponse, Project, Ticket } from "@volli/shared";
-import type { WorktreeDiffMode } from "../../ipc/contract";
+import type { WorktreeDiffMode } from "@volli/shared";
 
 import {
   listArchivedTicketsByProject,

@@ -849,8 +849,8 @@ _Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
 
 **Ticket Wake**:
 One committed Ticket Event, fanned out in-process after its transaction
-commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
-stream: every mutation door feeds it, and the Watch registry listens on it. A
+commits (`packages/host-core/src/ticket-wake.ts`). The wake bus is the host's
+canonical post-commit stream: every mutation door feeds it, and the Watch registry listens on it. A
 wake is never a source of truth — the durable event it reports already is.
 _Avoid_: notification, broadcast (that is the window fan-out)
 

@@ -34,7 +34,7 @@ import {
   decideRegisteredHarnesses,
   recordHarnessDelivery,
   scanHarnessManifests,
-} from "./harness-registry";
+} from "@volli/host-core/harness-registry";
 import {
   recordHarnessChannelEvent,
   recordHarnessLaunch,

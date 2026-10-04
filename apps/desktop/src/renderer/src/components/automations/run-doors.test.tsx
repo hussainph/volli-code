@@ -21,7 +21,7 @@
  *  - `runner.run()` → the composed Instructions delivered as the Session's
  *    FIRST turn under the Run's durable ids, and the loud failure when the
  *    attach that would have carried them is refused:
- *    `main/automations/run.test.ts`.
+ *    `packages/host-core/src/automations/run.test.ts`.
  *  - the doors that never ask the renderer to run — the agent verb, schedule
  *    timer, and main-owned armed-column expiry — reach the same runner in
  *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and

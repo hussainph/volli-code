@@ -13,8 +13,11 @@ import {
   recordHarnessDelivery,
   scanHarnessManifests,
   trustedHarnessAdapters,
-} from "./harness-registry";
-import type { HarnessManifestScan, ScannedHarnessManifest } from "./harness-registry";
+} from "@volli/host-core/harness-registry";
+import type {
+  HarnessManifestScan,
+  ScannedHarnessManifest,
+} from "@volli/host-core/harness-registry";
 import { ensureHarnessRuntime } from "./harness-runtime";
 import {
   getRegisteredHarness,

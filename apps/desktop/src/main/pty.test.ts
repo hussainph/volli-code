@@ -101,7 +101,7 @@ import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } 
 import { PtyManager } from "@volli/host-core/pty/manager";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
-import { createAgentCommandService } from "./agent-commands";
+import { createAgentCommandService } from "@volli/host-core/agent-commands";
 import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
 import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";

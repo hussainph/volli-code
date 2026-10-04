@@ -156,7 +156,7 @@ The implementation and tests resolved several ambiguities in older copy:
 Under `apps/desktop/src`, primary sources included
 `main/session-runtime/sessions.ts`, `renderer/src/stores/chat-sessions.ts`,
 `renderer/src/stores/chat-drafts.ts`, `main/index.ts`,
-`main/automations/pending-armed-runs.ts`, `main/mcp/session-host.ts`,
+`packages/host-core/src/automations/pending-armed-runs.ts`, `main/mcp/session-host.ts`,
 `main/worktree/include.ts`, and `data-export-copy.ts`, plus shared model policy
 and ticket tests. The shared Verb Registry's
 public effects descriptions were corrected for armed arrivals and the

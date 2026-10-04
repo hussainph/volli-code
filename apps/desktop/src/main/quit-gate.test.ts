@@ -17,7 +17,7 @@ import {
   unsavedDocumentNames,
   updateInstallQuitInFlight,
 } from "./quit-gate";
-import { registerAgentSocketWillQuit } from "./agent-socket";
+import { registerAgentSocketWillQuit } from "./agent-socket-quit";
 
 afterEach(() => {
   vi.useRealTimers();
