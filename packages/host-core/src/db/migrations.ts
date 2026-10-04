@@ -14,18 +14,13 @@
  * pending. Read "Breaking an older reader" above {@link MIGRATIONS} before
  * adding a migration.
  */
-import { randomUUID } from "node:crypto";
-import { copyFileSync, lstatSync, renameSync, rmSync } from "node:fs";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
-import {
-  BACKUP_RETENTION_LOG_PREFIX,
-  logMigrationBackupRetention,
-  pruneMigrationBackups,
-} from "./backup-retention";
-import { assertDatabaseIntegrity, verifyMigrationBackup } from "./backup-integrity";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import { assertDatabaseIntegrity } from "./backup-integrity";
+import { MIGRATION_RECOVERY_ACTION, publishRollbackPoint } from "./database-file";
 import {
   compactMigrationDatabase,
   logMigrationCompaction,
@@ -3335,8 +3330,7 @@ export function migrate(
   dbPath: string,
   options: MigrateOptions = {},
 ): boolean {
-  const recovery =
-    "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
+  const recovery = MIGRATION_RECOVERY_ACTION;
   let currentVersion: number;
   try {
     currentVersion = db.pragma("user_version", { simple: true }) as number;
@@ -3365,81 +3359,9 @@ export function migrate(
         { cause: error },
       );
     }
-    const checkpoint = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
-    if (checkpoint.length !== 1 || checkpoint[0].busy !== 0) {
-      throw new Error(`Migration refused: WAL checkpoint did not complete. ${recovery}`);
-    }
-    const backupPath = `${dbPath}.backup-v${currentVersion}`;
-    // Stage separately so a failed copy/check cannot overwrite an existing
-    // clean rollback point at the same version (e.g. after a failed upgrade).
-    const stagedPath = `${backupPath}.pending-${randomUUID()}`;
-    copyFileSync(dbPath, stagedPath);
-    try {
-      verifyMigrationBackup(stagedPath);
-    } catch (error) {
-      const quarantinePath = `${stagedPath}.corrupt`;
-      try {
-        renameSync(stagedPath, quarantinePath);
-        console.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", name: quarantinePath });
-      } catch (quarantineError) {
-        console.error(BACKUP_RETENTION_LOG_PREFIX, {
-          action: "failed",
-          operation: "quarantine",
-          name: stagedPath,
-          error: quarantineError,
-        });
-      }
-      throw new Error(`Migration refused: safety copy failed integrity verification. ${recovery}`, {
-        cause: error,
-      });
-    }
-    // Readonly WAL verification can create empty WAL/SHM files. These belong
-    // only to our unique staged snapshot, not to any existing backup family.
-    for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
-    // A verified backup's readonly check can leave WAL/SHM behind. Preserve
-    // the entire old family before publishing, including on restore/re-upgrade.
-    // Never attach an old WAL or journal to the newly verified base file.
-    const preservedPath = `${backupPath}.preserved-${randomUUID()}`;
-    const moved: string[] = [];
-    try {
-      const existingSuffixes = ["", "-wal", "-shm", "-journal"].filter((suffix) => {
-        const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
-        if (info === undefined) return false;
-        if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
-        return true;
-      });
-      if (existingSuffixes.length > 0 && existingSuffixes[0] !== "") {
-        throw new Error("existing safety copy family is missing its base");
-      }
-      for (const suffix of existingSuffixes) {
-        renameSync(`${backupPath}${suffix}`, `${preservedPath}${suffix}`);
-        moved.push(suffix);
-      }
-      renameSync(stagedPath, backupPath);
-    } catch (error) {
-      // Restore sidecars before the base; on rollback failure leave the base
-      // aside, not at a rollback name with an incomplete family.
-      for (const suffix of moved.toReversed()) {
-        try {
-          renameSync(`${preservedPath}${suffix}`, `${backupPath}${suffix}`);
-          moved.pop();
-        } catch (rollbackError) {
-          console.error(BACKUP_RETENTION_LOG_PREFIX, {
-            action: "failed",
-            operation: "preserve",
-            name: preservedPath,
-            error: rollbackError,
-          });
-          break;
-        }
-      }
-      throw new Error(
-        `Migration refused: could not preserve and publish the safety copy. Recovery action: quit Volli and recover the complete backup family kept beside ${backupPath} before retrying.`,
-        { cause: error },
-      );
-    }
-    if (moved.length > 0)
-      console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preservedPath });
+    // The rollback point is a published database file: durable, verified,
+    // and never torn behind the migration it protects (VC-628).
+    publishRollbackPoint(db, dbPath, currentVersion);
   }
 
   const applyPendingMigrations = db.transaction(() => {
