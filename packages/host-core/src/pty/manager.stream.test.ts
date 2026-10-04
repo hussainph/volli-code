@@ -254,6 +254,30 @@ describe("detach (VC-560)", () => {
   });
 });
 
+describe("a stale disconnect hook (VC-560)", () => {
+  it("cannot close a terminal another client attached to after its own detach", async () => {
+    const first = makeClient("first");
+    const { sessionId, pty } = await start(first, "close");
+    // Capture the hook as an emitter would have already queued it.
+    let queued: (() => void) | undefined;
+    const register = first.sink.onceClosed.bind(first.sink);
+    first.sink.onceClosed = (listener) => {
+      queued = listener;
+      register(listener);
+    };
+    manager.detach(first.sink, sessionId);
+    manager.attach(first.sink, sessionId, { ...SIZE, onDisconnect: "close" });
+    const firstHook = queued;
+    manager.detach(first.sink, sessionId);
+    const second = makeClient("second");
+    manager.attach(second.sink, sessionId, SIZE);
+
+    firstHook?.();
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(manager.write(second.sink, sessionId, "x")).toEqual({ ok: true });
+  });
+});
+
 describe("ownership by client id (VC-509, VC-560)", () => {
   it("filters busy sessions by the caller's id, and leaves a detached one to the whole-host gate", async () => {
     const holder = makeClient("holder");

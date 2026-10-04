@@ -1116,16 +1116,20 @@ export class PtyManager {
     sink: HostClientEventSink,
     onDisconnect: TerminalDisconnectPolicy,
   ): AttachedClient {
-    const onClosed = (): void => {
-      if (onDisconnect === "close") {
-        this.killSession(sessionId);
-        return;
-      }
-      const session = this.sessions.get(sessionId);
-      if (session !== undefined && session.client?.sink === sink) this.releaseClient(session);
+    const attached: AttachedClient = {
+      sink,
+      onClosed: () => {
+        // Only this attachment's own disconnect acts: a hook already queued
+        // when its client detached must not touch a terminal that a later
+        // client now holds, so a removed listener cannot close it by accident.
+        const session = this.sessions.get(sessionId);
+        if (session === undefined || session.client !== attached) return;
+        if (onDisconnect === "close") this.killSession(sessionId);
+        else this.releaseClient(session);
+      },
     };
-    sink.onceClosed(onClosed);
-    return { sink, onClosed };
+    sink.onceClosed(attached.onClosed);
+    return attached;
   }
 
   /**
