@@ -23,6 +23,10 @@ export interface OAuthFixtureOptions {
   expiresIn?: number;
   /** Never answer a refresh-token request: an authorization server that hangs. */
   hangRefresh?: boolean;
+  /** Stall the authorization-code exchange before headers or partway through its JSON body. */
+  hangCodeExchange?: "headers" | "body";
+  /** Never answer the MCP session DELETE used by the post-sign-in probe's close. */
+  hangSessionDelete?: boolean;
   /**
    * RFC 9207: `correct` sends `iss` on the redirect and advertises it, `wrong`
    * sends another issuer's, `withheld` advertises it but sends none.
@@ -153,6 +157,7 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
       return;
     }
     if (request.method === "DELETE") {
+      if (options.hangSessionDelete) return;
       response.writeHead(200).end();
       return;
     }
@@ -309,6 +314,12 @@ export async function startOAuthFixture(options: OAuthFixtureOptions = {}): Prom
           computed !== stored.challenge
         ) {
           json(response, 400, { error: "invalid_grant" });
+          return;
+        }
+        if (options.hangCodeExchange === "headers") return;
+        if (options.hangCodeExchange === "body") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"access_token":');
           return;
         }
         json(response, 200, issue({ clientId, scope: stored.scope }));

@@ -173,10 +173,17 @@ export function McpPane({ project }: { project: Project }) {
    */
   async function signIn(serverId: string): Promise<string | null> {
     setSigningIn(serverId);
-    const result = await window.api.mcp.signIn({ projectId: project.id, serverId });
-    setSigningIn(null);
-    await refreshAccess();
-    return result.ok || result.cancelled ? null : result.error;
+    try {
+      const result = await window.api.mcp.signIn({ projectId: project.id, serverId });
+      await refreshAccess();
+      return result.ok || result.cancelled ? null : result.error;
+    } catch {
+      // An IPC rejection is not an OAuth outcome, but must still release the
+      // row/dialog and be said on the surface that requested the sign-in.
+      return "Could not sign in. Try again.";
+    } finally {
+      setSigningIn(null);
+    }
   }
 
   async function cancelSignIn(serverId: string): Promise<string | null> {
