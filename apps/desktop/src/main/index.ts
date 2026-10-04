@@ -2796,7 +2796,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
-    sessionEngine: sessionEngine ?? undefined,
+    sessionEngine,
     listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
@@ -3159,8 +3159,8 @@ app.whenReady().then(async () => {
   // one question about one machine, asked once.
   const ptyManager = registerTerminalIpcHandlers(
     dbHandle,
-    agentRuntime,
     sessionEngine,
+    agentRuntime,
     concurrencyEnvReader,
   );
   ptyManagerRef = ptyManager;

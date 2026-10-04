@@ -3,7 +3,7 @@ import { SESSION_LISTING_FOLD_CHUNK } from "@volli/session-engine";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "./index";
+import { createTestSessionEngine } from "../testing/session-engine";
 
 const immediates = vi.hoisted(() => ({ scheduled: 0 }));
 
@@ -29,7 +29,7 @@ const provenance = {
   venue: { id: "local", kind: "local" as const },
 };
 
-describe("createDesktopSessionEngine", () => {
+describe("createTestSessionEngine", () => {
   /**
    * The engine owns no Node API, so its default yield between roster chunks
    * is `setTimeout(0)` and its millisecond clamp. This host has `setImmediate`
@@ -42,7 +42,7 @@ describe("createDesktopSessionEngine", () => {
     const project = testProject({ id: "project" });
     insertProject(ctx.db, project);
     let id = 0;
-    const engine = createDesktopSessionEngine(ctx.db, {
+    const engine = createTestSessionEngine(ctx.db, {
       now: () => 100 + id,
       nextId: () => `id-${++id}`,
     });

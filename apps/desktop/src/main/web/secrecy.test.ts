@@ -41,6 +41,7 @@ vi.mock("electron", () => ({
 
 import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { readSecret } from "@volli/host-core/db/secrets-repo";
+import { createTestSessionEngine } from "../test-session-engine";
 import { registerDataIpcHandlers } from "../data-ipc";
 import {
   createPiNativeAdapter,
@@ -108,6 +109,7 @@ const context: PiRuntimeContext = {
 };
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 let settings: WebAccessSettings;
 
 async function invoke(channel: VolliIpcChannel, ...args: unknown[]): Promise<unknown> {
@@ -141,6 +143,7 @@ async function attach(): Promise<{ runtime: SpecRecordingRuntime; sink: Recordin
 beforeEach(() => {
   handlers.clear();
   ctx = openTestDb();
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
   settings = new WebAccessSettings({
     db: ctx.db,
     credentials: {
@@ -149,7 +152,7 @@ beforeEach(() => {
     },
   });
   registerWebAccessIpcHandlers(settings);
-  registerDataIpcHandlers({ ok: true, db: ctx.db }, {});
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 });
 
 afterEach(() => {

@@ -25,10 +25,6 @@
       "types": "./src/session-runtime/*.ts",
       "import": "./src/session-runtime/*.ts"
     },
-    "./session-wake": {
-      "types": "./src/session-wake.ts",
-      "import": "./src/session-wake.ts"
-    },
     "./session-concurrency": {
       "types": "./src/session-concurrency.ts",
       "import": "./src/session-concurrency.ts"

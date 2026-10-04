@@ -1,3 +1,4 @@
+import { createTestSessionEngine } from "../testing/session-engine";
 /**
  * The terminal stream contract's edges (VC-560), against a node-pty double:
  * who may attach, what a refused attach leaves untouched, and what a detach
@@ -96,6 +97,7 @@ beforeEach(async () => {
     host,
     testDb.db,
     "",
+    createTestSessionEngine(testDb.db),
     undefined,
     parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
   );

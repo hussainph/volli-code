@@ -173,7 +173,6 @@ import {
  * performance harness can measure the same function the handler calls.
  */
 import {
-  createDesktopSessionEngine,
   publishSessionListingRow,
   readSessionPeekContent,
   sessionListingRowsForRoster,
@@ -464,7 +463,7 @@ export function registerDataIpcHandlers(
      */
     onDeliberateMove?: (notice: TicketMovedNotice) => void;
     /** The app's single durable Session Engine. */
-    sessionEngine?: SessionEngine;
+    sessionEngine: SessionEngine | null;
     /**
      * The structured executor bindings this process holds right now. Session
      * attachments stay durably open across relaunch for lazy rehydration, so a
@@ -509,7 +508,7 @@ export function registerDataIpcHandlers(
      * output. Absent (tests, degraded boot) means nothing is removed.
      */
     piSessionsDirectory?: string;
-  } = {},
+  },
 ): void {
   if (!handle.ok) {
     registerDegradedIpcHandlers(DATA_CHANNELS, handle.error);
@@ -517,7 +516,8 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
-  const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  const sessionEngine = options.sessionEngine;
+  if (sessionEngine === null) throw new Error("Session Engine is unavailable");
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";

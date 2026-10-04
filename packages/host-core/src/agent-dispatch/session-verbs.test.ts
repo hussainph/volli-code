@@ -11,7 +11,7 @@ import {
   testTicket,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 
 let db: TestDb;
@@ -39,7 +39,7 @@ function fixture(observeTerminal = false) {
   insertTicket(db.db, testTicket("p", { id: "ticket", ticketNumber: 12 }));
   let clock = 1;
   let nextId = 0;
-  const engine = createDesktopSessionEngine(db.db, {
+  const engine = createTestSessionEngine(db.db, {
     now: () => clock,
     nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
   });

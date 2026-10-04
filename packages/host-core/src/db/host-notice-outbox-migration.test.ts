@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import { createDesktopSessionEngine } from "../session-control";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openRawDb, testProject } from "@volli/host-core/db/test-helpers";
 import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
@@ -26,7 +26,7 @@ async function version55() {
   migrate(db, path, { toVersion: 55 });
   insertProject(db, testProject({ id: "project" }));
   let id = 0;
-  const engine = createDesktopSessionEngine(db, { now: () => 100, nextId: () => `id-${++id}` });
+  const engine = createTestSessionEngine(db, { now: () => 100, nextId: () => `id-${++id}` });
   const created = await engine.createSession({
     commandId: "create",
     projectId: "project",

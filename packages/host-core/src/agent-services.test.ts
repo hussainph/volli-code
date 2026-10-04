@@ -4,7 +4,7 @@ import { createHostAgentServices, createHostAgentSocket } from "./agent-services
 import { HEADLESS_ATTENTION } from "./ports";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import { insertProject } from "./db/projects-repo";
-import { createDesktopSessionEngine } from "./session-control";
+import { createTestSessionEngine } from "./testing/session-engine";
 import { insertSession } from "./session-control/test-support";
 import { createSessionTokenRegistry } from "./session-tokens";
 
@@ -25,7 +25,7 @@ it("uses the same event bus and attention delivery for socket commands without a
     });
     const commands = services.createCommands({
       db: ctx.db,
-      sessionEngine: createDesktopSessionEngine(ctx.db),
+      sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "0.2.1",
       verifySessionToken: tokens.verify,
     });

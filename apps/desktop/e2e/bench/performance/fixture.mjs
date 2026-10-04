@@ -245,9 +245,10 @@ async function loadProductionModules() {
   restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
-    const [db, sessionControl, artifacts, shared, migrations] = await Promise.all([
+    const [db, sessionControl, sessionEngine, artifacts, shared, migrations] = await Promise.all([
       load("../../packages/host-core/src/db/index.ts"),
       load("../../packages/host-core/src/session-control/index.ts"),
+      vite.ssrLoadModule("@volli/session-engine"),
       load("../../packages/host-core/src/session-runtime/transcript-artifacts.ts"),
       vite.ssrLoadModule("@volli/shared"),
       load("../../packages/host-core/src/db/migrations.ts"),
@@ -256,6 +257,7 @@ async function loadProductionModules() {
       vite,
       ...db,
       ...sessionControl,
+      ...sessionEngine,
       ...artifacts,
       shared,
       // One source of truth; adding a migration cannot stale the fixture harness.
@@ -823,9 +825,12 @@ export async function generateFixture(input) {
     // publish that, so the runner never hard-codes a guess about the fold.
     const projectedLongChatTitle = (
       await modules
-        .createDesktopSessionEngine(db, {
-          now: () => BASE_TIME,
-          nextId: () => "manifest-id-not-used",
+        .createSessionEngine({
+          ledger: modules.createSqliteSessionLedger(db),
+          clock: { now: () => BASE_TIME },
+          ids: { next: () => "manifest-id-not-used" },
+          onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
+          yieldToHost: () => new Promise((done) => setImmediate(done)),
         })
         .getSession({ sessionId: sessionId(0) })
     )?.session?.title;
@@ -1012,9 +1017,12 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       decodedEventCount += 1;
     }
     const ledger = modules.createSqliteSessionLedger(db);
-    const engine = modules.createDesktopSessionEngine(db, {
-      now: () => BASE_TIME,
-      nextId: () => "verification-id-not-used",
+    const engine = modules.createSessionEngine({
+      ledger,
+      clock: { now: () => BASE_TIME },
+      ids: { next: () => "verification-id-not-used" },
+      onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
+      yieldToHost: () => new Promise((done) => setImmediate(done)),
     });
     const projections = await engine.listSessions({
       projectId: PROJECT_ID,
