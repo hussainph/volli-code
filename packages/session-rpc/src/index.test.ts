@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import type {
   CancelInteractionRequest,
   SessionRuntime,
@@ -14,8 +14,17 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
-import type { CommandRefusalSeverity } from "@volli/shared";
-import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
+import type { CommandReceipt, CommandRefusalSeverity, ExperimentSnapshot } from "@volli/shared";
+import type { HostReceiptStatus } from "@volli/host-protocol";
+import {
+  AsyncQueue,
+  createSessionRouter,
+  RpcDiagnosticLog,
+  sanitizeDiagnosticText,
+  type AppRouter,
+  type JsonUnsafeProcedures,
+  type SessionRouterJsonSafety,
+} from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
 type SessionCommand = SessionRuntimeSnapshot["projection"]["commands"][number];
@@ -364,6 +373,19 @@ function runtimeFixture(refusal: CommandRefusalSeverity | null = null): {
   };
 }
 
+// `IsJsonSafe` and the receipt vocabulary are specified in `@volli/host-protocol`;
+// these are the seams where this router is held to them (`docs/BOUNDARIES.md` rule 3).
+describe("the Session router's host protocol seams", () => {
+  it("guards every raw input and output published by AppRouter", () => {
+    expectTypeOf<JsonUnsafeProcedures<AppRouter>>().toEqualTypeOf<never>();
+    expectTypeOf<SessionRouterJsonSafety>().toEqualTypeOf<never>();
+  });
+
+  it("answers commands in the receipt vocabulary the host protocol names", () => {
+    expectTypeOf<CommandReceipt["status"]>().toEqualTypeOf<HostReceiptStatus>();
+  });
+});
+
 describe("RpcDiagnosticLog", () => {
   it("bounds entries, replays in order, and removes sensitive diagnostics", () => {
     let now = 0;
@@ -495,6 +517,79 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("reads and writes experimental flags through the registry-backed settings routes", async () => {
+    const fixture = runtimeFixture();
+    const writes: { id: string; enabled: boolean }[] = [];
+    let experimentSnapshot: ExperimentSnapshot = {
+      cloud: { enabled: false, source: "default" },
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readExperiments: () => experimentSnapshot,
+      writeExperiment: (id, enabled) => {
+        writes.push({ id, enabled });
+        experimentSnapshot = { cloud: { enabled, source: "storage" } };
+        return experimentSnapshot;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.settings.experiments()).resolves.toEqual({
+      cloud: { enabled: false, source: "default" },
+    });
+    await expect(caller.settings.setExperiment({ id: "cloud", enabled: true })).resolves.toEqual({
+      cloud: { enabled: true, source: "storage" },
+    });
+    expect(writes).toEqual([{ id: "cloud", enabled: true }]);
+  });
+
+  it("rejects unknown experiment ids, non-booleans, and non-JSON-safe snapshots", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readExperiments: () => ({ cloud: { enabled: false, source: "default" } }),
+      writeExperiment: (id, enabled) => {
+        writes.push({ id, enabled });
+        return { cloud: { enabled, source: "storage" } };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(
+      caller.settings.setExperiment({ id: "unknown", enabled: true } as never),
+    ).rejects.toThrow();
+    await expect(
+      caller.settings.setExperiment({ id: 42, enabled: true } as never),
+    ).rejects.toThrow();
+    await expect(
+      caller.settings.setExperiment({ id: "cloud", enabled: "true" } as never),
+    ).rejects.toThrow();
+    expect(writes).toEqual([]);
+
+    const invalidSnapshot = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readExperiments: () => ({ cloud: { enabled: "false", source: "unknown" } }) as never,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await expect(invalidSnapshot.settings.experiments()).rejects.toThrow();
+  });
+
+  it("reports when experimental settings callbacks are unavailable", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.settings.experiments()).rejects.toThrow(
+      "Experimental settings are unavailable",
+    );
+    await expect(caller.settings.setExperiment({ id: "cloud", enabled: true })).rejects.toThrow(
+      "Experimental settings are unavailable",
+    );
+  });
+
   it("preserves a minimal runtime projection without inventing attachment state", async () => {
     const fixture = runtimeFixture();
     const runtime: SessionRuntime = {
