@@ -20,8 +20,8 @@
  * (cmux #5032), so the user can watch it, interrupt it, and keep the shell
  * afterwards whatever it exited with.
  */
-import type { SetupFeedResult, SetupRun } from "../worktree";
-import { buildSetupSentinelLine, parseSetupSentinel } from "../worktree";
+import type { SetupFeedResult, SetupRun } from "@volli/host-core/worktree";
+import { buildSetupSentinelLine, parseSetupSentinel } from "@volli/host-core/worktree";
 
 /**
  * How a run ended: the command's own exit code, or `null` when the shell died

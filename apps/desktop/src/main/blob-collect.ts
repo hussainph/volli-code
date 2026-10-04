@@ -24,7 +24,7 @@
  */
 import type Database from "better-sqlite3";
 import { deleteBlob, listUnlinkedBlobHashes } from "@volli/host-core/db/blobs-repo";
-import { removeBlob } from "./blob-store";
+import { removeBlob } from "@volli/host-core/blob-store";
 
 export interface BlobCollectionReport {
   /** Hashes whose bytes and row were both dropped. */

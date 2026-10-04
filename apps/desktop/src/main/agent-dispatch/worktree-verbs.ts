@@ -28,9 +28,9 @@ import {
   readWorktreeDiff,
   readWorktreeStatus,
   syncTicketWorktree,
-} from "../worktree";
-import { isInside } from "../worktree/paths";
-import { getWorktreeSnapshots } from "../worktree/snapshot";
+} from "@volli/host-core/worktree";
+import { isInside } from "@volli/host-core/worktree/paths";
+import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
 import { failure } from "./context";
 import type { AgentCommandContext, EnvSessionIdentity } from "./context";
 import { dryRunResponse } from "./preview";

@@ -14,7 +14,7 @@ import {
   setTicketRetentionKeep,
   updateTicketFields,
 } from "@volli/host-core/db/tickets-repo";
-import type { NotificationRequest } from "../notifications/dispatch";
+import type { NotificationRequest } from "@volli/shared";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
 import type { WorktreeDeps } from "./types";

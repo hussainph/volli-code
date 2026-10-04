@@ -35,7 +35,7 @@
  * an open terminal, or a changed tracked file refuses there, and this pass
  * reports the refusal per worktree instead of inventing a second, looser rule.
  */
-import type { WorktreeTrimScanEntry, WorktreeTrimSweepReport } from "../../ipc/contract";
+import type { WorktreeTrimScanEntry, WorktreeTrimSweepReport } from "@volli/shared";
 
 import { listProjects } from "@volli/host-core/db/projects-repo";
 import { listWorktreeRefs } from "@volli/host-core/db/tickets-repo";

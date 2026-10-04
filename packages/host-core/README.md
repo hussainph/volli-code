@@ -58,6 +58,17 @@ VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
+VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
+`@volli/host-core/worktree/*`), `worktree-runtime`, `project-base-branch`,
+`project-relink`, `project-roots`, `blob-store`, `blob-materialize`,
+`ticket-commands` and `credential-helper-diagnostics` at matching subpath
+exports. `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
+desktop callers not yet moved pass those same facts through `worktree-host.ts`.
+`repository-turn.ts` is byte-identical: its per-process ordering has not changed.
+The repository-turn coverage entry moves at 100%; project roots and relink stay
+in desktop's 100% gate, pointing at their new paths, because their covering tests
+still compose desktop modules. The ensure test stays there for its blob importer.
+
 VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
 through is `src/ports/secret-key.ts`.
@@ -89,8 +100,13 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   compile until you do. Desktop code that has not moved yet keeps calling the
   `broadcastX` functions, which publish through the same bus.
 - **One client's stream** (a watched worktree, terminal output, a file
-  watch) is not a broadcast. The first move that needs one (VC-556, VC-557 or
-  VC-560) adds an addressed sink beside the bus, over the same topic map.
+  watch) is not a broadcast. `HostClientEventSink` (VC-556) uses the same topic
+  map as the bus, with a stable connection-scoped `id`, `publish`, `isClosed`,
+  `onceClosed` and `removeCloseListener`. Desktop's `clientEventSink` adapts
+  exactly the requesting WebContents: its channels and `destroyed` hooks are
+  unchanged. A headless host supplies its client's connection and disconnect
+  hooks. Unsubscribing removes only that subscription's hook; disconnect tears
+  it down immediately. VC-557 and VC-560 can use the same port.
 - **Alerts** go through `ports.attention.deliver`. A background observer
   ignores the outcome; a person's own request reports it.
 - **Client work** goes through `clientCapabilities(ports.client)`, or

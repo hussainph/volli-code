@@ -17,7 +17,7 @@ import type {
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
-import { blobsRoot } from "../blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import type { DbHandle } from "../data-ipc";
 import { SpawnLedger } from "../process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";

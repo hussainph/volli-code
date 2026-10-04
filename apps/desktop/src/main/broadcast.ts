@@ -68,6 +68,8 @@ const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => vo
   "pending-armed-run-settled": (notice) =>
     sendToEveryWindow("volli:pending-armed-run-settled", notice),
   "worktree-phase": (event) => sendToEveryWindow("volli:worktree-phase", event),
+  "worktree-changed": (event) => sendToEveryWindow("volli:worktree-changed", event),
+  "worktree-watch-error": (event) => sendToEveryWindow("volli:worktree-watch-error", event),
 };
 
 /** host-core's `HostEventBus` over every open window. */

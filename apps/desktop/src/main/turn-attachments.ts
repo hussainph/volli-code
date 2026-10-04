@@ -32,8 +32,8 @@ import {
   type RuntimeImageInput,
   type UIMessageLike,
 } from "@volli/shared";
-import { materializeBlobs } from "./blob-materialize";
-import { readBlob } from "./blob-store";
+import { materializeBlobs } from "@volli/host-core/blob-materialize";
+import { readBlob } from "@volli/host-core/blob-store";
 import { getBlob, listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 
 export interface TurnAttachments {
