@@ -425,24 +425,30 @@ export function McpServerDialog({
     setDraft((current) => ({ ...current, id, name: request.server.name }));
     setDraftSigningIn(id);
     setBusy("sign-in");
-    const result = await window.api.mcp.signIn({
-      projectId: project.id,
-      server: request.server,
-      ...(Object.keys(request.secrets).length === 0 ? {} : { secrets: request.secrets }),
-    });
-    setDraftSigningIn(null);
-    setBusy(null);
-    await onAccessChanged();
-    if (!result.ok) {
-      if (!result.cancelled) setError(result.error);
-      return;
+    try {
+      const result = await window.api.mcp.signIn({
+        projectId: project.id,
+        server: request.server,
+        ...(Object.keys(request.secrets).length === 0 ? {} : { secrets: request.secrets }),
+      });
+      await onAccessChanged();
+      if (!result.ok) {
+        if (!result.cancelled) setError(result.error);
+        return;
+      }
+      setError(null);
+      setBlocked(null);
+      // Blocked on the sign-in, so straight on to the tools it was hiding. The
+      // fields were locked while the browser was open, so this is still the
+      // draft that signed in. Show connecting, not waiting for the browser.
+      setDraftSigningIn(null);
+      await connect();
+    } catch {
+      setError("Could not sign in. Try again.");
+    } finally {
+      setDraftSigningIn(null);
+      setBusy(null);
     }
-    setError(null);
-    setBlocked(null);
-    // Blocked on the sign-in, so straight on to the tools it was hiding. The
-    // fields were locked while the browser was open, so this is still the
-    // draft that signed in.
-    await connect();
   }
 
   async function cancelDraftSignIn(): Promise<string | null> {
