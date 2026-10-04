@@ -120,6 +120,113 @@ describe("sanitizeMcpToolDefinition", () => {
   });
 
   it.each([
+    "http://json-schema.org/draft-07/schema",
+    "http://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft/2019-09/schema",
+    "https://json-schema.org/draft/2019-09/schema#",
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2020-12/schema#",
+  ])("accepts declared %s unchanged at discovery and frozen-set validation", ($schema) => {
+    const schema = {
+      $schema,
+      $id: "https://example.com/repeated-tool-schema",
+      type: "object",
+      properties: { query: { type: "string", minLength: 1 }, hidden: false },
+      required: ["query"],
+      additionalProperties: false,
+      // Annotations are data, not schemas or dialect declarations to resolve.
+      examples: [{ $schema: "urn:annotation-only" }],
+    } as const;
+    for (let repeat = 0; repeat < 2; repeat += 1) {
+      const result = sanitizeMcpToolDefinition(
+        toolCandidate({ inputSchema: schema, outputSchema: schema }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.reason);
+      expect(result.definition.inputSchema).toBe(schema);
+      expect(result.definition.outputSchema).toBe(schema);
+      const frozen = [result.definition];
+      expect(validateMcpToolDefinitions(frozen)).toBe(frozen);
+    }
+  });
+
+  it.each([
+    "http://json-schema.org/draft-07/schema#",
+    "https://json-schema.org/draft/2019-09/schema",
+  ])("validates tuple items using the declared dialect %s", ($schema) => {
+    const tuple = { type: "array", items: [{ type: "string" }], additionalItems: false };
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({ inputSchema: { $schema, type: "object", properties: { tuple } } }),
+      ).ok,
+    ).toBe(true);
+    for (const declaration of [{}, { $schema: "https://json-schema.org/draft/2020-12/schema" }]) {
+      expect(
+        sanitizeMcpToolDefinition(
+          toolCandidate({ inputSchema: { ...declaration, type: "object", properties: { tuple } } }),
+        ),
+      ).toEqual({ ok: false, reason: "input schema must be valid JSON Schema" });
+    }
+  });
+
+  it.each([
+    ["http://json-schema.org/draft-07/schema#", { items: [1] }],
+    ["https://json-schema.org/draft/2019-09/schema", { dependentSchemas: { query: 1 } }],
+    ["https://json-schema.org/draft/2020-12/schema", { prefixItems: [1] }],
+    ["http://json-schema.org/draft-07/schema#", { properties: { query: { minLength: -1 } } }],
+    ["https://json-schema.org/draft/2019-09/schema", { required: ["query", "query"] }],
+    [
+      "https://json-schema.org/draft/2020-12/schema",
+      { properties: { query: { type: "invalid" } } },
+    ],
+  ])("rejects malformed keywords under %s (%#)", ($schema, keywords) => {
+    const result = sanitizeMcpToolDefinition(
+      toolCandidate({ inputSchema: { $schema, type: "object", ...keywords } }),
+    );
+    expect(result).toEqual({ ok: false, reason: "input schema must be valid JSON Schema" });
+  });
+
+  it.each([
+    "",
+    "urn:unknown",
+    "https://example.com/custom-meta-schema",
+    "http://json-schema.org/draft-04/schema#",
+    "https://json-schema.org/draft/2020-12/schema#/$defs/schemaArray",
+    null,
+    false,
+    2020,
+    {},
+    [],
+  ])("rejects an unknown or malformed dialect %# without resolving it", ($schema) => {
+    const schema = { $schema, type: "object" };
+    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: schema }))).toEqual({
+      ok: false,
+      reason: "input schema must be valid JSON Schema",
+    });
+    expect(sanitizeMcpToolDefinition(toolCandidate({ outputSchema: schema }))).toMatchObject({
+      ok: true,
+      outputSchemaRejected: "output schema must be valid JSON Schema",
+      definition: expect.not.objectContaining({ outputSchema: expect.anything() }),
+    });
+  });
+
+  it("meta-validates references without fetching them or registering server meta-schemas", () => {
+    const schema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: { query: { $ref: "https://example.com/remote-definition" } },
+    };
+    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: schema })).ok).toBe(true);
+    const customMeta = { ...schema, $id: "urn:untrusted-meta" };
+    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: customMeta })).ok).toBe(true);
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({ inputSchema: { type: "object", $schema: "urn:untrusted-meta" } }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each([
     ["empty name", "", "must not be empty"],
     ["oversized name", "x".repeat(MCP_TOOL_NAME_MAX_CHARS + 1), "is too long"],
   ])("rejects an %s", (_label, toolName, reason) => {
@@ -179,32 +286,51 @@ describe("sanitizeMcpToolDefinition", () => {
     if (!result.ok) expect(result.reason).toContain(reason);
   });
 
-  it("rejects cyclic, over-deep, and over-populated schemas before accepting them", () => {
-    const cyclic: Record<string, unknown> = { type: "object" };
-    cyclic["self"] = cyclic;
-    let deep: Record<string, unknown> = { type: "object" };
-    for (let index = 0; index <= MCP_SCHEMA_MAX_DEPTH; index += 1) {
-      deep = { type: "object", properties: { next: deep } };
-    }
-    const populated = {
-      type: "object",
-      examples: Array.from({ length: MCP_SCHEMA_MAX_NODES }, () => null),
-    };
-    const nullPrototype = Object.assign(Object.create(null) as Record<string, unknown>, {
-      type: "object",
-    });
+  it.each([undefined, "http://json-schema.org/draft-07/schema#"])(
+    "preserves JSON, depth, size and node bounds with dialect %s",
+    ($schema) => {
+      const cyclic: Record<string, unknown> = { type: "object", ...($schema ? { $schema } : {}) };
+      cyclic["self"] = cyclic;
+      let deep: Record<string, unknown> = { type: "object" };
+      for (let index = 0; index <= MCP_SCHEMA_MAX_DEPTH; index += 1) {
+        deep = { type: "object", properties: { next: deep } };
+      }
+      const populated = {
+        type: "object",
+        examples: Array.from({ length: MCP_SCHEMA_MAX_NODES }, () => null),
+      };
+      const nullPrototype = Object.assign(Object.create(null) as Record<string, unknown>, {
+        type: "object",
+      });
 
-    for (const [inputSchema, reason] of [
-      [cyclic, "cycles"],
-      [deep, "nested too deeply"],
-      [populated, "too many values"],
-    ] as const) {
-      const result = sanitizeMcpToolDefinition(toolCandidate({ inputSchema }));
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.reason).toContain(reason);
-    }
-    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: nullPrototype })).ok).toBe(true);
-  });
+      for (const [inputSchema, reason] of [
+        [cyclic, "cycles"],
+        [deep, "nested too deeply"],
+        [populated, "too many values"],
+      ] as const) {
+        const result = sanitizeMcpToolDefinition(
+          toolCandidate({ inputSchema: { ...inputSchema, ...($schema ? { $schema } : {}) } }),
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.reason).toContain(reason);
+      }
+      for (const [extra, reason] of [
+        [{ description: "x".repeat(MCP_SCHEMA_MAX_CHARS) }, "too large"],
+        [{ default: Number.NaN }, "JSON values"],
+      ] as const) {
+        const result = sanitizeMcpToolDefinition(
+          toolCandidate({
+            inputSchema: { type: "object", ...extra, ...($schema ? { $schema } : {}) },
+          }),
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.reason).toContain(reason);
+      }
+      expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: nullPrototype })).ok).toBe(
+        true,
+      );
+    },
+  );
 
   it.each([
     [{ serverId: "bad id" }, "server id"],

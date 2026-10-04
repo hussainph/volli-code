@@ -11,6 +11,7 @@ import {
   type RuntimeMcpPort,
 } from "@volli/shared";
 
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import sharp from "sharp";
 import { MAX_READ_IMAGE_BASE64_BYTES } from "./read-image-processor";
 import { ToolOutputStore } from "./tool-output";
@@ -103,6 +104,53 @@ describe("MCP Pi tool wrapper", () => {
       structuredContent: { z: 1, a: { two: true } },
     });
   });
+
+  it.each([
+    [
+      "http://json-schema.org/draft-07/schema#",
+      { items: [{ type: "string" }], additionalItems: false },
+    ],
+    [
+      "https://json-schema.org/draft/2019-09/schema",
+      { items: [{ type: "string" }], additionalItems: false },
+    ],
+    [
+      "https://json-schema.org/draft/2020-12/schema",
+      { prefixItems: [{ type: "string" }], items: false },
+    ],
+  ])(
+    "Pi validates a raw %s schema without rebuilding or stripping its declaration",
+    async ($schema, tupleSchema) => {
+      const inputSchema = {
+        $schema,
+        type: "object",
+        properties: { tuple: { type: "array", ...tupleSchema, minItems: 1 } },
+        required: ["tuple"],
+        additionalProperties: false,
+      } as const;
+      const call = vi.fn<RuntimeMcpPort["call"]>(async () => ({ content: [], isError: false }));
+      const registered = tool({ call }, { tool: definition({ inputSchema }) });
+      expect(registered.parameters).toBe(inputSchema);
+      const valid = {
+        type: "toolCall" as const,
+        id: "dialect-call",
+        name: registered.name,
+        arguments: { tuple: ["query"] },
+      };
+      const args = validateToolArguments(registered, valid);
+      await registered.execute(valid.id, args, new AbortController().signal);
+      expect(call).toHaveBeenCalledWith(
+        expect.objectContaining({ arguments: valid.arguments }),
+        expect.any(AbortSignal),
+      );
+      for (const tuple of [["query", "extra"], [], [{}]]) {
+        expect(() => validateToolArguments(registered, { ...valid, arguments: { tuple } })).toThrow(
+          "Validation failed",
+        );
+      }
+      expect(registered.parameters).toBe(inputSchema);
+    },
+  );
 
   it("declares the frozen output schema, which the model is never sent", () => {
     const outputSchema = { type: "object", properties: { z: { type: "number" } } } as const;
