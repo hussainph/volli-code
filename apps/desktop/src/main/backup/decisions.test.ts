@@ -94,6 +94,18 @@ describe("table decisions", () => {
     }
   });
 
+  it("carries workspace epochs and keeps per-host cloud identity out of every bundle (VC-550)", () => {
+    // A restored profile is a new host: it must not inherit the source's host
+    // id, workers, leases or paired devices. The workspace's epoch counter is
+    // the exception, because restarting it could reissue a used epoch.
+    expect(tableBackupDecision("workspace_epochs")?.decision).toBe("include");
+    expect(BACKUP_INCLUDED_TABLES).toContain("workspace_epochs");
+    for (const table of ["host_identity", "workers", "checkout_leases", "devices"]) {
+      expect(tableBackupDecision(table)?.decision, `${table} must be excluded`).toBe("exclude");
+      expect(BACKUP_INCLUDED_TABLES).not.toContain(table);
+    }
+  });
+
   it("rebuilds the two usage projections rather than including or dropping them", () => {
     expect(tableBackupDecision("session_usage")?.decision).toBe("rebuild");
     expect(tableBackupDecision("session_usage_coverage")?.decision).toBe("rebuild");
