@@ -19,6 +19,7 @@ import {
 import {
   CODE_MODE_MODES,
   CODE_MODE_POLICY_MODELS_MAX,
+  EXPERIMENTS,
   MODEL_PICKER_VIEWS,
   isolatePerformanceObserver,
   MODEL_PURPOSES,
@@ -31,6 +32,8 @@ import {
   scrubSessionInteraction,
   type CodeModePolicy,
   type CompactionPolicy,
+  type ExperimentId,
+  type ExperimentSnapshot,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelPickerView,
@@ -184,6 +187,11 @@ export interface SessionRouterContext {
   /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
   readModelPickerView?: () => ModelPickerView;
   writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
+  readExperiments?: () => ExperimentSnapshot;
+  writeExperiment?: (
+    id: ExperimentId,
+    enabled: boolean,
+  ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -457,6 +465,21 @@ const codeModePolicySchema = z.object({
     ),
 });
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
+const experimentIdSchema = z.custom<ExperimentId>(
+  (id): id is ExperimentId =>
+    typeof id === "string" && EXPERIMENTS.some((experiment) => experiment.id === id),
+  "Unknown experiment id",
+);
+const experimentFlagSchema = z.object({
+  enabled: z.boolean(),
+  source: z.enum(["default", "storage", "environment"]),
+});
+const experimentSnapshotSchema = z.object(
+  Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<
+    ExperimentId,
+    typeof experimentFlagSchema
+  >,
+);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 /**
  * One account's subscription windows (VC-263). Every field is a number the
@@ -804,6 +827,22 @@ export function createSessionRouter() {
             unavailable("Sessions are unavailable on this transport");
           }
           return ctx.attachSession(input);
+        }),
+    }),
+    settings: t.router({
+      experiments: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readExperiments) {
+          unavailable("Experimental settings are unavailable on this transport");
+        }
+        return experimentSnapshotSchema.parse(ctx.readExperiments());
+      }),
+      setExperiment: instrumentedProcedure
+        .input(z.object({ id: experimentIdSchema, enabled: z.boolean() }))
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeExperiment) {
+            unavailable("Experimental settings are unavailable on this transport");
+          }
+          return experimentSnapshotSchema.parse(await ctx.writeExperiment(input.id, input.enabled));
         }),
     }),
     modelAccess: t.router({

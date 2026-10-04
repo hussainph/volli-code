@@ -1,10 +1,10 @@
 /**
- * The Settings rail: three groups, nine categories, app-wide always.
+ * The Settings rail: grouped categories, app-wide always.
  *
  * THE GROUPS CARRY THE RELATIONSHIP. Preferences is what you like, Services is
  * what Volli talks to on your behalf, System is the install itself. A flat list
- * of nine is a list you read top to bottom every time; three groups of three is
- * a structure you learn once.
+ * is a list you read top to bottom every time; grouped categories are a
+ * structure you learn once.
  *
  * `keywords` is hand-maintained and guarded — `settings-search-smoke.mjs` walks
  * every row label on both surfaces and fails if one cannot be reached from rail
@@ -14,16 +14,18 @@ import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { MODEL_TIER_ROWS } from "@volli/shared";
+import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
 
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
+import { ExperimentalSettings } from "@renderer/components/pages/experimental-settings";
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
@@ -323,6 +325,21 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "cache hit",
           ],
           content: <AgentObservabilitySettings />,
+        },
+        {
+          key: "experimental",
+          label: "Experimental",
+          icon: FlaskIcon,
+          keywords: [
+            "experiment",
+            "experiments",
+            "flags",
+            "feature flags",
+            "cloud",
+            "unstable",
+            ...EXPERIMENTS.map((experiment) => experiment.label.toLowerCase()),
+          ],
+          content: <ExperimentalSettings />,
         },
         {
           key: "updates",

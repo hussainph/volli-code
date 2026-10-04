@@ -530,6 +530,92 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("routes experimental flag reads and writes over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readExperiments: () => ({ cloud: { enabled: false, source: "default" } }),
+      writeExperiment: async (id, enabled) => {
+        writes.push([id, enabled]);
+        return { cloud: { enabled, source: "storage" } };
+      },
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "settings.experiments", input: undefined }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { cloud: { enabled: false, source: "default" } },
+    });
+    await expect(
+      invoke(sender(), {
+        procedure: "settings.setExperiment",
+        input: { id: "cloud", enabled: true },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { cloud: { enabled: true, source: "storage" } },
+    });
+    expect(writes).toEqual([["cloud", true]]);
+    await registration.close();
+  });
+
+  it("rejects invalid experimental flag requests before invoking the writer", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      writeExperiment: (id, enabled) => {
+        writes.push([id, enabled]);
+        return { cloud: { enabled, source: "storage" } };
+      },
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "settings.setExperiment",
+        input: { id: "unknown", enabled: true },
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+    await expect(
+      invoke(sender(), {
+        procedure: "settings.setExperiment",
+        input: { id: "cloud", enabled: 1 },
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+    expect(writes).toEqual([]);
+    await registration.close();
+  });
+
+  it("reports when experimental flag callbacks are unavailable over IPC", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+
+    await expect(
+      invoke(sender(), { procedure: "settings.experiments", input: undefined }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "NOT_IMPLEMENTED",
+        message: "Experimental settings are unavailable on this transport",
+      },
+    });
+    await expect(
+      invoke(sender(), {
+        procedure: "settings.setExperiment",
+        input: { id: "cloud", enabled: true },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "NOT_IMPLEMENTED",
+        message: "Experimental settings are unavailable on this transport",
+      },
+    });
+    await registration.close();
+  });
+
   it("routes product-owned Model Access inspection over IPC", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
