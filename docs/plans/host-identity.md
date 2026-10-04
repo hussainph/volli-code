@@ -7,8 +7,8 @@ must share. Migration 058 only reserves empty tables; none of the behavior
 below is activated by this PR.
 
 **Revised by VC-630** (architecture review, 2026-10-04, lens A candidate E),
-finding **F5**: host, device and worker names are bound to keys before VC-575
-pairs any device. See [Keys](#keys-proof-behind-the-names).
+finding **F5**: host, device and worker names are bound to keys in M2, before
+VC-575 pairs any device (owner decision, 2026-10-04). See [Keys](#keys-proof-behind-the-names).
 
 ## Identity table
 
@@ -271,7 +271,7 @@ not introduce another identity for the same paired principal.
 ## Keys: proof behind the names (F5)
 
 `hostId` is a UUID the host claims, and device credentials would otherwise be
-bearer secrets. VC-575 binds both to keys before any device pairs, as Syncthing
+bearer secrets. VC-575 binds both to keys in M2, before any device pairs, as Syncthing
 device ids (a hash of the device certificate) and Tailscale node keys do.
 Workers follow the same contract at registration (VC-580).
 
@@ -375,10 +375,10 @@ arbitration. None is permission to enable unsafe behavior. The owner reviews
 this naming contract in VC-550's PR; the implementing tickets resolve these
 flows before using it.
 
-## Open decisions for the owner
+## Decided (owner, 2026-10-04)
 
-- **Key-bound identity in M2** (F5, VC-575). Keys before any device pairs, as
-  specified above, or bearer device tokens for M2 and keys before M5, at the
-  cost of pairing every device again. The protocol spec's
-  [open decisions](host-protocol.md#open-decisions-for-the-owner) list it with
-  the others from VC-630.
+- **Key-bound identity lands in M2** (F5, VC-575). It covers host-key pinning
+  at pairing, the welcome signed over the client nonce, and short-lived device
+  and worker credentials that prove a key. Copy detection stays open. See the
+  protocol spec's
+  [decisions](host-protocol.md#decided-owner-2026-10-04).

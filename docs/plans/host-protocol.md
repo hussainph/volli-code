@@ -182,7 +182,7 @@ Classify by who owns the effect: durable workspace state or a worker-owned resou
 |---|---|---|
 | Window | Open/focus/close, menus, clipboard, native browser view | Session lifetime/commands, board state; app quit does not stop workers |
 | Theme | Client theme/appearance preference, OS resolution, CSS application | No theme-rendering RPC; any workspace-shared preference must be explicitly reclassified by VC-574, not inferred from today's app_state |
-| Update | Desktop updater/install/relaunch | Host/worker version and capabilities; any future host self-update is a separate authorized operation |
+| Update | Desktop updater/install/relaunch | Host/worker version and capabilities. The desktop installs and upgrades an exact-match hostd over SSH ([Decided 1](#decided-owner-2026-10-04)); any other host self-update is a separate authorized operation |
 | Pick | Native file/folder chooser on this client | Upload chosen bytes via authorized blobs; remote path selection/listing uses host resource ids |
 | Reveal | Finder/open external app on this client, only for an actual local locator | Resolve resource metadata/download; remote paths never sent blindly to Finder |
 
@@ -261,16 +261,17 @@ Add host-protocol as a **devDependency** for `/testing`; never import it in prod
 
 Workspace glob `packages/*` includes this package in `pnpm typecheck` (`vp run -r typecheck`) and CI's `Test (packages)` (`test:coverage`); desktop contract cases run in desktop test shards. Owner review of this spec, particularly binary limits/bootstrap naming, is required before migration tickets copy it. VC-564/575 own runtime enforcement and production security; VC-550 defines the identity/fence contract; copy detection and promotion arbitration remain implementation requirements for restore/promotion (VC-591) and control-plane work. This package does not solve those by typing them.
 
-## Open decisions for the owner
+## Decided (owner, 2026-10-04)
 
-1. **Provisioning hostd over SSH** (lens A, candidate D; ties into VC-615's open decisions). Should the desktop ship the matching hostd and install or upgrade it over SSH, as Zed and VS Code Remote-SSH do (probe → upload → systemd user unit → pair), with later updates draining and restarting when idle, as Amp runners do?
-   - **Yes:** version-range negotiation becomes the safety net rather than the daily path, and VC-615's "Add a host over SSH" is the main path. Costs: a hostd artifact per platform in each desktop release, an SSH client in the desktop, and an authorized host self-update (the Update row above).
-   - **No:** operators install the tarball, the hello's version refusal is the daily path, and VC-615 designs around it.
-   - Decide before VC-615 picks a direction and before VC-579's dogfood week.
-2. **Where the agent browser backend lives for a local hostd** (lens C, candidate C5; Rulings 2, 3 and 8; VC-619). Once the desktop always talks to a host, the `WebContentsView` backend sits in a process that is now a Client.
-   - **(a) Standalone Chromium on every hostd, local included** (VC-619). WebContentsView becomes viewer-only: the browser pane renders screencast frames and forwards input under the browser hold, as for a remote host. One backend kind per host, and agent browsing outlives app quit. Costs: a Chromium install on every Mac, and the person co-drives through screencast rather than the native view (native dialogs, passkeys and extensions behave differently).
-   - **(b) The desktop lends its WebContentsView backend to a same-machine hostd** as a connection capability. Native fidelity, but agent browsing stops when the app quits, which is against the M2 demo, and agent tools run on a Client, which Ruling 3 forbids for remote hosts.
-   - **(c) Both, chosen per Session at birth** from the host's capabilities (lens C, candidate C2). Two backend kinds per host.
-   - Decide before the VC-577 and VC-571 briefs are expanded.
-3. **Key-bound identity in M2** (F5, VC-575). The identity spec now requires host keys and key-proved, short-lived device and worker credentials before any device pairs. Confirm that, or choose bearer device tokens for M2 and keys before M5 (phones); the later choice means every device pairs again when keys arrive.
-4. **BOUNDARIES rules 2 and 5** (F1, F3). This revision amends both. Rule 2 now says the Workspace feed cursor is outside it. Rule 5 now names the command catalog as the one place a new domain command is declared. Approve these with the spec.
+The four questions VC-630 raised are settled.
+
+1. **The desktop provisions hostd over SSH** (lens A, candidate D; VC-615). "Add a host over SSH" probes the box, uploads the hostd that exactly matches the desktop's version, installs a systemd user unit and pairs, as VS Code Remote-SSH and Zed do. Upgrades take the same path. Pairing by code (`volli-hostd pair`) remains the fallback for a host that is already running. Version-range negotiation in the hello is the safety net, not the daily path.
+2. **Every hostd, local included, runs standalone Chromium** (lens C, candidate C5; VC-619: Chromium over a CDP pipe, plus screencast). That is the one backend code path; `WebContentsView` becomes a viewer.
+   - **Parity bar.** Chromium replaces today's in-app browser panel only when it meets every point below, measured on a loopback local hostd:
+     - **Agent capabilities:** every agent browser tool verb behaves identically on both backends, with the same results and refusals, proved by the backend-parameterized suite (VC-619).
+     - **Latency:** the 95th-percentile time from a person's input in the view to the screencast frame showing its effect is at most 100 ms. The view shows at least 30 frames per second while the page changes.
+     - **The person's interaction:** pointer, scroll, keyboard and text input (IME included), clipboard, navigation, and taking and releasing the browser hold all work in the view as they do in the panel today.
+   - **Extensibility.** The `BrowserBackend` seam stays open to further backends and capabilities, as optional members a host advertises. The owner has larger plans for the browser.
+   - **Fallback.** If Chromium cannot meet the parity bar, the fallback is option (c): the desktop's own view is lent to a same-machine host while the desktop is attached, and Chromium is used otherwise.
+3. **Key-bound identity lands in M2** (F5, VC-575). That covers host-key pinning at pairing, the welcome signed over the client nonce, and short-lived device and worker credentials that prove a key. Copy detection stays open.
+4. **The amendments to BOUNDARIES rules 2 and 5 are approved** as written (F1, F3).
