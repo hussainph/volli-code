@@ -33,7 +33,6 @@ import {
   closeAppBounded,
   createDeadline,
   launch,
-  waitForChildExit,
   waitUntil,
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
@@ -302,14 +301,32 @@ async function incompatibleScenario(seedPath, head, future) {
     }
   });
 
-  await check("Quit Volli quits the app", async () => {
+  await check("Quit Volli asks Electron main to quit", async () => {
+    // Playwright holds a debugger on main, and a self-initiated quit waits for
+    // it to disconnect, so the real exit cannot be awaited here. Record the
+    // call the button makes instead, then quit through the bounded close.
+    await bounded("intercept app.quit", () =>
+      run.app.evaluate(({ app }) => {
+        globalThis.vc602QuitCalls = 0;
+        globalThis.vc602OriginalQuit = app.quit;
+        app.quit = () => {
+          globalThis.vc602QuitCalls += 1;
+        };
+      }),
+    );
     await run.page.getByRole("button", { name: "Quit Volli", exact: true }).click();
-    const exit = await waitForChildExit(run.child, "quit from the refusal screen", {
-      timeout: 20000,
-      interval: 100,
-    });
-    assert.equal(exit.code, 0, JSON.stringify(exit));
-    runs.delete(run);
+    await waitUntil(
+      "quit requested from the refusal screen",
+      () =>
+        bounded("read quit calls", () => run.app.evaluate(() => globalThis.vc602QuitCalls === 1)),
+      { timeout: 5000, interval: 100 },
+    );
+    await bounded("restore app.quit", () =>
+      run.app.evaluate(({ app }) => {
+        app.quit = globalThis.vc602OriginalQuit;
+      }),
+    );
+    await closeRun(run);
   });
 
   await check("the refused database file is byte-identical after quit", async () => {
