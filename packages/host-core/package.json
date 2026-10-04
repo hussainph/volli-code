@@ -144,6 +144,10 @@
     "./worktree/*": {
       "types": "./src/worktree/*.ts",
       "import": "./src/worktree/*.ts"
+    },
+    "./browser/*": {
+      "types": "./src/browser/*.ts",
+      "import": "./src/browser/*.ts"
     }
   },
   "scripts": {

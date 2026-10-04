@@ -82,6 +82,12 @@ model sign-in service are exported as `@volli/host-core/<cluster>/*`;
 Web Access's legacy `safeStorage` migration, and Pi tests that compose desktop
 secret services stay in desktop.
 
+VC-561 adds `src/browser/` (`@volli/host-core/browser/*`): the agent browser's
+engine-agnostic half. `cdp-controller`, `snapshot-format`, `agent-coordinator`,
+the picture and trace stores and their disks, and `trace-steps` moved
+byte-identical; `agent-port` moved without its Electron wire. See
+[Browser backend](#browser-backend).
+
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot
 order, so legacy web keys migrate before any store reads them, and sign-in
@@ -264,6 +270,40 @@ from root, from the host's own user and its Sessions, or from anyone who can
 read both the data directory and the key file. The full paragraph, cross-machine
 restore, and where Pi's `auth.json` lives for `hostd` are in
 [docs/secrets.md](../../docs/secrets.md#headless-hosts).
+
+## Browser backend
+
+Agent browser tools speak CDP through a `BrowserTabController`
+(`browser/cdp-controller.ts`) over an injected `CdpTransport`. Everything else
+they need, they ask of a `BrowserBackend` (`browser/backend.ts`), so the engine
+is the one thing that changes between hosts:
+
+| Backend                                               | Engine and CDP wire                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`) | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`) |
+| Headless host                                         | Standalone Chromium over a CDP pipe (follow-up to VC-561)                                |
+
+- **The interface.** Tab lifecycle with the VC-238 ownership fields
+  (`BrowserTabState`, now in `@volli/shared`), a `CdpTransport` per tab
+  (`transportFor`), the load wait, viewport (`setBounds`), pictures and
+  screenshots, the wake hold (`holdAwake`), console capture (`consoleOf`), the
+  VC-239 holds and presentation. Window work (attaching a page to a person's
+  window, DevTools, the cursor overlay) is not on it and stays in desktop.
+- **Shared policy.** `BrowserTabRegistry` (`browser/tab-registry.ts`) is the
+  abstract base every backend extends: tab ids, ownership at birth, the
+  per-Project and per-Session caps, holds and their colours, console bounds,
+  pictures, traces, presentation and wake leases. A backend answers its
+  engine through the abstract members (`open`, `close`, navigation,
+  `liveChrome`, `applyWakePolicy`, `goOffScreen`, `transportFor`,
+  `waitForLoad`, `capturePicture`, `setBounds`, `closeAll`). One
+  implementation of the policy is what keeps refs, generations and refusals
+  identical across engines.
+- **The port.** `browserAgentPort({ backend, scope, session, cursorFor })`
+  (`browser/agent-port.ts`) binds the backend's wire, load wait and wake hold
+  into the one agent port every caller builds.
+- **The security stance (VC-110).** A backend's CDP wire is private to the
+  engine it drives. Never `--remote-debugging-port`: no loopback endpoint
+  through which another local process could reach a tab.
 
 ## Moving a service cluster in
 
