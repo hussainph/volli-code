@@ -418,18 +418,6 @@ describe("agent socket", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("opens the socket to its group only when asked to (VC-623)", async () => {
-    ctx = openTestDb();
-    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
-    server = await startAgentSocket({
-      socketPath,
-      socketMode: 0o660,
-      execute: async () => ({ v: 1, ok: true, data: {} }),
-    });
-
-    expect((await stat(socketPath)).mode & 0o777).toBe(0o660);
-  });
-
   it("still writes the reply after the client half-closes, even when execute awaits", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");

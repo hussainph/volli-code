@@ -7,15 +7,15 @@
 #     --shell /bin/bash volli
 #   sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd \
 #     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
-#   sudo install -m 644 volli-hostd.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
+#   sudo install -m 644 volli-hostd.service volli-hostd.socket /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
 #   journalctl -u volli-hostd -o cat | jq .
 #
 # An operator (a person, never the service account) writes over SSH with a
 # token root issues, and reaches the socket through the service's group:
 #   sudo volli-hostd operator-token --for <login>
 #   sudo usermod -aG volli <login>
-#   VOLLI_SOCKET=/run/volli-hostd/volli.sock volli project add <path>
+#   VOLLI_SOCKET=/run/volli-hostd.sock volli project add <path>
 # README.md, "Operators".
 
 [Unit]
@@ -23,6 +23,9 @@ Description=Volli headless host (volli-hostd)
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/hostd/README.md
 Wants=network-online.target
 After=network-online.target
+# systemd binds the agent socket (volli-hostd.socket), as root, in root's /run.
+Requires=volli-hostd.socket
+After=volli-hostd.socket
 
 [Service]
 Type=simple
@@ -33,12 +36,6 @@ Group=volli
 # directory other users can write (they could rename its key or database).
 StateDirectory=volli-hostd
 StateDirectoryMode=0700
-# The agent socket lives apart from the data, so the service's group can reach
-# it (0750 here, 0660 on the socket) without reaching the database or the key.
-# Group access is reach, not authority: without an operator token a caller
-# reads and never writes (VC-623).
-RuntimeDirectory=volli-hostd
-RuntimeDirectoryMode=0750
 UMask=0077
 WorkingDirectory=/var/lib/volli-hostd
 Environment=VOLLI_HOSTD_LOG_LEVEL=info
@@ -48,8 +45,10 @@ Environment=VOLLI_HOSTD_LOG_LEVEL=info
 #Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key
 # hostd reads /etc/volli-hostd-operators (root's; ProtectSystem= keeps /etc
 # read-only to it anyway) and refuses to boot if the service could write it.
+# --socket only names the socket systemd passes in (LISTEN_FDS); hostd serves
+# that and never binds, renames or removes the pathname itself.
 ExecStart=/opt/volli-hostd/bin/volli-hostd --data-dir /var/lib/volli-hostd \
-  --socket /run/volli-hostd/volli.sock --socket-mode 660
+  --socket /run/volli-hostd.sock
 # SIGTERM stops accepting work, drains in-flight requests (10 s at most),
 # checkpoints the WAL and closes the database. hostd's own deadline is 30 s.
 KillSignal=SIGTERM

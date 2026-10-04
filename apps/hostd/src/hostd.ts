@@ -43,11 +43,7 @@ import { dirname } from "node:path";
 import type Database from "better-sqlite3";
 import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/shared";
 import { createHostCore, throwTransactionViolation, type HostCore } from "@volli/host-core";
-import {
-  createAgentSocketLifecycle,
-  startAgentSocket,
-  type AgentSocketMode,
-} from "@volli/host-core/agent-socket";
+import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
 
 import { HostdBootError } from "./boot-error";
 import { acquireInstanceLock } from "./instance-lock";
@@ -69,8 +65,12 @@ export interface HostdOptions {
   readonly version: string;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly logger: HostdLogger;
-  /** `0o600` unless `--socket-mode 660` lets the service's group reach it (VC-623). */
-  readonly socketMode?: AgentSocketMode;
+  /**
+   * The listening socket systemd bound (`activation.ts`, VC-623). Present, it
+   * is served and `socketPath` only names it; absent, hostd binds
+   * `socketPath` itself at mode 0600.
+   */
+  readonly listenFd?: number;
   /**
    * The root-owned operator verifier file (VC-623, `operators.ts`);
    * `--operators`, defaulting to `DEFAULT_OPERATORS_FILE`. A missing file
@@ -193,7 +193,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     try {
       await socket.start({
         socketPath,
-        socketMode: options.socketMode ?? 0o600,
+        listenFd: options.listenFd,
         execute: (request) => track(ready.then((execute) => execute(request))),
       });
     } catch (error) {

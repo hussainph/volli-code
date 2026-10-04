@@ -147,7 +147,6 @@ async function boot(
     socketPath?: string;
     env?: Record<string, string>;
     drainTimeoutMs?: number;
-    socketMode?: 0o600 | 0o660;
     /** Leaves the owner to hostd's own default, root. */
     rootOwnsOperators?: boolean;
   } = {},
@@ -164,7 +163,6 @@ async function boot(
     // the way production trusts root.
     operatorsFile: join(root, "operators"),
     ...(options.rootOwnsOperators === true ? {} : { operatorsOwnerUid: process.getuid!() }),
-    ...(options.socketMode === undefined ? {} : { socketMode: options.socketMode }),
     ...(options.drainTimeoutMs === undefined ? {} : { drainTimeoutMs: options.drainTimeoutMs }),
   });
   running.push(host);
@@ -347,13 +345,12 @@ describe("an operator at the host's shell", () => {
   it("registers a project and creates a ticket, as the person", async () => {
     const token = issue();
     const log = logger();
-    await boot({ socketMode: 0o660 }, log);
+    await boot({}, log);
     const socketPath = join(root, "data", "volli.sock");
     const repo = join(root, "acme");
     mkdirSync(repo);
     const operator = { operatorToken: token };
 
-    expect(statSync(socketPath).mode & 0o777).toBe(0o660);
     expect(await ask(socketPath, "project.add", { id: repo }, operator)).toMatchObject({
       ok: true,
       data: { created: true, project: { name: "acme", prefix: "AC", path: repo } },
@@ -424,7 +421,7 @@ describe("an operator at the host's shell", () => {
     const error = await refused({ rootOwnsOperators: true });
 
     expect(error.reason).toBe("operators");
-    expect(error.message).toContain("not to uid 0");
+    expect(error.message).toContain(`belongs to uid ${process.getuid!()}`);
   });
 
   it("refuses to boot when the service account could write the operators file", async () => {

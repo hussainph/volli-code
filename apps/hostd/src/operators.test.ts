@@ -3,7 +3,15 @@
  * trusts is its own uid; production's is root, and `hostd.ts` never takes it
  * from an argument.
  */
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -28,7 +36,7 @@ let root: string;
 let file: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "hostd-operators-"));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "hostd-operators-")));
   file = join(root, "operators");
 });
 
@@ -102,20 +110,31 @@ describe("the file format", () => {
 
 describe("inspectOperatorsFile", () => {
   it("answers absent for no file, and the entries for a safe one", () => {
-    expect(inspectOperatorsFile(file, ME)).toEqual({ state: "absent" });
+    expect(inspectOperatorsFile(file, ME)).toEqual({ state: "absent", realPath: file });
     write([entry("alice", "a")]);
-    expect(inspectOperatorsFile(file, ME)).toEqual({ state: "ok", entries: [entry("alice", "a")] });
-  });
-
-  it("refuses a file its trusted owner does not own", () => {
-    write([]);
-    expect(inspectOperatorsFile(file, ME + 1)).toMatchObject({
-      state: "unsafe",
-      reason: expect.stringContaining(`belongs to uid ${ME}, not to uid ${ME + 1}`),
+    expect(inspectOperatorsFile(file, ME)).toEqual({
+      state: "ok",
+      realPath: file,
+      entries: [entry("alice", "a")],
     });
   });
 
-  it("refuses a file or a directory its group or others can write", () => {
+  it("refuses a file its trusted owner does not own, and a directory chain it does not", () => {
+    write([]);
+    // The file is checked through its descriptor: owned by ME, trusted is root.
+    const asRoot = inspectOperatorsFile(file, 0);
+    expect(asRoot).toMatchObject({ state: "unsafe" });
+    // Here the directory, which ME owns, is what fails first.
+    if (asRoot.state === "unsafe") expect(asRoot.reason).toContain(`${root} belongs to uid ${ME}`);
+    // A root-owned chain with a file someone else owns: here, root's own
+    // /etc/hosts, judged as if this user were the trusted owner.
+    expect(inspectOperatorsFile("/etc/hosts", ME)).toMatchObject({
+      state: "unsafe",
+      reason: expect.stringContaining(`belongs to uid 0, not to uid ${ME}`),
+    });
+  });
+
+  it("refuses a file or a directory its group or others can write, unless the directory is sticky", () => {
     write([], 0o660);
     expect(inspectOperatorsFile(file, ME)).toMatchObject({
       state: "unsafe",
@@ -125,17 +144,39 @@ describe("inspectOperatorsFile", () => {
     chmodSync(root, 0o777);
     expect(inspectOperatorsFile(file, ME)).toMatchObject({
       state: "unsafe",
-      reason: expect.stringContaining(`its directory ${root} can be written`),
+      reason: expect.stringContaining(`${root} can be written by its group or other users`),
+    });
+    // Sticky, as /tmp is: nobody else can rename or remove the file in it.
+    chmodSync(root, 0o1777);
+    expect(inspectOperatorsFile(file, ME)).toMatchObject({ state: "ok" });
+  });
+
+  it("follows a symlinked directory once, and reads the real path", () => {
+    write([entry("alice", "a")]);
+    const alias = join(root, "alias");
+    mkdirSync(join(root, "real"));
+    symlinkSync(join(root, "real"), alias);
+    writeFileSync(join(root, "real", "operators"), formatOperators([entry("bob", "b")]));
+    expect(inspectOperatorsFile(join(alias, "operators"), ME)).toEqual({
+      state: "ok",
+      realPath: join(root, "real", "operators"),
+      entries: [entry("bob", "b")],
     });
   });
 
-  it("refuses a symlink, an unreadable file and one that does not parse", () => {
+  it("refuses a symlinked file, a directory, an unreadable file and one that does not parse", () => {
     write([]);
     const link = join(root, "link");
     symlinkSync(file, link);
     expect(inspectOperatorsFile(link, ME)).toEqual({
       state: "unsafe",
-      reason: `${link} is not a regular file`,
+      reason: `${link} is a symbolic link`,
+    });
+
+    mkdirSync(join(root, "dir"));
+    expect(inspectOperatorsFile(join(root, "dir"), ME)).toEqual({
+      state: "unsafe",
+      reason: `${join(root, "dir")} is not a regular file`,
     });
 
     chmodSync(file, 0o000);
@@ -152,12 +193,16 @@ describe("inspectOperatorsFile", () => {
     });
   });
 
-  it("refuses a path it cannot even look at", () => {
+  it("refuses a path it cannot open, and a directory it cannot resolve", () => {
     writeFileSync(join(root, "plain"), "");
-    const path = join(root, "plain", "operators");
-    expect(inspectOperatorsFile(path, ME)).toMatchObject({
+    const throughFile = join(root, "plain", "operators");
+    expect(inspectOperatorsFile(throughFile, ME)).toMatchObject({
       state: "unsafe",
-      reason: expect.stringContaining(`${path} could not be read`),
+      reason: expect.stringContaining(`${throughFile} could not be read`),
+    });
+    expect(inspectOperatorsFile(join(root, "missing", "operators"), ME)).toMatchObject({
+      state: "unsafe",
+      reason: expect.stringContaining(`${join(root, "missing")} could not be resolved`),
     });
   });
 });

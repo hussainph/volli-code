@@ -279,8 +279,11 @@ host only:
   attributed as the app's own writes are, governed by each project's `user`
   policy.
 - **No Session can become the person.** Sessions run as hostd's service
-  account, which cannot read a token file, write the verifier file (hostd
-  refuses to boot if it could) or run the issuer; no socket verb mints. The
+  account, which cannot read a token file, write the verifier file or any
+  directory above it (hostd refuses to boot if it could) or run the issuer;
+  no socket verb mints. Nor can it stand in for the host to collect a token:
+  systemd binds the socket as root in root's `/run`, and the CLI sends a token
+  only to a socket whose name only root or the operator controls. The
   person's verbs (registry actor `user`, today `project.add`) are judged by
   the door's actor alone, so no project policy can extend one to a Session.
 - **Revocable without a rebuild**: removing the verifier line holds from the

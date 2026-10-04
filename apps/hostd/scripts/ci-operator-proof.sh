@@ -35,9 +35,7 @@ useradd --system --create-home --home-dir /var/lib/volli-hostd --shell /bin/bash
 chmod 700 /var/lib/volli-hostd
 useradd --create-home --shell /bin/bash ops
 usermod -aG volli ops
-# What systemd's RuntimeDirectory=volli-hostd with RuntimeDirectoryMode=0750 makes.
-install -d -o volli -g volli -m 750 /run/volli-hostd
-socket=/run/volli-hostd/volli.sock
+socket=/run/volli-hostd.sock
 install -d -o ops -g ops -m 755 /srv/demo
 runuser -u ops -- git -C /srv/demo init --quiet --initial-branch=main
 
@@ -58,13 +56,31 @@ code=0
 "$hostd" operator-token --for volli 2>&1 || code=$?
 test "$code" -eq 1 || fail "issuing to the service account exited $code"
 
-step "hostd runs as the service account, socket 0660 in a 0750 directory"
+step "socket activation, as volli-hostd.socket does it: root binds, hostd (as volli) serves"
 log=$(mktemp)
 chmod 644 "$log"
-# setpriv execs in place, so $! is hostd itself and SIGTERM reaches it as
-# systemd's would (runuser would stay the parent and exit 143).
-setpriv --reuid=volli --regid=volli --init-groups -- "$hostd" --data-dir /var/lib/volli-hostd \
-  --socket "$socket" --socket-mode 660 >"$log" 2>&1 &
+# What systemd does for the .socket unit and then the service: bind the path as
+# root in /run (root:volli 0660), pass it as fd 3 with LISTEN_FDS/LISTEN_PID,
+# drop to the service account and exec hostd in place, so $! is hostd itself.
+python3 - "$hostd" "$socket" >"$log" 2>&1 <<'PY' &
+import os, pwd, socket, sys
+hostd, path = sys.argv[1], sys.argv[2]
+pw = pwd.getpwnam("volli")
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+previous = os.umask(0o177)
+listener.bind(path)
+os.umask(previous)
+os.chown(path, 0, pw.pw_gid)
+os.chmod(path, 0o660)
+listener.listen(64)
+os.dup2(listener.fileno(), 3)
+os.set_inheritable(3, True)
+os.initgroups("volli", pw.pw_gid)
+os.setgid(pw.pw_gid)
+os.setuid(pw.pw_uid)
+env = {"PATH": "/usr/bin:/bin", "HOME": pw.pw_dir, "LISTEN_FDS": "1", "LISTEN_PID": str(os.getpid())}
+os.execve(hostd, [hostd, "--data-dir", "/var/lib/volli-hostd", "--socket", path], env)
+PY
 pid=$!
 serving=false
 for _ in $(seq 1 150); do
@@ -79,7 +95,11 @@ if [[ "$serving" != true ]]; then
   cat "$log" >&2
   fail "volli-hostd did not reach serving"
 fi
-test "$(stat -c '%U %G %a' "$socket")" = "volli volli 660" || fail "socket is not volli:volli 0660"
+test "$(stat -c '%U %G %a' "$socket")" = "root volli 660" || fail "socket is not root:volli 0660"
+if runuser -u volli -- mv "$socket" /run/stolen.sock 2>/dev/null; then
+  fail "volli renamed the socket away"
+fi
+echo "volli cannot rename or replace $socket"
 
 # One CLI call as `who`, with a clean environment: no Volli Session variables
 # unless the caller passes them.
@@ -116,6 +136,18 @@ expect_refused "a Session token beside ops' token file" \
   VOLLI_SESSION_TOKEN=minted-elsewhere "$volli" ticket create --title "Session" --project "$prefix"
 expect_refused "project add with a Session token" \
   as ops /home/ops VOLLI_SESSION_TOKEN=minted-elsewhere "$volli" project add /srv/demo
+
+step "ops' CLI sends no token to a socket name the service account controls"
+install -d -o volli -g volli -m 755 /var/lib/volli-hostd/run
+ln -s "$socket" /var/lib/volli-hostd/run/volli.sock
+chmod 755 /var/lib/volli-hostd
+out=$(runuser -u ops -- env -i PATH=/usr/bin:/bin HOME=/home/ops \
+  VOLLI_SOCKET=/var/lib/volli-hostd/run/volli.sock "$volli" ticket create --title Phished \
+  --project "$prefix" 2>&1) && fail "a write went through an untrusted socket name: $out"
+grep -q "not sending the operator token" <<<"$out" || fail "no warning for an untrusted socket name: $out"
+grep -q FORBIDDEN_ACTOR <<<"$out" || fail "the untrusted-name request was not read-only: $out"
+echo "refused as expected: the token stays home when the socket's name is not root's"
+chmod 700 /var/lib/volli-hostd
 
 step "the service account cannot read the token or mint one"
 if runuser -u volli -- cat "$token_file" >/dev/null 2>&1; then fail "volli read ops' token"; fi

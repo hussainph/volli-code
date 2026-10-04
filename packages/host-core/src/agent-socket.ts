@@ -18,13 +18,17 @@ export interface AgentSocketOptions {
   socketPath: string;
   requestTimeoutMs?: number;
   /**
-   * The socket file's mode once it listens: `0o600` (the default, and what
-   * desktop always uses) or `0o660`, so a headless host's operators reach it
-   * through the service's group (VC-623). Group access is reach, not
-   * authority: without an operator token that group's callers read and never
-   * write, because the admission gate judges every request on its own.
+   * A listening socket the service manager already bound (systemd socket
+   * activation, VC-623), to serve instead of binding `socketPath`.
+   *
+   * The point is WHO owns the pathname: systemd creates it, as root, in a
+   * directory only root can write, so nothing running as the host's own
+   * account — which is every Session — can rename it away and put an
+   * impostor in its place to collect an operator's token. Its mode and group
+   * are the unit's to set; nothing here chmods, unlinks or replaces it.
+   * `socketPath` is then only the name this host reports.
    */
-  socketMode?: AgentSocketMode;
+  listenFd?: number;
   execute(request: AgentRequest): Promise<AgentResponse>;
 }
 
@@ -33,9 +37,6 @@ export interface AgentSocketServer {
 }
 
 type SetSocketMode = (socketPath: string, mode: number) => Promise<void>;
-
-/** The two modes a socket may take; see {@link AgentSocketOptions.socketMode}. */
-export type AgentSocketMode = 0o600 | 0o660;
 
 export type ShutdownAgentSocket = () => Promise<void>;
 
@@ -373,11 +374,11 @@ function closeListeningServer(server: Server): Promise<void> {
   });
 }
 
-function listen(server: Server, socketPath: string): Promise<void> {
+function listen(server: Server, target: string | { fd: number }): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
-    server.listen(socketPath, () => {
+    server.listen(target, () => {
       server.off("error", onError);
       resolve();
     });
@@ -390,6 +391,13 @@ export async function startAgentSocket(
   claim: (server: AgentSocketServer) => void = () => undefined,
   setSocketMode: SetSocketMode = chmod,
 ): Promise<AgentSocketServer> {
+  if (options.listenFd !== undefined) {
+    const activated = agentServer(options);
+    await listen(activated.server, { fd: options.listenFd });
+    const server = agentSocketHandle(activated);
+    claim(server);
+    return server;
+  }
   let liveServer = agentServer(options);
   // Belt-and-braces against the create-then-chmod race: `listen()` creates the
   // socket file with umask-default perms, and another local process could open
@@ -421,7 +429,7 @@ export async function startAgentSocket(
   // yield, so quit can close and unlink it without waiting for publication.
   claim(server);
   try {
-    await setSocketMode(options.socketPath, options.socketMode ?? 0o600);
+    await setSocketMode(options.socketPath, 0o600);
   } catch (error) {
     await server.close().catch(() => undefined);
     throw error;

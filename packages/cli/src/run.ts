@@ -54,6 +54,11 @@ export interface RunCliDependencies {
    * carries no Session evidence; absent means there is no file to read.
    */
   readOperatorToken?(): Promise<OperatorTokenFileRead>;
+  /**
+   * Why the socket may not be the host it names (`untrustedSocketPath`), asked
+   * only before an operator token would be sent. Absent means no check.
+   */
+  socketPathFault?(socketPath: string): Promise<string | null>;
 }
 
 function clientError(error: unknown): AgentError {
@@ -421,6 +426,7 @@ export async function runCli(
     const operator = await operatorTokenFor(
       dependencies.env,
       dependencies.readOperatorToken ?? (async () => null),
+      async () => (await dependencies.socketPathFault?.(socketPath)) ?? null,
     );
     if (operator.warning !== undefined) dependencies.stderr(operator.warning);
     const request: AgentRequest = {

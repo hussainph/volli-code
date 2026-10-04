@@ -5,7 +5,15 @@
  * the operators file's owner, and production names 0 for both. The real
  * writer and lookup run too, as this user, into a temporary home.
  */
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  realpathSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -27,7 +35,7 @@ let root: string;
 let operatorsFile: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "hostd-operator-token-"));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "hostd-operator-token-")));
   operatorsFile = join(root, "operators");
 });
 
@@ -151,7 +159,7 @@ describe("issuing", () => {
     });
     expect(run()).toBe(1);
     expect(err.join("")).toContain("could not write alice's token file: EACCES");
-    expect(inspectOperatorsFile(operatorsFile, ME)).toEqual({ state: "absent" });
+    expect(inspectOperatorsFile(operatorsFile, ME)).toMatchObject({ state: "absent" });
   });
 
   it("says when there is no service account to check against, and writes the file world-readable", () => {

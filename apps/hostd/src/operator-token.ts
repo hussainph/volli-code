@@ -98,7 +98,7 @@ export function runOperatorToken(command: OperatorTokenCommand, ports: OperatorT
       return 0;
     }
     writeOperatorsFile(
-      operatorsFile,
+      current.realPath,
       entries.filter((entry) => entry.login !== login),
       ports.rootUid,
       service,
@@ -136,7 +136,7 @@ export function runOperatorToken(command: OperatorTokenCommand, ports: OperatorT
     issuedAt: ports.now().toISOString(),
   };
   writeOperatorsFile(
-    operatorsFile,
+    current.realPath,
     [...entries.filter((existing) => existing.login !== login), entry],
     ports.rootUid,
     service,
@@ -167,6 +167,8 @@ function writeOperatorsFile(
   service: SystemUser | null,
 ): void {
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  // `wx` is O_EXCL: never through a name someone else made first. The
+  // directory is one `inspectOperatorsFile` found only root controls.
   const fd = openSync(temporary, "wx", 0o600);
   try {
     writeSync(fd, formatOperators(entries));

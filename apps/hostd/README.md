@@ -7,7 +7,7 @@ No window, no Electron: `scripts/check-host-electron-imports.mjs` gates this
 directory.
 
 ```sh
-volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>] [--socket-mode 600|660] [--operators <file>]
+volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>] [--operators <file>]
 volli-hostd status --data-dir /var/lib/volli-hostd
 sudo volli-hostd operator-token --for <login> | --revoke <login>
 VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
@@ -70,7 +70,9 @@ In order; each refusal is logged as one JSON line and exits **78**
    missing or different: each refuses boot with the adapter's own sentence.
 5. **The agent socket**, before the database, so a request that arrives
    during migrations waits for boot rather than being refused at connect. A
-   live listener on the same path refuses this host.
+   live listener on the same path refuses this host. Under socket activation
+   hostd serves the descriptor systemd passed instead (more than one is
+   refused) and leaves the pathname to systemd.
 6. **host-core** opens and migrates the database. A database that will not
    open is **not** a boot failure: hostd stays up in state `refusing`, every
    verb answers `DB_UNAVAILABLE` with the reason, and the status file carries
@@ -89,7 +91,7 @@ protocol's F5) may supersede it.
 ```sh
 sudo volli-hostd operator-token --for alice      # issue (or reissue) alice's token
 sudo usermod -aG volli alice                     # reach the socket; log in again
-export VOLLI_SOCKET=/run/volli-hostd/volli.sock  # as alice
+export VOLLI_SOCKET=/run/volli-hostd.sock        # as alice
 volli project add ~/code/acme [--name Acme] [--dry-run]
 volli ticket create --title "Fix auth" --project AC
 sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next request
@@ -126,10 +128,20 @@ The CLI reads `VOLLI_OPERATOR_TOKEN`, then the token file. Like ssh with a key,
 it will not use a token file that another user owns or that group or others
 can read, and says so on stderr.
 
-**The socket.** The systemd unit puts it in `/run/volli-hostd` (0750, group
-`volli`) at mode 0660 (`--socket-mode 660`), apart from the 0700 data
-directory. Group membership is reach, not authority: a caller without a token
-reads the board and writes nothing. The default `--socket-mode` stays 600.
+**The socket, and why systemd binds it.** A token is a bearer secret, and the
+CLI cannot authenticate the listener, so the socket's _name_ must be one the
+service account cannot take over: otherwise any Session could rename the real
+socket away, listen in its place and collect the next operator's token.
+`volli-hostd.socket` therefore has systemd bind `/run/volli-hostd.sock` as
+root, in root's `/run`, `root:volli` 0660, and pass it to hostd
+(`LISTEN_FDS`); hostd serves that descriptor and never binds, renames or
+removes the pathname. The `volli` group reaches it; group membership is reach,
+not authority, since a caller without a token reads and never writes. On its
+side, the CLI sends a token only to a socket owned by root or the caller,
+through directories only root or the caller can write (sticky ones such as
+`/tmp` excepted), along the path as typed and as resolved; otherwise it warns
+and sends none. Without socket activation hostd binds `<data-dir>/volli.sock`
+itself at 0600, as before.
 
 **Audit.** Every write that presented a valid token logs one line, refused or
 not, naming the login, never the token:
@@ -246,7 +258,7 @@ volli-hostd-<version>-linux-x64/
   lib/volli.cjs         the CLI bundle (packages/cli)
   lib/probe-natives.cjs loads and exercises every native under bin/node
   lib/node_modules/     `pnpm deploy --prod` of this package, from the lockfile
-  share/systemd/volli-hostd.service
+  share/systemd/volli-hostd.{service,socket}
   share/launchd/com.volli.hostd.plist
   MANIFEST.json  README.md  LICENSE
 ```
@@ -316,13 +328,14 @@ sudo useradd --system --create-home --home-dir /var/lib/volli-hostd --shell /bin
 sudo mkdir -p /opt/volli-hostd
 sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd --strip-components=1 \
   --no-same-owner
-sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
+sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.{service,socket} \
+  /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
 sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
 ```
 
 Then issue yourself an operator token and add a project ([Operators](#operators)).
-The unit serves the socket at `/run/volli-hostd/volli.sock`.
+The socket unit binds the agent socket at `/run/volli-hostd.sock`.
 
 - **A dedicated service user** (`User=volli`). The key and the data belong to
   it; nothing runs as root.
@@ -331,9 +344,10 @@ The unit serves the socket at `/run/volli-hostd/volli.sock`.
   the box rewrite `bin/node`. `--no-same-owner` makes every file root-owned;
   the service user can read and run them and cannot change them.
 - **`StateDirectory=volli-hostd` with `StateDirectoryMode=0700`** and
-  `UMask=0077`. The socket is elsewhere: **`RuntimeDirectory=volli-hostd`**,
-  0750, with `--socket-mode 660`, so the `volli` group reaches the socket and
-  nothing in the data directory. The adapter checks only the key file, so a data directory
+  `UMask=0077`. The socket is elsewhere: **`volli-hostd.socket`** binds
+  `/run/volli-hostd.sock` as root (`root:volli` 0660), so the `volli` group
+  reaches the socket and nothing in the data directory, and no Session can
+  replace it ([Operators](#operators)). The adapter checks only the key file, so a data directory
   others could write would let them rename the key or the store away (denial
   of service, not disclosure).
 - **`RestartPreventExitStatus=78`**: a boot refusal waits for the operator.

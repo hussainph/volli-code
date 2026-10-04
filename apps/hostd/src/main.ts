@@ -10,6 +10,7 @@ import { EXIT_CONFIG, HostdBootError } from "./boot-error";
 import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
 
 import { parseHostdArgs, USAGE, type HostdCommand } from "./args";
+import { socketActivationFd } from "./activation";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
 import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
@@ -68,6 +69,12 @@ async function serve(
   // Session it starts (VC-623): an operator who exported it in the shell that
   // launched hostd keeps it in that shell.
   delete process.env[VOLLI_OPERATOR_TOKEN_ENV];
+  // Read before the Sessions this host starts could inherit them: the
+  // activated socket is hostd's, and no child is the process it names.
+  const activation = { ...process.env };
+  delete process.env["LISTEN_FDS"];
+  delete process.env["LISTEN_PID"];
+  delete process.env["LISTEN_FDNAMES"];
   routeConsole(logger);
   let running: RunningHostd | undefined;
   let finish!: (code: number) => void;
@@ -135,10 +142,11 @@ async function serve(
   });
 
   try {
+    const listenFd = socketActivationFd(activation, process.pid);
     running = await startHostd({
       dataDir,
       socketPath,
-      socketMode: command.socketMode,
+      listenFd,
       operatorsFile: command.operatorsFile,
       version: HOSTD_VERSION,
       env: process.env,

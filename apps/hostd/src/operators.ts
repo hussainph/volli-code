@@ -29,8 +29,16 @@
  * entry must be noticed, not half-applied.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { HostdBootError } from "./boot-error";
 import type { HostdLogger } from "./log";
@@ -111,49 +119,100 @@ export function formatOperators(entries: readonly OperatorEntry[]): string {
 }
 
 export type OperatorsFileState =
-  | { readonly state: "absent" }
-  | { readonly state: "ok"; readonly entries: readonly OperatorEntry[] }
+  | { readonly state: "absent"; readonly realPath: string }
+  | {
+      readonly state: "ok";
+      readonly realPath: string;
+      readonly entries: readonly OperatorEntry[];
+    }
   | { readonly state: "unsafe"; readonly reason: string };
 
+function octal(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(4, "0");
+}
+
 /**
- * Reads the operators file, judging it before believing it: a regular file,
- * owned by `trustedOwnerUid` (root in production), that neither group nor
- * others can write, in a directory with the same three properties.
+ * Why a directory chain could let someone other than root (or the trusted
+ * owner) change what a path inside it names, or `null` when nobody could.
+ *
+ * Every directory from `/` down: owned by root or the trusted owner, and
+ * writable by neither group nor others unless it is sticky (`/tmp`), where
+ * others still cannot rename or remove an entry they do not own — and every
+ * entry below it is checked to be owned by a trusted uid. Walked over the
+ * REAL path, so a symlink anywhere in the configured one is followed once,
+ * here, and never again.
+ */
+function untrustedDirectory(realDirectory: string, trusted: ReadonlySet<number>): string | null {
+  let directory = realDirectory;
+  for (;;) {
+    const stat = statSync(directory);
+    if (!trusted.has(stat.uid)) {
+      return `${directory} belongs to uid ${stat.uid}, so its owner could replace the operators file`;
+    }
+    if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
+      return `${directory} can be written by its group or other users (mode ${octal(stat.mode)}), so they could replace the operators file`;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+/**
+ * Reads the operators file, judging it before believing it.
+ *
+ * The directory chain must be one only root (or `trustedOwnerUid`, which is
+ * root in production) controls; then the file is opened once, without
+ * following a symlink, and that DESCRIPTOR is judged — a regular file, owned
+ * by `trustedOwnerUid`, that neither group nor others can write — and read.
+ * Nothing is looked up by name twice, so there is no window in which the
+ * name could be pointed at another file between the check and the read.
  */
 export function inspectOperatorsFile(path: string, trustedOwnerUid: number): OperatorsFileState {
-  let stat;
+  let realDirectory: string;
   try {
-    stat = lstatSync(path);
+    realDirectory = realpathSync(dirname(path));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
-    return { state: "unsafe", reason: `${path} could not be read: ${(error as Error).message}` };
+    return {
+      state: "unsafe",
+      reason: `${dirname(path)} could not be resolved: ${(error as Error).message}`,
+    };
   }
-  const unsafeOwnership = (what: string, uid: number, mode: number): string | null => {
-    if (uid !== trustedOwnerUid) {
-      return `${what} belongs to uid ${uid}, not to uid ${trustedOwnerUid}, so its owner could add an operator`;
-    }
-    if ((mode & 0o022) !== 0) {
-      return `${what} can be written by its group or other users (mode ${(mode & 0o777).toString(8).padStart(4, "0")})`;
-    }
-    return null;
-  };
-  if (!stat.isFile()) return { state: "unsafe", reason: `${path} is not a regular file` };
-  const fileFault = unsafeOwnership(path, stat.uid, stat.mode);
-  if (fileFault !== null) return { state: "unsafe", reason: fileFault };
-  const directory = dirname(path);
-  const parent = statSync(directory);
-  const directoryFault = unsafeOwnership(`its directory ${directory}`, parent.uid, parent.mode);
+  const realPath = join(realDirectory, basename(path));
+  const directoryFault = untrustedDirectory(realDirectory, new Set([0, trustedOwnerUid]));
   if (directoryFault !== null) return { state: "unsafe", reason: directoryFault };
-  let text;
+  let fd: number;
   try {
-    text = readFileSync(path, "utf8");
+    fd = openSync(realPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    return { state: "unsafe", reason: `${path} could not be read: ${(error as Error).message}` };
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { state: "absent", realPath };
+    if (code === "ELOOP") return { state: "unsafe", reason: `${realPath} is a symbolic link` };
+    return {
+      state: "unsafe",
+      reason: `${realPath} could not be read: ${(error as Error).message}`,
+    };
   }
   try {
-    return { state: "ok", entries: parseOperators(text) };
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return { state: "unsafe", reason: `${realPath} is not a regular file` };
+    if (stat.uid !== trustedOwnerUid) {
+      return {
+        state: "unsafe",
+        reason: `${realPath} belongs to uid ${stat.uid}, not to uid ${trustedOwnerUid}, so its owner could add an operator`,
+      };
+    }
+    if ((stat.mode & 0o022) !== 0) {
+      return {
+        state: "unsafe",
+        reason: `${realPath} can be written by its group or other users (mode ${octal(stat.mode)})`,
+      };
+    }
+    return { state: "ok", realPath, entries: parseOperators(readFileSync(fd, "utf8")) };
   } catch (error) {
-    return { state: "unsafe", reason: `${path}: ${(error as Error).message}` };
+    return { state: "unsafe", reason: `${realPath}: ${(error as Error).message}` };
+  } finally {
+    closeSync(fd);
   }
 }
 

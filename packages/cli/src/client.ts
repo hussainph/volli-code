@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { dirname } from "node:path";
 
 import { AGENT_ERROR_CODES, makeAgentError } from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
@@ -73,13 +74,70 @@ export type OperatorTokenFileRead =
 export async function operatorTokenFor(
   env: Readonly<Record<string, string | undefined>>,
   readTokenFile: () => Promise<OperatorTokenFileRead>,
+  socketFault: () => Promise<string | null>,
 ): Promise<{ token?: string; warning?: string }> {
   if (env["VOLLI_SESSION_TOKEN"] !== undefined || env["VOLLI_SESSION"] !== undefined) return {};
   const exported = env["VOLLI_OPERATOR_TOKEN"]?.trim();
-  if (exported) return { token: exported };
-  const read = await readTokenFile();
+  const read = exported ? { token: exported } : await readTokenFile();
   if (read === null) return {};
-  return "token" in read ? { token: read.token } : { warning: read.warning };
+  if (!("token" in read)) return { warning: read.warning };
+  // A token is a bearer secret, so it goes only to a socket nobody but root
+  // or this user could have put at that name (see `untrustedSocketPath`).
+  const fault = await socketFault();
+  return fault === null
+    ? { token: read.token }
+    : { warning: `volli: not sending the operator token: ${fault}.\n` };
+}
+
+/** The file-system calls {@link untrustedSocketPath} makes; tests script them. */
+export interface SocketPathFileSystem {
+  realpath(path: string): Promise<string>;
+  stat(path: string): Promise<{ uid: number; mode: number; isSocket(): boolean }>;
+  /** The invoking user's uid, or `null` where the platform has none. */
+  uid(): number | null;
+}
+
+/**
+ * Why `socketPath` might not be the host it claims to be, or `null`.
+ *
+ * The CLI cannot authenticate the listener, so it judges the NAME (VC-623): a
+ * socket owned by root or this user, reached through directories only root or
+ * this user can write (or sticky ones, like `/tmp`, where nobody can rename
+ * another's entry) — along the path as typed and along the real path it
+ * resolves to. Under the packaged unit that is `/run/volli-hostd.sock`, bound
+ * by systemd as root in root's `/run`. A socket in a directory the host's
+ * service account can write fails, because every Session runs as that
+ * account and could have swapped an impostor in to collect the token.
+ */
+export async function untrustedSocketPath(
+  socketPath: string,
+  fs: SocketPathFileSystem,
+): Promise<string | null> {
+  const self = fs.uid();
+  const trusted = (uid: number): boolean => uid === 0 || uid === self;
+  let real: string;
+  let socket;
+  try {
+    real = await fs.realpath(socketPath);
+    socket = await fs.stat(real);
+  } catch {
+    return `${socketPath} could not be resolved`;
+  }
+  if (!socket.isSocket()) return `${socketPath} is not a socket`;
+  if (!trusted(socket.uid)) return `${socketPath} belongs to uid ${socket.uid}`;
+  for (const start of [socketPath, real]) {
+    for (let directory = dirname(start); ; directory = dirname(directory)) {
+      const stat = await fs.stat(directory);
+      if (!trusted(stat.uid)) {
+        return `${directory} belongs to uid ${stat.uid}, who could replace ${socketPath}`;
+      }
+      if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
+        return `${directory} can be written by its group or other users, who could replace ${socketPath}`;
+      }
+      if (dirname(directory) === directory) break;
+    }
+  }
+  return null;
 }
 
 /** The file-system calls {@link readOperatorTokenFile} makes; tests script them. */

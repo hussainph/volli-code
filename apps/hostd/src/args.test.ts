@@ -22,7 +22,6 @@ describe("volli-hostd's arguments", () => {
       kind: "serve",
       dataDir: "/var/lib/volli",
       socketPath: "/var/lib/volli/volli.sock",
-      socketMode: 0o600,
       operatorsFile: "/etc/volli-hostd-operators",
     });
     expect(defaultSocketPath("/d")).toBe("/d/volli.sock");
@@ -38,7 +37,6 @@ describe("volli-hostd's arguments", () => {
       kind: "serve",
       dataDir: "/srv/data",
       socketPath: "/srv/run/v.sock",
-      socketMode: 0o600,
       operatorsFile: "/srv/etc/operators",
     });
   });
@@ -56,11 +54,8 @@ describe("volli-hostd's arguments", () => {
     });
   });
 
-  it("opens the socket to its group, and only in the one other mode", () => {
-    expect(
-      parseHostdArgs(["--data-dir", "/d", "--socket-mode", "660", "--operators="], CWD),
-    ).toMatchObject({
-      socketMode: 0o660,
+  it("treats an empty --operators as the default", () => {
+    expect(parseHostdArgs(["--data-dir", "/d", "--operators="], CWD)).toMatchObject({
       operatorsFile: "/etc/volli-hostd-operators",
     });
   });
@@ -101,14 +96,11 @@ describe("volli-hostd's arguments", () => {
     expect(refusal(["--data-dir="])).toBe("--data-dir <dir> is required.");
     expect(refusal(["serve", "--data-dir", "/d"])).toBe("Unknown argument: serve");
     expect(refusal(["status", "extra", "--data-dir", "/d"])).toBe("Unknown argument: extra");
-    for (const flag of ["--socket", "--socket-mode", "--operators"]) {
+    for (const flag of ["--socket", "--operators"]) {
       expect(refusal(["status", "--data-dir", "/d", flag, "x"])).toBe(
         "status takes --data-dir only: it reads the socket path from the data directory.",
       );
     }
-    expect(refusal(["--data-dir", "/d", "--socket-mode", "666"])).toBe(
-      "--socket-mode is 600 or 660, not 666.",
-    );
     expect(refusal(["--data-dir", "/d", "--for", "alice"])).toBe(
       "--for, --revoke and --service-user belong to operator-token.",
     );

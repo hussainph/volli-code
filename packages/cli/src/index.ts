@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -8,7 +8,12 @@ import { spawn } from "node:child_process";
 import { OPERATOR_TOKEN_HOME_PATH } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
-import { agentRequestEnv, readOperatorTokenFile, requestAgent } from "./client";
+import {
+  agentRequestEnv,
+  readOperatorTokenFile,
+  requestAgent,
+  untrustedSocketPath,
+} from "./client";
 import { runHook } from "./hook";
 import { observeEnvironment } from "./doctor";
 import { runCli } from "./run";
@@ -217,6 +222,12 @@ async function main(): Promise<void> {
       readOperatorTokenFile(join(homedir(), ...OPERATOR_TOKEN_HOME_PATH), {
         lstat: (path) => lstat(path),
         readFile: (path) => readFile(path, "utf8"),
+        uid: () => process.getuid?.() ?? null,
+      }),
+    socketPathFault: (path) =>
+      untrustedSocketPath(path, {
+        realpath: (candidate) => realpath(candidate),
+        stat: (candidate) => stat(candidate),
         uid: () => process.getuid?.() ?? null,
       }),
     launch: (timeoutMs) => {
