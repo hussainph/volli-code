@@ -728,7 +728,7 @@ function IslandPill({ chat, state }: { chat: LabChat; state: LabState }) {
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" sideOffset={10} className="w-[28rem] p-1">
+      <PopoverContent side="top" sideOffset={10} className="w-[28rem] p-1 text-ui">
         <TabsCard chat={chat} tabs={tabs} onDone={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
