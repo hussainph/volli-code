@@ -14,6 +14,7 @@ SQL strings in migration definitions or prose.
 | `db/app-state-repo`, `db/automations-repo`, `db/harness-channel-repo`, `db/harness-registry-repo`, `db/labels-repo`, `db/mcp-operations-repo`, `db/mcp-servers-repo`, `db/secrets-repo`, `db/session-event-provenance`, `db/session-read-repo`, `db/spawn-ledger-repo` | Synchronous statements: autocommit independently, direct when deliberately inside an owned transaction. |
 | `db/blobs-repo` (2), `db/comments-repo` (1), `db/pending-armed-runs-repo` (1), `db/projects-repo` (1), `db/signals-repo` (1), `db/tickets-repo` (1) | Compound writes now use `withTransaction`; remaining single writes autocommit. |
 | `ticket-commands` (10), `data-ipc` (2) | Duplicated native transaction wrappers folded into `withTransaction`. |
+| `experiments` (VC-548, landed during CI) | One settings transaction uses `withTransaction`; committed memory publishes synchronously with the write. |
 | `session-control/sqlite-ledger`, `automations/sqlite-ledger`, `worktree/cleanup-ledger` | All three former async gate users now use `settleTransaction`: synchronous body, promise-shaped outcome. |
 | `session-runtime/sqlite-host-notice-outbox` (3) | Uses the Session ledger's synchronous atomic boundary. |
 | `session-runtime/delegation-store` (4), `agent-dispatch/ticket-verbs` (1), `worktree/publish` (1), `worktree/watch` (1) | Existing synchronous native transactions remain safe; the structural guard wraps all native transaction variants. |
