@@ -1,7 +1,7 @@
 // Exercise the actual workflow's shell, not a second implementation of it.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -176,28 +176,30 @@ test("devcontainer installs host tooling/packages without the desktop postinstal
   ]);
 });
 
-test("existing and future host packages cannot silently omit the coverage script", () => {
-  for (const directory of [
-    "packages/session-engine",
-    "packages/session-rpc",
-    "packages/agent-runtime",
-    "packages/shared",
-    "packages/host-protocol",
-    "packages/host-core",
-    "apps/hostd",
-  ]) {
-    const manifest = join(root, directory, "package.json");
-    if (
-      !existsSync(manifest) &&
-      ["packages/host-protocol", "packages/host-core", "apps/hostd"].includes(directory)
-    )
-      continue;
+function hostPackageDirectories(workspaceRoot) {
+  const workspace = parse(readFileSync(join(workspaceRoot, "pnpm-workspace.yaml"), "utf8"));
+  return globSync(
+    workspace.packages.map((pattern) => `${pattern}/package.json`),
+    { cwd: workspaceRoot },
+  )
+    .map((manifest) => dirname(manifest))
+    .filter((directory) => directory.startsWith("packages/") || directory === "apps/hostd")
+    .toSorted();
+}
+
+function assertHostCoverage(workspaceRoot) {
+  for (const directory of hostPackageDirectories(workspaceRoot)) {
+    const manifest = join(workspaceRoot, directory, "package.json");
     assert.equal(
       typeof JSON.parse(readFileSync(manifest, "utf8")).scripts?.["test:coverage"],
       "string",
       `${directory} must join Test (packages)`,
     );
   }
+}
+
+test("existing and future host packages cannot silently omit the coverage script", () => {
+  assertHostCoverage(root);
   assert.equal(
     jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").with[
       "node-version-file"
@@ -209,4 +211,37 @@ test("existing and future host packages cannot silently omit the coverage script
     command.includes("--filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'"),
   );
   assert.ok(command.includes("test:coverage"));
+});
+
+test("workspace globs discover a newly added host package and require its coverage script", () => {
+  mkdirSync(join(root, ".tmp"), { recursive: true });
+  const temporary = mkdtempSync(join(root, ".tmp/ci-host-packages-"));
+  function writeManifest(directory, scripts = {}) {
+    mkdirSync(join(temporary, directory), { recursive: true });
+    writeFileSync(join(temporary, directory, "package.json"), JSON.stringify({ scripts }));
+  }
+  try {
+    writeFileSync(
+      join(temporary, "pnpm-workspace.yaml"),
+      readFileSync(join(root, "pnpm-workspace.yaml"), "utf8"),
+    );
+    writeManifest("packages/existing", { "test:coverage": "vitest run --coverage" });
+    writeManifest("apps/hostd", { "test:coverage": "vitest run --coverage" });
+    writeManifest("apps/desktop");
+    mkdirSync(join(temporary, "packages/not-a-package"), { recursive: true });
+    assert.deepEqual(hostPackageDirectories(temporary), ["apps/hostd", "packages/existing"]);
+    assertHostCoverage(temporary);
+
+    writeManifest("packages/new-host-package");
+    assert.deepEqual(hostPackageDirectories(temporary), [
+      "apps/hostd",
+      "packages/existing",
+      "packages/new-host-package",
+    ]);
+    assert.throws(() => assertHostCoverage(temporary), /packages\/new-host-package must join/);
+    writeManifest("packages/new-host-package", { "test:coverage": "vitest run --coverage" });
+    assertHostCoverage(temporary);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });

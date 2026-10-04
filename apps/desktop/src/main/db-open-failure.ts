@@ -38,7 +38,7 @@ import { errorMessage } from "@volli/shared";
  * — main cannot read the root manifest at runtime (it is not packaged), so
  * the test is what keeps this string from drifting into a lie.
  */
-export const REQUIRED_NODE_RANGE = "^24.13.0";
+export const REQUIRED_NODE_RANGE = "^24.15.0";
 
 /**
  * The signatures a wrong-ABI or missing native build leaves in its error.

@@ -50,7 +50,7 @@ Projects, tickets, and chat history stay on your machine. Model requests go to t
 
 ## Build from source
 
-Requirements: macOS, Node.js `^24.13.0` (a `.nvmrc` is provided — `nvm use`), and pnpm `11.10.0`. The Node range is enforced: `pnpm install` and the dev scripts refuse to run under an unsupported Node, because native modules built against the wrong ABI leave the app unable to open its database (and sign-in disabled).
+Requirements: macOS, Node.js `^24.15.0` (a `.nvmrc` is provided — `nvm use`), and pnpm `11.10.0`. The Node range is enforced: `pnpm install` and the dev scripts refuse to run under an unsupported Node, because native modules built against the wrong ABI leave the app unable to open its database (and sign-in disabled).
 
 ```bash
 git clone https://github.com/hussainph/volli-code.git

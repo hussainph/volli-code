@@ -42,7 +42,7 @@ Each milestone ticket lists its work tickets. Work-ticket briefs for M0 and M1 a
    - Push once.
    - Hand off at PR-open: the ticket goes to Needs Review naming the PR.
    - Red-main rule.
-   - **Merge only on request, only on green**, with `gh pr merge <pr> --merge --match-head-commit <sha>`. Never `--auto`.
+   - **Cloud merges use the owner's standing grant** (section 9), only after the verification loop (section 8). Use `gh pr merge <pr> --merge --match-head-commit <sha>`. Never `--auto`.
 6. **Do not change the ruling silently.** If a Session finds the ruling wrong, it writes the evidence on the ticket and you bring it to the owner (section 9).
 
 ## 4. Every pass
@@ -97,7 +97,7 @@ Pass `tier` on every `session_start`; do not rely on defaults. Pick the reviewer
 - VC-549 (protocol spec and code, `deep` tier)
 - VC-550 (identity spec and code, `deep` tier)
 
-VC-549 and VC-550 reference each other: tell each Session the other exists and to coordinate through ticket comments. **Both specs need the owner's review before they merge** (section 9). Six Sessions exceeds the default concurrency of 4, so start VC-549, VC-550, VC-551 and VC-552 first, then the two docs/flag tickets.
+VC-549 and VC-550 reference each other: tell each Session the other exists and to coordinate through ticket comments. **Both specs merge under the standing grant; the owner reviews them at the end of the wave** (section 9). Six Sessions exceeds the default concurrency of 4, so start VC-549, VC-550, VC-551 and VC-552 first, then the two docs/flag tickets.
 
 **Wave B (M1 core): one at a time to start.**
 1. VC-553 (host-core pattern) runs **alone** until merged. It sets the pattern everything else copies.
@@ -162,6 +162,8 @@ Remove the stub line when done. If a stub turns out to be two tickets, file the 
 ```
 You are working ticket <ID>: <title>. It is part of the Volli Cloud program (parent VC-539, milestone <VC-54x>).
 
+First action: git fetch origin && volli worktree sync. New worktrees branch from the root checkout's local main, which may be stale. If the sync brings in a new workspace package, run pnpm install before any local typecheck.
+
 Read first: the ticket brief, docs/plans/volli-cloud.md (the ruling), and CLAUDE.md. <For M2+: docs/plans/host-protocol.md and docs/plans/host-identity.md.>
 
 Rules: one PR based on main; with the `cloud` flag off the app must behave exactly as today; no `electron` imports in host-core / host-protocol / hostd; follow docs/BOUNDARIES.md; local runs stay small and CI is the gate; push once; hand off at PR-open (move the ticket to Needs Review and name the PR). Do not merge.
@@ -173,11 +175,28 @@ Done means: PR open; CI gate green on its head; the ticket body's "Done when" sa
 
 ### When a Session reports done
 
-1. Read its closing comment and `gh pr view <pr>`. Check that CI is green on the current head.
-2. Run a review with the `code-review` skill through a subagent of a different model family (section 5). Brief it with the ticket id, the PR, the ruling, and the flag-off rule. Ask for blocking findings only, with file:line evidence.
-3. Blocking findings: steer the same Session (`session send`) or start a follow-up Session on the same ticket. Do not fix it yourself.
-4. Clean: comment "Ready to merge" on the ticket and add it to the merge batch for the owner (section 9), unless the owner has granted standing merge permission.
-5. After merge: move the ticket to Done, tick it on the milestone ticket, and start whatever it unblocked.
+1. **Receipt.** Read the closing comment and `gh pr view <pr>` against the ticket's "Done when".
+2. **Freshness.** Fetch: the head must contain current `origin/main`. If not, sync and get fresh CI.
+   Every merge makes the other PRs stale; check again before each landing.
+3. **CI.** Require `CI gate` SUCCESS on the exact head; desktop changes must actually run the smoke lanes.
+   A cancelled or superseded gate is never mergeable. GitHub does not enforce required checks here.
+4. **Independent verification.** Use one subagent from a different model family (section 5) for both
+   code review (`code-review` skill) and live proof: focused tests and edge-case probes.
+   Require PASS / PASS+NOTES / FAIL tied to the head SHA, with no unresolved blocking findings.
+   Spec and migration PRs get a second, design-focused reviewer.
+   A changed head voids the verdict; re-check only the delta and record the new head.
+5. **Flag-off proof.** Confirm unchanged behavior with `cloud` off; core e2e is the desktop proof.
+6. **Migration/schema extras.** Check the diff is additive-only and the version is unique and above main's max.
+   Sweep open PRs for version collisions; run the db tests.
+   Copy a real profile with online SQLite `.backup` into `/tmp`, then boot the copy twice.
+   Prove an old build opens the new DB. Derive head constants; never pin them to today's migration version.
+7. **FAIL.** Start a fresh Ticket Session on the same ticket with the findings, not repeated steering of the old one.
+   Do not fix it yourself; repeat the loop on the resulting head.
+8. **Land.** Under the standing grant (section 9), merge one at a time:
+   `gh pr merge <pr> --merge --match-head-commit <sha>`. Never `--auto`.
+   Watch main CI on the merge commit before landing the next PR; stop on red.
+9. **Record.** Put the receipt on the ticket: head SHA, CI, verifier verdicts, flag-off and extra proof, merge SHA.
+   Move it to Done, tick it on the milestone ticket, and start whatever it unblocked.
 
 ### When a Session is stuck
 
@@ -189,8 +208,8 @@ Done means: PR open; CI gate green on its head; the ticket body's "Done when" sa
 
 Bring these to the owner. Batch them into the end-of-pass comment, and use `volli notify` when something is blocking:
 
-- **Spec reviews:** VC-549 (protocol) and VC-550 (identity) each ship spec and code in one PR; the owner reviews the spec in that PR before merge. Also review every expanded M4 brief and VC-582 (move protocol).
-- **Merges.** The repo's rule is "merge only on request". Present a batch: ticket, PR, CI state, review verdict. The owner may grant standing permission for cloud tickets that are green, cross-reviewed and flag-off-safe. Record any such grant as a comment on VC-539 and follow its exact terms.
+- **Spec reviews:** VC-549 (protocol) and VC-550 (identity) each ship spec and code in one PR, merged under the standing grant. The owner reviews the specs at the end of the wave; record that review on each ticket. Also review every expanded M4 brief and VC-582 (move protocol).
+- **Merges.** The owner granted standing merge permission for cloud PRs on 2026-10-03 (recorded on VC-539). The orchestrator does not wait for approval: require green `CI gate` on a head containing current `origin/main`, one cross-family review with no unresolved blocking findings, flag-off safety, and the section 8 verification loop (extra scrutiny for edge cases and migrations). Merge one at a time with `--match-head-commit`, never `--auto`, and watch main CI after each merge. Spec PRs may land on the orchestrator's judgment while the owner is away; flag them for the end-of-wave spec review.
 - **Any change to the ruling,** or a finding that contradicts it.
 - **Anything that changes flag-off behavior,** or touches a real profile database outside a test copy.
 - **Provider limits:** rate-limit, quota or overload stops on all available providers.
