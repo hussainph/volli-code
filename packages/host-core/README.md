@@ -300,7 +300,7 @@ is the one thing that changes between hosts:
 | Backend                                               | Engine and CDP wire                                                                      |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Desktop `BrowserTabHost` (`main/browser/tab-host.ts`) | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`) |
-| Headless host                                         | Standalone Chromium over a CDP pipe (follow-up to VC-561)                                |
+| Headless host                                         | Standalone Chromium over a CDP pipe (VC-619)                                             |
 
 - **The interface.** Tab lifecycle with the VC-238 ownership fields
   (`BrowserTabState`, now in `@volli/shared`), a `CdpTransport` per tab

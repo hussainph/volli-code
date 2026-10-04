@@ -12,8 +12,8 @@
  * - Desktop answers with `BrowserTabHost` (`apps/desktop/src/main/browser/tab-host.ts`):
  *   `WebContentsView`s, each tab's app-private `webContents.debugger` as its
  *   CDP wire.
- * - A headless host answers with standalone Chromium, attached over a CDP
- *   pipe and never `--remote-debugging-port` (the VC-110 stance).
+ * - A headless host will answer with standalone Chromium (VC-619), attached
+ *   over a CDP pipe and never `--remote-debugging-port` (the VC-110 stance).
  *
  * The policy half every backend shares — ownership (VC-238), holds (VC-239),
  * the per-Project and per-Session caps, console bounds, pictures and traces —
