@@ -11,7 +11,7 @@ vp run --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' te
 
 It covers `session-engine`, `session-rpc`, `agent-runtime`, `shared`,
 `host-protocol` and `host-core` (and the other non-desktop workspace suites)
-through those directory filters. `apps/hostd` joins when it appears. They must
+through those directory filters, and `apps/hostd`. They must
 provide `test:coverage`: the CI policy self-test refuses a host manifest that
 would otherwise silently skip. This lane runs on **every PR**, including every
 host-path change, and `CI gate` requires success. There is no duplicate host
@@ -20,7 +20,11 @@ suite and no path-based waiver of these unit tests.
 **Check + Build** runs the host Electron import guard, its deliberate failing
 fixture, and the CI policy tests. **Build (host container)** builds and checks
 the image on host-package, hostd, container, toolchain or CI-policy changes
-(and on main/manual runs). `CI gate` checks its exact expected result:
+(and on main/manual runs). It then builds the hostd linux-x64 artifact inside
+that image, boots it from the archive alone against an empty data directory,
+lists projects through it with the `volli` CLI, stops it with `SIGTERM` and
+integrity-checks its database (`apps/hostd/README.md`, "Building it"), and
+uploads it as the `volli-hostd-linux-x64` artifact. `CI gate` checks its exact expected result:
 `success` when selected, `skipped` otherwise. Failure or cancellation never
 qualifies. Missing/invalid Scope flags also fail the gate. The policy tests
 execute the workflow's actual Bash for the result and path matrices, including
@@ -91,9 +95,8 @@ The same configuration can be opened via **Dev Containers: Open Folder in
 Container**, selecting `.devcontainer/host/devcontainer.json`. Use a separate
 Linux checkout; do not reuse a Mac's installed dependency directories or a
 checkout being used by a desktop Electron build. The filtered install includes
-root tooling, all packages and hostd when present, **not desktop**: its Electron
-native postinstall must not run in this host-only checkout. Until hostd exists,
-pnpm's no-match notice for that one filter is expected. The devcontainer keeps
+root tooling, all packages and hostd, **not desktop**: its Electron
+native postinstall must not run in this host-only checkout. The devcontainer keeps
 the root dependency store in a named Docker volume. On Linux the bind mount must
 be writable by uid 1000 (`node`); adjust the container user/mount permissions
 for your own checkout if needed. No production secrets are baked or mounted.

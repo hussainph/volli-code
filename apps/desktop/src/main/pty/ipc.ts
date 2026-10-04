@@ -24,9 +24,8 @@ import type { DbHandle } from "../data-ipc";
 import { windowEventBus } from "../broadcast";
 import { clientEventSink } from "../client-event-sink";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { SpawnLedger } from "../process/spawn-ledger";
+import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
@@ -189,8 +188,8 @@ function isCreateRequest(
  */
 export function registerTerminalIpcHandlers(
   handle: DbHandle,
+  sessionEngine: SessionEngine | null,
   agentRuntime: AgentRuntimeEnvironment | null = null,
-  sessionEngine: SessionEngine | null = handle.ok ? createDesktopSessionEngine(handle.db) : null,
   /**
    * The process's one reader of who is working (VC-339, VC-403). `index.ts`
    * passes the same instance the structured door uses, so both answer this
@@ -216,17 +215,26 @@ export function registerTerminalIpcHandlers(
         host,
         handle.db,
         "",
+        sessionEngine,
         undefined,
         undefined,
         agentRuntime,
         blobsRootPath,
-        sessionEngine,
         // Every terminal shell lands in the spawn ledger (VC-341), so a shell
         // that outlives this launch can still be attributed to its Session.
         new SpawnLedger(handle.db),
         concurrencyEnvReader,
       )
-    : new PtyManager(host, null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
+    : new PtyManager(
+        host,
+        null,
+        handle.error,
+        null,
+        undefined,
+        undefined,
+        agentRuntime,
+        blobsRootPath,
+      );
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is

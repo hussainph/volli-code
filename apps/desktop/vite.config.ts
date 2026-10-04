@@ -622,13 +622,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
-        // The agent-observability export boundary (VC-119). The mapping module
-        // is the ONLY place Volli's metadata-only vocabulary becomes somebody
-        // else's attribute names, and the sink is the bound that stops a
-        // collector from reaching a turn — both are enrolled here for the same
-        // reason the IPC handlers are: a missed branch is a privacy or a
-        // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
-        // `index.ts`: it is transport bootstrap around an SDK.
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression
@@ -640,17 +633,16 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/notifications/dispatch.ts",
         "**/src/main/notifications/ipc.ts",
         "**/src/main/notifications/settings.ts",
-        "**/src/main/observability/genai.ts",
+        // The agent-observability export boundary (VC-119). The mapping module,
+        // the settings owner and the sink moved to @volli/host-core with their
+        // tests (VC-622); their unchanged 100% gate moved to that package's
+        // vite.config.ts. The IPC door stays here.
         "**/src/main/observability/ipc.ts",
-        "**/src/main/observability/settings.ts",
-        "**/src/main/observability/sink.ts",
-        // The orphan process sweep (VC-341). Enrolled for the same reason the
-        // IPC handlers and `quit-gate.ts` are, only more so: this is the one
-        // place in the app that calls `process.kill`, and every uncovered
-        // branch in it is a branch nobody has watched decide whether to signal
-        // a stranger's process. The ledger's storage (`db/spawn-ledger-repo.ts`)
-        // is held to the same bar in @volli/host-core's gate.
-        "**/src/main/process/**",
+        // The process IPC door stays here; the sweep and its unchanged 100%
+        // gate moved with its tests to @volli/host-core (VC-618).
+        "**/src/main/process/ipc.ts",
+        // Still covered by desktop's IPC/PTY boundary tests; host-core's own
+        // tests do not yet hold every registry branch at 100%.
         "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
@@ -658,18 +650,10 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
-        // Relinking a project to the folder it moved to (VC-430). In the gate
-        // because every branch of it is a rule about a filesystem nobody is
-        // watching: the refusal that stops two projects tracking one checkout,
-        // and the container move that keeps a renamed project's worktrees
-        // inside the set this database recognises as its own. Both are silent
-        // when wrong — one duplicates a project, the other strands checkouts
-        // that no cleanup surface will ever list again.
-        "**/packages/host-core/src/project-relink.ts",
-        "**/src/main/pty.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
-        "**/src/main/shutdown-deadline.ts",
+        // The host deadline is still covered by desktop's quit/socket integration tests.
+        "**/packages/host-core/src/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
@@ -677,11 +661,8 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
-        // The db modules moved to @volli/host-core (VC-553) and took their gate
-        // entries with them; see that package's vite.config.ts. `export.ts`
-        // stays enrolled here because its covering test composes desktop
-        // Session code, and moves when that test can.
-        "**/packages/host-core/src/db/export.ts",
+        // The db modules, including export.ts, are protected by
+        // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
       ],

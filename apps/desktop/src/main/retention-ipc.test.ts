@@ -50,12 +50,13 @@ vi.mock("electron", () => ({
   },
 }));
 
+import { createTestSessionEngine } from "./test-session-engine";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 import { getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
-import { resetOrphanScanForTest } from "./orphan-scan";
-import { resetRetentionWatcherForTest } from "./retention-runtime";
+import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
+import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
 
 const fakeEvent = { sender: {} };
 
@@ -75,6 +76,7 @@ async function expectDataChangeCount(count: number): Promise<void> {
 }
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 
 beforeEach(() => {
   handlers.clear();
@@ -82,7 +84,8 @@ beforeEach(() => {
   resetOrphanScanForTest();
   resetRetentionWatcherForTest();
   ctx = openTestDb();
-  registerDataIpcHandlers({ ok: true, db: ctx.db });
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
   insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
 });
 
@@ -194,6 +197,7 @@ describe("volli:retention-archive-clean", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async () => [
           { directory: `${worktreePath}/packages/app`, surface: "agent" },
         ],
@@ -228,6 +232,7 @@ describe("volli:retention-archive-clean", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async (target) => {
           asked.push(target);
           return [];

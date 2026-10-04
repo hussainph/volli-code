@@ -17,7 +17,7 @@
  * This record is neither: it is machine-local host configuration (the read
  * beside it says so — "it names a host"), it does not travel with a Session or
  * a Ticket, and no other client will ever need to replay how it got its value.
- * `observability/settings.ts` (VC-119) is the same shape for the same reason,
+ * `@volli/host-core`'s `observability/settings.ts` (VC-119) is the same shape for the same reason,
  * and this follows it rather than inventing a preference event stream with one
  * reader.
  *

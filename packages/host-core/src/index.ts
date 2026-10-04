@@ -9,9 +9,9 @@
  * ask its host to do comes in as {@link HostCorePorts}. Nothing in this
  * package imports `electron` (`scripts/check-host-electron-imports.mjs`).
  *
- * Persistence (VC-553) and Session composition (VC-612) live here. The repos
- * and ledger are exported under `db/*` and `session-control/*`. See README.md
- * for how later slices move a cluster.
+ * Persistence, Session/runtime services, worktrees and files, secrets, agent
+ * tools and dispatch, Automations, terminals and the engine-agnostic browser
+ * live here. See README.md for the cluster exports, ports and move pattern.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -27,6 +27,10 @@ import { createHostFileServices, type HostFileServices } from "./file-services";
 import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
 import { createHostAgentServices, type HostAgentServices } from "./agent-services";
 import { createHostAutomationServices, type HostAutomationServices } from "./automation-services";
+import {
+  createHostMaintenanceServices,
+  type HostMaintenanceServices,
+} from "./maintenance-services";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
@@ -107,6 +111,8 @@ export interface HostCore extends HostSessionServices {
   readonly database: DbHandle;
   /** Staged construction, called in the host's existing boot order. */
   readonly runtimeServices: HostRuntimeServices;
+  /** Staged durability/process construction, with no window-dependent start. */
+  readonly maintenance: HostMaintenanceServices;
   readonly agentServices: HostAgentServices;
   readonly automations: HostAutomationServices;
   /** The client's capabilities, or one that refuses each readably when there is none. */
@@ -160,8 +166,15 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   }
   const client = clientCapabilities(ports.client);
   const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
+  const worktrees = createWorktreeRuntime(ports, options);
   return {
-    worktrees: createWorktreeRuntime(ports, options),
+    worktrees,
+    maintenance: createHostMaintenanceServices(
+      database.ok ? database.db : null,
+      ports,
+      { dataDir: options.dataDir, dbPath },
+      worktrees,
+    ),
     dataDir: options.dataDir,
     dbPath,
     database,

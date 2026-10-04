@@ -45,17 +45,17 @@ if (!host.database.ok) console.error(host.database.error);
 
 ## What is here
 
-| Path                     | Exports                                                                                                                     | Moved in |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                     | VC-553   |
-| `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`) | VC-553   |
-| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
-| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power and client-capability ports, with their headless answers | VC-554   |
-| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                         | VC-560   |
-| `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
+| Path                     | Exports                                                                                                                                        | Moved in |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                                        | VC-553   |
+| `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`)                    | VC-553   |
+| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                                            | VC-553   |
+| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power, client-capability, trash and secret-key ports, with their headless answers | VC-554   |
+| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                                            | VC-560   |
+| `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                                               | VC-553   |
 
 VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
-`@volli/host-core/session-control/*`), `src/session-wake.ts`,
+`@volli/host-core/session-control/*`), `src/session-control/session-wake.ts`,
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
@@ -76,9 +76,10 @@ VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
 exports. `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
 desktop callers not yet moved pass those same facts through `worktree-host.ts`.
 `repository-turn.ts` is byte-identical: its per-process ordering has not changed.
-The repository-turn coverage entry moves at 100%; project roots and relink stay
-in desktop's 100% gate, pointing at their new paths, because their covering tests
-still compose desktop modules. The ensure test stays there for its blob importer.
+Repository-turn and project-relink coverage run here at 100%, beside their
+tests. The ensure test also runs here, including its host-core blob importer.
+Project roots remain in desktop's 100% gate: host-core tests reach the registry,
+but desktop's IPC/PTY tests still cover branches this package does not.
 
 VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
@@ -98,6 +99,15 @@ engine-agnostic half. `cdp-controller`, `snapshot-format`, `agent-coordinator`,
 the picture and trace stores and their disks, and `trace-steps` moved
 byte-identical; `agent-port` moved without its Electron wire. See
 [Browser backend](#browser-backend).
+
+VC-622's first desktop-only slice adds `session-runtime/assembly`: synchronous,
+inert Pi attachment assembly over the host's existing engine, model access,
+MCP/Code Mode/Web Access owners, secret service and attachment identities. Browser
+and shell ports are construction inputs; birth membership derives from those
+capabilities, preserving desktop's shipped tool order. Venue and sandbox assets
+are explicit options. The runtime and peek share one transcript artifact store.
+Session facade/agent commands, recovery gating and the single composition
+`close()` are the next desktop-only slice; hostd does not run Sessions yet.
 
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot
@@ -142,6 +152,34 @@ VC-560 adds `src/pty/` (`@volli/host-core/pty/*`): the terminal supervisor
 Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
 constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
 this gate with its test.
+
+VC-618 (VC-558 slice 2) adds `src/backup/` (`@volli/host-core/backup/*`),
+`src/process/` (`@volli/host-core/process/*`), `database-recovery`,
+`retention-runtime`, `orphan-scan`, `quiet-windows`, `host-shutdown` and
+`shutdown-deadline` at matching subpath exports. Backup files are byte-identical:
+format, redactions, credential exclusions and the minimum-reader marker guard
+are unchanged. Warm park was already moved by VC-560 into `src/pty/park.ts`;
+its desktop quit/confirm door remains in `main/pty/ipc.ts`.
+
+`host.maintenance` stages recovery, spawn-ledger, orphan-process and retention
+construction at desktop's original boot points. Retention and process alerts use
+`events`/`attention`; no maintenance scheduler needs a window. Desktop still
+starts them after first paint and triggers retention on focus. The retention
+singleton keeps its first construction and shared dismissal state across IPC and
+host reads, including the original read-only behavior without reclaim seams.
+
+Recovery's IPC door is `main/database-recovery-ipc.ts`; recovery screens, dialogs,
+restart and `app.quit` stay desktop-owned. `main/quit-gate.ts` keeps synchronous
+refusals, the accepted-update latch, the microtask verdict and the Immediate
+before native exit. Host shutdown stops watches/notices, drains both Session
+owners, closes all MCP process groups and only then flushes observability. Its
+unchanged 15-second aggregate deadline is in `shutdown-deadline.ts`. The existing
+desktop quit/socket tests still hold that file at 100%; process coverage moved
+with its tests at the same 100% gate. Recovery's integration test stays desktop
+because it still composes IPC. All backup tests now run here: VC-561 moved the
+file-decision test's last desktop dependency, `browser/picture-disk`.
+`quiet-windows.ts` is unchanged, Node-only policy over injected structural
+interfaces; actual native windows and activation still belong to desktop.
 
 ## Ports
 
@@ -224,15 +262,17 @@ composition uses: `events`, `attention`, `log`, `listOpenNativeBindings` and
 construction, so desktop can bind notifications and the runtime
 after the database is known. Desktop wires `onFocusedSessionsChanged` to the
 returned read watch, and supplies the runtime-dependent scheduled-resume
-observer after the runtime exists. `createDesktopSessionEngine` retains its
-name for existing callers but is now the single engine construction site in
-host-core; host composition passes the shared ledger into it.
+observer after the runtime exists. Engine construction is private to the
+Sessions module (`src/sessions/engine.ts`, not a package export). It requires
+the shared ledger; terminal, data and runtime consumers must receive the
+composed engine and never construct a fallback. The wake decorator lives beside
+the activity watch in `src/session-control/`.
 
-Coverage entries for the activity/read/peek watches and concurrency budget
-move with their tests at the unchanged 100% thresholds. `db/export.ts` remains
-in desktop's gate: its test still composes the desktop delegation store. The
-cross-ledger transaction test and full host-notice integration test also stay
-in desktop until their remaining desktop dependencies move.
+Coverage entries for the activity/read/peek watches, concurrency budget and
+`db/export.ts` run here at unchanged 100% thresholds. The export test and
+`db/transaction-gate-ledgers.test.ts` compose host-core ledgers and run in the
+Linux packages lane. The full host-notice integration test stays in desktop
+until its remaining desktop dependencies move.
 
 ### Persistence
 
@@ -308,6 +348,10 @@ another user, is refused, as ssh refuses such a private key. Sealed secrets
 whose key is missing or different are refused, never re-keyed. Each refusal is
 a `SecretKeyUnavailableError` whose message names the fix and never a key byte;
 the store passes it through and keeps every other failure generic.
+`inspectSecretKeyFile(path)` raises the same refusals for an existing key
+without creating one, so `hostd` can refuse to boot on a bad key instead of
+finding it at the first save. A filesystem without hard links is its own
+refusal, `no-hard-links`, naming the manual `openssl rand` fallback.
 
 **Threat model, in one breath.** The file key protects stored secrets from
 other local users and from copies of the data directory made without the key,
@@ -413,6 +457,29 @@ is the one thing that changes between hosts:
   engine it drives. Never `--remote-debugging-port`: no loopback endpoint
   through which another local process could reach a tab.
 
+## Ticket moves
+
+`executeTicketMove` (`@volli/host-core/ticket-move`, VC-629) is the whole
+Deliberate move: atomic single/group write, post-commit Ticket wakes, immediate
+background Done trim, armed arrivals, non-user Doing notification, and backward
+Session interrupts. IPC and `ticket.move` only resolve/map their inputs and
+replies. An omitted drop index means column-only intent (same-column no-op);
+indexed drops retain renderer reorder semantics. The reply remains synchronous
+unless interrupt delivery is asynchronous, and never waits for trim.
+
+The socket intentionally gains the renderer's immediate trim, including on
+hostd without a retention poll. Both reuse the trim primitive's busy/dirty/Keep/
+opt-out refusals, durable `worktree_trimmed` event, snapshot invalidation and
+worktree change notice. Desktop wires the same busy supplier to both doors.
+The renderer still receives the board projection in its reply, not a new
+`data-changed` push; detached trims push as before. NDJSON receives its existing
+agent projection and targeted invalidation. There is no new receipt ledger or
+migration; backward-interrupt receipts remain Session evidence.
+
+This is a handler seam for the future command catalog, not a second catalog.
+The pre-change audit on VC-629 records remaining projection/delivery and harness
+policy differences for the board-area migration.
+
 ## Moving a service cluster in
 
 This is the pattern for every later move (VC-554 onward). A move is a **pure
@@ -448,14 +515,15 @@ move**: no behavior change, no migration, and the app is identical with the
    - A test whose imports all land in host-core moves with `git mv`.
    - A test that still composes desktop modules stays in desktop at its old
      path and imports from `@volli/host-core`. It moves in the ticket that
-     moves its last desktop dependency. Examples: `apps/desktop/src/main/db/*.test.ts`
-     and `transaction-gate-ledgers.test.ts`.
+     moves its last desktop dependency. For example,
+     `apps/desktop/src/main/volli-fs-ipc.test.ts` still composes the desktop
+     IPC adapter.
 6. **Coverage moves with the test.** A protected entry in
    `apps/desktop/vite.config.ts` moves to this package's `vite.config.ts`
    when host-core's own tests hold it at 100%. Check that with
    `vp test run <test> --coverage --coverage.include=<file>`. If its test
    must stay in desktop, re-point the desktop entry to
-   `**/packages/host-core/src/<path>`, as `db/export.ts` is.
+   `**/packages/host-core/src/<path>`, as `project-roots.ts` is.
 7. **Fix every path reference.** `rg` the old directory across:
    - e2e and bench scripts (`ssrLoadModule("/apps/desktop/src/main/...")`, `load("src/main/...")`);
    - `apps/desktop/scripts`;

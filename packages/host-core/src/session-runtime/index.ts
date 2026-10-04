@@ -8,10 +8,7 @@ import {
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import {
-  createCheckpointFailureReporter,
-  createDesktopSessionEngine,
-} from "@volli/host-core/session-control";
+import { createCheckpointFailureReporter } from "@volli/host-core/session-control";
 import type { HostEventBus } from "../ports";
 import { createDesktopSessionLocationResolver } from "./location";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
@@ -22,7 +19,7 @@ export interface DesktopSessionRuntimeOptions {
   dataDir: string;
   transcriptDirectory: string;
   executor: NativeHarnessAdapter;
-  sessionEngine?: SessionEngine;
+  sessionEngine: SessionEngine;
   /**
    * The one artifact store for this launch. Passed in when another reader needs
    * the same store — `session peek`'s chat transcript tail reads it straight
@@ -47,14 +44,11 @@ export function createDesktopSessionRuntime(
 ): HostedSessionRuntime {
   const now = options.now ?? Date.now;
   const nextId = options.nextId ?? randomUUID;
-  // One reporter for both halves: the engine's read path and the runtime's
-  // write path share a throttle window, so a single failing cache row cannot
-  // be announced twice for the same fault (VC-355).
+  // Runtime write-path diagnostics; the Sessions module owns the engine's
+  // read-path reporter. No engine is constructed here.
   const onProjectionCheckpointFailure = createCheckpointFailureReporter();
   return createSessionRuntime({
-    engine:
-      options.sessionEngine ??
-      createDesktopSessionEngine(options.db, { now, nextId, onProjectionCheckpointFailure }),
+    engine: options.sessionEngine,
     executor: options.executor,
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createDesktopSessionLocationResolver(

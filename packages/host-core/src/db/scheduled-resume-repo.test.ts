@@ -5,7 +5,7 @@
 import { pendingScheduledResume } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { createDesktopSessionEngine } from "../session-control";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { listScheduledResumeSessionIds } from "@volli/host-core/db/scheduled-resume-repo";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
@@ -32,7 +32,7 @@ describe("listScheduledResumeSessionIds", () => {
     const project = testProject({ id: "project" });
     insertProject(ctx.db, project);
     let id = 0;
-    const engine = createDesktopSessionEngine(ctx.db, {
+    const engine = createTestSessionEngine(ctx.db, {
       now: () => 100 + id,
       nextId: () => `id-${++id}`,
     });

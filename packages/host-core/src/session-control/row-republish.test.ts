@@ -4,7 +4,7 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { writeSessionUnread } from "@volli/host-core/db/session-read-repo";
-import { createDesktopSessionEngine } from "./index";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { publishSessionListingRow } from "./row-republish";
 
 let ctx: TestDb;
@@ -23,7 +23,7 @@ async function seeded() {
   const project = testProject({ id: "project" });
   insertProject(ctx.db, project);
   let id = 0;
-  const engine = createDesktopSessionEngine(ctx.db, { now: () => 100, nextId: () => `id-${++id}` });
+  const engine = createTestSessionEngine(ctx.db, { now: () => 100, nextId: () => `id-${++id}` });
   const created = await engine.createSession({
     commandId: "create-1",
     projectId: project.id,

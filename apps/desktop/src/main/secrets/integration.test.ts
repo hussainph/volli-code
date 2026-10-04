@@ -15,13 +15,13 @@ import {
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import { secretFixtureProvider } from "../../../../../packages/agent-runtime/src/pi/fixtures/secret-provider";
 import { createPiRuntimeHost } from "@volli/host-core/session-runtime/pi-adapter";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "../test-session-engine";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import { insertProject } from "@volli/host-core/db/projects-repo";
-import { BackgroundShellHost } from "../shell/background-shell-host";
-import { createAgentShellPort } from "../shell/agent-port";
+import { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
+import { createAgentShellPort } from "@volli/host-core/shell/agent-port";
 import { SecretStore } from "@volli/host-core/secrets";
-import { SecretService } from "./service";
+import { SecretService } from "@volli/host-core/secrets/service";
 import { registerSecretIpc } from "./ipc";
 
 const { handlers } = vi.hoisted(() => ({
@@ -199,7 +199,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
         };
       },
     });
-    const engine = createDesktopSessionEngine(ctx.db);
+    const engine = createTestSessionEngine(ctx.db);
     const runtime = createSessionRuntime({
       engine,
       clock: { now: Date.now },
@@ -390,7 +390,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
           };
         },
       });
-      const engine = createDesktopSessionEngine(ctx.db);
+      const engine = createTestSessionEngine(ctx.db);
       const runtime = createSessionRuntime({
         engine,
         clock: { now: Date.now },

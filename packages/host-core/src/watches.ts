@@ -102,7 +102,7 @@ import type {
 } from "@volli/session-engine";
 import { readSessionAnswer } from "@volli/session-engine";
 
-import type { SubscribeSessionWake } from "@volli/host-core/session-wake";
+import type { SubscribeSessionWake } from "@volli/host-core/session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
 import {
   cutAtCodePoint,

@@ -17,7 +17,7 @@ deliberate: the export is missing attachments, transcripts, and several ledgers,
 so a "restore" from it would silently produce a profile that has quietly lost
 things.
 
-Source: `apps/desktop/src/main/backup/`.
+Source: `packages/host-core/src/backup/` (`@volli/host-core/backup/*`).
 
 ## Container
 
