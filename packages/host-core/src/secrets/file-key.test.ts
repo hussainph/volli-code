@@ -8,9 +8,12 @@
  */
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -124,6 +127,16 @@ function expectRefused(
   return error;
 }
 
+/** One descriptor for both facts, so the mode read is the mode of the bytes read. */
+function readWithMode(path: string): { mode: number; bytes: Buffer } {
+  const fd = openSync(path, "r");
+  try {
+    return { mode: fstatSync(fd).mode & 0o777, bytes: readFileSync(fd) };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function keyLine(): string {
   return readFileSync(keyPath, "utf8").trim();
 }
@@ -159,14 +172,15 @@ describe("the file key round trip", () => {
     expect(existsSync(storePath)).toBe(false);
 
     saveTwo(store);
-    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
-    expect(statSync(storePath).mode & 0o777).toBe(0o600);
-    expect(readFileSync(keyPath, "utf8")).toMatch(/^[A-Za-z0-9+/]{43}=\n$/);
-    expect(Buffer.from(keyLine(), "base64")).toHaveLength(32);
+    const key = readWithMode(keyPath);
+    expect(key.mode).toBe(0o600);
+    expect(key.bytes.toString("utf8")).toMatch(/^[A-Za-z0-9+/]{43}=\n$/);
+    expect(Buffer.from(key.bytes.toString("utf8").trim(), "base64")).toHaveLength(32);
     // No temporary key sibling survives the create.
     expect(readdirSync(dataDir).toSorted()).toEqual([SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME]);
 
-    const sealed = readFileSync(storePath);
+    const { mode, bytes: sealed } = readWithMode(storePath);
+    expect(mode).toBe(0o600);
     expect(sealed.subarray(0, 4).toString()).toBe("VSF1");
     for (const plain of ["sk_headless_always", "headless-project-token", "STRIPE_API_KEY"]) {
       expect(sealed.includes(Buffer.from(plain))).toBe(false);
