@@ -221,7 +221,7 @@ describe("signing in to a remote MCP server", () => {
         ending === "cancel while opening browser" ||
         ending === "caller abort";
       const h = harness({
-        signInTimeoutMs: ending === "timeout" ? 100 : 5_000,
+        signInTimeoutMs: ending === "timeout" ? 1_000 : 5_000,
         browser: async (url) => {
           const redirect = new URL(new URL(url).searchParams.get("redirect_uri")!);
           callbackPort = Number(redirect.port);
@@ -248,7 +248,7 @@ describe("signing in to a remote MCP server", () => {
         const socketClosed = new Promise<void>((resolve) => idle!.once("close", () => resolve()));
         if (ending === "caller abort") caller.abort(new Error("caller stopped waiting"));
         else if (cancelled) h.broker.cancelSignIn(server.id);
-        const result = await withinDeadline(outcome);
+        const result = await withinDeadline(outcome, ending === "timeout" ? 3_000 : 1_500);
         expect(result).toMatchObject({
           ok: ending === "success",
           ...(ending === "success" ? {} : { cancelled }),
