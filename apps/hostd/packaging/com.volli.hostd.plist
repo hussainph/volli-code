@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  volli-hostd as a launchd user agent (VC-562). A template: replace
+  /Users/YOU and the install path. Install and start it with:
+
+    mkdir -m 700 -p "$HOME/Library/Application Support/volli-hostd"
+    cp com.volli.hostd.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.volli.hostd.plist
+
+  Stop it with `launchctl bootout gui/$(id -u)/com.volli.hostd`, which sends
+  SIGTERM: hostd drains, checkpoints and closes its database.
+  This data directory is NOT the desktop app's: never point hostd at
+  ~/Library/Application Support/Volli Code while the app is running.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.volli.hostd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/volli-hostd/bin/volli-hostd</string>
+    <string>--data-dir</string>
+    <string>/Users/YOU/Library/Application Support/volli-hostd</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VOLLI_HOSTD_LOG_LEVEL</key>
+    <string>info</string>
+  </dict>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart after a non-zero exit, not after a clean stop. launchd cannot tell a
+       crash from a refusal to boot (exit 78): a refusal retries every ThrottleInterval. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>45</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/Library/Logs/volli-hostd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/Library/Logs/volli-hostd.log</string>
+</dict>
+</plist>

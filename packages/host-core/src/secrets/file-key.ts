@@ -184,6 +184,20 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
   };
 }
 
+/**
+ * Checks the key file at `path` now, without creating one: `"absent"` when
+ * nothing is there, `"present"` when it holds a usable key. Every refusal the
+ * adapter would raise later (too open, wrong owner, not a file, malformed,
+ * unreadable) is raised here instead, so a headless host can refuse to boot on
+ * a bad key rather than on the first save. The key bytes are dropped at once.
+ */
+export function inspectSecretKeyFile(path: string): "absent" | "present" {
+  const key = readKey(path);
+  if (key === null) return "absent";
+  key.fill(0);
+  return "present";
+}
+
 function keyId(key: Buffer): Buffer {
   return createHash("sha256").update(KEY_ID_LABEL).update(key).digest().subarray(0, ID_BYTES);
 }
@@ -288,6 +302,7 @@ function createKey(path: string): Buffer {
     // the loser adopts the winner's key.
     linked = linkOnce(temporary, path);
   } catch (error) {
+    if (error instanceof SecretKeyUnavailableError) throw error;
     throw unreadable(path, error);
   } finally {
     rmSync(temporary, { force: true });
@@ -300,12 +315,29 @@ function createKey(path: string): Buffer {
   return key;
 }
 
+/**
+ * What `link(2)` answers on a filesystem that cannot make hard links: some
+ * FUSE mounts, s3fs and container volumes. Not a permissions problem, so it
+ * gets its own sentence rather than the "must be able to write" one.
+ */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"]);
+
 function linkOnce(from: string, to: string): boolean {
   try {
     linkSync(from, to);
     return true;
   } catch (error) {
-    if (errorCode(error) === "EEXIST") return false;
+    const code = errorCode(error);
+    if (code === "EEXIST") return false;
+    if (code !== undefined && NO_HARD_LINKS.has(code)) {
+      throw new SecretKeyUnavailableError(
+        "no-hard-links",
+        `Volli could not create the secret key file ${to} (${code}): its filesystem ` +
+          "cannot make hard links, which Volli uses to create the key atomically. " +
+          "Create the key yourself instead, private from its first byte: " +
+          `(umask 077 && openssl rand -base64 32 > ${to})`,
+      );
+    }
     throw error;
   }
 }

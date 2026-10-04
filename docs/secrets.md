@@ -73,13 +73,32 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
 - **What it is.** One line: 32 random bytes in base64. Volli creates it the
   first time a Project or Always secret is saved: written whole to a 0600
   temporary file, fsynced, then hard-linked into place. You may write one
-  yourself (`openssl rand -base64 32 > key && chmod 600 key`). Nothing reads
+  yourself (`(umask 077 && openssl rand -base64 32 > key)`: under the usual
+  umask 022, `openssl ... > key` creates it readable by everyone before any
+  `chmod` runs). Nothing reads
   the file until stored secrets exist, and it is read once per process.
 - **Refusals, each naming its fix.** Like ssh with a private key, Volli refuses
   a key file that grants group or other users any access (`chmod 600 <path>`)
   or belongs to another user (`chown`). It also refuses a path that is not a
   regular file, a file that is not one base64 key line, and a key file it
-  cannot read or create. None of these messages quotes the key.
+  cannot read or create. On a filesystem that cannot make hard links (`link(2)`
+  answering `EPERM` or `ENOSYS`, as some FUSE, s3fs and container volumes do)
+  it says so (`no-hard-links`) and names the manual fallback: create the key
+  yourself with `(umask 077 && openssl rand -base64 32 > key)`. Creation
+  only runs when the file is absent. None of these messages quotes the key.
+- **Checked at boot.** `volli-hostd` settles all of this before it serves
+  anything: it inspects an existing key file and opens an existing sealed
+  store, and refuses to start, naming the fix, rather than waiting for the
+  first Session to need a secret.
+- **Provisioning it for a service.** Install an admin-made key with
+  `install -o <service-user> -m 600`, so it belongs to the user hostd runs as.
+  A systemd `LoadCredential=` file is refused, and rightly: systemd owns it as
+  root and grants the service user access through an ACL, and the key must
+  belong to that user alone. Give the data directory `StateDirectoryMode=0700`:
+  the adapter checks only the key file, so a directory other users could write
+  would let them rename the key or the store away. hostd refuses a data
+  directory every user can write and warns about a group-writable one.
+  `apps/hostd/README.md` ("Running under systemd") has the unit.
 - **Never re-keyed.** A key is only created to seal, and the store always opens
   what exists before it seals. So if `session-secrets.enc` exists and its key
   file is missing, or is a different key, opening, saving, injecting and

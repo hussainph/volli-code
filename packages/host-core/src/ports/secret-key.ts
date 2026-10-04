@@ -45,6 +45,11 @@ export type SecretKeyRefusal =
   | "malformed"
   /** The key file could not be read or written. */
   | "unreadable"
+  /**
+   * The key file's filesystem cannot make hard links (some FUSE, s3fs and
+   * container volumes), so Volli cannot create the key there atomically.
+   */
+  | "no-hard-links"
   /** Sealed secrets exist and their key file does not. */
   | "missing"
   /** The key file is not the key the secrets were sealed with. */
