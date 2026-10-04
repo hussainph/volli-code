@@ -6,13 +6,17 @@ import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
 import { insertSession } from "../session-control/test-support";
 import { buildBackupDataDocument, validateBackupDataDocument } from "../backup/data-document";
-import { getProjectById, insertProject } from "./projects-repo";
-import { getTicket, insertTicket, nextTicketNumberForProject } from "./tickets-repo";
-import { openRawDb, testProject, testSession, testTicket } from "./test-helpers";
-import { openVolliDb } from "./index";
-import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
-import * as migrations from "./migrations";
-import { migrate } from "./migrations";
+import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
+import {
+  getTicket,
+  insertTicket,
+  nextTicketNumberForProject,
+} from "@volli/host-core/db/tickets-repo";
+import { openRawDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
+import { openVolliDb } from "@volli/host-core/db";
+import { CLOUD_IDENTITY_MIGRATION } from "@volli/host-core/db/cloud-identity-migration";
+import * as migrations from "@volli/host-core/db/migrations";
+import { migrate } from "@volli/host-core/db/migrations";
 
 const LATEST_SCHEMA_VERSION = migrations.MIGRATIONS.at(-1)!.version;
 

@@ -21,7 +21,11 @@
 import { displayTicketId } from "@volli/shared";
 import type { AgentRequest, AgentResponse, Label } from "@volli/shared";
 
-import { findLabelByName, findLabelRetirement, listLabelsByProject } from "../db/labels-repo";
+import {
+  findLabelByName,
+  findLabelRetirement,
+  listLabelsByProject,
+} from "@volli/host-core/db/labels-repo";
 import { mergeLabelsCommand, planLabelMerge, type LabelMergePlan } from "../ticket-commands";
 import { emitTicketWakesSince, markTicketWake } from "../ticket-wake";
 import { failure } from "./context";

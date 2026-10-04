@@ -41,8 +41,7 @@ import {
   parseCanvas,
   THEME_APP_STATE_KEY,
 } from "@volli/shared";
-import type { Appearance, Canvas } from "@volli/shared";
-import type { FirstPaintHint } from "../../ipc/contract";
+import type { Appearance, Canvas, FirstPaintHint } from "@volli/shared";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
 

@@ -101,17 +101,23 @@ import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { importBlob } from "./blob-import";
 import { blobsRoot, removeBlob } from "./blob-store";
-import { listTicketEvents, recordSessionResumedOnce } from "./db/events-repo";
-import { insertProject } from "./db/projects-repo";
+import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
   getSession,
   insertSession,
   listSessions,
   listTicketSessions,
 } from "./session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
+import {
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
 import type { HarnessId } from "@volli/shared";
-import { deleteTicket, insertTicket } from "./db/tickets-repo";
+import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
 import { createDesktopSessionEngine } from "./session-control";
 import { createSessionTokenRegistry } from "./session-tokens";

@@ -4,13 +4,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "vite";
 
-export const LOCK_COMMAND = "pnpm --filter @volli/desktop migrations:lock";
-export const MIGRATIONS_PATH = fileURLToPath(
-  new URL("../src/main/db/migrations.ts", import.meta.url),
-);
-export const LOCK_PATH = fileURLToPath(
-  new URL("../src/main/db/migrations.lock.json", import.meta.url),
-);
+export const LOCK_COMMAND = "pnpm --filter @volli/host-core migrations:lock";
+export const MIGRATIONS_PATH = fileURLToPath(new URL("../src/db/migrations.ts", import.meta.url));
+export const LOCK_PATH = fileURLToPath(new URL("../src/db/migrations.lock.json", import.meta.url));
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
-import { writeSessionUnread } from "../db/session-read-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { writeSessionUnread } from "@volli/host-core/db/session-read-repo";
 import { createDesktopSessionEngine } from "./index";
 import { publishSessionListingRow } from "./row-republish";
 

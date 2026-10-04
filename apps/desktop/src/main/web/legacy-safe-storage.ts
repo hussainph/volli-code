@@ -43,8 +43,8 @@
 import { safeStorage } from "electron";
 import type Database from "better-sqlite3";
 
-import { prepared } from "../db/prepared";
-import { hasSecret, writeSecret } from "../db/secrets-repo";
+import { prepared } from "@volli/host-core/db/prepared";
+import { hasSecret, writeSecret } from "@volli/host-core/db/secrets-repo";
 
 /** What one pass did. Row counts only — nothing here describes a key. */
 export interface LegacySafeStorageOutcome {

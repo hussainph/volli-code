@@ -126,7 +126,7 @@ describe("REQUIRED_NODE_RANGE", () => {
   // this assertion is the sync between the printed range and the real pin.
   it("matches the root package.json engines.node", () => {
     const manifest = JSON.parse(
-      readFileSync(new URL("../../../../package.json", import.meta.url), "utf8"),
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
     ) as { engines?: { node?: string } };
     expect(REQUIRED_NODE_RANGE).toBe(manifest.engines?.node);
   });

@@ -42,10 +42,10 @@ import { AGENT_COMMAND_BINDINGS, AGENT_COMMANDS, VERB_REGISTRY } from "@volli/sh
 
 import { createAgentCommandService } from "./agent-commands";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
-import { insertProject } from "./db/projects-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertSession } from "./session-control/test-support";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
+import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { createDesktopSessionEngine } from "./session-control";
 import { createSessionTokenRegistry } from "./session-tokens";
 

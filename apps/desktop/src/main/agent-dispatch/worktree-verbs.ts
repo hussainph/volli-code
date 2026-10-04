@@ -19,7 +19,10 @@ import { displayTicketId, resolveAgentContext } from "@volli/shared";
 import type { AgentRequest, AgentResponse, Project, Ticket } from "@volli/shared";
 import type { WorktreeDiffMode } from "../../ipc/contract";
 
-import { listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
+import {
+  listArchivedTicketsByProject,
+  listTicketsByProject,
+} from "@volli/host-core/db/tickets-repo";
 import {
   previewTicketWorktree,
   readWorktreeDiff,

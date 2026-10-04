@@ -21,9 +21,9 @@ import {
   setColumnArming,
   setColumnOrder,
   triggerColumnValue,
-} from "../db/automations-repo";
-import { prepared } from "../db/prepared";
-import { settleTransaction } from "../db/transaction-gate";
+} from "@volli/host-core/db/automations-repo";
+import { prepared } from "@volli/host-core/db/prepared";
+import { settleTransaction } from "@volli/host-core/db/transaction-gate";
 import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
   AutomationCommand,

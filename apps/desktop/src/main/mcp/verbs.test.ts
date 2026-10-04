@@ -25,11 +25,17 @@ import type { RuntimeAskChoice, RuntimeAskRequest, RuntimeSessionIdentity } from
 
 import { createAgentToolDoor } from "../agent-tool-door";
 import type { VerbBudgetAsk } from "../agent-tool-door";
-import { listMcpOperations } from "../db/mcp-operations-repo";
-import { listMcpServers, putMcpServer } from "../db/mcp-servers-repo";
-import { insertProject } from "../db/projects-repo";
-import { insertTicket } from "../db/tickets-repo";
-import { openRawDb, openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
+import { listMcpServers, putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import {
+  openRawDb,
+  openTestDb,
+  testProject,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
 import type { McpProtocolClient } from "./discovery";
 import { serversForFrozenMcpTools } from "./session-host";
 import { McpSettingsService } from "./settings";

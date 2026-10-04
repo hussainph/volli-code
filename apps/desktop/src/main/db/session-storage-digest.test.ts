@@ -7,7 +7,7 @@ import {
   computeSessionStorageContentDigest,
   computeSessionStorageContentDigestAtPath,
   type SessionStorageContentDigest,
-} from "./session-storage-digest";
+} from "@volli/host-core/db/session-storage-digest";
 
 type DigestTable = keyof SessionStorageContentDigest;
 

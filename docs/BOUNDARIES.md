@@ -75,15 +75,15 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 ## Shipped SQLite migrations
 
-SQL and original TypeScript `apply` source (including referenced helpers) are frozen in `apps/desktop/src/main/db/migrations.lock.json`; edits to shipped entries require a new migration, never a rewritten lock. Keep frozen helpers/constants byte-identical (including shared runtime helpers); new behavior gets new names, leaving old applies bound to the original implementations. Formatter/tool upgrades must preserve these source slices, not regenerate shipped hashes.
-Append the next contiguous version to `MIGRATIONS`, then run `pnpm --filter @volli/desktop migrations:lock` and commit its single new version line; the script refuses to rewrite existing entries, and concurrent claims on the same number conflict on that line.
+SQL and original TypeScript `apply` source (including referenced helpers) are frozen in `packages/host-core/src/db/migrations.lock.json`; edits to shipped entries require a new migration, never a rewritten lock. Keep frozen helpers/constants byte-identical (including shared runtime helpers); new behavior gets new names, leaving old applies bound to the original implementations. Formatter/tool upgrades must preserve these source slices, not regenerate shipped hashes.
+Append the next contiguous version to `MIGRATIONS`, then run `pnpm --filter @volli/host-core migrations:lock` and commit its single new version line; the script refuses to rewrite existing entries, and concurrent claims on the same number conflict on that line.
 Tests enforce versions 1..N with no exceptions (023/024 reconcile historical lineages, not numbering gaps); schema-head consumers derive the last version from `MIGRATIONS`.
 
 ## SQLite transaction ownership
 
 **No SQLite transaction spans an `await` (VC-551).** One host owns the handle
 on one JavaScript thread. `withTransaction(db, work)` in
-`apps/desktop/src/main/db/transaction-gate.ts` runs a synchronous body between
+`packages/host-core/src/db/transaction-gate.ts` runs a synchronous body between
 `BEGIN IMMEDIATE` and COMMIT/ROLLBACK; nested work uses a savepoint. The Session,
 Automation and orphan-cleanup ledger ports use `settleTransaction`: the same
 synchronous work, with its outcome delivered as a promise. Their transaction
@@ -109,9 +109,11 @@ Isolated synchronous connections were rejected: `busy_timeout` could block the
 same event loop an async owner needed to commit.
 
 `openVolliDb` installs an execution-time ownership guard after migrations.
-`openTestDb` selects its throwing handler; desktop startup explicitly selects
-throwing for development and **logging only for `app.isPackaged`**, never based
-on `NODE_ENV`. It checks `exec` and statement execution, including statements
+`openTestDb` selects its throwing handler. The handler is a required
+`createHostCore` option, chosen at each host's composition root: desktop
+explicitly selects throwing for development and **logging only for
+`app.isPackaged`**, never based on `NODE_ENV`; a headless host selects
+throwing. It checks `exec` and statement execution, including statements
 already in the repo cache, and tracks native synchronous transaction callbacks.
 A raw BEGIN/SAVEPOINT left open between calls fails synchronously in tests/dev,
 with rollback before another command can join. Ending an owned transaction
@@ -127,9 +129,17 @@ all reads, including cached readers and lazy iterator stepping.
 Boot-time sole-owner migrations, recovery and backup/restore connections remain
 direct and are not runtime shared-handle exceptions. No runtime allowlist is
 needed. See [the write-path inventory](research/sqlite-ownership-vc551.md).
-`apps/desktop/src/main/db/transaction-gate.test.ts` proves that the former
+**The boot window is the only unguarded time, and nothing from it outlives
+boot:** a statement handle created on the runtime handle before the guard is
+installed must not be retained past `openVolliDb`. The guard re-wraps the
+statements in the repo cache (`prepared`) when it installs; any other early
+statement would escape it.
+`packages/host-core/src/db/transaction-gate.test.ts` proves that the former
 ungated-write rollback hazard cannot happen, and covers cached statements,
-raw transaction controls, cross-ledger work, nesting and the packaged handler.
+raw transaction controls, nesting and the packaged handler; the cases that need
+desktop ledgers (cross-ledger work) are in
+`apps/desktop/src/main/db/transaction-gate-ledgers.test.ts` until those ledgers
+move into host-core.
 
 ## The chosen path, for context
 

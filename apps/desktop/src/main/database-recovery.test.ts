@@ -55,9 +55,9 @@ vi.mock("electron", () => ({
   },
 }));
 
-import * as database from "./db";
-import { migrate, MIGRATIONS } from "./db/migrations";
-import { beginDatabaseRecovery, recoveryPendingPath } from "./db/recovery-pending";
+import * as database from "@volli/host-core/db";
+import { migrate, MIGRATIONS } from "@volli/host-core/db/migrations";
+import { beginDatabaseRecovery, recoveryPendingPath } from "@volli/host-core/db/recovery-pending";
 import {
   DatabaseRecovery,
   NO_CLEAN_BACKUP,

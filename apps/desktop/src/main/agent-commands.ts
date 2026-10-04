@@ -31,7 +31,7 @@ import { coordinationRefusal } from "./agent-dispatch/admission";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
-import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, listProjects } from "@volli/host-core/db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 

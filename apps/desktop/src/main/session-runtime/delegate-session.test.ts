@@ -55,8 +55,8 @@ import type { SessionStartInput } from "./sessions";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { insertSession } from "../session-control/test-support";
-import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, testSession } from "../db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
 
 const PARENT = "aaaaaaaa-0000-0000-0000-000000000000";
 const CHILD = "bbbbbbbb-0000-0000-0000-000000000000";

@@ -12,7 +12,7 @@ import {
   verifyFixture,
 } from "./fixture.mjs";
 import { DEFAULT_SEED, PRESETS } from "./presets.mjs";
-import { MIGRATIONS } from "../../../src/main/db/migrations.ts";
+import { MIGRATIONS } from "@volli/host-core/db/migrations";
 
 const CURRENT_DB_SCHEMA_VERSION = MIGRATIONS.at(-1).version;
 

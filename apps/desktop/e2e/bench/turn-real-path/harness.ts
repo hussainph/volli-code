@@ -51,8 +51,8 @@ import {
 } from "@volli/session-engine";
 import { type ObservabilityEvent, type ObservabilitySink, type SessionLedger } from "@volli/shared";
 
-import { openVolliDb } from "../../../src/main/db";
-import { insertProject } from "../../../src/main/db/projects-repo";
+import { openVolliDb } from "@volli/host-core/db";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
   createCheckpointFailureReporter,
   createSqliteSessionLedger,

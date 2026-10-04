@@ -652,10 +652,9 @@ export default defineConfig(({ mode }) => ({
         // IPC handlers and `quit-gate.ts` are, only more so: this is the one
         // place in the app that calls `process.kill`, and every uncovered
         // branch in it is a branch nobody has watched decide whether to signal
-        // a stranger's process. The ledger's storage rides along, because a row
-        // it hands back wrong is what that decision is made from.
+        // a stranger's process. The ledger's storage (`db/spawn-ledger-repo.ts`)
+        // is held to the same bar in @volli/host-core's gate.
         "**/src/main/process/**",
-        "**/src/main/db/spawn-ledger-repo.ts",
         "**/src/main/project-roots.ts",
         // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
         // for the reason the process modules above are: it is a concurrency
@@ -697,13 +696,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
-        "**/src/main/db/export.ts",
-        "**/src/main/db/theme-repo.ts",
-        // Where "unread" is written down (VC-30). Enrolled beside the other
-        // named db modules for the reason the notification boundary is: a
-        // receipt read or written wrong is work a person never sees they have,
-        // and nothing on screen says the dot was the part that was broken.
-        "**/src/main/db/session-read-repo.ts",
+        // The db modules moved to @volli/host-core (VC-553) and took their gate
+        // entries with them; see that package's vite.config.ts. `export.ts`
+        // stays enrolled here because its covering test composes desktop
+        // Session code, and moves when that test can.
+        "**/packages/host-core/src/db/export.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a

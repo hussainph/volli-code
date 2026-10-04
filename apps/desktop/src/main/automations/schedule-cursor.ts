@@ -39,7 +39,7 @@
  */
 import type Database from "better-sqlite3";
 
-import { getAppState, setAppState } from "../db/app-state-repo";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 
 /**
  * The `app_state` key. A frozen string: it names durable rows, so changing it

@@ -28,8 +28,8 @@ import { errorMessage } from "@volli/shared";
 import type { NotificationRequest } from "./notifications/dispatch";
 
 import type { UpdateUiState } from "../ipc/contract";
-import { setAppState } from "./db/app-state-repo";
-import { prepared } from "./db/prepared";
+import { setAppState } from "@volli/host-core/db/app-state-repo";
+import { prepared } from "@volli/host-core/db/prepared";
 
 /**
  * The `app_state` key behind the prerelease toggle (default OFF). Canary

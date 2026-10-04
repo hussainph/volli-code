@@ -842,7 +842,7 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |
 | Developer opt-in, stamping, attach narrowing, budget binding | `apps/desktop/src/main/mcp/parallel-dev-config.ts`, `dispatch-policy.ts` |
 | Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
-| Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
+| Storage | `packages/host-core/src/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
 | Server dialog, tool picker | `mcp-server-dialog.tsx`, `mcp-tool-picker.tsx`, `mcp-tools-model.ts` (same folder) |
 | Tool hints (display-only labels) | `sanitizeMcpToolHints` in `packages/shared/src/mcp.ts` |

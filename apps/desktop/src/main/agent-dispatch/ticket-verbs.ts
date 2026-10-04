@@ -37,9 +37,9 @@ import type {
   TicketEventActorKind,
 } from "@volli/shared";
 
-import { getRegisteredHarness } from "../db/harness-registry-repo";
-import { findLabelByName } from "../db/labels-repo";
-import { listTicketsByProject } from "../db/tickets-repo";
+import { getRegisteredHarness } from "@volli/host-core/db/harness-registry-repo";
+import { findLabelByName } from "@volli/host-core/db/labels-repo";
+import { listTicketsByProject } from "@volli/host-core/db/tickets-repo";
 import {
   createTicketCommand,
   createTicketCommentCommand,

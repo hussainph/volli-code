@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
 import { WebAccessSettings } from "./settings";
 

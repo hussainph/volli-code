@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { getAppState, setAppState } from "../db/app-state-repo";
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import {
   advanceScheduleCursor,
   AUTOMATION_SCHEDULE_CURSORS_KEY,

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
-import { testProject, testSession, testTicket, openTestDb } from "./test-helpers";
-import type { TestDb } from "./test-helpers";
+import { testProject, testSession, testTicket, openTestDb } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import {
   deleteProject,
@@ -12,8 +12,8 @@ import {
   updateProjectAuthorityPolicy,
   updateProjectSkillModes,
   updateProjectSessionDefaults,
-} from "./projects-repo";
-import { insertTicket } from "./tickets-repo";
+} from "@volli/host-core/db/projects-repo";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 
 let ctx: TestDb;
 

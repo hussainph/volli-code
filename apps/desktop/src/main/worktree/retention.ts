@@ -26,10 +26,10 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
-import { getAllAppState, setAppState } from "../db/app-state-repo";
-import { recordTicketEvent } from "../db/events-repo";
-import { prepared } from "../db/prepared";
-import { getTicketRow } from "../db/tickets-repo";
+import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { prepared } from "@volli/host-core/db/prepared";
+import { getTicketRow } from "@volli/host-core/db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
 import type { WorktreeTrimReport } from "../../ipc/contract";
 import type { BusyWorktreeSites } from "./activity";

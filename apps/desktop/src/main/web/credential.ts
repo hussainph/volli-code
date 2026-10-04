@@ -28,7 +28,7 @@
  */
 import type Database from "better-sqlite3";
 
-import { deleteSecret, hasSecret, readSecret, writeSecret } from "../db/secrets-repo";
+import { deleteSecret, hasSecret, readSecret, writeSecret } from "@volli/host-core/db/secrets-repo";
 
 /**
  * The name the Brave key is stored under.

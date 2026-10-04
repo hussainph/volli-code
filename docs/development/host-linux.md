@@ -114,11 +114,14 @@ limits its build context to the toolchain manifests, not local credentials.
 
 ## Native modules: keep host and Electron installs separate
 
-Currently only desktop depends on `better-sqlite3` and `node-pty`. Its
-postinstall runs `electron-rebuild -f -w node-pty,better-sqlite3`. SQLite 13 is
-N-API with a cross-runtime prebuild; the Electron rebuild is deliberately a
-no-op for it. PTY must be built for **Node**, not inherited from that Electron
-install. No host native rebuild is wired in before a host package needs it.
+`@volli/host-core` and desktop depend on `better-sqlite3`; only desktop depends
+on `node-pty`. Desktop's postinstall runs
+`electron-rebuild -f -w node-pty,better-sqlite3`. SQLite 13 is N-API and loads
+its bundled `prebuilds/<platform>-<arch>.node` under both Node and Electron, so
+the Electron rebuild is deliberately a no-op for it and host-core's tests load
+the same package under plain Node in the host lane with no rebuild step. PTY
+must be built for **Node**, not inherited from that Electron install. No host
+native rebuild is wired in before a host package needs it.
 
 For VC-560, after a host package declares node-pty, use an **isolated Linux
 host install/job** with no desktop postinstall, then force its Node build:

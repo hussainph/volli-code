@@ -37,8 +37,8 @@
  */
 import type { WorktreeTrimScanEntry, WorktreeTrimSweepReport } from "../../ipc/contract";
 
-import { listProjects } from "../db/projects-repo";
-import { listWorktreeRefs } from "../db/tickets-repo";
+import { listProjects } from "@volli/host-core/db/projects-repo";
+import { listWorktreeRefs } from "@volli/host-core/db/tickets-repo";
 import { isOwnedWorktreeLeaf, ownedContainers } from "./containers";
 import { parseWorktreeList } from "./git";
 import { homeDir } from "./home";

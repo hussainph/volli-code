@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { importBlob } from "../blob-import";
 import { blobsRoot, removeBlob } from "../blob-store";
-import { listTicketEvents } from "../db/events-repo";
-import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
-import { getTicketRow, insertTicket } from "../db/tickets-repo";
+import { listTicketEvents } from "@volli/host-core/db/events-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { getTicketRow, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { ensure } from "./ensure";
 import { runGitCapturing, runGitCapturingAsync } from "./git";

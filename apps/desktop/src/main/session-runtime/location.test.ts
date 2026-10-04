@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
-import { insertProject } from "../db/projects-repo";
-import { insertTicket } from "../db/tickets-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 
 // Only `ensure` is stood in for, so `prepare` can be asked the one question no
 // return value answers: whether a ticketless Session touches git at all.

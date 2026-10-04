@@ -23,8 +23,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { blobFilePath, blobsRoot } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
-import { MIGRATIONS } from "../db/migrations";
-import { openRawDb } from "../db/test-helpers";
+import { MIGRATIONS } from "@volli/host-core/db/migrations";
+import { openRawDb } from "@volli/host-core/db/test-helpers";
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,

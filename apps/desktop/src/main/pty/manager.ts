@@ -34,7 +34,7 @@ import type {
 } from "@volli/shared";
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
-import { recordSessionStartedOnce } from "../db/events-repo";
+import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { SessionConcurrencyEnvReader } from "../session-concurrency";

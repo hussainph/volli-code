@@ -71,7 +71,7 @@ import {
   currentSessionEventSequence,
   decodeSessionEventCursor,
   listSessionEventsAfter,
-} from "./db/session-events-cursor-repo";
+} from "@volli/host-core/db/session-events-cursor-repo";
 
 /** One committed Session fact and its opaque durable cursor. */
 export interface SessionWake {

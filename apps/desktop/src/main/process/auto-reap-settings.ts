@@ -10,7 +10,7 @@
 import type Database from "better-sqlite3";
 import { DEFAULT_AUTO_REAP_POLICY, type AutoReapPolicy } from "@volli/shared";
 
-import { getAppState, setAppState } from "../db/app-state-repo";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 
 /** The `app_state` key the automatic-reaping settings JSON lives under. */
 export const AUTO_REAP_SETTINGS_KEY = "volli:orphan-processes";

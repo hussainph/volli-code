@@ -7,10 +7,10 @@ import type {
 } from "@volli/session-engine";
 import type { SessionEvent, SessionInput } from "@volli/shared";
 
-import { internSessionEventProvenance } from "./db/session-event-provenance";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
+import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { createSessionWakeBus, type SessionWake } from "./session-wake";
 
 let ctx: TestDb;

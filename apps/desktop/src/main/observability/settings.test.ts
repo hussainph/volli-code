@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { NOOP_OBSERVABILITY_SINK, type ObservabilityEvent } from "@volli/shared";
 
-import { setAppState } from "../db/app-state-repo";
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { setAppState } from "@volli/host-core/db/app-state-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import {
   AGENT_OBSERVABILITY_APP_STATE_KEY,
   AgentObservability,

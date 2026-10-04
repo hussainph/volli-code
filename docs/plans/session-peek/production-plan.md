@@ -6,6 +6,8 @@ Source of truth for the design: `apps/desktop/src/renderer/lab/session-peek/READ
 owner decisions restated in §1.2 below. Where this plan and the lab disagree, this
 plan is the production reading and says why.
 
+> **Paths moved (VC-553).** `apps/desktop/src/main/db/` is now `packages/host-core/src/db/` (`@volli/host-core/db/*`), and its coverage entries moved to `packages/host-core/vite.config.ts`. The paths below are as of this document's writing.
+
 ---
 
 ## 0. Production map (what these features touch today)

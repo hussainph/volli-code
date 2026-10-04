@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // The migration lock test imports its plain-JS fingerprinter from scripts/.
+    "allowJs": true,
+    // `migrations.ts` imports `./session-storage-digest.ts` explicitly: the
+    // read-only storage digest tool loads it under Node's type stripper.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src"]
+}

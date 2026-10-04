@@ -144,7 +144,7 @@ try {
     transcriptModule,
     sharedModule,
   ] = await Promise.all([
-    vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts"),
+    vite.ssrLoadModule("/packages/host-core/src/db/index.ts"),
     vite.ssrLoadModule("/apps/desktop/src/main/session-control/sqlite-ledger.ts"),
     vite.ssrLoadModule("/packages/session-engine/src/index.ts"),
     vite.ssrLoadModule("/apps/desktop/src/main/session-runtime/transcript-artifacts.ts"),

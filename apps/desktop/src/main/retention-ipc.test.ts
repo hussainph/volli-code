@@ -51,9 +51,9 @@ vi.mock("electron", () => ({
 }));
 
 import { registerDataIpcHandlers } from "./data-ipc";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
-import { getTicketRow, insertTicket, updateTicketFields } from "./db/tickets-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
 import { resetRetentionWatcherForTest } from "./retention-runtime";
 

@@ -23,7 +23,7 @@ import {
   MAX_SESSION_INLINE_IMAGE_BYTES,
 } from "@volli/shared";
 import { importBlob, importOwnerless, mimeForFileName } from "./blob-import";
-import { getBlob, listSessionLinks } from "./db/blobs-repo";
+import { getBlob, listSessionLinks } from "@volli/host-core/db/blobs-repo";
 
 /**
  * Where a file sits relative to the workspace an `@` ref will be resolved

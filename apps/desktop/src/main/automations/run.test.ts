@@ -28,14 +28,14 @@ import {
   listProjectRunsForAutomation,
   listRunsForTicket,
   recordAutomationRun,
-} from "../db/automations-repo";
-import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
-import { insertProject } from "../db/projects-repo";
-import { readSessionProvenance } from "../db/session-provenance-repo";
+} from "@volli/host-core/db/automations-repo";
+import { listTicketEvents, recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
 import { insertSession } from "../session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
-import { insertTicket } from "../db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
+import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import { sessionCreateCommandId, StructuredSessionsError } from "../session-runtime/sessions";
 import type { SessionStartInput } from "../session-runtime/sessions";
 

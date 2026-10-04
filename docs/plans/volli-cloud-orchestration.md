@@ -131,7 +131,7 @@ These files are touched by many cloud tickets and by 0.2.x work:
 - `apps/desktop/src/main/data-ipc.ts`
 - `apps/desktop/src/preload/index.ts`
 - `apps/desktop/src/renderer/src/stores/workspace.ts`
-- `apps/desktop/src/main/db/migrations.ts`
+- `packages/host-core/src/db/migrations.ts`
 
 Rules for hotspots:
 
