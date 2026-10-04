@@ -1,5 +1,4 @@
 import type { SessionOrigin } from "@volli/shared";
-import type { WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -32,27 +31,23 @@ import type {
   TerminalParkStateEvent,
   SpawnLedgerPort,
 } from "@volli/shared";
-import type { VolliIpcEvent } from "../../ipc/contract";
-import { broadcastDataChanged } from "../broadcast";
-import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { createProcessInspector, parkConfigFromEnv } from "../park";
-import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { ParkConfig, ProcessInspector } from "../park";
-import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
-import { isPathWithinRoots } from "@volli/host-core/project-roots";
-import { ensureProjectArtifactsDir } from "@volli/host-core/volli-fs";
+import { recordSessionStartedOnce } from "../db/events-repo";
+import type { HostClientEventSink, HostEventBus } from "../ports";
+import { createProcessInspector, parkConfigFromEnv } from "./park";
+import type { SessionConcurrencyEnvReader } from "../session-concurrency";
+import type { ParkConfig, ProcessInspector } from "./park";
+import { isPathWithinRoots } from "../project-roots";
+import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
   acquireWorktreeStartLease,
   createSetupRun,
   ensure,
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
-} from "@volli/host-core/worktree";
-import type { EnsureOutcome, SetupRun } from "@volli/host-core/worktree";
-import { worktreesHome } from "@volli/host-core/worktree-runtime";
-import { worktreeDeps } from "../worktree-host";
-import { isInside } from "@volli/host-core/worktree/paths";
+} from "../worktree";
+import type { EnsureOutcome, RunGitAsync, SetupRun, WorktreeDeps } from "../worktree";
+import { worktreesHome } from "../worktree-runtime";
+import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
 import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
@@ -64,13 +59,14 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
   type TerminalAttachmentDetail,
-} from "@volli/host-core/session-control";
+} from "../session-control";
 import { resolveScope } from "./scope";
 import type { SessionScope } from "./scope";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
-// this module needs a value import of node-pty (whose native binary is built
-// for the Electron ABI and must never load under plain-Node vitest).
+// this module needs a value import of node-pty: the native module loads only
+// when a session is actually created. node-pty 1.x is N-API, so the same build
+// loads under Electron and plain Node (see the host-core README).
 interface PtyProcess {
   /** The child shell's pid — the root of the tree the warm-park sweep walks. */
   readonly pid: number;
@@ -122,17 +118,20 @@ interface Session {
   shellName: string;
   /** The resolved (canonical, `path.resolve`'d) cwd the PTY runs in — the worktree-delete/remove guards test containment against it. */
   cwd: string;
-  /** The window that created the session; where its output events are sent. */
-  webContents: WebContents;
-  /** The `destroyed` listener we attached, so we can detach it on cleanup. */
-  onDestroyed: () => void;
+  /**
+   * The one client this terminal's stream is attached to, or `null` while it
+   * is detached (VC-560). Output, exit and park state go to it alone, and only
+   * it may write, resize, ack, park, wake or close. A desktop window is
+   * attached from `create` until it closes, which is today's window-owned PTY.
+   */
+  client: AttachedClient | null;
   /**
    * This session's output pipeline: batching, the ack-based flow control, and
    * the bounded observation tail — all the machinery the manager's onData
    * handler used to spread across seven Session fields, now owned by {@link createOutputPipeline}
    * (issue #99). The manager keeps only the side effects that ride the same
    * onData chunk (activity stamping, setup-run feeding) and adapts a
-   * {@link OutputSink} onto this session's webContents + pty.
+   * {@link OutputSink} onto this session's attached client + pty.
    */
   output: OutputPipeline;
   /** Last PTY output OR user input, epoch ms — the warm-park idle clock. */
@@ -178,6 +177,65 @@ interface Session {
   terminalDetail: TerminalAttachmentDetail;
 }
 
+/**
+ * What happens to a terminal when the client attached to it disconnects
+ * (VC-320 C07, explicit close vs detach). `close` kills the process: a
+ * desktop window's terminals die with it, as they always have. `detach` keeps
+ * it running with its output retained, for a client that will reconnect.
+ * Either way an explicit {@link PtyManager.kill} closes, and
+ * {@link PtyManager.detach} detaches.
+ */
+export type TerminalDisconnectPolicy = "close" | "detach";
+
+/** Who is asking: ownership is decided by the client's connection-scoped id alone. */
+export type TerminalCaller = Pick<HostClientEventSink, "id">;
+
+/** A client holding a terminal's stream, with the close hook registered for it. */
+interface AttachedClient {
+  readonly sink: HostClientEventSink;
+  readonly onClosed: () => void;
+}
+
+/** The size an attaching client renders at; it becomes the PTY's size. */
+export interface TerminalAttachRequest {
+  cols: number;
+  rows: number;
+  onDisconnect: TerminalDisconnectPolicy;
+}
+
+/** A worktree's per-harness workspace files to write, and how to ask git about them. */
+export interface HarnessWorkspaceFilesInput {
+  worktreePath: string;
+  adapters: readonly HarnessAdapter[];
+  socketPath: string;
+  shimPath: string;
+  git: RunGitAsync;
+}
+
+/**
+ * What the terminal supervisor asks of the host it runs in (VC-560). Desktop
+ * passes `desktopPtyHost()` (`apps/desktop/src/main/pty/ipc.ts`): the window
+ * event bus, `worktree-host.ts`, and the harness-file writer, whose module
+ * (`harness-workspace.ts`) has not moved into host-core yet. A headless host
+ * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
+ */
+export interface PtyHost {
+  /** Announces planning changes (`data-changed`) to every client. */
+  readonly events: HostEventBus;
+  /** The host's worktree bundle (`host.worktrees.deps`). */
+  worktreeDeps(db: Database.Database): WorktreeDeps;
+  /** Writes a worktree's per-harness hook files, reporting each one it refused. */
+  ensureHarnessWorkspaceFiles(
+    input: HarnessWorkspaceFilesInput,
+  ): Promise<{ refused: readonly { harnessId: string; path: string; reason: string }[] }>;
+}
+
+/** Records nothing: the spawn ledger a test that is not about the ledger wants. */
+const NO_SPAWN_LEDGER: SpawnLedgerPort = {
+  recordSpawn: () => null,
+  markExited: () => {},
+};
+
 const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
 function terminalSystemProvenance(origin?: SessionOrigin) {
@@ -215,11 +273,15 @@ function terminalDetailFor(
 }
 
 /**
- * Owns every live PTY, keyed by an opaque session id. Sessions are scoped to
- * the window that created them: output events go only to that window, and a
- * window teardown (or app quit) kills its PTYs. node-pty is imported LAZILY
- * inside `create` so the Electron-ABI native binary never loads under
- * plain-Node vitest, which exercises everything except a real spawn.
+ * The host's terminal supervisor (VC-560): owns every live PTY, keyed by an
+ * opaque session id. Each session's stream is attached to at most one client
+ * (a {@link HostClientEventSink}): output events go only to it, and only it
+ * may drive the PTY. Desktop attaches the creating window and kills its PTYs
+ * when the window closes or the app quits, exactly as before the move; a
+ * remote client can {@link PtyManager.detach} and {@link PtyManager.attach}
+ * again without killing the process. The stream contract is in the host-core
+ * README. node-pty is imported LAZILY inside `create`, so the native module
+ * loads only when a session is actually created.
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
@@ -231,7 +293,7 @@ export class PtyManager {
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
    * #99. It reads this manager's live `sessions` map (the SAME instance) and
    * mutates each session's park fields in place; the manager keeps only the
-   * side effects that touch node-pty/webContents and hands them in as deps.
+   * side effects that touch node-pty and the client and hands them in as deps.
    */
   private readonly parkController: ParkController;
   /**
@@ -248,6 +310,7 @@ export class PtyManager {
   private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
   /**
+   * @param host       what this supervisor asks of its host ({@link PtyHost}).
    * @param db         the app database, or `null` when it failed to open. Every
    *                   session persists a durable record, so with no db `create`
    *                   fails outright (surfacing {@link dbError}).
@@ -273,6 +336,7 @@ export class PtyManager {
    *                   nothing — what a test that is not about the budget wants.
    */
   constructor(
+    private readonly host: PtyHost,
     private readonly db: Database.Database | null,
     private readonly dbError: string,
     private readonly inspector: ProcessInspector = createProcessInspector(),
@@ -287,7 +351,7 @@ export class PtyManager {
     this.concurrencyEnvReader = concurrencyEnvReader;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
-    // they touch the output pipeline and webContents — and every current
+    // they touch the output pipeline and the client — and every current
     // pushParkState call site has already verified the session is the map's
     // current entry, so the id→session re-lookup is safe.
     this.parkController = new ParkController({
@@ -338,7 +402,7 @@ export class PtyManager {
     runtime: AgentRuntimeEnvironment,
   ): Promise<void> {
     try {
-      const result = await ensureHarnessWorkspaceFiles({
+      const result = await this.host.ensureHarnessWorkspaceFiles({
         worktreePath,
         adapters: runtime.adapters ?? harnessAdapters,
         socketPath: runtime.socketPath,
@@ -386,9 +450,15 @@ export class PtyManager {
     return this.concurrencyEnvReader({ excludeSessionId: sessionId, environment: inheritedEnv });
   }
 
+  /**
+   * Starts a terminal with `client` attached to its stream. `onDisconnect`
+   * says what the client's disconnect does: a desktop window's `close` is
+   * today's behavior, and the default.
+   */
   async create(
-    webContents: WebContents,
+    client: HostClientEventSink,
     request: CreateTerminalSessionRequest,
+    onDisconnect: TerminalDisconnectPolicy = "close",
   ): Promise<CreateTerminalSessionResult> {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
@@ -434,7 +504,10 @@ export class PtyManager {
             origin: { kind: "user" },
           })
         ) {
-          broadcastDataChanged({ projectId: scope.projectId, ticketId: scope.ticketId });
+          this.host.events.publish("data-changed", {
+            projectId: scope.projectId,
+            ticketId: scope.ticketId,
+          });
         }
       } else {
         sessionId = scope.resume.sessionId;
@@ -512,7 +585,7 @@ export class PtyManager {
     // failure aborts boot outright.
     let worktreeOutcome: EnsureOutcome | null = null;
     if (scope.worktree !== null) {
-      const result = await ensure(worktreeDeps(db), scope.worktree.ticketId);
+      const result = await ensure(this.host.worktreeDeps(db), scope.worktree.ticketId);
       if (!result.ok) {
         await recordAttachmentFailure(new Error(result.error), scope.cwd);
         return { ok: false, error: result.error };
@@ -526,7 +599,7 @@ export class PtyManager {
       // reused ready worktree that changed nothing never broadcasts. Targeted at
       // the booting ticket, so its own rail refreshes promptly.
       if (worktreeOutcome.created || worktreeOutcome.restamped) {
-        broadcastDataChanged({
+        this.host.events.publish("data-changed", {
           ticketId: scope.worktree.ticketId,
           projectId: scope.projectId,
           kind: "worktree",
@@ -601,7 +674,7 @@ export class PtyManager {
       // The window can close during the awaited import above — its `destroyed`
       // event has already fired, so a once() attached below would never run
       // and the shell would idle as an orphan until quit. Bail before spawning.
-      if (webContents.isDestroyed()) {
+      if (client.isClosed()) {
         await recordAttachmentFailure(
           new Error("Window was closed before the terminal could start"),
           cwd,
@@ -734,7 +807,7 @@ export class PtyManager {
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
-      if (webContents.isDestroyed()) {
+      if (client.isClosed()) {
         pty.kill();
         if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         await recordAttachmentFailure(
@@ -771,20 +844,19 @@ export class PtyManager {
         return { ok: false, error: errorMessage(error) };
       }
 
-      const onDestroyed = (): void => {
-        this.killSession(sessionId);
-      };
-      // A window teardown must not leave an orphaned shell behind.
-      webContents.once("destroyed", onDestroyed);
-      // The output pipeline's window onto this session: a batch is delivered as
-      // one `volli:terminal-data` event (dropped, `send` returning false, once
-      // the owning window is destroyed), and backpressure maps onto the pty's
-      // real fd pause/resume.
+      // A window teardown must not leave an orphaned shell behind: a `close`
+      // client's disconnect kills it, a `detach` client's keeps it running.
+      const attached = this.attachClient(sessionId, client, onDisconnect);
+      // The output pipeline's view of this session: a batch is delivered as one
+      // `terminal-data` event to whichever client is attached (dropped, `send`
+      // returning false, while none is or once it has disconnected), and
+      // backpressure maps onto the pty's real fd pause/resume.
       const sink: OutputSink = {
         send: (data: string): boolean => {
-          if (webContents.isDestroyed()) return false;
+          const target = session.client?.sink;
+          if (target === undefined || target.isClosed()) return false;
           const payload: TerminalDataEvent = { sessionId, data };
-          webContents.send("volli:terminal-data" satisfies VolliIpcEvent, payload);
+          target.publish("terminal-data", payload);
           return true;
         },
         pause: () => pty.pause(),
@@ -797,8 +869,7 @@ export class PtyManager {
         launchKind: scope.launchKind,
         shellName: basename(file),
         cwd,
-        webContents,
-        onDestroyed,
+        client: attached,
         output: createOutputPipeline(sink),
         lastActivityAt: now,
         visible: false,
@@ -878,7 +949,7 @@ export class PtyManager {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.
           const setupRun = createSetupRun(
-            { db, onPhase: worktreeDeps(db).onPhase },
+            { db, onPhase: this.host.worktreeDeps(db).onPhase },
             { ticketId: worktree.ticketId, setupCommand, shellPath: file, launchCommand },
           );
           session.setupRun = setupRun;
@@ -913,9 +984,10 @@ export class PtyManager {
         // on SQLite: a close write may be slow or unavailable, but a dead PTY
         // must disappear from the live map immediately. The ledger close is
         // durable best-effort evidence for that already-observed fact.
-        if (!webContents.isDestroyed()) {
+        const target = session.client?.sink;
+        if (target !== undefined && !target.isClosed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
-          webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
+          target.publish("terminal-exit", payload);
         }
         // The shell is dead before any durable close observation is needed.
         // Revoke synchronously with that fact so a copied credential cannot
@@ -1020,25 +1092,119 @@ export class PtyManager {
    * The session this caller may drive, or `undefined`.
    *
    * The terminal surface's single ownership check (VC-509): a session is
-   * controllable only by the webContents it was created for. {@link ack} and
-   * {@link setVisible} have always applied it, and every mutating handler now
-   * shares it, so a second surface naming another window's session gets no
-   * more than it would from an unknown id: an unknown session and a foreign
-   * one answer identically, and neither reveals that the other's exists.
+   * controllable only by the client attached to it, which for a desktop window
+   * is the window that created it. {@link ack} and {@link setVisible} have
+   * always applied it, and every mutating handler now shares it, so a second
+   * surface naming another window's session gets no more than it would from an
+   * unknown id: an unknown session and a foreign one answer identically, and
+   * neither reveals that the other's exists. A detached session is owned by
+   * nobody until a client {@link attach}es.
    */
-  private ownedSession(sender: WebContents, sessionId: string): Session | undefined {
+  private ownedSession(sender: TerminalCaller, sessionId: string): Session | undefined {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return undefined;
-    return session.webContents === sender ? session : undefined;
+    return session.client !== null && session.client.sink.id === sender.id ? session : undefined;
+  }
+
+  /**
+   * Registers `sink` as the client a session's stream goes to, and what its
+   * disconnect does (VC-560). Returned for the caller to store on the session.
+   */
+  private attachClient(
+    sessionId: string,
+    sink: HostClientEventSink,
+    onDisconnect: TerminalDisconnectPolicy,
+  ): AttachedClient {
+    const attached: AttachedClient = {
+      sink,
+      onClosed: () => {
+        // Only this attachment's own disconnect acts: a hook already queued
+        // when its client detached must not touch a terminal that a later
+        // client now holds, so a removed listener cannot close it by accident.
+        const session = this.sessions.get(sessionId);
+        if (session === undefined || session.client !== attached) return;
+        if (onDisconnect === "close") this.killSession(sessionId);
+        else this.releaseClient(session);
+      },
+    };
+    sink.onceClosed(attached.onClosed);
+    return attached;
+  }
+
+  /**
+   * Leaves a session detached: nobody receives its output or may drive it, and
+   * nothing the departed client had in flight holds the PTY paused. The process
+   * keeps running, and its output keeps landing in the retained tail the next
+   * {@link attach} resyncs from.
+   */
+  private releaseClient(session: Session): void {
+    const attached = session.client;
+    if (attached === null) return;
+    session.client = null;
+    if (!attached.sink.isClosed()) attached.sink.removeCloseListener(attached.onClosed);
+    // Visibility was the departed client's report; a detached pane is on no
+    // screen, so it no longer keeps the session out of auto-park.
+    session.visible = false;
+    session.output.releaseFlow();
+  }
+
+  /**
+   * Attaches `client` to a running terminal's stream (VC-560, VC-320 C07).
+   *
+   * One holder at a time: a session another client holds is refused, and the
+   * holder attaching again starts a fresh attachment. The client's size
+   * becomes the PTY's (resize ownership goes with the stream). The attachment
+   * opens with a resync: the retained output tail, sent as its first
+   * `terminal-data` batch, then the current park state. Input is never
+   * replayed — nothing a client wrote is retained — and the launch line was
+   * written once, at spawn.
+   */
+  attach(
+    client: HostClientEventSink,
+    sessionId: string,
+    request: TerminalAttachRequest,
+  ): TerminalIoResult {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return { ok: false, error: "Unknown terminal session" };
+    const holder = session.client;
+    if (holder !== null && holder.sink.id !== client.id) {
+      return { ok: false, error: "Terminal is attached to another client" };
+    }
+    if (client.isClosed()) {
+      return { ok: false, error: "Client disconnected before the terminal could attach" };
+    }
+    try {
+      session.pty.resize(request.cols, request.rows);
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+    this.releaseClient(session);
+    session.client = this.attachClient(sessionId, client, request.onDisconnect);
+    session.output.resync();
+    this.pushParkState(session, sessionId);
+    return { ok: true };
+  }
+
+  /**
+   * Lets go of a terminal's stream without killing its process: the explicit
+   * detach, where {@link kill} is the explicit close (VC-320 C07). Output
+   * already batched goes to the departing client first. Owner-only (VC-509).
+   */
+  detach(sender: TerminalCaller, sessionId: string): TerminalIoResult {
+    const session = this.ownedSession(sender, sessionId);
+    if (session === undefined) return { ok: false, error: "Unknown terminal session" };
+    session.output.flush();
+    this.releaseClient(session);
+    return { ok: true };
   }
 
   /**
    * Renderer flow-control ack: `chars` of output were consumed. Only honored
-   * from the session's owning webContents — the same window-scoping stance as
+   * from the session's attached client — the same client-scoping stance as
    * the output events themselves. The pause/resume accounting lives in the
    * session's output pipeline.
    */
-  ack(sender: WebContents, sessionId: string, chars: number): void {
+  ack(sender: TerminalCaller, sessionId: string, chars: number): void {
     const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return;
     session.output.ack(chars);
@@ -1080,25 +1246,26 @@ export class PtyManager {
     return { status, output };
   }
 
-  /** Pushes the session's current park/keep-awake state to its window (skipped if destroyed). */
+  /** Pushes the session's current park/keep-awake state to its client (skipped when none is attached). */
   private pushParkState(session: Session, sessionId: string): void {
-    if (session.webContents.isDestroyed()) return;
+    const target = session.client?.sink;
+    if (target === undefined || target.isClosed()) return;
     const payload: TerminalParkStateEvent = {
       sessionId,
       parked: session.parkedPids !== null,
       keepAwake: session.keepAwake,
     };
-    session.webContents.send("volli:terminal-park-state" satisfies VolliIpcEvent, payload);
+    target.publish("terminal-park-state", payload);
   }
 
   /**
    * Parks a session (SIGSTOP its whole tree — issue #51 warm tier). Delegates to
    * the {@link ParkController}, which owns the guards, mid-park death races, and
    * fork-rescan rounds; this IPC-facing entry point first honors the session
-   * only for its owning webContents (VC-509).
+   * only for its attached client (VC-509).
    */
   park(
-    sender: WebContents,
+    sender: TerminalCaller,
     sessionId: string,
     opts: { manual: boolean; activityBaseline?: number },
   ): Promise<TerminalIoResult> {
@@ -1114,7 +1281,7 @@ export class PtyManager {
    * use it off the stored pid list. Delegates to the {@link ParkController} for
    * an owning caller; the manager's own wake paths call the controller directly.
    */
-  wake(sender: WebContents, sessionId: string): TerminalIoResult {
+  wake(sender: TerminalCaller, sessionId: string): TerminalIoResult {
     if (this.ownedSession(sender, sessionId) === undefined) {
       return { ok: false, error: "Unknown terminal session" };
     }
@@ -1123,10 +1290,10 @@ export class PtyManager {
 
   /**
    * Renderer-reported pane visibility. Only honored from the session's owning
-   * webContents (same stance as {@link ack}). A pane becoming visible wakes a
+   * client (same stance as {@link ack}). A pane becoming visible wakes a
    * parked session immediately.
    */
-  setVisible(sender: WebContents, sessionId: string, visible: boolean): void {
+  setVisible(sender: TerminalCaller, sessionId: string, visible: boolean): void {
     const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return;
     session.visible = visible;
@@ -1134,7 +1301,7 @@ export class PtyManager {
   }
 
   /** User pin: excludes a session from auto-park, waking it if already parked. */
-  setKeepAwake(sender: WebContents, sessionId: string, keepAwake: boolean): TerminalIoResult {
+  setKeepAwake(sender: TerminalCaller, sessionId: string, keepAwake: boolean): TerminalIoResult {
     const session = this.ownedSession(sender, sessionId);
     if (session === undefined) return { ok: false, error: "Unknown terminal session" };
     session.keepAwake = keepAwake;
@@ -1185,10 +1352,10 @@ export class PtyManager {
    * probe that throws is skipped: an unreadable pty must never block
    * enumerating the rest.
    */
-  busySessions(owner?: WebContents): Array<{ sessionId: string; process: string }> {
+  busySessions(owner?: TerminalCaller): Array<{ sessionId: string; process: string }> {
     const busy: Array<{ sessionId: string; process: string }> = [];
     for (const [sessionId, session] of this.sessions) {
-      if (owner !== undefined && session.webContents !== owner) continue;
+      if (owner !== undefined && session.client?.sink.id !== owner.id) continue;
       try {
         const process = foregroundProcess(session);
         if (process !== null) busy.push({ sessionId, process });
@@ -1282,7 +1449,7 @@ export class PtyManager {
   }
 
   /** Sends user input to a session the caller's window owns (VC-509), waking it if parked. */
-  write(sender: WebContents, sessionId: string, data: string): TerminalIoResult {
+  write(sender: TerminalCaller, sessionId: string, data: string): TerminalIoResult {
     const session = this.ownedSession(sender, sessionId);
     if (session === undefined) {
       return { ok: false, error: "Unknown terminal session" };
@@ -1314,7 +1481,7 @@ export class PtyManager {
    * is mid-install would land in the install's own stdin.
    */
   async runCommand(
-    sender: WebContents,
+    sender: TerminalCaller,
     sessionId: string,
     command: string,
   ): Promise<TerminalCommandResult> {
@@ -1354,7 +1521,7 @@ export class PtyManager {
     return { ok: true, exitCode: (await settled.promise).exitCode };
   }
 
-  resize(sender: WebContents, sessionId: string, cols: number, rows: number): TerminalIoResult {
+  resize(sender: TerminalCaller, sessionId: string, cols: number, rows: number): TerminalIoResult {
     const session = this.ownedSession(sender, sessionId);
     if (session === undefined) {
       return { ok: false, error: "Unknown terminal session" };
@@ -1372,7 +1539,7 @@ export class PtyManager {
    * past the ownership question — the owning window's own `destroyed` listener
    * and {@link killAll} on quit — call {@link killSession} directly.
    */
-  kill(sender: WebContents, sessionId: string): TerminalIoResult {
+  kill(sender: TerminalCaller, sessionId: string): TerminalIoResult {
     if (this.ownedSession(sender, sessionId) === undefined) {
       return { ok: false, error: "Unknown terminal session" };
     }
@@ -1415,7 +1582,7 @@ export class PtyManager {
   }
 
   /**
-   * Drops a session from the registry, detaches its window listener, and
+   * Drops a session from the registry, removes its client's close hook, and
    * disposes its output pipeline (discarding any buffered-but-unflushed output
    * along with its flush timer).
    */
@@ -1433,8 +1600,9 @@ export class PtyManager {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.output.dispose();
-    if (!session.webContents.isDestroyed()) {
-      session.webContents.removeListener("destroyed", session.onDestroyed);
+    const attached = session.client;
+    if (attached !== null && !attached.sink.isClosed()) {
+      attached.sink.removeCloseListener(attached.onClosed);
     }
     this.sessions.delete(sessionId);
   }
@@ -1459,7 +1627,7 @@ function foregroundProcess(session: Session): string | null {
  * The bundled `volli` CLI's runtime coordinates — layered into a session's env
  * (via `agentSessionEnv`) when present, so an agent process can reach the
  * planner over the socket. Constructed and threaded through the constructor
- * by {@link registerTerminalIpcHandlers} (now in `./ipc`, issue #99).
+ * by the host: desktop's `registerTerminalIpcHandlers` (`apps/desktop/src/main/pty/ipc.ts`).
  */
 export interface AgentRuntimeEnvironment {
   socketPath: string;

@@ -14,9 +14,9 @@ export const BATCH_MAX_CHARS = 256_000;
 export const OBSERVATION_TAIL_MAX_CHARS = 256_000;
 
 /** Where the pipeline delivers output and applies backpressure — the manager
- *  adapts this onto the session's webContents + pty. `send` returns false when
- *  the owning window is gone: the batch is dropped and never enters the
- *  flow-control accounting. */
+ *  adapts this onto the session's attached client + pty. `send` returns false
+ *  when no client is attached or it has disconnected: the batch is dropped and
+ *  never enters the flow-control accounting. */
 export interface OutputSink {
   send(data: string): boolean;
   pause(): void;
@@ -37,6 +37,15 @@ export interface OutputPipeline {
   ack(chars: number): void;
   /** Read-only, byte-identical tail of the last N lines of retained output. */
   peekTail(lines: number): string;
+  /**
+   * Opens a new attachment's stream (VC-560): drops the pending batch (it is
+   * already in the retained tail), clears the previous attachment's flow
+   * accounting, and sends the raw retained tail as the attachment's first
+   * batch, accounted like any other.
+   */
+  resync(): void;
+  /** Forgets the chars a departed client never acked, resuming a pty it held paused. */
+  releaseFlow(): void;
   /** Drops the pending buffer + its timer. Idempotent. */
   dispose(): void;
 }
@@ -56,7 +65,7 @@ export function createOutputPipeline(sink: OutputSink): OutputPipeline {
   let paused = false;
   /**
    * Recent raw output retained independently of renderer batching for the
-   * read-only session peek — kept as chunks (not one growing string) so the hot
+   * read-only session peek and a new attachment's resync — kept as chunks (not one growing string) so the hot
    * output path appends in O(chunk) instead of rebuilding a ~256KB string every
    * event. Whole chunks are trimmed off the front once dropping one still leaves
    * {@link OBSERVATION_TAIL_MAX_CHARS} behind; `tailChars` tracks the joined
@@ -86,11 +95,33 @@ export function createOutputPipeline(sink: OutputSink): OutputPipeline {
     // Clear the buffer BEFORE consulting the sink: a dead window drops the
     // batch, which then never enters the flow-control accounting below.
     if (!sink.send(data)) return;
-    unackedChars += data.length;
+    account(data.length);
+  };
+
+  /** Counts a delivered batch toward flow control, pausing the pty past the high watermark. */
+  const account = (chars: number): void => {
+    unackedChars += chars;
     if (!paused && unackedChars > FLOW_CONTROL_HIGH_WATERMARK) {
       paused = true;
       sink.pause();
     }
+  };
+
+  const releaseFlow = (): void => {
+    unackedChars = 0;
+    if (paused) {
+      paused = false;
+      sink.resume();
+    }
+  };
+
+  const dropPending = (): void => {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    pendingChunks = [];
+    pendingChars = 0;
   };
 
   return {
@@ -145,13 +176,19 @@ export function createOutputPipeline(sink: OutputSink): OutputPipeline {
       return normalized.split("\n").slice(-lines).join("\n");
     },
 
-    dispose(): void {
-      if (flushTimer !== null) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
-      pendingChunks = [];
-      pendingChars = 0;
+    resync(): void {
+      dropPending();
+      releaseFlow();
+      let retained = tailChunks.join("").slice(-OBSERVATION_TAIL_MAX_CHARS);
+      // The cap is in UTF-16 units: never open the stream on half a surrogate pair.
+      if (/^[\uDC00-\uDFFF]/.test(retained)) retained = retained.slice(1);
+      if (retained.length === 0) return;
+      if (!sink.send(retained)) return;
+      account(retained.length);
     },
+
+    releaseFlow,
+
+    dispose: dropPending,
   };
 }

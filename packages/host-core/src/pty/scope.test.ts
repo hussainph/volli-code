@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
 import { getHarnessAdapter, roleImpliedByTicket } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control";
-import { terminalNativeReference } from "@volli/host-core/session-control";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
+import { createSqliteSessionLedger } from "../session-control";
+import { terminalNativeReference } from "../session-control";
 import { resolveScope } from "./scope";
 
 let ctx: TestDb;

@@ -189,6 +189,10 @@
       "types": "./src/skills.ts",
       "import": "./src/skills.ts"
     },
+    "./pty/*": {
+      "types": "./src/pty/*.ts",
+      "import": "./src/pty/*.ts"
+    },
     "./browser/*": {
       "types": "./src/browser/*.ts",
       "import": "./src/browser/*.ts"
@@ -207,6 +211,7 @@
     "@volli/shared": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
     "better-sqlite3": "^13.0.3",
+    "node-pty": "1.1.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {

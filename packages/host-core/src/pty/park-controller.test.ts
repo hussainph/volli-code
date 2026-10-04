@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { ParkConfig, ProcessInspector } from "../park";
+import type { ParkConfig, ProcessInspector } from "./park";
 import { ParkController } from "./park-controller";
 import type { ParkableSession } from "./park-controller";
 
