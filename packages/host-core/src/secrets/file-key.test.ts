@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   fileSecretKey,
+  inspectSecretKeyFile,
   isSecretKeyUnavailable,
   SECRET_KEY_FILE_ENV,
   SECRET_KEY_FILE_NAME,
@@ -468,5 +469,39 @@ describe("a key file Volli cannot use", () => {
       `Volli could not read or create the secret key file ${keyPath}. The user Volli runs as must be able to read it, and to write its directory the first time.`,
     );
     expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  it.each(["EPERM", "ENOSYS"])(
+    "names a filesystem without hard links (%s) and the manual fallback",
+    (code) => {
+      faults.link = () => {
+        throw Object.assign(new Error("no links"), { code });
+      };
+      expectRefused(
+        () => fileSecretKey({ path: keyPath }).encryptString("x"),
+        "no-hard-links",
+        `Volli could not create the secret key file ${keyPath} (${code}): its filesystem cannot make hard links, which Volli uses to create the key atomically. Create the key yourself instead, private from its first byte: (umask 077 && openssl rand -base64 32 > ${keyPath})`,
+      );
+      expect(readdirSync(dataDir)).toEqual([]);
+    },
+  );
+});
+
+describe("inspecting a key file at boot", () => {
+  it("answers absent without creating anything", () => {
+    expect(inspectSecretKeyFile(keyPath)).toBe("absent");
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  it("answers present for a usable key", () => {
+    writeFileSync(keyPath, `${Buffer.alloc(32, 7).toString("base64")}\n`, { mode: 0o600 });
+    expect(inspectSecretKeyFile(keyPath)).toBe("present");
+  });
+
+  it("raises the adapter's refusal for a bad key now, not on first save", () => {
+    writeFileSync(keyPath, "not a key\n", { mode: 0o600 });
+    expectRefused(() => inspectSecretKeyFile(keyPath), "malformed", /does not hold a key/);
+    chmodSync(keyPath, 0o644);
+    expectRefused(() => inspectSecretKeyFile(keyPath), "too-open", /chmod 600/);
   });
 });
