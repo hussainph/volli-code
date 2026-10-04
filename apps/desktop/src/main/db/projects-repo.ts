@@ -1,3 +1,4 @@
+import { withTransaction } from "./transaction-gate";
 /**
  * `projects` table repo: row↔domain mapping (snake_case → camelCase) plus
  * the plain SQL `projects.create/remove/reorder` need. No event log here —
@@ -532,14 +533,13 @@ export function reorderProjects(
   orderedIds: readonly string[],
   now: number,
 ): void {
-  const run = db.transaction((ids: readonly string[]) => {
+  withTransaction(db, () => {
     const stmt = prepared(
       db,
       "UPDATE projects SET sort_order = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
     );
-    ids.forEach((id, index) => {
+    orderedIds.forEach((id, index) => {
       stmt.run(index, now, id);
     });
   });
-  run(orderedIds);
 }

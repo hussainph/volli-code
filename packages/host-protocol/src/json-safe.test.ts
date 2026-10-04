@@ -1,6 +1,5 @@
 import { initTRPC, tracked } from "@trpc/server";
 import { describe, expectTypeOf, it } from "vite-plus/test";
-import type { AppRouter, SessionRouterJsonSafety } from "./index";
 import type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
 
 /**
@@ -97,13 +96,6 @@ describe("IsJsonSafe", () => {
     >().toEqualTypeOf<true>();
     // Still not blind to what sits beside it.
     expectTypeOf<IsJsonSafe<{ meta: LooseJsonObject; when: Date }>>().toEqualTypeOf<false>();
-  });
-});
-
-describe("the Session router JSON seam", () => {
-  it("guards every raw input and output published by AppRouter", () => {
-    expectTypeOf<JsonUnsafeProcedures<AppRouter>>().toEqualTypeOf<never>();
-    expectTypeOf<SessionRouterJsonSafety>().toEqualTypeOf<never>();
   });
 });
 

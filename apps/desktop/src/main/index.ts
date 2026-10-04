@@ -105,6 +105,7 @@ import {
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
+import { logTransactionViolation, throwTransactionViolation } from "./db/transaction-gate";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { createSessionConcurrencyEnvReader } from "./session-concurrency";
 import type { SessionConcurrencyEnvReader } from "./session-concurrency";
@@ -919,7 +920,9 @@ app.whenReady().then(async () => {
   let dbHandle: DbHandle;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    const db = openVolliDb(dbPath);
+    const db = openVolliDb(dbPath, {
+      onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
+    });
     dbHandle = { ok: true, db };
   } catch (error) {
     // The recorded reason is what every degraded handler answers with, so it

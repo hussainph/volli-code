@@ -6,13 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createServer } from "vite";
 
-import {
-  CURRENT_DB_SCHEMA_VERSION,
-  DEFAULT_SEED,
-  FIXTURE_SCHEMA_VERSION,
-  PRESET_NAMES,
-  presetNamed,
-} from "./presets.mjs";
+import { DEFAULT_SEED, FIXTURE_SCHEMA_VERSION, PRESET_NAMES, presetNamed } from "./presets.mjs";
 import {
   allocateFamilyUnits,
   attachmentClosedPayload,
@@ -251,13 +245,22 @@ async function loadProductionModules() {
   restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
-    const [db, sessionControl, artifacts, shared] = await Promise.all([
+    const [db, sessionControl, artifacts, shared, migrations] = await Promise.all([
       load("src/main/db/index.ts"),
       load("src/main/session-control/index.ts"),
       load("src/main/session-runtime/transcript-artifacts.ts"),
       vite.ssrLoadModule("@volli/shared"),
+      load("src/main/db/migrations.ts"),
     ]);
-    return { vite, ...db, ...sessionControl, ...artifacts, shared };
+    return {
+      vite,
+      ...db,
+      ...sessionControl,
+      ...artifacts,
+      shared,
+      // One source of truth; adding a migration cannot stale the fixture harness.
+      currentDbSchemaVersion: migrations.MIGRATIONS.at(-1).version,
+    };
   } catch (error) {
     await vite.close();
     throw error;
@@ -748,7 +751,7 @@ export async function generateFixture(input) {
     // This is the production file-backed open/migration path by requirement —
     // never :memory:, never a copied schema.
     db = modules.openVolliDb(paths.dbPath);
-    if (db.pragma("user_version", { simple: true }) !== CURRENT_DB_SCHEMA_VERSION) {
+    if (db.pragma("user_version", { simple: true }) !== modules.currentDbSchemaVersion) {
       throw new Error("fresh fixture did not migrate to the current database schema");
     }
     db.pragma("synchronous = OFF");
@@ -945,8 +948,10 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       );
     }
     const databaseSchemaVersion = db.pragma("user_version", { simple: true });
-    if (databaseSchemaVersion !== CURRENT_DB_SCHEMA_VERSION) {
-      throw new Error(`expected schema ${CURRENT_DB_SCHEMA_VERSION}, got ${databaseSchemaVersion}`);
+    if (databaseSchemaVersion !== modules.currentDbSchemaVersion) {
+      throw new Error(
+        `expected schema ${modules.currentDbSchemaVersion}, got ${databaseSchemaVersion}`,
+      );
     }
     const eventCounts = db
       .prepare("SELECT COUNT(*) AS count FROM session_events GROUP BY session_id")

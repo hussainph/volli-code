@@ -11,6 +11,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { copyFileSync, lstatSync, renameSync, rmSync } from "node:fs";
+import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
@@ -2685,6 +2686,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 57,
     name: "session event kind index — synchronize canonical-prefix repairs (VC-513)",
     sql: MIGRATION_057_SESSION_EVENT_KIND_REPAIR,
+  },
+  {
+    version: 58,
+    name: "cloud identity — host, workspace epochs, workers, checkout leases, devices (VC-550)",
+    sql: CLOUD_IDENTITY_MIGRATION,
   },
 ];
 

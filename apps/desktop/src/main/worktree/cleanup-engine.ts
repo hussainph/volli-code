@@ -33,15 +33,13 @@ import type {
   OrphanCleanupRejectionCode,
   OrphanCleanupRun,
   OrphanCleanupSource,
+  Synchronous,
 } from "@volli/shared";
 import {
   isOrphanCleanupItemOutcome,
   isOrphanCleanupPlanItem,
   isOrphanCleanupSource,
 } from "@volli/shared";
-
-/** A value a durable host may answer synchronously today or asynchronously later. */
-type Awaitable<T> = T | Promise<T>;
 
 /** How many runs a projection reads back by default — enough history to audit, bounded. */
 export const RECENT_CLEANUP_RUNS = 20;
@@ -106,15 +104,15 @@ export interface OrphanCleanupFact {
 
 /** The storage port. Deliberately free of Electron and SQLite types. */
 export interface OrphanCleanupLedgerTransaction {
-  getCommand(commandId: string): Awaitable<OrphanCleanupCommand | null>;
-  insertCommand(command: OrphanCleanupCommand): Awaitable<void>;
-  appendFact(fact: OrphanCleanupFact): Awaitable<void>;
+  getCommand(commandId: string): OrphanCleanupCommand | null;
+  insertCommand(command: OrphanCleanupCommand): void;
+  appendFact(fact: OrphanCleanupFact): void;
   /** Every fact for one command, in the order it was appended. */
-  listFacts(commandId: string): Awaitable<readonly OrphanCleanupFact[]>;
-  listReceipts(commandId: string): Awaitable<readonly OrphanCleanupReceipt[]>;
-  appendReceipt(receipt: OrphanCleanupReceipt): Awaitable<void>;
+  listFacts(commandId: string): readonly OrphanCleanupFact[];
+  listReceipts(commandId: string): readonly OrphanCleanupReceipt[];
+  appendReceipt(receipt: OrphanCleanupReceipt): void;
   /** Command ids, newest first, for the history projection. Bounded on purpose. */
-  recentCommandIds(limit: number): Awaitable<readonly string[]>;
+  recentCommandIds(limit: number): readonly string[];
   /**
    * Every command that was accepted and never closed — no `cleanup.run.finished`
    * and no `cleanup.run.interrupted` fact — oldest first, UNBOUNDED.
@@ -125,11 +123,11 @@ export interface OrphanCleanupLedgerTransaction {
    * ones out of that window. A run that removed a directory and never finished
    * has to be reconcilable however long ago it stopped.
    */
-  openCommandIds(): Awaitable<readonly string[]>;
+  openCommandIds(): readonly string[];
 }
 
 export interface OrphanCleanupLedger {
-  transaction<T>(work: (transaction: OrphanCleanupLedgerTransaction) => Awaitable<T>): Promise<T>;
+  transaction<T>(work: (transaction: OrphanCleanupLedgerTransaction) => Synchronous<T>): Promise<T>;
 }
 
 export interface OrphanCleanupEnginePorts {
@@ -397,11 +395,11 @@ export function foldCleanupRun(facts: readonly OrphanCleanupFact[]): OrphanClean
 }
 
 /** The last receipt recorded for a command, or `null` when it has none. */
-async function latestReceipt(
+function latestReceipt(
   tx: OrphanCleanupLedgerTransaction,
   commandId: string,
-): Promise<OrphanCleanupReceipt | null> {
-  const receipts = await tx.listReceipts(commandId);
+): OrphanCleanupReceipt | null {
+  const receipts = tx.listReceipts(commandId);
   return receipts.at(-1) ?? null;
 }
 
@@ -433,21 +431,15 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     createdAt: number,
   ): OrphanCleanupFact => ({ id: ports.nextId(), commandId, kind, payload, createdAt });
 
-  async function recordReceipt(
-    tx: OrphanCleanupLedgerTransaction,
-    receipt: OrphanCleanupReceipt,
-  ): Promise<void> {
-    await tx.appendReceipt(receipt);
-    await tx.appendFact(
+  function recordReceipt(tx: OrphanCleanupLedgerTransaction, receipt: OrphanCleanupReceipt): void {
+    tx.appendReceipt(receipt);
+    tx.appendFact(
       fact(receipt.commandId, "command.receipt.recorded", { receipt }, receipt.recordedAt),
     );
   }
 
-  async function foldFor(
-    tx: OrphanCleanupLedgerTransaction,
-    commandId: string,
-  ): Promise<OrphanCleanupRun | null> {
-    return foldCleanupRun(await tx.listFacts(commandId));
+  function foldFor(tx: OrphanCleanupLedgerTransaction, commandId: string): OrphanCleanupRun | null {
+    return foldCleanupRun(tx.listFacts(commandId));
   }
 
   /** Appends one fact to an already-accepted command; a stray command id is a no-op. */
@@ -456,23 +448,23 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     kind: OrphanCleanupFactKind,
     payload: unknown,
   ): Promise<void> {
-    await ports.ledger.transaction(async (tx) => {
-      const command = await tx.getCommand(commandId);
+    await ports.ledger.transaction((tx) => {
+      const command = tx.getCommand(commandId);
       if (command === null) return;
-      await tx.appendFact(fact(commandId, kind, payload, ports.now()));
+      tx.appendFact(fact(commandId, kind, payload, ports.now()));
     });
   }
 
   return {
     async hasCommand(commandId) {
-      return ports.ledger.transaction(async (tx) => (await tx.getCommand(commandId)) !== null);
+      return ports.ledger.transaction((tx) => tx.getCommand(commandId) !== null);
     },
 
     async replay(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const existing = tx.getCommand(input.commandId);
         if (existing === null) return null;
-        const receipt = (await latestReceipt(tx, input.commandId)) ?? {
+        const receipt = latestReceipt(tx, input.commandId) ?? {
           id: ports.nextId(),
           commandId: input.commandId,
           status: "rejected" as const,
@@ -480,7 +472,7 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
           detail: "This command has no receipt.",
           recordedAt: ports.now(),
         };
-        const run = await foldFor(tx, input.commandId);
+        const run = foldFor(tx, input.commandId);
         // A used id with a DIFFERENT request is a conflict whatever its first
         // answer was — and it is refused without appending anything, so the
         // original answer stays the only answer this id has.
@@ -519,10 +511,10 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
         preservation: [...input.preservation],
         items: [...input.items],
       };
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const existing = tx.getCommand(input.commandId);
         if (existing !== null) {
-          const receipt = (await latestReceipt(tx, input.commandId)) ?? {
+          const receipt = latestReceipt(tx, input.commandId) ?? {
             id: ports.nextId(),
             commandId: input.commandId,
             status: "rejected" as const,
@@ -530,7 +522,7 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
             detail: "This command has no receipt.",
             recordedAt: ports.now(),
           };
-          const run = await foldFor(tx, input.commandId);
+          const run = foldFor(tx, input.commandId);
           if (!sameIntent(existing.intent, intent)) {
             return {
               ok: false as const,
@@ -555,11 +547,11 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
         }
         const now = ports.now();
         const command: OrphanCleanupCommand = { id: input.commandId, intent, createdAt: now };
-        await tx.insertCommand(command);
-        await tx.appendFact(fact(command.id, "command.recorded", { command }, now));
+        tx.insertCommand(command);
+        tx.appendFact(fact(command.id, "command.recorded", { command }, now));
         // BEFORE any change: the accepted plan is durable first, so an app that
         // dies inside the first removal still knows what it set out to do.
-        await tx.appendFact(fact(command.id, "cleanup.accepted", { intent }, now));
+        tx.appendFact(fact(command.id, "cleanup.accepted", { intent }, now));
         const receipt: OrphanCleanupReceipt = {
           id: ports.nextId(),
           commandId: command.id,
@@ -568,16 +560,16 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
           detail: null,
           recordedAt: now,
         };
-        await recordReceipt(tx, receipt);
-        const run = await foldFor(tx, command.id);
+        recordReceipt(tx, receipt);
+        const run = foldFor(tx, command.id);
         if (run === null) throw new Error("Accepted cleanup produced no run");
         return { ok: true as const, run, receipt, replayed: false };
       });
     },
 
     async reject(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const existing = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const existing = tx.getCommand(input.commandId);
         const now = ports.now();
         if (existing !== null) {
           // Never a second receipt over an id that already answered. An accepted
@@ -587,7 +579,7 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
           // refusal, so a client hammering a superseded revision cannot grow the
           // log either. A command with no receipt at all is not a thing this
           // core writes; if one is ever found, it gets the refusal below.
-          const receipt = await latestReceipt(tx, input.commandId);
+          const receipt = latestReceipt(tx, input.commandId);
           if (receipt !== null) return receipt;
         } else {
           const intent: OrphanCleanupIntent = {
@@ -600,10 +592,10 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
             items: [],
           };
           const command: OrphanCleanupCommand = { id: input.commandId, intent, createdAt: now };
-          await tx.insertCommand(command);
-          await tx.appendFact(fact(command.id, "command.recorded", { command }, now));
+          tx.insertCommand(command);
+          tx.appendFact(fact(command.id, "command.recorded", { command }, now));
         }
-        await tx.appendFact(
+        tx.appendFact(
           fact(input.commandId, "cleanup.rejected", { code: input.code, error: input.error }, now),
         );
         const receipt: OrphanCleanupReceipt = {
@@ -614,7 +606,7 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
           detail: input.error,
           recordedAt: now,
         };
-        await recordReceipt(tx, receipt);
+        recordReceipt(tx, receipt);
         return receipt;
       });
     },
@@ -634,11 +626,11 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     },
 
     async finish(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const command = await tx.getCommand(input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const command = tx.getCommand(input.commandId);
         if (command === null) throw new Error(`Unknown cleanup command ${input.commandId}`);
         const now = ports.now();
-        await tx.appendFact(fact(input.commandId, "cleanup.run.finished", {}, now));
+        tx.appendFact(fact(input.commandId, "cleanup.run.finished", {}, now));
         const receipt: OrphanCleanupReceipt = {
           id: ports.nextId(),
           commandId: input.commandId,
@@ -647,18 +639,18 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
           detail: null,
           recordedAt: now,
         };
-        await recordReceipt(tx, receipt);
-        const run = await foldFor(tx, input.commandId);
+        recordReceipt(tx, receipt);
+        const run = foldFor(tx, input.commandId);
         if (run === null) throw new Error(`Cleanup command ${input.commandId} has no run`);
         return { run, receipt };
       });
     },
 
     async markInterrupted(input) {
-      return ports.ledger.transaction(async (tx) => {
-        const run = await foldFor(tx, input.commandId);
+      return ports.ledger.transaction((tx) => {
+        const run = foldFor(tx, input.commandId);
         if (run === null || run.finishedAt !== null || run.interruptedAt !== null) return run;
-        await tx.appendFact(fact(input.commandId, "cleanup.run.interrupted", {}, ports.now()));
+        tx.appendFact(fact(input.commandId, "cleanup.run.interrupted", {}, ports.now()));
         return foldFor(tx, input.commandId);
       });
     },
@@ -668,10 +660,10 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     },
 
     async recentRuns(limit = RECENT_CLEANUP_RUNS) {
-      return ports.ledger.transaction(async (tx) => {
+      return ports.ledger.transaction((tx) => {
         const runs: OrphanCleanupRun[] = [];
-        for (const commandId of await tx.recentCommandIds(limit)) {
-          const run = await foldFor(tx, commandId);
+        for (const commandId of tx.recentCommandIds(limit)) {
+          const run = foldFor(tx, commandId);
           if (run !== null) runs.push(run);
         }
         return runs;
@@ -679,10 +671,10 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     },
 
     async openRuns() {
-      return ports.ledger.transaction(async (tx) => {
+      return ports.ledger.transaction((tx) => {
         const runs: OrphanCleanupRun[] = [];
-        for (const commandId of await tx.openCommandIds()) {
-          const run = await foldFor(tx, commandId);
+        for (const commandId of tx.openCommandIds()) {
+          const run = foldFor(tx, commandId);
           // A refused command has no run at all, and an open one is by
           // definition unfinished: the store already asked that question.
           if (run !== null) runs.push(run);

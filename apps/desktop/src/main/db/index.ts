@@ -3,6 +3,8 @@ import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { migrate } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
 import { assertNoPendingDatabaseRecovery } from "./recovery-pending";
+import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
+import type { TransactionViolationHandler } from "./transaction-gate";
 
 export function assertDatabaseHeader(dbPath: string): void {
   // SQLite can update SHM even on a read-only handle. Reject a broken header
@@ -40,7 +42,11 @@ export function assertDatabaseHeader(dbPath: string): void {
  */
 export function openVolliDb(
   dbPath: string,
-  options: { allowPendingRecovery?: boolean } = {},
+  options: {
+    allowPendingRecovery?: boolean;
+    /** Tests/dev opt into failure; packaged startup explicitly uses logging. */
+    onTransactionViolation?: TransactionViolationHandler;
+  } = {},
 ): Database.Database {
   // A crash or full disk during publication must never turn a missing live
   // pathname into an apparently successful, empty first-run database.
@@ -96,6 +102,7 @@ export function openVolliDb(
         db.pragma("analysis_limit = 1000");
         db.exec("ANALYZE");
       }
+      guardTransactionOwnership(db, options.onTransactionViolation ?? logTransactionViolation);
       return db;
     } catch (error) {
       // A degraded boot must not leave a writer alive during backup recovery.

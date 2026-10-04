@@ -19,6 +19,7 @@ import type {
   SessionUsage,
   SessionUsageAttribution,
   SessionUsageEntry,
+  Synchronous,
 } from "@volli/shared";
 import {
   COST_BASES,
@@ -39,25 +40,23 @@ import {
 } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
-import { getTransactionGate } from "../db/transaction-gate";
+import { settleTransaction } from "../db/transaction-gate";
 
 type SqlRow = Record<string, unknown>;
 
 /**
- * The desktop's sole durable Session writer.  Although better-sqlite3 is
- * synchronous, a Session Engine transaction may await host work. The shared
- * connection gate holds transaction ownership across that await, so no ledger
- * on this handle observes a partial fact set.
+ * The desktop's sole durable Session writer. Transaction work is synchronous:
+ * no client or repo call can interleave with a partial fact set.
  */
 export class SqliteSessionLedger implements SessionLedger {
   constructor(private readonly db: Database.Database) {}
 
-  transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T> {
-    return getTransactionGate(this.db).transaction(async () => {
+  transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
+    return settleTransaction(this.db, () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
       try {
-        const value = await work(transaction);
+        const value = work(transaction);
         transaction.assertReceiptEventPairs();
         return value;
       } finally {

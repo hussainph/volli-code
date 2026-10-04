@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
-import type { JsonUnsafeProcedures } from "./json-safe";
-export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
+import type { JsonUnsafeProcedures } from "@volli/host-protocol";
+export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 import {
   isSessionStreamFrame,
   SuperviseSessionError,

@@ -2330,9 +2330,12 @@ export interface SessionLedgerTransaction {
   appendReceipt(receipt: CommandReceipt): void;
 }
 
+/** A callback result that cannot keep a storage transaction open across an await. */
+export type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
+
 /** The composition root guarantees atomicity for every function passed here. */
 export interface SessionLedger {
-  transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T>;
+  transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T>;
 }
 
 /** Injected by the composition root so the domain never imports a runtime clock or UUID library. */

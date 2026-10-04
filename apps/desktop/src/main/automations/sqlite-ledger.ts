@@ -7,6 +7,7 @@ import type {
   ColumnArming,
   ColumnAutomationOrder,
   PromptResource,
+  Synchronous,
   TicketStatus,
 } from "@volli/shared";
 
@@ -22,7 +23,7 @@ import {
   triggerColumnValue,
 } from "../db/automations-repo";
 import { prepared } from "../db/prepared";
-import { getTransactionGate } from "../db/transaction-gate";
+import { settleTransaction } from "../db/transaction-gate";
 import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
   AutomationCommand,
@@ -70,10 +71,8 @@ interface DeliveryRow {
 export class SqliteAutomationLedger implements AutomationLedger {
   constructor(private readonly db: Database.Database) {}
 
-  transaction<T>(work: (transaction: AutomationLedgerTransaction) => T | Promise<T>): Promise<T> {
-    return getTransactionGate(this.db).transaction(() =>
-      work(new SqliteAutomationLedgerTransaction(this.db)),
-    );
+  transaction<T>(work: (transaction: AutomationLedgerTransaction) => Synchronous<T>): Promise<T> {
+    return settleTransaction(this.db, () => work(new SqliteAutomationLedgerTransaction(this.db)));
   }
 }
 

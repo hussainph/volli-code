@@ -48,10 +48,12 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
-   all three. `SessionRouterJsonSafety` in
-   `packages/session-rpc/src/index.ts` applies `IsJsonSafe` to every raw
-   procedure input and output at the router seam, so an unsafe payload fails
-   type-checking before any transport can expose it.
+   all three. `IsJsonSafe` and `JsonUnsafeProcedures` live in
+   `@volli/host-protocol` (`packages/host-protocol/src/json-safe.ts`); assert
+   the latter is `never` at every router seam, including subscription yields.
+   `SessionRouterJsonSafety` in `packages/session-rpc/src/index.ts` is the
+   existing example, and session-rpc re-exports the types for compatibility.
+   See `docs/plans/host-protocol.md` for the opaque-type/runtime-validation limit.
 
 4. **A receipt is local acceptance, not eternal finality.** UI code may
    render "accepted" from a receipt; it may not be written so that a remote
@@ -73,29 +75,55 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 ## SQLite transaction ownership
 
-The desktop's Session, Automation and orphan-cleanup ledgers share **one async
-transaction gate per SQLite handle** (`apps/desktop/src/main/db/transaction-gate.ts`).
-It owns `BEGIN IMMEDIATE` through COMMIT/ROLLBACK, including while host work is
-awaited. New ledger adapters must use `getTransactionGate(db).transaction(work)`;
-a private promise queue is not sufficient on a shared handle. Separate handles
-have separate gates; SQLite, not this in-process queue, arbitrates their locks.
+**No SQLite transaction spans an `await` (VC-551).** One host owns the handle
+on one JavaScript thread. `withTransaction(db, work)` in
+`apps/desktop/src/main/db/transaction-gate.ts` runs a synchronous body between
+`BEGIN IMMEDIATE` and COMMIT/ROLLBACK; nested work uses a savepoint. The Session,
+Automation and orphan-cleanup ledger ports use `settleTransaction`: the same
+synchronous work, with its outcome delivered as a promise. Their transaction
+methods and bodies are synchronous by type; host/filesystem/network work runs
+before or after the atomic boundary. Re-read mutable state after async host work
+before deciding what to commit.
 
-**Known limit (VC-511): this gate is cooperative.** Existing synchronous repo
-calls, `db.transaction`, prepared statements and direct `db.exec` calls do not
-implicitly acquire it. An independent repo write on a handle with an open async
-transaction silently joins that transaction and is lost if it rolls back; a
-read can see uncommitted state. This change does not migrate those legacy
-callers or make the entire desktop a single safe writer. Before a second
-host/client is introduced, independent writes and consistent reads must enter
-the gate (for example, `await getTransactionGate(db).transaction(() =>
-insertProject(db, project))`) or use an appropriately isolated connection.
-Repo work intentionally part of an existing transaction remains direct; never
-await another ledger/gate transaction on the same handle from inside its work,
-since it queues behind itself. Host work that needs another ledger transaction
-must be split at the commit boundary.
+Independent synchronous repo writes are SQLite autocommit transactions. A
+consistent multi-statement read or compound write uses `withTransaction`;
+repo work deliberately inside a transaction remains direct. Existing native
+`db.transaction` callbacks are safe only with synchronous bodies. No separate
+queue or isolated connection is needed to protect ordinary repo calls: nothing
+can interleave while an owned transaction is open. Multiple clients still enter
+one event loop, not multiple concurrent owners of the handle.
 
-`apps/desktop/src/main/db/transaction-gate.test.ts` reproduces both cross-ledger
-serialization and the remaining ungated-write rollback hazard.
+**The cooperative-gate limit (VC-511) is closed.** The old gate held a transaction
+open across promises and allowed an unrelated repo write to join its rollback.
+None of the three ledger adapters needed interactive async transactions: the
+Automation/cleanup bodies awaited only synchronous ledger operations, and the
+Session engine already used synchronous bodies. Removing that await, rather
+than gating every caller, makes independent reads/writes structurally safe.
+Isolated synchronous connections were rejected: `busy_timeout` could block the
+same event loop an async owner needed to commit.
+
+`openVolliDb` installs an execution-time ownership guard after migrations.
+`openTestDb` selects its throwing handler; desktop startup explicitly selects
+throwing for development and **logging only for `app.isPackaged`**, never based
+on `NODE_ENV`. It checks `exec` and statement execution, including statements
+already in the repo cache, and tracks native synchronous transaction callbacks.
+A raw BEGIN/SAVEPOINT left open between calls fails synchronously in tests/dev,
+with rollback before another command can join. Ending an owned transaction
+inside its callback also fails the guard and blocks subsequent writes in that
+callback. Promise-returning transaction
+bodies are rejected and rolled back by the transaction helper (native
+better-sqlite3 also rejects them). The packaged ownership guard neither throws
+nor rolls back; it only logs, preserving release behavior on a programming bug.
+Its row readers stay native to avoid read-path overhead; transaction-opening
+statements and non-reader writes are still diagnosed. Tests/dev instrument
+all reads, including cached readers and lazy iterator stepping.
+
+Boot-time sole-owner migrations, recovery and backup/restore connections remain
+direct and are not runtime shared-handle exceptions. No runtime allowlist is
+needed. See [the write-path inventory](research/sqlite-ownership-vc551.md).
+`apps/desktop/src/main/db/transaction-gate.test.ts` proves that the former
+ungated-write rollback hazard cannot happen, and covers cached statements,
+raw transaction controls, cross-ledger work, nesting and the packaged handler.
 
 ## The chosen path, for context
 

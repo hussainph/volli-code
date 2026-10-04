@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import type {
   CancelInteractionRequest,
   SessionRuntime,
@@ -14,8 +14,17 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
-import type { CommandRefusalSeverity, ExperimentSnapshot } from "@volli/shared";
-import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
+import type { CommandReceipt, CommandRefusalSeverity, ExperimentSnapshot } from "@volli/shared";
+import type { HostReceiptStatus } from "@volli/host-protocol";
+import {
+  AsyncQueue,
+  createSessionRouter,
+  RpcDiagnosticLog,
+  sanitizeDiagnosticText,
+  type AppRouter,
+  type JsonUnsafeProcedures,
+  type SessionRouterJsonSafety,
+} from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
 type SessionCommand = SessionRuntimeSnapshot["projection"]["commands"][number];
@@ -363,6 +372,19 @@ function runtimeFixture(refusal: CommandRefusalSeverity | null = null): {
     },
   };
 }
+
+// `IsJsonSafe` and the receipt vocabulary are specified in `@volli/host-protocol`;
+// these are the seams where this router is held to them (`docs/BOUNDARIES.md` rule 3).
+describe("the Session router's host protocol seams", () => {
+  it("guards every raw input and output published by AppRouter", () => {
+    expectTypeOf<JsonUnsafeProcedures<AppRouter>>().toEqualTypeOf<never>();
+    expectTypeOf<SessionRouterJsonSafety>().toEqualTypeOf<never>();
+  });
+
+  it("answers commands in the receipt vocabulary the host protocol names", () => {
+    expectTypeOf<CommandReceipt["status"]>().toEqualTypeOf<HostReceiptStatus>();
+  });
+});
 
 describe("RpcDiagnosticLog", () => {
   it("bounds entries, replays in order, and removes sensitive diagnostics", () => {
