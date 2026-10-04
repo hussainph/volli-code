@@ -55,8 +55,8 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
 import { getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
-import { resetOrphanScanForTest } from "./orphan-scan";
-import { resetRetentionWatcherForTest } from "./retention-runtime";
+import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
+import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
 
 const fakeEvent = { sender: {} };
 

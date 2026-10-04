@@ -13,7 +13,7 @@ import {
   rmSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { DatabaseOpenFault, DatabaseSafetyCopy } from "../ipc/contract";
+import type { DatabaseSafetyCopy } from "@volli/shared";
 import { assertDatabaseHeader, openVolliDb } from "@volli/host-core/db";
 import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
 import {
@@ -29,10 +29,8 @@ import {
   recoveryPendingPath,
   syncRecoveryPath,
 } from "@volli/host-core/db/recovery-pending";
-import { DATABASE_RECOVERY_IPC } from "./ipc-descriptors";
-import { registerGuardedIpcHandlers } from "./ipc-registry";
 
-class RecoveryFailure extends Error {}
+export class RecoveryFailure extends Error {}
 
 export const NO_CLEAN_BACKUP =
   "No local backup checks clean. Nothing was restored. Your database and safety copies are preserved for manual recovery.";
@@ -323,73 +321,4 @@ export class DatabaseRecovery {
         "The database is in use. Close other Volli instances before restoring.",
       );
   }
-}
-
-export function registerDatabaseRecoveryIpcHandlers(
-  options: DatabaseRecoveryOptions & {
-    degraded: boolean;
-    /**
-     * Which recovery screen the renderer shows (VC-602): `newer-version` when
-     * the database is from a newer Volli this build refused to open.
-     */
-    fault: DatabaseOpenFault;
-    restart: () => void;
-    /** Quits the app from the recovery screen. */
-    quit: () => void;
-  },
-): void {
-  const recovery = new DatabaseRecovery(options);
-  let restored = false;
-  const degraded = (): void => {
-    if (!options.degraded)
-      throw new Error("Backup recovery is only available when the database failed to open.");
-  };
-  const available = (): void => {
-    degraded();
-    if (restored) throw new Error("The database has been restored. Volli is restarting.");
-  };
-  registerGuardedIpcHandlers(DATABASE_RECOVERY_IPC, {
-    "volli:database-recovery-fault": () => {
-      degraded();
-      return { ok: true, fault: options.fault };
-    },
-    "volli:database-recovery-quit": () => {
-      degraded();
-      options.quit();
-      return { ok: true };
-    },
-    "volli:database-recovery-list": () => {
-      available();
-      try {
-        return { ok: true, backups: recovery.list() };
-      } catch (error) {
-        console.error("[database recovery] could not list safety copies", error);
-        return {
-          ok: false,
-          error:
-            "Local safety copies could not be checked. Nothing was changed. Your files are preserved for manual recovery.",
-        };
-      }
-    },
-    "volli:database-recovery-restore": () => {
-      available();
-      let restoredBackup: string;
-      try {
-        restoredBackup = recovery.restore();
-      } catch (error) {
-        console.error("[database recovery] restore unavailable", error);
-        return {
-          ok: false,
-          error:
-            error instanceof RecoveryFailure ||
-            (error instanceof Error && error.message === NO_CLEAN_BACKUP)
-              ? error.message
-              : "Restore could not start. Nothing was restored. Your files are preserved for manual recovery.",
-        };
-      }
-      restored = true;
-      options.restart();
-      return { ok: true, restoredBackup };
-    },
-  });
 }

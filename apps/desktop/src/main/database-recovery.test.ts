@@ -59,11 +59,8 @@ import * as database from "@volli/host-core/db";
 import { migrate, MIGRATIONS } from "@volli/host-core/db/migrations";
 import { beginDatabaseRecovery, recoveryPendingPath } from "@volli/host-core/db/recovery-pending";
 import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
-import {
-  DatabaseRecovery,
-  NO_CLEAN_BACKUP,
-  registerDatabaseRecoveryIpcHandlers,
-} from "./database-recovery";
+import { DatabaseRecovery, NO_CLEAN_BACKUP } from "@volli/host-core/database-recovery";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 
 let directory: string;
 let dbPath: string;
@@ -562,8 +559,7 @@ describe("database recovery IPC", () => {
     const restart = vi.fn();
     const quit = vi.fn();
     registerDatabaseRecoveryIpcHandlers({
-      dbPath,
-      userData: directory,
+      recovery,
       degraded,
       fault,
       restart,

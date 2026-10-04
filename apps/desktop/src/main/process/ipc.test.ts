@@ -22,9 +22,9 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { getAutoReapPolicy } from "./auto-reap-settings";
+import { getAutoReapPolicy } from "@volli/host-core/process/auto-reap-settings";
 import { registerOrphanProcessIpcHandlers } from "./ipc";
-import { OrphanProcessService } from "./orphan-processes";
+import { OrphanProcessService } from "@volli/host-core/process/orphan-processes";
 
 const NOW = 1_800_000_000_000;
 const worktree = {

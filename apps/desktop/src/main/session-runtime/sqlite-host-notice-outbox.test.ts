@@ -16,7 +16,7 @@ import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fix
 import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { createSessionWakeBus } from "@volli/host-core/session-control/session-wake";
 import { insertProject } from "@volli/host-core/db/projects-repo";
-import { buildBackupDataDocument } from "../backup/data-document";
+import { buildBackupDataDocument } from "@volli/host-core/backup/data-document";
 import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
 import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
 import { createPiNativeAdapter } from "@volli/host-core/session-runtime/pi-adapter";

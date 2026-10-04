@@ -86,6 +86,10 @@ export default defineConfig({
         // branch wrong here is a frozen shell or a client that never resumes.
         "src/pty/park.ts",
         "src/pty/output.ts",
+        // The orphan process sweep (VC-341, moved with its tests in VC-618).
+        // Every branch decides whether to signal a stranger's process; the
+        // ledger's storage above is held to the same unchanged 100% bar.
+        "src/process/**",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

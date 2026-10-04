@@ -1,7 +1,10 @@
 import type Database from "better-sqlite3";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createFixtureProfile, FIXTURE_NATIVE_USAGE_EVENT_ID } from "../backup/test-fixture";
+import {
+  createFixtureProfile,
+  FIXTURE_NATIVE_USAGE_EVENT_ID,
+} from "@volli/host-core/backup/test-fixture";
 import {
   assertSessionStorageContentUnchanged,
   computeSessionStorageContentDigest,

@@ -28,8 +28,12 @@ describe("host notice composition", () => {
     expect(source).toContain("sessionWakeBus.subscribe(({ event }) => listener(event))");
   });
 
-  it("releases host notice subscriptions before closing the runtime", () => {
-    before("shellHostNotices?.close()", "sessionRuntime?.close()");
+  it("passes the live notice and Session owners to host-core shutdown", () => {
+    // The notice-before-runtime order now lives in host-shutdown.test.ts.
+    // Desktop still supplies the live owners when the accepted quit runs.
+    expect(source).toMatch(
+      /shutdownNativeSessions:\s*\(\) =>\s*hostCore\.maintenance\.shutdownNativeSessions\(\{\s*sessionWatchdog,\s*scheduledResumeHost,\s*shellHostNotices,\s*sessionRpc,\s*sessionRuntime,\s*agentObservability,\s*\}\)/,
+    );
   });
 
   it("wires secret-safe fragment preview alongside ordinary shell output redaction", () => {

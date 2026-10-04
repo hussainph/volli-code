@@ -68,7 +68,7 @@ import {
 } from "@volli/shared";
 
 import type { BackgroundShellState } from "../../ipc/contract";
-import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
+import { NO_SPAWN_LEDGER } from "@volli/host-core/process/spawn-ledger";
 import { NoticeMatchWatch, NoticeOutput } from "./notice-output";
 import {
   compileNotifyPattern,

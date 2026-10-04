@@ -144,6 +144,34 @@ Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
 constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
 this gate with its test.
 
+VC-618 (VC-558 slice 2) adds `src/backup/` (`@volli/host-core/backup/*`),
+`src/process/` (`@volli/host-core/process/*`), `database-recovery`,
+`retention-runtime`, `orphan-scan`, `quiet-windows`, `host-shutdown` and
+`shutdown-deadline` at matching subpath exports. Backup files are byte-identical:
+format, redactions, credential exclusions and the minimum-reader marker guard
+are unchanged. Warm park was already moved by VC-560 into `src/pty/park.ts`;
+its desktop quit/confirm door remains in `main/pty/ipc.ts`.
+
+`host.maintenance` stages recovery, spawn-ledger, orphan-process and retention
+construction at desktop's original boot points. Retention and process alerts use
+`events`/`attention`; no maintenance scheduler needs a window. Desktop still
+starts them after first paint and triggers retention on focus. The retention
+singleton keeps its first construction and shared dismissal state across IPC and
+host reads, including the original read-only behavior without reclaim seams.
+
+Recovery's IPC door is `main/database-recovery-ipc.ts`; recovery screens, dialogs,
+restart and `app.quit` stay desktop-owned. `main/quit-gate.ts` keeps synchronous
+refusals, the accepted-update latch, the microtask verdict and the Immediate
+before native exit. Host shutdown stops watches/notices, drains both Session
+owners, closes all MCP process groups and only then flushes observability. Its
+unchanged 15-second aggregate deadline is in `shutdown-deadline.ts`. The existing
+desktop quit/socket tests still hold that file at 100%; process coverage moved
+with its tests at the same 100% gate. Recovery's integration test stays desktop
+because it still composes IPC. All backup tests now run here: VC-561 moved the
+file-decision test's last desktop dependency, `browser/picture-disk`.
+`quiet-windows.ts` is unchanged, Node-only policy over injected structural
+interfaces; actual native windows and activation still belong to desktop.
+
 ## Ports
 
 A port is what host-core asks of the process hosting it. Each port lives in
