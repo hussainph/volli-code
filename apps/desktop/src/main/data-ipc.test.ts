@@ -232,7 +232,7 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { resetOrphanScanForTest } from "./orphan-scan";
+import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import { worktreesHome } from "@volli/host-core/worktree-runtime";
 import { projectContainerName } from "@volli/host-core/worktree/containers";

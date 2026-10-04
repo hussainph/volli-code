@@ -644,13 +644,9 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",
         "**/src/main/observability/sink.ts",
-        // The orphan process sweep (VC-341). Enrolled for the same reason the
-        // IPC handlers and `quit-gate.ts` are, only more so: this is the one
-        // place in the app that calls `process.kill`, and every uncovered
-        // branch in it is a branch nobody has watched decide whether to signal
-        // a stranger's process. The ledger's storage (`db/spawn-ledger-repo.ts`)
-        // is held to the same bar in @volli/host-core's gate.
-        "**/src/main/process/**",
+        // The process IPC door stays here; the sweep and its unchanged 100%
+        // gate moved with its tests to @volli/host-core (VC-618).
+        "**/src/main/process/ipc.ts",
         "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
@@ -669,7 +665,8 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/pty.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
-        "**/src/main/shutdown-deadline.ts",
+        // The host deadline is still covered by desktop's quit/socket integration tests.
+        "**/packages/host-core/src/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",

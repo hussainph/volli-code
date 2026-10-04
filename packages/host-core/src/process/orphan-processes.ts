@@ -41,17 +41,15 @@ import {
   type AutoReapPolicy,
   type MemoryPressureReading,
   type OrphanProcessCandidate,
+  type OrphanProcessInventory,
+  type OrphanProcessReapInput,
+  type OrphanProcessReapReport,
   type ProcessFact,
   type SpawnLedgerEntry,
   type WorktreeHolder,
   type WorktreeRef,
 } from "@volli/shared";
 
-import type {
-  OrphanProcessInventory,
-  OrphanProcessReapInput,
-  OrphanProcessReapReport,
-} from "../../ipc/contract";
 import { readProcessInventory } from "./inventory";
 import { readMemoryPressure } from "./memory-pressure";
 

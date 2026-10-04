@@ -24,7 +24,7 @@ import type { DbHandle } from "../data-ipc";
 import { windowEventBus } from "../broadcast";
 import { clientEventSink } from "../client-event-sink";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { SpawnLedger } from "../process/spawn-ledger";
+import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";

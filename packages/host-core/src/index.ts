@@ -26,6 +26,10 @@ import type { TrashPort } from "./ports/trash";
 import { createHostFileServices, type HostFileServices } from "./file-services";
 import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
 import {
+  createHostMaintenanceServices,
+  type HostMaintenanceServices,
+} from "./maintenance-services";
+import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
   describeDbOpenFailure,
@@ -105,6 +109,8 @@ export interface HostCore extends HostSessionServices {
   readonly database: DbHandle;
   /** Staged construction, called in the host's existing boot order. */
   readonly runtimeServices: HostRuntimeServices;
+  /** Staged durability/process construction, with no window-dependent start. */
+  readonly maintenance: HostMaintenanceServices;
   /** The client's capabilities, or one that refuses each readably when there is none. */
   readonly client: ClientCapabilityPort;
   readonly fileServices: HostFileServices;
@@ -156,8 +162,15 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   }
   const client = clientCapabilities(ports.client);
   const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
+  const worktrees = createWorktreeRuntime(ports, options);
   return {
-    worktrees: createWorktreeRuntime(ports, options),
+    worktrees,
+    maintenance: createHostMaintenanceServices(
+      database.ok ? database.db : null,
+      ports,
+      { dataDir: options.dataDir, dbPath },
+      worktrees,
+    ),
     dataDir: options.dataDir,
     dbPath,
     database,

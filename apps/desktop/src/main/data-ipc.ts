@@ -205,9 +205,14 @@ import {
   updateTicketFieldsCommand,
 } from "@volli/host-core/ticket-commands";
 import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
-import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
+import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import { deliverNotification } from "./notifications/runtime";
 import { withTicketWake } from "./ticket-wake";
-import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
+import {
+  invalidateOrphanScan,
+  orphanScanReport,
+  resolveCleanupPlan,
+} from "@volli/host-core/orphan-scan";
 import { exportDatabase } from "./menu";
 import {
   acquireDeletionLease,
@@ -243,7 +248,7 @@ import {
 import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "@volli/host-core/worktree/coalesce";
 import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
 import { credentialHelperIssues } from "@volli/host-core/credential-helper-diagnostics";
-import { getRetentionWatcher } from "./retention-runtime";
+import { getRetentionWatcher } from "@volli/host-core/retention-runtime";
 import {
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -522,6 +527,12 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+  const retentionWatcher = () =>
+    getRetentionWatcher(
+      db,
+      { events: windowEventBus, attention: { deliver: deliverNotification } },
+      () => worktreeDeps(db),
+    );
 
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
@@ -1984,7 +1995,7 @@ export function registerDataIpcHandlers(
     // (retention-runtime.ts) is shared with index.ts's start/stop + focus wiring.
 
     "volli:retention-state": (input: TicketIdInput): RetentionStateResult => {
-      const state = getRetentionWatcher(db).getState(input.ticketId);
+      const state = retentionWatcher().getState(input.ticketId);
       if (state === null) return { ok: false, error: "Unknown ticket" };
       return { ok: true, state };
     },
@@ -2004,7 +2015,7 @@ export function registerDataIpcHandlers(
 
     "volli:retention-dismiss": (input: TicketIdInput): RetentionDismissResult => {
       // In-memory, launch-scoped: the prompt is re-offered next launch.
-      getRetentionWatcher(db).dismiss(input.ticketId);
+      retentionWatcher().dismiss(input.ticketId);
       broadcastDataChanged({
         ticketId: input.ticketId,
         ...ticketScope(db, input.ticketId),
@@ -2060,7 +2071,7 @@ export function registerDataIpcHandlers(
 
     "volli:retention-poll": (): RetentionPollResult => {
       // Fire-and-forget: the poll runs async and broadcasts on change itself.
-      getRetentionWatcher(db).triggerNow();
+      retentionWatcher().triggerNow();
       return { ok: true };
     },
   };

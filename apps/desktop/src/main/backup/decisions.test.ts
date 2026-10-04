@@ -23,7 +23,7 @@ import {
   PROFILE_FILE_DECISIONS,
   TABLE_BACKUP_DECISIONS,
   tableBackupDecision,
-} from "./decisions";
+} from "@volli/host-core/backup/decisions";
 
 let ctx: TestDb;
 

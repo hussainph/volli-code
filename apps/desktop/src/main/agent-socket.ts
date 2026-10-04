@@ -10,7 +10,7 @@ import {
   type AgentResponse,
 } from "@volli/shared";
 
-import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+import { settleShutdownBeforeDeadline } from "@volli/host-core/shutdown-deadline";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;

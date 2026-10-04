@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { setAppState } from "@volli/host-core/db/app-state-repo";
-import { openTestDb } from "@volli/host-core/db/test-helpers";
+import { setAppState } from "../db/app-state-repo";
+import { openTestDb } from "../db/test-helpers";
 import {
   AUTO_REAP_SETTINGS_KEY,
   getAutoReapPolicy,
