@@ -665,5 +665,21 @@ describe("durability ordering", () => {
     const publish = position((entry) => entry === `rename ${staged} -> ${fx.dbPath}`, stagedSync);
     const nameSync = position((entry) => entry === `fsync ${fx.root}`, publish);
     position((entry) => entry === `unlink ${recoveryPendingPath(fx.dbPath)}`, nameSync);
+    // Companion contents: each staged file before its directories, bottom-up,
+    // all before anything in the live profile moves.
+    const stagedFiles = [
+      ["blobs/bb/blob", "blobs/bb", "blobs"],
+      ["session-transcripts/t.json", "session-transcripts"],
+    ];
+    for (const chain of stagedFiles) {
+      let previous = -1;
+      for (const path of chain) {
+        previous = position(
+          (entry) => entry === `fsync ${join(fx.root, ".staged", path)}`,
+          previous,
+        );
+      }
+      expect(previous).toBeLessThan(markerSync);
+    }
   });
 });

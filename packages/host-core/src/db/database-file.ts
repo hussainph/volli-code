@@ -42,6 +42,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readSync,
   renameSync,
   rmSync,
@@ -150,6 +151,17 @@ function exists(path: string): boolean {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+/** fsync a file, or a directory tree bottom-up: children before their directory. */
+function syncTree(path: string): void {
+  const info = lstatSync(path);
+  if (info.isDirectory()) {
+    for (const name of readdirSync(path)) syncTree(join(path, name));
+  } else if (!info.isFile()) {
+    return;
+  }
+  syncRecoveryPath(path);
 }
 
 function regularFile(path: string): void {
@@ -496,6 +508,14 @@ export function swapInStagedProfile(request: StagedProfileSwap): void {
     const sidecar = `${stagedPath}${suffix}`;
     if (exists(sidecar) && suffix !== "-shm" && lstatSync(sidecar).size !== 0)
       throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
+  }
+  // A directory fsync flushes its own entries, not its descendants'. Every
+  // staged companion file and directory is durable before the swap begins, so
+  // a power cut after success cannot leave a booting database whose
+  // attachments were never written. Outside the lock: it is staging-only work.
+  for (const entry of request.companions ?? []) {
+    const path = join(dirname(stagedPath), entry);
+    if (exists(path)) syncTree(path);
   }
   (request.faults ?? noFaults)("swap:lock");
   let lock: Database.Database;
