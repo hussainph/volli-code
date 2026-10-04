@@ -70,18 +70,15 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "../ipc/contract";
-import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
-import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
-import { desktopMcpDispatch } from "./mcp/dispatch-policy";
-import { McpOAuthBroker } from "./mcp/oauth";
+import type { HarnessUninstallResult, ManagedConflict } from "@volli/host-core/harness-install";
+import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
 import {
   closeAllMcpSessionHosts,
   McpSessionHost,
   serversForFrozenMcpTools,
-} from "./mcp/session-host";
-import { desktopCodeMode } from "./codemode/dev-config";
-import { codeModeSandboxAssets } from "./codemode/sandbox-assets";
-import { McpSettingsService } from "./mcp/settings";
+} from "@volli/host-core/mcp/session-host";
+import { desktopCodeMode } from "@volli/host-core/codemode/dev-config";
+import { codeModeSandboxAssets } from "@volli/host-core/codemode/sandbox-assets";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -174,50 +171,42 @@ import {
   createFileTranscriptArtifactStore,
   repackLegacyTranscriptArtifacts,
   sessionTranscriptsRoot,
-} from "./session-runtime";
-import { createSessionTokenRegistry } from "./session-tokens";
-import { closeStaleAttachments } from "./session-runtime/boot-recovery";
+} from "@volli/host-core/session-runtime";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
-import { createHostNoticeDelivery } from "./session-runtime/durable-host-notice-delivery";
+import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
-import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
-import { createModelAutoSelect } from "./decision/auto-select";
-import { createDesktopDecisions } from "./decision/desktop";
+import { createModelAutoSelect } from "@volli/host-core/decision/auto-select";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
-import {
-  BRAVE_SEARCH_KEY_SECRET,
-  EXA_SEARCH_KEY_SECRET,
-  WebCredentialStore,
-} from "./web/credential";
 import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
-import { WebAccessSettings } from "./web/settings";
-import { webPortsFor } from "./web/ports";
-import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { webPortsFor } from "@volli/host-core/web/ports";
+import { createPiRuntimeHost, PI_TOOLS } from "@volli/host-core/session-runtime/pi-adapter";
 import { SecretStore } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
 import { retiresSessionSecrets } from "./secrets/lifetime";
 import { registerSecretIpc } from "./secrets/ipc";
 import { refusingCredentialReads } from "@volli/agent-runtime";
-import { createConnectivityPort } from "./session-runtime/connectivity";
-import { createAutoTitler } from "./session-runtime/auto-title";
+import { createConnectivityPort } from "@volli/host-core/session-runtime/connectivity";
+import { createAutoTitler } from "@volli/host-core/session-runtime/auto-title";
 import { createPeekSummarizer } from "@volli/host-core/session-control/peek-summary";
-import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
+import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
 import {
   createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
   type SessionToolSurfacePorts,
-} from "./session-runtime/sessions";
-import { loadSkills } from "./skills";
-import { loadPromptTemplates } from "./prompt-templates";
+} from "@volli/host-core/session-runtime/sessions";
+import { loadSkills } from "@volli/host-core/skills";
+import { loadPromptTemplates } from "@volli/host-core/prompt-templates";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
@@ -244,12 +233,12 @@ import {
   writeHiddenModels,
   writeModelAccessDefault,
   writeModelPickerView,
-} from "./session-runtime/model-access-preferences";
+} from "@volli/host-core/session-runtime/model-access-preferences";
 import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
 } from "./session-rpc-ipc";
-import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
+import { piExecutionEnv, piSignIn } from "@volli/agent-runtime";
 import {
   ExperimentalSettings,
   installExperimentalSettings,
@@ -271,7 +260,7 @@ import {
   getGlobalCanvas,
 } from "@volli/host-core/db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
-import { registerFileIpcHandlers } from "./volli-fs";
+import { registerFileIpcHandlers } from "./volli-fs-ipc";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
@@ -287,8 +276,8 @@ import {
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
-import { createDelegations } from "./session-runtime/delegate-session";
-import type { Delegations } from "./session-runtime/delegate-session";
+import { createDelegations } from "@volli/host-core/session-runtime/delegate-session";
+import type { Delegations } from "@volli/host-core/session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { subscribeTicketWake } from "./ticket-wake";
 import { createWatches } from "./watches";
@@ -311,7 +300,11 @@ import {
   composeTicketBrief,
   createAgentCommandService,
 } from "./agent-commands";
-import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import {
+  acquireVolliAppProfile,
+  ensureVolliCliShim,
+  volliRuntimePaths,
+} from "@volli/host-core/agent-runtime";
 import {
   decideRegisteredHarnesses,
   scanHarnessManifests,
@@ -333,8 +326,8 @@ import {
   loginShellPath,
   probeLoginShellPath,
   resetLoginShellPathCache,
-} from "./login-shell-path";
-import { buildSessionEnvReport } from "./session-env";
+} from "@volli/host-core/login-shell-path";
+import { buildSessionEnvReport } from "@volli/host-core/session-env";
 import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
 import {
   cleanupLegacyGlobalCliLink,
@@ -347,7 +340,7 @@ import {
   resolveOnPath,
   uninstallAllHarnessSkills,
   userCliLinkPath,
-} from "./agent-tools";
+} from "@volli/host-core/agent-tools";
 import { registerCliIpcHandlers } from "./cli-ipc";
 import { registerSupportIpcHandlers } from "./support-info";
 import { probeCliDoctor } from "./cli-doctor";
@@ -367,9 +360,9 @@ import {
   PACKAGED_RENDERER_SCHEME,
   resolvePackagedRendererAsset,
 } from "./app-protocol";
-import { collectUnlinkedBlobs } from "./blob-collect";
-import { prepareTurnAttachments } from "./turn-attachments";
-import { blobProtocolResponse } from "./blob-protocol";
+import { collectUnlinkedBlobs } from "@volli/host-core/blob-collect";
+import { prepareTurnAttachments } from "@volli/host-core/turn-attachments";
+import { blobProtocolResponse } from "@volli/host-core/blob-protocol";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import { getBlob } from "@volli/host-core/db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
@@ -382,7 +375,7 @@ import { BackgroundShellHost, type BackgroundShellNotice } from "./shell/backgro
 import { createAgentShellPort } from "./shell/agent-port";
 import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
-import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
+import { createAttachmentIdentities } from "@volli/host-core/session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { desktopBrowserPort } from "./browser/agent-port";
 import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
@@ -936,6 +929,7 @@ app.whenReady().then(async () => {
     power: powerMonitor,
     connectivity: createConnectivityPort({ net, powerMonitor }),
     client: createElectronClientCapabilities(),
+    trash: { trashItem: (path) => shell.trashItem(path) },
     listOpenNativeBindings: () => listOpenNativeBindings(),
     observeScheduledResume: (projection) => scheduledResumeHost?.observe(projection),
   };
@@ -1071,38 +1065,14 @@ app.whenReady().then(async () => {
   // cross-process and already survives the `pi` CLI writing alongside us, but
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
-  const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  const piModelAccess = hostCore.runtimeServices.createModelAccess();
   // Decision models (VC-478): the host decision service every feature that
   // asks a classifier goes through, the `classify` tool's per-Session port,
   // and the Settings owner. Built over the same Pi collection as chat, so a
   // cloud classifier's key is the one a person signed in with under Model
   // Access. Its usage is billed into the Session it was asked for, as
   // `usage.recorded` with cause `decision` and the purpose in the provenance.
-  const desktopDecisions =
-    dbHandle.ok && piModelAccess !== null
-      ? createDesktopDecisions({
-          db: dbHandle.db,
-          models: piModelAccess.models,
-          catalogReady: piModelAccess.catalogReady,
-          recordUsage: async (sessionId, usage, purpose) => {
-            if (sessionEngine === null) return;
-            await sessionEngine.observe({
-              // A fresh id per call: every decision is its own bill.
-              id: `usage:decision:${randomUUID()}`,
-              kind: "usage.recorded",
-              sessionId,
-              occurredAt: Date.now(),
-              provenance: {
-                source: { kind: "system", id: "decision-service", detail: { purpose } },
-                venue: { id: "local", kind: "local" },
-              },
-              attachmentId: null,
-              turnId: null,
-              usage,
-            });
-          },
-        })
-      : null;
+  const desktopDecisions = hostCore.runtimeServices.createDecisions(piModelAccess);
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -1145,21 +1115,7 @@ app.whenReady().then(async () => {
     expected.hash = "";
     return actual.href === expected.href;
   });
-  const mcpCredentials = new FileMcpCredentialStore(
-    join(dirname(dbPath), MCP_CREDENTIAL_FILE_NAME),
-  );
-  const mcpSettings = dbHandle.ok
-    ? new McpSettingsService({
-        db: dbHandle.db,
-        credentials: mcpCredentials,
-        oauth: new McpOAuthBroker({
-          store: mcpCredentials,
-          // Only ever an authorization page the server's own metadata named,
-          // already checked to be https (or loopback) by the broker.
-          openExternal: (url) => hostCore.client.openExternal(url),
-        }),
-      })
-    : null;
+  const { settings: mcpSettings } = hostCore.runtimeServices.createMcp();
   // How MCP calls are dispatched and bounded (VC-454): the developer-only
   // parallel-read opt-in, read once from an unpackaged build's environment
   // (no setting, no UI), and one per-server bound every Session shares.
@@ -1189,21 +1145,7 @@ app.whenReady().then(async () => {
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
-  const webAccess = dbHandle.ok
-    ? new WebAccessSettings({
-        db: dbHandle.db,
-        credentials: {
-          brave: new WebCredentialStore({
-            db: dbHandle.db,
-            secretName: BRAVE_SEARCH_KEY_SECRET,
-          }),
-          exa: new WebCredentialStore({
-            db: dbHandle.db,
-            secretName: EXA_SEARCH_KEY_SECRET,
-          }),
-        },
-      })
-    : null;
+  const webAccess = hostCore.runtimeServices.createWebAccess();
   // Assigned once the BrowserTabHost is built inside the ready path below; the
   // attach-time browser-port resolver reads it lazily, long after boot — the
   // same bargain ptyManagerRef strikes with the worktree guards.
@@ -1813,6 +1755,8 @@ app.whenReady().then(async () => {
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
+          events: hostPorts.events,
+          dataDir: hostCore.dataDir,
           transcriptDirectory,
           executor: piRuntimeHost.adapter,
           sessionEngine,
@@ -2478,7 +2422,7 @@ app.whenReady().then(async () => {
   registerModelAccessIpcHandlers(
     piModelAccess === null
       ? null
-      : new ModelAccessSignInService({
+      : hostCore.runtimeServices.createSignIn({
           // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
           pi: piSignIn(piModelAccess.models, {
             deviceId: () => {
@@ -2999,10 +2943,14 @@ app.whenReady().then(async () => {
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
-  registerFileIpcHandlers(dbHandle, {
-    globalCommandsDir: join(fsDeps.userDataDir, "commands"),
-    globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
-  });
+  registerFileIpcHandlers(
+    dbHandle,
+    {
+      globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+      globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+    },
+    hostCore.fileServices,
+  );
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the
   // `userData` root is where Volli's overlay files live (never the user's own

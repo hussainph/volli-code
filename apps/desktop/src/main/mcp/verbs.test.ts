@@ -36,9 +36,9 @@ import {
   testTicket,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import type { McpProtocolClient } from "./discovery";
-import { serversForFrozenMcpTools } from "./session-host";
-import { McpSettingsService } from "./settings";
+import type { McpProtocolClient } from "@volli/host-core/mcp/discovery";
+import { serversForFrozenMcpTools } from "@volli/host-core/mcp/session-host";
+import { McpSettingsService } from "@volli/host-core/mcp/settings";
 
 let ctx: TestDb;
 /** A handle a test reopened after a simulated relaunch, so `afterEach` can close it. */

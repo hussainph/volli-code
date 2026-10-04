@@ -31,19 +31,17 @@ import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-conc
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
 import { PtyManager } from "@volli/host-core/pty/manager";
-import { ensureProjectArtifactsDir } from "../volli-fs";
 import { worktreeDeps } from "../worktree-host";
 
 /**
  * What the terminal supervisor asks of desktop (VC-560): the window event bus,
- * and the worktree bundle and filesystem writers desktop composed inline
+ * the worktree bundle and the harness-file writer desktop composed inline
  * before the supervisor moved into host-core.
  */
 export function desktopPtyHost(): PtyHost {
   return {
     events: windowEventBus,
     worktreeDeps,
-    ensureProjectArtifactsDir,
     ensureHarnessWorkspaceFiles,
   };
 }

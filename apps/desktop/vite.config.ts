@@ -618,10 +618,6 @@ export default defineConfig(({ mode }) => ({
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",
-        "**/src/main/blob-attach.ts",
-        "**/src/main/blob-collect.ts",
-        "**/src/main/blob-protocol.ts",
-        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
@@ -670,7 +666,6 @@ export default defineConfig(({ mode }) => ({
         // when wrong — one duplicates a project, the other strands checkouts
         // that no cleanup surface will ever list again.
         "**/packages/host-core/src/project-relink.ts",
-        "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
@@ -679,7 +674,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
-        "**/src/main/session-runtime/boot-recovery.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
@@ -690,7 +684,6 @@ export default defineConfig(({ mode }) => ({
         "**/packages/host-core/src/db/export.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
-        "**/src/main/session-runtime/sessions.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

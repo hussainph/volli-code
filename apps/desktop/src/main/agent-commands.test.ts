@@ -23,7 +23,7 @@ import type { UIMessage } from "ai";
 import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
 import type { NotificationOutcome, NotificationRequest } from "./notifications/dispatch";
 
-import { importBlob } from "./blob-import";
+import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
 import { listComments } from "@volli/host-core/db/comments-repo";
@@ -60,9 +60,9 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
-import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
+import { writeModelAccessDefault } from "@volli/host-core/session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
 import {
   getWorktreeSnapshots,

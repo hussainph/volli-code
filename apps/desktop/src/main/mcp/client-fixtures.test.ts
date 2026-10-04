@@ -11,12 +11,12 @@ import {
   MCP_HTTP_MESSAGE_MAX_BYTES,
   MCP_STDIO_BUFFER_MAX_BYTES,
   openMcpProtocolClient,
-} from "./client";
-import { MemoryMcpCredentialStore } from "./credential-store";
-import { McpCredentialRejectedError, McpProtocolEraError } from "./credentials";
-import { McpSessionHost } from "./session-host";
+} from "@volli/host-core/mcp/client";
+import { MemoryMcpCredentialStore } from "@volli/host-core/mcp/credential-store";
+import { McpCredentialRejectedError, McpProtocolEraError } from "@volli/host-core/mcp/credentials";
+import { McpSessionHost } from "@volli/host-core/mcp/session-host";
 import { startFixtureMcpServer } from "../../../e2e/bench/mcp-parallel/http-fixture";
-import type { McpProtocolClient } from "./discovery";
+import type { McpProtocolClient } from "@volli/host-core/mcp/discovery";
 
 const opened: McpProtocolClient[] = [];
 const closing: Array<() => Promise<void>> = [];
@@ -30,7 +30,12 @@ describe("real MCP transport fixtures", () => {
   it.each(["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"])(
     "still discovers and calls a legacy-only %s stdio server",
     async (revision) => {
-      const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+      const fixture = fileURLToPath(
+        new URL(
+          "../../../../../packages/host-core/src/mcp/fixtures/protocol-era-server.mjs",
+          import.meta.url,
+        ),
+      );
       const client = await openMcpProtocolClient(
         {
           id: "legacy-fixture",
@@ -61,7 +66,12 @@ describe("real MCP transport fixtures", () => {
   // server stack — so these also pin that pi-mcp's 2025-11-25 handshake is
   // accepted by a dual-era server (VC-470).
   it("discovers and calls a v2 server over stdio, then closes the child transport", async () => {
-    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL(
+        "../../../../../packages/host-core/src/mcp/fixtures/stdio-server.mjs",
+        import.meta.url,
+      ),
+    );
     const client = await openMcpProtocolClient(
       {
         id: "stdio-fixture",
@@ -104,7 +114,12 @@ describe("real MCP transport fixtures", () => {
   });
 
   it("carries a result over a megabyte through the real stdio transport and session host (VC-469)", async () => {
-    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL(
+        "../../../../../packages/host-core/src/mcp/fixtures/stdio-server.mjs",
+        import.meta.url,
+      ),
+    );
     const server = {
       id: "stdio-fixture",
       name: "stdio fixture",
@@ -259,7 +274,12 @@ async function answering(status: number, body: string) {
 
 describe("refusals the client names (VC-470, structural since VC-479)", () => {
   it("names a structured modern-only stdio refusal without inspecting its prose", async () => {
-    const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL(
+        "../../../../../packages/host-core/src/mcp/fixtures/protocol-era-server.mjs",
+        import.meta.url,
+      ),
+    );
     await expect(
       openMcpProtocolClient(
         {
@@ -275,7 +295,12 @@ describe("refusals the client names (VC-470, structural since VC-479)", () => {
   });
 
   it("does not infer an era from a stdio method error even when its data names the modern revision", async () => {
-    const fixture = fileURLToPath(new URL("./fixtures/protocol-era-server.mjs", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL(
+        "../../../../../packages/host-core/src/mcp/fixtures/protocol-era-server.mjs",
+        import.meta.url,
+      ),
+    );
     await expect(
       openMcpProtocolClient(
         {
@@ -434,7 +459,12 @@ describe("refusals the client names (VC-470, structural since VC-479)", () => {
 describe("message size bounds (VC-469's 8 MiB outer bound, on pi-mcp)", () => {
   it("accepts one stdio message of about 1.1 MB, past VC-8's old 1 MiB limit", async () => {
     expect(MCP_STDIO_BUFFER_MAX_BYTES).toBeGreaterThanOrEqual(8 * 1_024 * 1_024);
-    const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL(
+        "../../../../../packages/host-core/src/mcp/fixtures/stdio-server.mjs",
+        import.meta.url,
+      ),
+    );
     const client = await openMcpProtocolClient(
       {
         id: "large",

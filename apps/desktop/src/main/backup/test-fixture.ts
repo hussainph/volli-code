@@ -25,7 +25,7 @@ import type Database from "better-sqlite3";
 import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
 import { migrate } from "@volli/host-core/db/migrations";
 import { openRawDb } from "@volli/host-core/db/test-helpers";
-import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
+import { sessionTranscriptsRoot } from "@volli/host-core/session-runtime/transcript-artifacts";
 
 export const FIXTURE_NATIVE_RECEIPT_EVENT_ID =
   "native-event:terminal:session-root:attach-1:terminal:receipt:command-1:completed";

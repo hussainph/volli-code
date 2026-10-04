@@ -8,7 +8,7 @@
  * and explicit close vs a disconnect's close-or-detach policy.
  */
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -114,9 +114,6 @@ beforeEach(async () => {
   const host: PtyHost = {
     events,
     worktreeDeps: (db) => worktreeDeps(db, { events }, { dataDir }),
-    ensureProjectArtifactsDir: async (projectPath) => {
-      await mkdir(join(projectPath, ".volli", "artifacts"), { recursive: true });
-    },
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
   };
   manager = new PtyManager(

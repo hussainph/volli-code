@@ -37,6 +37,7 @@ import { createProcessInspector, parkConfigFromEnv } from "./park";
 import type { SessionConcurrencyEnvReader } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { isPathWithinRoots } from "../project-roots";
+import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
   acquireWorktreeStartLease,
   createSetupRun,
@@ -214,17 +215,15 @@ export interface HarnessWorkspaceFilesInput {
 /**
  * What the terminal supervisor asks of the host it runs in (VC-560). Desktop
  * passes `desktopPtyHost()` (`apps/desktop/src/main/pty/ipc.ts`): the window
- * event bus, `worktree-host.ts`, and the two filesystem writers whose modules
- * have not moved into host-core yet. A headless host passes its own bus,
- * `host.worktrees.deps`, and the same writers once they move.
+ * event bus, `worktree-host.ts`, and the harness-file writer, whose module
+ * (`harness-workspace.ts`) has not moved into host-core yet. A headless host
+ * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
  */
 export interface PtyHost {
   /** Announces planning changes (`data-changed`) to every client. */
   readonly events: HostEventBus;
   /** The host's worktree bundle (`host.worktrees.deps`). */
   worktreeDeps(db: Database.Database): WorktreeDeps;
-  /** Creates `<project>/.volli/artifacts`, so an agent can write there from its first prompt. */
-  ensureProjectArtifactsDir(projectPath: string): Promise<void>;
   /** Writes a worktree's per-harness hook files, reporting each one it refused. */
   ensureHarnessWorkspaceFiles(
     input: HarnessWorkspaceFilesInput,
@@ -708,7 +707,7 @@ export class PtyManager {
             error: `Project folder no longer exists at ${scope.artifactsRoot}`,
           };
         }
-        await this.host.ensureProjectArtifactsDir(scope.artifactsRoot);
+        await ensureProjectArtifactsDir(scope.artifactsRoot);
       }
       const { file, args } = resolveShell(process.env);
       const now = Date.now();

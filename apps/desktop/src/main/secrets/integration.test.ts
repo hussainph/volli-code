@@ -14,7 +14,7 @@ import {
 } from "@volli/shared";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import { secretFixtureProvider } from "../../../../../packages/agent-runtime/src/pi/fixtures/secret-provider";
-import { createPiRuntimeHost } from "../session-runtime/pi-adapter";
+import { createPiRuntimeHost } from "@volli/host-core/session-runtime/pi-adapter";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
 import { insertProject } from "@volli/host-core/db/projects-repo";

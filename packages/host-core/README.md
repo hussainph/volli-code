@@ -59,6 +59,16 @@ VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
+VC-557 adds the file services under `src/`, mirroring their former desktop
+paths: `volli-fs.ts`, `file-search.ts`, `blob-{attach,collect,import,protocol}.ts`,
+`turn-attachments.ts`, `prompt-templates.ts` and `skills.ts`. Their named subpath
+exports are `@volli/host-core/<file>`. `createHostCore` composes `fileServices`
+(the watch managers and client/trash adapters). The desktop IPC door is
+`main/volli-fs-ipc.ts`; protocol registration, native external-app launch and
+pickers also remain desktop-owned. The file-boundary tests run here against
+real directories and symlinks; desktop IPC integration tests stay with the door.
+Protected blob/template coverage moves with its tests at the same 100% gates.
+`blob-store.ts` and `blob-materialize.ts` belong to VC-556, not this move.
 VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
 `@volli/host-core/worktree/*`), `worktree-runtime`, `project-base-branch`,
 `project-relink`, `project-roots`, `blob-store`, `blob-materialize`,
@@ -74,12 +84,41 @@ VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
 through is `src/ports/secret-key.ts`.
 
+VC-555 completes `src/session-runtime/` (`@volli/host-core/session-runtime`
+and `/*`), and moves the agent runtime wiring, agent tools, Session environment
+and tokens, Pi sidecar/tool-output cleanup, harness installation and login-shell
+PATH helpers. `src/mcp/`, `src/codemode/`, `src/web/`, `src/decision/` and the
+model sign-in service are exported as `@volli/host-core/<cluster>/*`;
+`verb-input` is exported directly. IPC adapters and their integration tests,
+Web Access's legacy `safeStorage` migration, and Pi tests that compose desktop
+secret services stay in desktop.
+
+`host.runtimeServices` holds staged constructors for model access, decisions,
+MCP, Web Access and model sign-in. Desktop invokes them in its original boot
+order, so legacy web keys migrate before any store reads them, and sign-in
+keeps the same Pi collection as the runtime. Session locations take `events`
+and `dataDir`, using that same event bus and user-data directory for worktree
+materialization and publication; they never import desktop's broadcast adapter.
+The retained
+`createDesktop*` names are compatibility names, not Electron dependencies.
+
+Code Mode's worker and `quickjs.wasm` paths still come from the host's injected
+app/resources directories, never the moved module's directory. Desktop keeps
+its packaging dependencies and `asarUnpack` entries. The moved sandbox test
+copies the real packages into the flat unpacked layout and runs a program;
+CI also checks both files in the unsigned packaged app before core e2e.
+
+MCP credentials retain their standalone mode-0600 `mcp-credentials.json` file
+and format. They do not use `SecretStore`; changing that storage would not be a
+pure move. Pi's secret-wait publisher type is exported by `secrets`, and its
+turn-attachment type lives in `session-runtime/turn-attachments`.
+
 VC-560 adds `src/pty/` (`@volli/host-core/pty/*`): the terminal supervisor
 (`manager.ts`, `PtyManager`), its output pipeline, warm park (`park.ts`,
 `park-controller.ts`), launch scope, launch line and offered-command run. The
 Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
-constructs the supervisor; see [Terminals](#terminals). `launch.test.ts` stays
-in desktop for its blob importer; `park.ts` moves into this gate with its test.
+constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
+this gate with its test.
 
 ## Ports
 
@@ -93,6 +132,7 @@ Electron adapter does exactly what desktop did before the port existed.
 | `attention`                                        | Raise an alert with a person (`deliver`), and which Sessions a focused client shows               | `notifications/runtime.ts`: native notification, preferences, focused-target suppression           | `HEADLESS_ATTENTION`: every alert `unsupported`, nothing focused                    |
 | `power: PowerPort`                                 | Sleep and wake (`suspend`, `resume`, `unlock-screen`, `user-did-become-active`)                   | Electron's `powerMonitor` itself                                                                   | `NO_POWER_EVENTS`                                                                   |
 | `connectivity`                                     | The network, for retry policy. This is `ConnectivityPort` from `@volli/agent-runtime`, not a copy | `createConnectivityPort({ net, powerMonitor })`                                                    | `ALWAYS_ONLINE` from `@volli/agent-runtime`                                         |
+| `trash?`                                           | Move a host file to recoverable Trash (`TrashPort`)                                               | `(path) => shell.trashItem(path)`, unchanged                                                       | Nothing. Requests reject with `TrashUnavailableError`; never permanent deletion     |
 | `client?`                                          | Open a link, reveal a file, the clipboard, menus (`ClientCapabilityPort`)                         | `createElectronClientCapabilities()` (`main/client-capabilities.ts`): `shell`, `clipboard`, `Menu` | Nothing. `host.client` refuses each request with `ClientCapabilityUnavailableError` |
 | `log`                                              | Errors and warnings                                                                               | `console`                                                                                          | Its logger                                                                          |
 | `listOpenNativeBindings`, `observeScheduledResume` | The live runtime's bindings and the scheduled-resume host, bound after the runtime exists         | Late-bound closures in `index.ts`                                                                  | Its runtime's                                                                       |
@@ -108,7 +148,9 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   compile until you do. Desktop code that has not moved yet keeps calling the
   `broadcastX` functions, which publish through the same bus.
 - **One client's stream** (a watched worktree, terminal output, a file
-  watch) is not a broadcast. `HostClientEventSink` (VC-556) uses the same topic
+  watch) is not a broadcast. `HostClientEventTopic` is excluded from
+  `HostBroadcastEventTopic`, so the broadcast adapter cannot carry a
+  subscription event by accident. `HostClientEventSink` (VC-556) uses the same topic
   map as the bus, with a stable connection-scoped `id`, `publish`, `isClosed`,
   `onceClosed` and `removeCloseListener`. Desktop's `clientEventSink` adapts
   exactly the requesting WebContents: its channels and `destroyed` hooks are
@@ -126,6 +168,12 @@ never reaches for `BrowserWindow`, `powerMonitor` or `shell`.
   message a person can read ("Opening a link needs the Volli desktop app, and
   this host is running without one."). Let it reach the caller as a refusal;
   `isClientCapabilityUnavailable` tells it apart from a real failure.
+
+Trash is a **host-side filesystem operation**, not a client capability. A moved
+service asks through `trashCapabilities(ports.trash)`. With no adapter, it rejects
+with `TrashUnavailableError` (`code: "trash-unavailable"`), stating that nothing
+was deleted. There is no unlink/rm fallback. Desktop's adapter calls the same
+`shell.trashItem` as before.
 
 Window-only work stays in desktop and never becomes a port: the OS
 appearance broadcast, the updater state, notification Settings pushes,
@@ -250,7 +298,7 @@ restore, and where Pi's `auth.json` lives for `hostd` are in
 
 `PtyManager` (`src/pty/manager.ts`) supervises every live PTY. It is built by
 the host with a `PtyHost` (the event bus, the worktree bundle, and the
-artifacts-dir and harness-file writers whose modules are still desktop's) plus
+harness-file writer whose module is still desktop's) plus
 the runtime pieces the host composes: the agent runtime environment, spawn
 ledger and concurrency reader. Desktop builds it in `registerTerminalIpcHandlers`
 with `desktopPtyHost()`; `hostd` will build it with its own. A degraded

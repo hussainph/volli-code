@@ -41,7 +41,7 @@ what it prints or returns reaches the model.
 | The tool: check, schedule, dispatch, shape, replay, taint | `packages/agent-runtime/src/codemode/` |
 | Declared tool array from the routes | `packages/agent-runtime/src/pi/tools.ts` (`createSessionTools`) |
 | One gate, one activity path | `packages/agent-runtime/src/pi/runtime.ts` (`sessionGate`, `observeToolActivity`) |
-| Developer opt-in, stamping at birth, rebind on attach | `apps/desktop/src/main/codemode/dev-config.ts`, `index.ts`, `session-runtime/pi-adapter.ts` |
+| Developer opt-in, stamping at birth, rebind on attach | `packages/host-core/src/codemode/dev-config.ts`, `index.ts`, `session-runtime/pi-adapter.ts` |
 | Benchmark | `packages/agent-runtime/bench/codemode/` |
 
 The sandbox is Pi's `@earendil-works/pi-codemode`: a fresh worker thread and a
@@ -288,7 +288,7 @@ Tests are in `packages/agent-runtime/src/codemode/*.test.ts` (unit, over
 stand-in tools), `runtime-codemode.test.ts` (the real Session path: real
 `createPiAgentRuntime`, real gate, real `bash`/`read`/`write` against a temporary
 worktree, only the provider scripted), `packages/shared/src/code-mode.test.ts`
-and the codec suite, and `apps/desktop/src/main/codemode/dev-config.test.ts`.
+and the codec suite, and `packages/host-core/src/codemode/dev-config.test.ts`.
 
 | rule | mechanism | proved by |
 | --- | --- | --- |
@@ -645,7 +645,7 @@ Phase 1's five changes, plus the owner's additions, in the order they matter.
    1,700-token base Board ceiling, which does not carry it.
 7. **Packaged.** pi-codemode's worker and `quickjs.wasm` ship unpacked from the
    asar (`electron-builder.yml`), located by `codeModeSandboxAssets` in
-   `apps/desktop/src/main/codemode/sandbox-assets.ts`; `verify-packed-requires`
+   `packages/host-core/src/codemode/sandbox-assets.ts`; `verify-packed-requires`
    now fails a chunk that `require()`s a package main reaches only by path.
    About 1.6 MB.
 8. **Docs.** `apps/docs/src/content/docs/guides/code-mode.mdx` (what it is, what

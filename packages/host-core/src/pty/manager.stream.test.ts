@@ -90,7 +90,6 @@ beforeEach(async () => {
     worktreeDeps: () => {
       throw new Error("a Board Session never asks for a worktree");
     },
-    ensureProjectArtifactsDir: async () => {},
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
   };
   manager = new PtyManager(

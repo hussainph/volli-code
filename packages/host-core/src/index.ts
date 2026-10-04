@@ -22,6 +22,9 @@ import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime"
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
+import type { TrashPort } from "./ports/trash";
+import { createHostFileServices, type HostFileServices } from "./file-services";
+import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
@@ -69,6 +72,8 @@ export interface HostCorePorts extends HostSessionPorts {
    * refused with a `ClientCapabilityUnavailableError`.
    */
   client?: ClientCapabilityPort;
+  /** Host-side recoverable deletion; absent on headless hosts, which refuse. */
+  trash?: TrashPort;
 }
 
 /** How this host behaves. No defaults for policy: every host states it. */
@@ -98,8 +103,11 @@ export interface HostCore extends HostSessionServices {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
+  /** Staged construction, called in the host's existing boot order. */
+  readonly runtimeServices: HostRuntimeServices;
   /** The client's capabilities, or one that refuses each readably when there is none. */
   readonly client: ClientCapabilityPort;
+  readonly fileServices: HostFileServices;
   /**
    * Why the database did not open, typed for routing (VC-602): `null` when it
    * opened. `database.error` is the sentence every degraded surface answers
@@ -146,13 +154,22 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     databaseFailure = classifyDbOpenFailure(error);
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
+  const client = clientCapabilities(ports.client);
+  const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
   return {
     worktrees: createWorktreeRuntime(ports, options),
     dataDir: options.dataDir,
     dbPath,
     database,
-    client: clientCapabilities(ports.client),
+    client,
+    fileServices: createHostFileServices(ports),
     databaseFailure,
-    ...createHostSessionServices(database.ok ? database.db : null, ports),
+    ...sessionServices,
+    runtimeServices: createHostRuntimeServices(
+      database.ok ? database.db : null,
+      sessionServices.sessionEngine,
+      { client },
+      { dbPath },
+    ),
   };
 }

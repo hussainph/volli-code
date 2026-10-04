@@ -1,0 +1,1801 @@
+/**
+ * The Pi-backed Agent Runtime wearing the Session Engine's native-adapter face.
+ *
+ * This is a desktop-private facade, not a second executor port. `@volli/agent-runtime`
+ * already speaks product vocabulary; what it does not speak is the durable
+ * Session's own seam — attachments, delivery receipts, commands — so everything
+ * here is translation and nothing here is policy. There is one manifest id and
+ * one profile because there is one executor: no registry, no catalog, no profile
+ * spread to grow into.
+ *
+ * Observations are the exception, and they cross untranslated: `RuntimeObservation`
+ * is the only observation vocabulary, and turning one into a Session fact is
+ * `@volli/session-engine`'s job, because a durable id and a transcript address
+ * are decisions about history rather than about Pi. What this file still owes
+ * that path is the two suppressions in {@link PiBinding.#observe}, which are
+ * facts about the binding's own lifecycle that no other layer can see.
+ *
+ * Two things the two contracts genuinely disagree about, and how they join:
+ *
+ * 1. **Identity.** `NativeAttachmentSpec` carries a Session and a directory,
+ *    and the runtime needs a Role, a project, possibly a Ticket, a root Thread
+ *    and a Runtime Brief. None of those are derivable from a directory, and
+ *    reading SQLite here would drag Electron-adjacent state into a module the
+ *    tests run in plain Node — so identity arrives through
+ *    {@link PiAdapterOptions.resolveRuntimeContext}, which main implements over
+ *    the same composition the `volli ticket brief` CLI verb uses. A ticketless
+ *    Session is a Role, not a missing Ticket: it resolves a project Brief and
+ *    attaches. What still fails the attach is a Session with no recorded model
+ *    or no Brief to give, rather than starting an agent that would be told
+ *    nothing about why it exists.
+ *
+ * 2. **Interrupt.** Aborting the runtime signal is how an attachment *ends* —
+ *    Pi's abort listener latches the attachment cancelled and every later
+ *    submit is rejected as closed. An interrupted turn is not an ended Session,
+ *    and the Session Engine keeps the binding live across one, so
+ *    `executor.interrupt` goes to the handle's own `interrupt()` and the
+ *    AbortController stays what `release` pulls.
+ *
+ * 3. **Asking.** The runtime blocks a tool call on a person and waits with no
+ *    timeout of its own; the Session seam carries commands one way and receipts
+ *    the other, and has no verb that means "wait here until somebody answers".
+ *    The join is a parked promise. {@link PiBinding.#ask} announces the question
+ *    as an `interaction` observation, keeps its resolvers in a map, and returns
+ *    a promise that {@link PiBinding.dispatch} settles when the answering
+ *    command comes back the other way. The interaction id is the whole of what
+ *    the two halves share — the runtime names a tool call and a Session command
+ *    names an interaction — which is why {@link budgetAskInteractionId} derives one
+ *    from the other and why that derivation is frozen. What is deliberately
+ *    absent is durability: the question, the answer and the withdrawal are all
+ *    Session facts, and this file emits observations for the Engine to write
+ *    rather than writing any of them itself.
+ *
+ *    Two kinds of question take that path, parked in two maps under two frozen
+ *    prefixes. A budget extension or host confirmation is read back through
+ *    `askChoice` as a decision; the
+ *    model's own question ({@link PiBinding.#askUser}) carries the model's
+ *    options and hands the answer back untouched, because reading it would mean
+ *    deciding what one of the model's own ids meant. One prefix serving both
+ *    would let either answer end the other's wait.
+ */
+
+import { createPiAgentRuntime, type PiRuntimeHostOptions } from "@volli/agent-runtime";
+import type {
+  BindingHandle,
+  DeliveryReceipt,
+  HarnessCommand,
+  NativeAttachmentSpec,
+  NativeHarnessAdapter,
+  NativeRuntimeIdentity,
+  ObservationSink,
+  Reconciliation,
+  ReleaseReason,
+} from "@volli/session-engine";
+import { NativeAttachmentError } from "@volli/session-engine";
+import {
+  askChoice,
+  askOffer,
+  askUserInteractionId,
+  budgetAskInteractionId,
+  confirmAskInteractionId,
+  credentialAskInteractionId,
+  isBudgetCause,
+  isConfirmCause,
+  isCredentialConfirmCause,
+  DEFAULT_INTERACTION_PROMPT_ID,
+  errorMessage,
+  isMcpToolId,
+  readSkillResources,
+  sessionToolIds,
+  verbToolsOf,
+  type AgentRuntime,
+  type CommandRefusalSeverity,
+  type CompactionRequestOutcome,
+  type DeliveryOutcome,
+  type CodeModeSurface,
+  type McpToolDefinition,
+  type ModelSelection,
+  type ModelSelectionOutcome,
+  type PromptResource,
+  type RuntimeAskChoice,
+  type RuntimeAskRequest,
+  type RuntimeAskUserRequest,
+  type RuntimeAttachmentHandle,
+  type RuntimeBrowserPort,
+  type RuntimeMcpCall,
+  type RuntimeMcpCallResult,
+  type RuntimeClassifyPort,
+  type RuntimeCallScope,
+  type RuntimeObservation,
+  type RuntimeShellPort,
+  type RuntimeContextCarry,
+  type RuntimeRecoveryRef,
+  type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
+  type RuntimeVerbResult,
+  type RuntimeWorkspaceEnvironment,
+  type SessionInteractionOption,
+  type SessionInteractionResolution,
+  type SessionToolId,
+  type SessionNativeDetail,
+  type SessionNativeReference,
+  type SessionRuntimeSpec,
+  type UIMessageLike,
+} from "@volli/shared";
+import type { SecretWaitPublisher } from "../secrets/wait-publisher";
+
+type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
+  withdraw?(interactionId: string): Promise<void>;
+  cancelPending?(): Promise<void>;
+  dispose?(): Promise<void>;
+};
+import type { UIMessage } from "ai";
+import type { SessionWebPorts } from "../web/ports";
+import { readWorkspaceEnvironment } from "../session-env";
+import type { TurnAttachments } from "../turn-attachments";
+import { STRUCTURED_ADAPTER_ID } from "./sessions";
+
+/**
+ * The one adapter id. Pi is the structured product's single target executor.
+ *
+ * Aliased rather than re-declared, and the boot sweep is why. It retires every
+ * local open attachment whose `adapterId` is not
+ * {@link STRUCTURED_ADAPTER_ID} — so two literals that merely happen to read
+ * the same would, the day one is renamed, durably close every live Pi
+ * attachment in the database on the next launch. That predicate is
+ * fail-destructive, so the agreement is held by the compiler rather than by
+ * whoever edits second.
+ */
+export const PI_ADAPTER_ID = STRUCTURED_ADAPTER_ID;
+
+/**
+ * The namespace every durable id derived from Pi's observations is minted under.
+ *
+ * A frozen literal, not `PI_ADAPTER_ID`: the two happen to read the same and
+ * mean different things — one names the executor an attachment was opened by,
+ * the other prefixes ids already written into history. Tying them together would
+ * make renaming the adapter silently re-key every fact on disk.
+ */
+const PI_DURABLE_ID_NAMESPACE = "pi";
+
+/** Pi's npm home and pinned release; both are recorded in `packages/agent-runtime/UPSTREAM.md`. */
+const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
+const PI_RUNTIME_VERSION = "0.84.1";
+
+const PI_ADAPTER_VERSION = "0.0.1";
+
+/**
+ * Static, because there is nothing to interrogate: Pi is a library this process
+ * already holds, not a binary on a PATH that may be missing, stale or untrusted.
+ * These three strings are recorded in every attachment's durable binding
+ * envelope, so they must stay exactly what past builds wrote.
+ */
+const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
+  path: PI_RUNTIME_PACKAGE,
+  version: PI_RUNTIME_VERSION,
+  fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
+};
+
+/**
+ * The coding tools this slice loads. Exported for the `prompt.baseline`
+ * diagnostic, which uses the same coding tool list a real attach names.
+ */
+export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
+
+function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
+  return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
+}
+
+/** Everything about a Session that a directory cannot tell the runtime. */
+interface PiRuntimeContextFields {
+  projectId: string;
+  /**
+   * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
+   *
+   * Pi writes this into its recovery sidecar and **throws** on recovery when
+   * what it finds there does not match what it was handed. The Session Engine
+   * files this Session's transcript under the same string, so a second
+   * derivation would not quietly disagree about an address — it would fail
+   * every existing Session's attach.
+   */
+  rootThreadId: string;
+  /** The generated Runtime Brief; the runtime prepends it to the first user message. */
+  brief: string;
+  /** Durable product policy selected before this attachment starts. */
+  model: ModelSelection;
+  /**
+   * Names and order frozen at Session start. No ports or credentials: this is
+   * the durable Cache Prefix shape, which an attachment must rebind honestly.
+   */
+  toolSurface: readonly SessionToolId[];
+  /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
+  mcpManagementNames?: "server";
+  /** Sanitized MCP definitions frozen beside their dynamic names. */
+  mcpTools?: readonly McpToolDefinition[];
+  /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
+  codeMode?: CodeModeSurface;
+  /**
+   * The skills this Session was explicitly started with, read from its own
+   * durable `prompt-resources` record — never from disk at attach time, so a
+   * recovery re-attach composes the exact system prompt the first attach did.
+   * Empty for the ordinary Session, and empty stays empty: nothing is ever
+   * injected that the start did not name.
+   */
+  promptResources: readonly PromptResource[];
+}
+
+/**
+ * The Role a Session attaches under, resolved with the identity it implies.
+ *
+ * Mirrors the runtime's own identity union rather than carrying an optional
+ * Ticket: "ticketless" is what a Board Session *is*, and a resolver that
+ * returned a Ticket Session with a null Ticket would not typecheck here.
+ */
+export type PiRuntimeContext =
+  | (PiRuntimeContextFields & { role: "ticket"; ticketId: string })
+  | (PiRuntimeContextFields & { role: "project"; ticketId: null })
+  // A subagent's Ticket is its parent's, or none (VC-9); the parent is what
+  // the Role guarantees, exactly as the Ticket is for the Ticket Role.
+  | (PiRuntimeContextFields & {
+      role: "subagent";
+      ticketId: string | null;
+      parentSessionId: string;
+    });
+
+/**
+ * The runtime's Browser port plus the one lifecycle door the desktop adapter
+ * drives that the runtime never sees: a turn ending (VC-239). A hold on a
+ * Browser Tab lasts a turn, and the runtime observation is where the adapter
+ * learns a turn is over — so the adapter tells the port, here. Required, not
+ * optional: it is the one door that keeps a hold from outliving its turn, and
+ * a port built without it would keep holds silently.
+ */
+export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+
+/**
+ * The runtime's shell port with the one lifecycle door the adapter drives
+ * (VC-270): the attachment ending. Required rather than optional, for
+ * {@link DesktopBrowserPort}'s reason — it is what keeps a Session's shells
+ * from outliving it.
+ */
+export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+
+/** Main-owned MCP port with attachment cleanup for its clients/transports. */
+/**
+ * The attachment's MCP host. `call` takes the attachment's ask as an optional
+ * third argument (VC-470): a call blocked on a sign-in or a credential puts
+ * the question to the person driving through the same parked-question
+ * machinery a verb's confirmation uses.
+ */
+export type DesktopMcpPort = {
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
+  ): Promise<RuntimeMcpCallResult>;
+  dispose: () => Promise<void> | void;
+};
+
+/**
+ * A Session frozen before the hold tools existed (VC-239) keeps its six: its
+ * port is handed over without `acquire`/`release`, so `sessionToolBindings`
+ * offers the six it recorded and the provider sees the array it was promised.
+ * The six writes still take the hold, because the port does that for every
+ * writer, hold tools or not.
+ */
+function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
+  // A shallow copy is safe here, unlike in `browserHoldPort`, because the
+  // desktop's port is an object literal of closures (`createAgentBrowserPort`)
+  // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
+  // turn ends, so the copy the runtime gets shares every hold with it.
+  const { acquire: _acquire, release: _release, ...withoutPair } = port;
+  return withoutPair;
+}
+
+/** The port without `find`, for a surface frozen before `browser_find` (VC-364). */
+function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
+  // Safe as a shallow copy for `withoutHoldPair`'s reasons.
+  const { find: _find, ...withoutSearch } = port;
+  return withoutSearch;
+}
+
+/** The port a frozen surface binds: exactly the optional tools it recorded. */
+function browserForSurface(
+  port: DesktopBrowserPort,
+  surface: { holdPair: boolean; find: boolean },
+): DesktopBrowserPort {
+  const held = surface.holdPair ? port : withoutHoldPair(port);
+  return surface.find ? held : withoutFind(held);
+}
+
+export interface PiAdapterOptions {
+  /**
+   * Directory that owns every attachment's Pi recovery sidecar. Main resolves
+   * it from Electron's `userData`; this module stays Electron-free so its tests
+   * run in plain Node.
+   */
+  sessionDataDir: string;
+  /** Resolves durable Session identity to the Role it runs under; `null` when it cannot. */
+  resolveRuntimeContext: (sessionId: string) => Promise<PiRuntimeContext | null>;
+  /** Injectable Pi model collection, for deterministic tests and host-owned credentials. */
+  models?: PiRuntimeHostOptions["models"];
+  /**
+   * The credential store behind {@link PiAdapterOptions.models}. Main passes the
+   * pair so Model Access can tell a provider configured from a stored
+   * credential apart from one reading an ambient environment variable — the
+   * question that decides whether signing out has anything to remove.
+   */
+  credentials?: PiRuntimeHostOptions["credentials"];
+  /** Completion of the injected collection's persisted catalog restore. */
+  catalogReady?: PiRuntimeHostOptions["catalogReady"];
+  /** Credential-independent public catalogs attached to the collection. */
+  catalogs?: PiRuntimeHostOptions["catalogs"];
+  /**
+   * Injectable execution environment factory. Defaults to Pi's own
+   * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
+   * onto a Session's `PATH`, so `volli` resolves inside a structured turn's
+   * shell tool whether or not the background install's `~/.local/bin/volli`
+   * link is reachable yet.
+   */
+  executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The machine's network and sleep, over Electron's `net` and `powerMonitor`
+   * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
+   * instead of spending its retry budget on it (VC-443). Absent, the runtime
+   * treats the host as always online.
+   */
+  connectivity?: PiRuntimeHostOptions["connectivity"];
+  /**
+   * The web ports this profile can honestly bind now, resolved once per
+   * attachment. Membership comes from the Session's durable tool surface, not
+   * from this answer: extra ports are ignored and a missing required port
+   * rejects reattachment instead of changing the provider tool array.
+   *
+   * Optional, and its absence means a Session is offered no web tool — the same
+   * thing an answer of `{}` means, because a profile that configured no
+   * provider and a build that wired no resolver are the same situation from the
+   * model's side. Main implements it over the settings owner, which is the only
+   * thing in the app that reads the stored credential.
+   *
+   * Called at attach, not per turn. Credential values stay inside the returned
+   * closures and are never captured in durable Session data.
+   *
+   * It must not throw. This runs on the attach path, so a failure to work out
+   * what web access amounts to would cost the Session its attachment rather
+   * than its web tools — a missing credential is a Session with no web, which
+   * is what `WebAccessSettings.resolve` answers instead of raising.
+   */
+  resolveWebPorts?: () => SessionWebPorts;
+  /**
+   * The desktop's Browser capability for one Session, scoped before the model
+   * ever speaks: the adapter states the Session's own project and Ticket from
+   * its resolved context, and the port that comes back answers only within
+   * them. Optional on `resolveWebPorts`'s terms — absent means a Session is
+   * offered no browser tool — and called once per attachment, not per turn.
+   *
+   * Unlike the web resolver this one takes an argument, because scope is the
+   * capability here: the same host answers every Session, and which tabs a
+   * port may see is decided by who is asking — a fact only the adapter's
+   * context can state honestly.
+   */
+  resolveBrowserPort?: (scope: {
+    projectId: string;
+    ticketId: string | null;
+    /**
+     * Who the port serves: the Session and this attachment. A hold on a
+     * Browser Tab is taken in this name and judged against it (VC-239), and
+     * the same `sessionId` is the owner every tab the port opens is stamped
+     * with (VC-238). The model never gets to say either.
+     */
+    sessionId: string;
+    attachmentId: string;
+  }) => DesktopBrowserPort;
+  /**
+   * The desktop's background shell capability for one Session (VC-270),
+   * scoped on {@link resolveBrowserPort}'s terms and resolved once per
+   * attachment. Absent means a Session is offered no shell tool. The port's
+   * `dispose` is required here, because it is the door that kills every
+   * shell the Session started when the attachment ends — a port without it
+   * would leak processes past their Session.
+   *
+   * `workspacePath` rides with the scope because the port decides where a
+   * shell may run: the directory the Session Engine prepared, and nothing
+   * outside it.
+   */
+  resolveShellPort?: (scope: {
+    projectId: string;
+    ticketId: string | null;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+  }) => DesktopShellPort;
+  /**
+   * The Session's decision port (VC-478), bound to the Session and its project
+   * by the host. Absent means a Session whose frozen surface names `classify`
+   * cannot attach — the record promised a tool this launch cannot answer.
+   */
+  resolveClassifyPort?: (scope: { sessionId: string; projectId: string }) => RuntimeClassifyPort;
+  resolveSecretPort?: (scope: {
+    sessionId: string;
+    projectId: string;
+    /** Output filtering is universal; requesting/injection stays frozen membership. */
+    allowInjection: boolean;
+    wait: SecretWaitPublisher;
+  }) => DesktopSecretPort;
+  /**
+   * Main-process MCP host for this attachment's exact frozen definitions.
+   * Membership stays in Session history; this resolver owns only clients,
+   * transports, calls, and cleanup.
+   */
+  resolveMcpPort?: (scope: {
+    projectId: string;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+    mcpTools: readonly McpToolDefinition[];
+  }) => DesktopMcpPort;
+  /**
+   * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
+   * own process (VC-162).
+   *
+   * Unlike {@link resolveWebPorts}, this decides no membership. The Session's
+   * frozen record decides that, and this supplies the one closure every verb in
+   * it is answered through — which is why it is a single port rather than one
+   * per verb: main holds every verb's handler already, keyed by the registry's
+   * own binding id.
+   *
+   * Absent means a build with no verb handlers wired, which is every test that
+   * does not exercise one. A Session whose record names a verb then fails to
+   * attach rather than being handed a smaller array — the same rule the web
+   * ports follow, and for the same reason: an attachment that quietly sends a
+   * different tool array has thrown away the Session's Cache Prefix and lied
+   * about its own durable record.
+   *
+   * The caller is not a parameter. Main binds the calling Session's identity
+   * from the attachment this port belongs to, which is the whole difference
+   * between this door and the socket — there, a caller states who it is through
+   * an environment variable anything running as the user could set.
+   */
+  callVerb?: (
+    session: RuntimeSessionIdentity,
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+    /**
+     * The attachment's own parked-question machinery, lent to the verb's
+     * handler for the one question a verb may raise mid-call: a spent budget
+     * (VC-204). Bound here rather than resolved by the door so the question
+     * rides the same interaction ledger, withdrawal signal and answer path as
+     * every host permission this binding asks — and so a door reached any other way
+     * simply has no one to ask, which reads as the hard refusal it should.
+     */
+    budgetAsk: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
+  ) => Promise<RuntimeVerbResult>;
+  /**
+   * The compaction policy every Session is run under — the global automatic
+   * switch. Read per compaction rather than per attach: a Session outlives
+   * the settings change that retunes it.
+   */
+  compactionPolicy?: PiRuntimeHostOptions["compactionPolicy"];
+  /**
+   * Where the runtime's metadata-only observability events go (VC-119).
+   *
+   * Passed straight through, and absent means the runtime's own default: the
+   * no-op sink, which is what every caller that has never heard of telemetry
+   * gets. Main supplies the owner of the opt-in Settings switch, which is a
+   * stable reference for the life of the process — turning export on or off
+   * swaps what is behind it rather than replacing this, so a Session started
+   * before the switch was flipped is still observed after it.
+   *
+   * This module never constructs one. An exporter is Electron-main's to own,
+   * and building one here would put OpenTelemetry into the plain-Node graph
+   * these tests run in.
+   */
+  observability?: PiRuntimeHostOptions["observability"];
+  /**
+   * The subscription usage read (VC-263): on, with its own holder and the
+   * platform fetch, unless a test injects a fetch that never reaches the
+   * network. Threaded as its own seam rather than defaulted inside the
+   * runtime so this file stays the one place main states what the runtime
+   * is allowed to touch.
+   */
+  usageLimits?: PiRuntimeHostOptions["usageLimits"];
+  /**
+   * Whether host-authored parallel-read marks frozen into a Session's MCP
+   * definitions may take effect (VC-454). Developer-only: main turns it on
+   * only in an unpackaged build given `VOLLI_DEV_MCP_PARALLEL`. Absent, the
+   * runtime's default holds and every Session dispatches sequentially.
+   */
+  parallelMcpReads?: PiRuntimeHostOptions["parallelMcpReads"];
+  /**
+   * Where Code Mode's sandbox worker and WebAssembly are when main runs
+   * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
+   */
+  codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
+  /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
+  createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
+  /**
+   * Materializes a turn's attachments and reads back what the model needs
+   * (VC-50). Injected, so this module keeps knowing nothing about the database
+   * or the Blob store; main supplies the real one. Absent means a Session whose
+   * messages carry no files, which is every message a test sends.
+   */
+  prepareTurnAttachments?: (
+    message: UIMessageLike,
+    owner: { sessionId: string; ticketId: string | null; workspacePath: string },
+  ) => Promise<TurnAttachments>;
+  /**
+   * Measures the workspace's package state for the prompt's environment layer
+   * (VC-156). Defaults to the real filesystem read; injected in tests, which
+   * have no checkout to measure.
+   *
+   * Called at attach, per attachment, because that is when the answer is true:
+   * a checkout's `node_modules` appears the moment somebody runs the install,
+   * and the agent this fact is for is the one most likely to have run it.
+   */
+  readWorkspaceEnvironment?: (workspacePath: string) => RuntimeWorkspaceEnvironment;
+  now?: () => number;
+}
+
+/** The rejection codes a caller can act on, per runtime rejection reason. */
+const REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "replace-unsupported": "PI_REPLACE_UNSUPPORTED",
+  "retry-unavailable": "PI_RETRY_UNAVAILABLE",
+} as const satisfies Record<Extract<DeliveryOutcome, { kind: "rejected" }>["reason"], string>;
+
+const MODEL_SELECTION_REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "model-unavailable": "PI_MODEL_UNAVAILABLE",
+  "reasoning-unsupported": "PI_REASONING_UNSUPPORTED",
+} as const satisfies Record<Extract<ModelSelectionOutcome, { kind: "rejected" }>["reason"], string>;
+
+/**
+ * Every way an explicit compaction does not happen, as a code the receipt
+ * carries. Two of them are not failures at all — a context with nothing left
+ * to summarize, and a summary the provider would not produce — and they are
+ * refusals here for the reason `CompactionRequestOutcome` gives: a person
+ * asked, so every answer has to be one.
+ */
+const COMPACTION_REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "nothing-to-compact": "PI_NOTHING_TO_COMPACT",
+  "summary-failed": "PI_COMPACTION_FAILED",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  string
+>;
+
+/**
+ * Which of those four a person's own `/compact` is owed an apology for, and
+ * which two it merely ran into (VC-141).
+ *
+ * Decided here because this is where the runtime's reason is still readable.
+ * A client given only `PI_BUSY` could not tell a live turn from a compaction
+ * already running, and the runtime writes a different sentence for each; a
+ * client given the severity renders whichever sentence arrived and never has
+ * to know either code.
+ *
+ * `busy-unsupported` and `nothing-to-compact` are benign: the context was not
+ * free, or there was nothing left to summarize. Neither is a failure of the
+ * Session's plumbing, and CLAUDE.md draws exactly that line — "Errors are for
+ * operations that failed, not for outcomes the user chose." `closed` and
+ * `summary-failed` are failures: an attachment that has gone away, and a
+ * provider that would not produce the summary.
+ */
+const COMPACTION_REFUSAL_SEVERITY = {
+  "busy-unsupported": "benign",
+  closed: "failure",
+  "nothing-to-compact": "benign",
+  "summary-failed": "failure",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  CommandRefusalSeverity
+>;
+
+function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
+  if (spec.continuity !== "native_resume") return undefined;
+  const detail = spec.native?.detail;
+  if (
+    spec.native === null ||
+    detail === null ||
+    Array.isArray(detail) ||
+    typeof detail !== "object"
+  ) {
+    throw new Error("Pi recovery metadata is missing or invalid.");
+  }
+  const record = detail as { readonly [key: string]: SessionNativeDetail };
+  if (
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    spec.native.id !== record["sessionId"]
+  ) {
+    throw new Error("Pi recovery metadata does not match the persisted attachment.");
+  }
+  return {
+    runtime: "pi",
+    sessionId: record["sessionId"],
+    sessionFilePath: record["sessionFilePath"],
+  };
+}
+
+/**
+ * The earlier attachment a `context_replay` attach continues (VC-457), read
+ * with the same checks a resume applies to its own binding.
+ *
+ * Three answers, kept apart because they are different facts: nothing to
+ * carry (undefined — the attach opens fresh, silently, as a first attach
+ * does), a carry, or an earlier conversation whose binding cannot be read.
+ * The last still opens fresh — a carry is an improvement to a fresh attach,
+ * never a new way for one to fail — but the runtime raises an Attention for
+ * it, because a Session that silently forgot its conversation is the bug this
+ * exists to fix.
+ */
+function piContextCarry(
+  spec: NativeAttachmentSpec,
+): { carry: RuntimeContextCarry } | { carryUnreadable: string } | undefined {
+  if (spec.carryFrom === undefined) return undefined;
+  // Checked before continuity on purpose: the engine records an attach whose
+  // earlier binding it could not read as `fresh` — that is what it IS — and
+  // the reason still has to reach the runtime, or the Attention it raises is
+  // lost between the two layers.
+  if ("unreadable" in spec.carryFrom) return { carryUnreadable: spec.carryFrom.unreadable };
+  if (spec.continuity !== "context_replay") return undefined;
+  const { native, attachmentId, directory } = spec.carryFrom;
+  const detail = native.detail;
+  const record =
+    detail === null || Array.isArray(detail) || typeof detail !== "object"
+      ? null
+      : (detail as { readonly [key: string]: SessionNativeDetail });
+  if (
+    record === null ||
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    native.id !== record["sessionId"]
+  ) {
+    return {
+      carryUnreadable: "the earlier attachment's Pi binding is not one this build can read.",
+    };
+  }
+  return {
+    carry: {
+      runtime: "pi",
+      sessionId: record["sessionId"],
+      sessionFilePath: record["sessionFilePath"],
+      attachmentId,
+      workspacePath: directory ?? spec.directory,
+    },
+  };
+}
+
+function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
+  if (cursor === null || Array.isArray(cursor) || typeof cursor !== "object") return null;
+  const entryId = (cursor as { readonly [key: string]: SessionNativeDetail })["entryId"];
+  if (typeof entryId !== "string") {
+    throw new Error("Pi recovery cursor is missing its sidecar entry id.");
+  }
+  return entryId;
+}
+
+/**
+ * The platform fetch the usage probe reads provider endpoints with — stated
+ * once here so the runtime itself never chooses a transport (VC-263).
+ */
+const platformUsageFetch: NonNullable<PiRuntimeHostOptions["usageLimits"]>["fetch"] = (url, init) =>
+  globalThis.fetch(url, init);
+
+export interface PiRuntimeHost {
+  readonly adapter: NativeHarnessAdapter;
+  inspectModelAccess: AgentRuntime["inspectModelAccess"];
+  /** The utility-completion door (VC-81 auto-titling), passed through unchanged. */
+  completeUtility: AgentRuntime["completeUtility"];
+}
+
+/** Main-owned singular runtime host; the native adapter remains private migration scaffolding. */
+export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
+  const now = options.now ?? Date.now;
+  const create = options.createRuntime ?? createPiAgentRuntime;
+  const runtime = create({
+    sessionDataDir: options.sessionDataDir,
+    ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+    ...(options.catalogReady === undefined ? {} : { catalogReady: options.catalogReady }),
+    ...(options.catalogs === undefined ? {} : { catalogs: options.catalogs }),
+    ...(options.executionEnvFactory === undefined
+      ? {}
+      : { executionEnvFactory: options.executionEnvFactory }),
+    ...(options.compactionPolicy === undefined
+      ? {}
+      : { compactionPolicy: options.compactionPolicy }),
+    ...(options.observability === undefined ? {} : { observability: options.observability }),
+    ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
+    usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
+    ...(options.parallelMcpReads === undefined
+      ? {}
+      : { parallelMcpReads: options.parallelMcpReads }),
+    ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+  });
+
+  return {
+    adapter: piNativeAdapter(options, runtime, now),
+    inspectModelAccess: (input) => runtime.inspectModelAccess(input),
+    completeUtility: (input) => runtime.completeUtility(input),
+  };
+}
+
+/** @deprecated Main should own {@link createPiRuntimeHost}; retained for isolated adapter tests. */
+export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessAdapter {
+  return createPiRuntimeHost(options).adapter;
+}
+
+function piNativeAdapter(
+  options: PiAdapterOptions,
+  runtime: AgentRuntime,
+  now: () => number,
+): NativeHarnessAdapter {
+  const measureWorkspaceEnvironment = options.readWorkspaceEnvironment ?? readWorkspaceEnvironment;
+  return {
+    id: PI_ADAPTER_ID,
+    durableIdNamespace: PI_DURABLE_ID_NAMESPACE,
+    adapterVersion: PI_ADAPTER_VERSION,
+    runtime: PI_RUNTIME_IDENTITY,
+
+    async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
+      let recovery: RuntimeRecoveryRef | undefined;
+      try {
+        recovery = piRecoveryRef(spec);
+      } catch (error) {
+        throw new NativeAttachmentError(
+          errorMessage(error),
+          "PI_RECOVERY_FAILED",
+          "adapter_unrecoverable",
+        );
+      }
+      const context = await options.resolveRuntimeContext(spec.sessionId);
+      if (context === null) {
+        // Thrown, not emitted: the runtime discards this attach's sink when the
+        // attach rejects, so the error message is the only channel that
+        // survives — and it becomes the `attach_failed` receipt's detail, which
+        // is where a user looks.
+        throw new NativeAttachmentError(
+          "Pi requires a Session with a selected model and Runtime Brief.",
+          "PI_CONFIGURATION_INVALID",
+          "configuration_invalid",
+        );
+      }
+      const binding = new PiBinding({
+        spec,
+        sink,
+        context,
+        recovery,
+        carry: recovery === undefined ? piContextCarry(spec) : undefined,
+        now,
+        web: options.resolveWebPorts?.() ?? {},
+        browser: options.resolveBrowserPort?.({
+          projectId: context.projectId,
+          ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
+        }),
+        shell: options.resolveShellPort?.({
+          projectId: context.projectId,
+          ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
+          workspacePath: spec.directory,
+        }),
+        classify: options.resolveClassifyPort?.({
+          sessionId: spec.sessionId,
+          projectId: context.projectId,
+        }),
+        resolveSecretPort: options.resolveSecretPort,
+        mcp:
+          (context.mcpTools?.length ?? 0) === 0
+            ? undefined
+            : options.resolveMcpPort?.({
+                projectId: context.projectId,
+                sessionId: spec.sessionId,
+                attachmentId: spec.attachmentId,
+                workspacePath: spec.directory,
+                mcpTools: context.mcpTools ?? [],
+              }),
+        callVerb: options.callVerb,
+        prepareTurnAttachments: options.prepareTurnAttachments,
+        // The directory the Session Engine prepared is the one to measure: a
+        // worktree ticket's isolated checkout has its own `node_modules`
+        // question, and the main checkout's answer is not it.
+        workspaceEnvironment: measureWorkspaceEnvironment(spec.directory),
+      });
+      try {
+        binding.bind(await runtime.startSession(binding.runtimeSpec()));
+      } catch (error) {
+        await binding.release("adapter_failure").catch(() => undefined);
+        throw new NativeAttachmentError(
+          errorMessage(error),
+          recovery === undefined ? "PI_CONFIGURATION_INVALID" : "PI_RECOVERY_FAILED",
+          recovery === undefined ? "configuration_invalid" : "adapter_unrecoverable",
+        );
+      }
+      return binding;
+    },
+  };
+}
+
+// Model questions use the shared `askUserInteractionId` derivation. Budget
+// and confirmation permissions use their own durable id prefixes below.
+
+/** The existing generic permission title for budget and confirmation asks. */
+function askTitle(request: RuntimeAskRequest): string {
+  return request.overridable
+    ? `Allow this ${request.tool} call?`
+    : `Blocked this ${request.tool} call`;
+}
+
+/**
+ * What an answer meets when nothing is waiting for it, said once because both
+ * ends of the resolve path can reach it: the question was never this
+ * attachment's, or it stopped being anyone's while the answer was in flight.
+ */
+const UNKNOWN_INTERACTION =
+  "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.";
+
+/** One question in front of a person, and everything needed to stop asking it. */
+interface ParkedAsk {
+  /** The request as the runtime made it; an answer is read back against it. */
+  request: RuntimeAskRequest;
+  settle: PromiseWithResolvers<RuntimeAskChoice>;
+  /** Drops this question's listener from the runtime's withdrawal signal. */
+  forget: () => void;
+}
+
+/**
+ * One of the model's own questions, parked the same way and answered differently.
+ *
+ * It keeps no request. A host permission holds one because `askChoice` reads the
+ * answer back against it; there is nothing to read back against here, and
+ * keeping the request anyway would be an invitation to start.
+ */
+interface ParkedAskUser {
+  settle: PromiseWithResolvers<SessionInteractionResolution>;
+  /** Drops this question's listener from the runtime's withdrawal signal. */
+  forget: () => void;
+}
+
+interface PiBindingOptions {
+  spec: NativeAttachmentSpec;
+  sink: ObservationSink;
+  context: PiRuntimeContext;
+  recovery: RuntimeRecoveryRef | undefined;
+  /** The earlier attachment a fresh one continues, or why it cannot be (VC-457). */
+  carry: ReturnType<typeof piContextCarry>;
+  now: () => number;
+  /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
+  web: SessionWebPorts;
+  /** The Session's scoped Browser capability; `undefined` is "no browser". */
+  browser: DesktopBrowserPort | undefined;
+  /** The Session's scoped background shell capability; `undefined` is "no shells". */
+  shell: DesktopShellPort | undefined;
+  /** The Session's decision port (VC-478), or undefined when this launch wired none. */
+  classify: RuntimeClassifyPort | undefined;
+  resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
+  /** Attachment-scoped MCP host for the frozen dynamic definitions. */
+  mcp: DesktopMcpPort | undefined;
+  callVerb: PiAdapterOptions["callVerb"];
+  prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
+  /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
+  workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+}
+
+class PiBinding implements BindingHandle {
+  readonly #spec: NativeAttachmentSpec;
+  readonly #sink: ObservationSink;
+  readonly #context: PiRuntimeContext;
+  readonly #recovery: RuntimeRecoveryRef | undefined;
+  readonly #carry: ReturnType<typeof piContextCarry>;
+  readonly #now: () => number;
+  readonly #web: SessionWebPorts;
+  readonly #browser: DesktopBrowserPort | undefined;
+  readonly #shell: DesktopShellPort | undefined;
+  readonly #classify: RuntimeClassifyPort | undefined;
+  readonly #secret: DesktopSecretPort | undefined;
+  readonly #mcp: DesktopMcpPort | undefined;
+  readonly #callVerb: PiAdapterOptions["callVerb"];
+  readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
+  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  readonly #abort = new AbortController();
+  /** Questions the runtime is parked on, by the interaction id they were asked under. */
+  readonly #asked = new Map<string, ParkedAsk>();
+  /** The model's own questions, kept apart because their answers are read differently. */
+  readonly #askedUser = new Map<string, ParkedAskUser>();
+  #handle: RuntimeAttachmentHandle | null = null;
+  #native: SessionNativeReference = { id: null, detail: null };
+  /**
+   * Set the moment {@link PiBinding.release} begins, and read by every command
+   * path instead of {@link PiBinding.#released}.
+   *
+   * Release cannot set `#released` until it has announced its withdrawals, so
+   * the two flags exist to say different things: this one closes the door on new
+   * work, `#released` closes it on new facts. One flag could only do both by
+   * accepting a command onto a handle that is already closing — a durable
+   * `accepted` receipt for a message Pi will never process.
+   */
+  #releasing = false;
+  #released = false;
+
+  constructor(options: PiBindingOptions) {
+    this.#spec = options.spec;
+    this.#sink = options.sink;
+    this.#context = options.context;
+    this.#recovery = options.recovery;
+    this.#carry = options.carry;
+    this.#now = options.now;
+    this.#web = options.web;
+    this.#browser = options.browser;
+    this.#shell = options.shell;
+    this.#classify = options.classify;
+    this.#secret = options.resolveSecretPort?.({
+      sessionId: options.spec.sessionId,
+      projectId: options.context.projectId,
+      allowInjection: options.context.toolSurface.includes("request_secret"),
+      wait: {
+        opened: (metadata) =>
+          this.#observe({
+            kind: "interaction",
+            state: "opened",
+            occurredAt: this.#now(),
+            interaction: {
+              id: metadata.id,
+              kind: "question",
+              title: "Credential requested",
+              detail: null,
+              options: [],
+              multiple: false,
+              credential: metadata,
+              native: this.#native,
+            },
+          }),
+        settled: (metadata, outcome) =>
+          this.#observe(
+            outcome === "still missing"
+              ? {
+                  kind: "interaction",
+                  state: "cancelled",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  reason: "withdrawn",
+                }
+              : {
+                  kind: "interaction",
+                  state: "resolved",
+                  occurredAt: this.#now(),
+                  interactionId: metadata.id,
+                  resolution: { optionIds: [outcome], response: null },
+                },
+          ),
+      },
+    });
+    this.#mcp = options.mcp;
+    this.#callVerb = options.callVerb;
+    this.#prepareTurnAttachments = options.prepareTurnAttachments;
+    this.#workspaceEnvironment = options.workspaceEnvironment;
+  }
+
+  /**
+   * This turn's attachments, or nothing when the host wired no preparer and
+   * when the message carries no files. Reading `directory` off the spec keeps
+   * the materialize target the same tree the agent is actually working in.
+   */
+  async #prepareAttachments(message: UIMessageLike): Promise<TurnAttachments> {
+    const prepare = this.#prepareTurnAttachments;
+    if (prepare === undefined) return { note: "", images: [] };
+    return prepare(message, {
+      sessionId: this.#spec.sessionId,
+      ticketId: this.#context.ticketId,
+      workspacePath: this.#spec.directory,
+    });
+  }
+
+  get native(): SessionNativeReference {
+    return this.#native;
+  }
+
+  runtimeSpec(): SessionRuntimeSpec {
+    const context = this.#context;
+    const identity = {
+      sessionId: this.#spec.sessionId,
+      rootThreadId: context.rootThreadId,
+      attachmentId: this.#spec.attachmentId,
+      projectId: context.projectId,
+    };
+    const wantsAskUser = context.toolSurface.includes("ask_user");
+    const wantsWebFetch = context.toolSurface.includes("web_fetch");
+    const wantsWebSearch = context.toolSurface.includes("web_search");
+    // One name stands for the six: the browser tools ride one port and one
+    // binding decision, so a recorded surface holds either every browser name
+    // or none — checking the first is checking the capability. The hold pair
+    // (VC-239) is the one qualification: a surface frozen before it existed
+    // names six, and is handed a port without the pair so it binds six.
+    const wantsBrowser = context.toolSurface.includes("browser_tabs");
+    const wantsHoldPair = context.toolSurface.includes("browser_acquire");
+    // And the search (VC-364), appended after both, on the same terms.
+    const wantsFind = context.toolSurface.includes("browser_find");
+    // One name stands for the three (VC-270), on the browser's reasoning.
+    const wantsShell = context.toolSurface.includes("shell_start");
+    // The decision model (VC-478): one name, one port.
+    const wantsClassify = context.toolSurface.includes("classify");
+    const mcpTools = context.mcpTools ?? [];
+    const mcpNames = context.toolSurface.filter(isMcpToolId);
+    if (
+      JSON.stringify(mcpNames) !==
+      JSON.stringify(mcpTools.map((definition) => definition.providerName))
+    ) {
+      throw new Error("This Session's frozen MCP definitions do not match its tool surface.");
+    }
+    if (mcpTools.length > 0 && this.#mcp === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes MCP tools, but this launch wired no MCP host.",
+      );
+    }
+    // Code Mode's record is read back with the names it routes (VC-471); the
+    // shared builder then holds it to the surface exactly.
+    const wantsCodeMode = context.toolSurface.includes("codemode");
+    if (wantsCodeMode && context.codeMode === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface names codemode without its routes.",
+      );
+    }
+    if (
+      (wantsWebFetch && this.#web.webFetch === undefined) ||
+      (wantsWebSearch && this.#web.webSearch === undefined)
+    ) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Web Access, but the current profile cannot bind it. Restore a working Web Access configuration and retry the attachment.",
+      );
+    }
+    if (wantsBrowser && this.#browser === undefined) {
+      // Refused rather than shrunk, on the web guard's reasoning: the frozen
+      // surface is a promise about the provider tool array, and a build that
+      // cannot keep it must fail the attachment loudly.
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes the Browser, but this build wired no Browser host. Retry the attachment on a build that carries one.",
+      );
+    }
+    if (wantsShell && this.#shell === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes background shells, but this build wired no shell host. Retry the attachment on a build that carries one.",
+      );
+    }
+    if (wantsClassify && this.#classify === undefined) {
+      // Refused rather than shrunk, on the browser guard's reasoning. A
+      // decision model turned off since birth is NOT this case: the port is
+      // still wired, and each call answers that no model is configured.
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes classify, but this launch wired no decision service. Relaunch the app and retry the attachment.",
+      );
+    }
+    // The verb half of the frozen record, read back rather than re-derived from
+    // Role and grants (VC-162). Re-deriving would be the recomposition the
+    // record exists to prevent: a Session attaching months later would resolve
+    // today's bundle and send a tool array its own history does not describe.
+    const verbs = verbToolsOf(context.toolSurface);
+    const callVerb = this.#callVerb;
+    if (verbs.length > 0 && callVerb === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Volli verbs, but this launch wired no handler for them. Relaunch the app and retry the attachment.",
+      );
+    }
+    const sessionIdentity: RuntimeSessionIdentity =
+      context.role === "ticket"
+        ? { ...identity, role: "ticket", ticketId: context.ticketId }
+        : context.role === "project"
+          ? { ...identity, role: "project", ticketId: null }
+          : {
+              ...identity,
+              role: "subagent",
+              ticketId: context.ticketId,
+              parentSessionId: context.parentSessionId,
+            };
+    const runtimeSpec: SessionRuntimeSpec = {
+      identity: sessionIdentity,
+      // The directory the Session Engine PREPARED: for a worktree ticket the
+      // isolated checkout — never the main one — and for a ticketless Session
+      // the project root, which is the only place it was ever going to run.
+      workspacePath: this.#spec.directory,
+      venue: "local",
+      model: this.#context.model,
+      brief: { text: this.#context.brief },
+      // Spread, not assigned, for the same reason `promptResources` is: an
+      // unmeasured workspace must reach the prompt as an ABSENT field rather
+      // than one set to undefined, so "nobody measured" and "measured, nothing
+      // to say" stay the same silent prompt and neither poses as the other.
+      ...(this.#workspaceEnvironment === undefined
+        ? {}
+        : { workspaceEnvironment: this.#workspaceEnvironment }),
+      // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
+      // Omitted rather than empty when the Session named no skills, so a spec
+      // with no resources is a spec with no resources field — same shape the
+      // runtime's own tests pin.
+      ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
+      tools: {
+        tools: context.toolSurface.filter(isPiCodingTool),
+        // The todo tool's membership (VC-6), read back off the frozen record
+        // exactly as the verb half is and for the same reason: it has no port,
+        // so nothing else could decide it, and re-deriving it from today's
+        // capabilities would hand an older Session a tool array its own
+        // history does not describe. Omitted rather than `false`, so a Session
+        // frozen before the tool existed produces the bundle it always did.
+        ...(context.toolSurface.includes("todo_write") ? { todoWrite: true } : {}),
+        // Omitted rather than empty for the reason `promptResources` is: a
+        // Ticket Session holds no verbs, and "no verb field" is the shape the
+        // runtime's own tests pin for that.
+        ...(verbs.length === 0 ? {} : { verbs }),
+        ...(context.mcpManagementNames === undefined
+          ? {}
+          : { mcpManagementNames: context.mcpManagementNames }),
+        ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
+        ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
+      },
+      ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
+      ...this.#carry,
+      signal: this.#abort.signal,
+      observer: (observation) => this.#observe(observation),
+      ask: (request, signal) => this.#ask(request, signal),
+      ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
+      ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
+      ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
+      ...(wantsBrowser && this.#browser !== undefined
+        ? {
+            browser: browserForSurface(this.#browser, {
+              holdPair: wantsHoldPair,
+              find: wantsFind,
+            }),
+          }
+        : {}),
+      ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
+      ...(wantsClassify && this.#classify !== undefined ? { classify: this.#classify } : {}),
+      ...(this.#secret === undefined ? {} : { credentialRedaction: this.#secret }),
+      ...(context.toolSurface.includes("request_secret") && this.#secret !== undefined
+        ? { secret: this.#secret }
+        : {}),
+      // The attachment's ask rides into MCP calls (VC-470). Code Mode lends
+      // its question scope (VC-471), serializing asks and pausing its clock.
+      ...(mcpTools.length === 0
+        ? {}
+        : {
+            mcp: {
+              call: (request: RuntimeMcpCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
+                this.#mcp!.call(request, signal, (ask, askSignal) =>
+                  scope === undefined
+                    ? this.#ask(ask, askSignal)
+                    : scope.question(() => this.#ask(ask, askSignal)),
+                ),
+            },
+          }),
+      // Caller identity is closed over here and never travels in the call. The
+      // model names a verb and its arguments; WHO is asking is this
+      // attachment's own identity, which is exactly what the socket door
+      // cannot know about its callers.
+      ...(verbs.length === 0
+        ? {}
+        : {
+            // A Code Mode program's call lends its scope (VC-471): the
+            // door's budget question then waits its turn among the
+            // program's questions, and stops the program's clock.
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal, scope?: RuntimeCallScope) =>
+              callVerb!(sessionIdentity, request, signal, (ask, askSignal) =>
+                scope === undefined
+                  ? this.#ask(ask, askSignal)
+                  : scope.question(() => this.#ask(ask, askSignal)),
+              ),
+          }),
+    };
+    // `sessionToolIds` is the same derivation `createSessionTools` consumes.
+    // Comparing the full ordered list here prevents corrupted/non-canonical
+    // durable data from silently becoming a different provider tool array.
+    if (JSON.stringify(sessionToolIds(runtimeSpec)) !== JSON.stringify(context.toolSurface)) {
+      throw new Error(
+        "The Session's frozen Agent Tool Surface is not valid for this product version.",
+      );
+    }
+    return runtimeSpec;
+  }
+
+  /**
+   * Adopt the live attachment, and with it the recovery reference.
+   *
+   * The reference is the whole of what crosses back out of Pi: a runtime tag, a
+   * Pi Session id, and the sidecar path Session 4 reopens. No credential, no
+   * transport detail, nothing a later reader could mistake for Session truth.
+   */
+  bind(handle: RuntimeAttachmentHandle): void {
+    this.#handle = handle;
+    const recovery = handle.recovery;
+    if (recovery === undefined) return;
+    this.#native = {
+      id: recovery.sessionId,
+      detail: {
+        runtime: recovery.runtime,
+        sessionId: recovery.sessionId,
+        sessionFilePath: recovery.sessionFilePath,
+      },
+    };
+  }
+
+  async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) {
+      return this.#rejected(
+        command.commandId,
+        "PI_ATTACHMENT_CLOSED",
+        "This attachment is closed.",
+      );
+    }
+    switch (command.kind) {
+      case "message.submit":
+        return this.#submit(handle, command);
+      case "model.select":
+        try {
+          const outcome = await handle.selectModel(command.selection);
+          return outcome.kind === "selected"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(
+                command.commandId,
+                MODEL_SELECTION_REJECTION_CODES[outcome.reason],
+                outcome.message,
+              );
+        } catch {
+          return this.#rejected(
+            command.commandId,
+            "PI_MODEL_SELECTION_FAILED",
+            "The model policy could not be applied. Retry.",
+          );
+        }
+      case "executor.interrupt":
+        try {
+          await handle.interrupt();
+          return this.#accepted(command.commandId);
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
+      case "executor.retry":
+        try {
+          const outcome = await handle.retry(command.commandId);
+          return outcome.kind === "delivered"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
+      case "context.compact":
+        try {
+          // The compaction itself is announced by the runtime, as the same
+          // Session Event its two automatic siblings emit. What comes back
+          // here is only whether the request was served, which is this
+          // receipt's whole job.
+          const outcome = await handle.compact(command.instructions ?? undefined);
+          return outcome.kind === "compacted"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(
+                command.commandId,
+                COMPACTION_REJECTION_CODES[outcome.reason],
+                // The runtime's own sentence, carried whole. It is the one
+                // place that knows whether the context is busy with a turn or
+                // with another compaction, and it writes a different sentence
+                // for each.
+                outcome.message,
+                COMPACTION_REFUSAL_SEVERITY[outcome.reason],
+              );
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
+      case "interaction.resolve": {
+        // Looked up WITHOUT claiming, because the answer has to be a Session
+        // fact before the question stops waiting — see the emit below.
+        if (!this.#awaiting(command.interaction.id)) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
+        // The answer is announced from here, and it has to be: the Session
+        // Engine writes `interaction.resolved` from THIS observation and from
+        // nowhere else. The delivery receipt this returns is a receipt, not a
+        // fact — `projectSession` folds it into `receipts` and never looks at
+        // its `result` — so a Session whose adapter stayed silent would settle
+        // the parked call, resume the turn, and leave the question active
+        // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
+        // true, and every later question hidden behind it.
+        //
+        // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
+        // which refuses to park on a question the Session could not record. The
+        // same bargain read the other way: an answer the Session could not
+        // record must not be reported as delivered, because the turn would
+        // resume on a decision history has no account of.
+        try {
+          await this.#observe({
+            kind: "interaction",
+            state: "resolved",
+            occurredAt: this.#now(),
+            interactionId: command.interaction.id,
+            resolution: command.resolution,
+          });
+        } catch (error) {
+          // Nothing was claimed, so the question is still parked and still
+          // active: the card stays answerable and pressing it again retries.
+          // That recoverable state is the whole reason the claim happens after
+          // the emit — claiming first would leave the ask unparked AND
+          // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
+          // turn blocked behind a card nothing can ever answer.
+          return this.#rejected(
+            command.commandId,
+            "PI_INTERACTION_NOT_RECORDED",
+            `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
+          );
+        }
+        // Lost the claim while the fact was committing — a withdrawal or a
+        // release got here first. History keeps the resolution, which is true:
+        // a person did answer. What is no longer true is that the runtime is
+        // waiting for it, so this reports a decision that reached nobody.
+        const settled = this.#settleAnswer(command.interaction.id, command.resolution);
+        if (settled === false) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
+        return this.#accepted(command.commandId);
+      }
+    }
+  }
+
+  async reconcile(cursor: Parameters<BindingHandle["reconcile"]>[0]): Promise<Reconciliation> {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) {
+      return { cursor, observations: [], receipts: [] };
+    }
+    const entryId = recoveryEntryId(cursor);
+    const replay = await handle.reconcile(entryId);
+    return {
+      // Pi's own history, offered whole. Which of these become Session facts,
+      // and under what ids, is the Engine's replay translation to decide — the
+      // same decision it makes for the live pass, which is what keeps one fact
+      // seen twice from being recorded twice.
+      cursor: replay.cursor === null ? cursor : { entryId: replay.cursor },
+      observations: replay.observations,
+      receipts: (replay.receipts ?? []).map(({ commandId, acceptedAt }) => ({
+        commandId,
+        status: "accepted",
+        acceptedAt,
+        native: this.#native,
+      })),
+    };
+  }
+
+  /**
+   * The Session cancelled a question the runtime is still parked on.
+   *
+   * Announces nothing, and that is the whole difference between this and every
+   * other way an ask ends. Cancelling is the Engine's own durable act — it
+   * writes `interaction.cancelled` before it calls this, because the fact is
+   * that nobody was told an answer — so a second announcement from here would
+   * record one withdrawal twice.
+   */
+  async withdrawInteraction(interactionId: string): Promise<void> {
+    await this.#secret?.withdraw?.(interactionId);
+    await this.#withdraw(interactionId, false);
+  }
+
+  /**
+   * End the live attachment, never the Session.
+   *
+   * The sink closes first: the Session Engine writes `attachment.closed` itself
+   * once this resolves, and Pi's own close observation would otherwise say the
+   * same thing a second time in the other direction.
+   *
+   * Everything still parked on a person is withdrawn *before* that, though,
+   * because {@link PiBinding.#observe} admits nothing once the flag is set: a
+   * cancellation announced after it would be dropped on the floor, leaving a
+   * question on screen that no later fact can ever clear and nothing left alive
+   * to answer it. Each withdrawal takes its own listener with it, so the abort
+   * below finds nothing left to withdraw — and a question that raced this loop
+   * is harmless either way, because the claim in {@link PiBinding.#take} lets
+   * only one path end any of them.
+   */
+  async release(_reason: ReleaseReason): Promise<void> {
+    if (this.#releasing) return;
+    this.#releasing = true;
+    // Iterated live rather than over a snapshot: a question that slipped in
+    // between two awaits here is one this loop still has to withdraw, and a
+    // question the map no longer holds is one something else already ended.
+    for (const asked of [this.#asked, this.#askedUser]) {
+      for (const interactionId of asked.keys()) await this.#withdraw(interactionId, true);
+    }
+    await this.#secret?.cancelPending?.();
+    this.#abort.abort();
+    this.#released = true;
+    this.#browser?.dispose?.();
+    // Before the handle closes: the execution environment's cleanup revokes
+    // the attachment's token, and a shell still being SIGTERMed should not
+    // outlive the identity it was spawned under (VC-270).
+    this.#shell?.dispose();
+    await this.#mcp?.dispose();
+    await this.#handle?.close();
+    await this.#secret?.dispose?.();
+  }
+
+  async #submit(
+    handle: RuntimeAttachmentHandle,
+    command: Extract<HarnessCommand, { kind: "message.submit" }>,
+  ): Promise<DeliveryReceipt> {
+    // `command.model`, `agent` and `variant` go nowhere, and nothing is lost
+    // by that. They are contract scaffolding no Volli surface fills — the chat
+    // client's `message.submit` carries a message and a delivery, so the
+    // runtime hands all three down as `null` — and a per-message override is
+    // not this product's model semantics in the first place. A Session's model
+    // is durable: chosen through `model.select`, and applied at attach from
+    // the Session's own projected selection.
+    const text = messageText(command.message);
+    const resources = readSkillResources(command.message.parts);
+    // Attachments are prepared BEFORE the empty-text check, because they can
+    // make an otherwise-empty message a real one: dragging in a screenshot and
+    // pressing return without typing is an ordinary way to ask "what is this?"
+    // (VC-50). A failure here is the turn's failure — a message whose file the
+    // agent will never see is not one worth delivering silently.
+    let attachments: TurnAttachments;
+    try {
+      attachments = await this.#prepareAttachments(command.message);
+    } catch (error) {
+      return this.#rejected(command.commandId, "PI_ATTACHMENT_FAILED", errorMessage(error));
+    }
+    if (text.trim().length === 0 && attachments.note.length === 0 && resources.length === 0) {
+      return this.#rejected(
+        command.commandId,
+        "PI_EMPTY_MESSAGE",
+        "There was no text in this message to send.",
+      );
+    }
+    if (command.delivery === "replace") {
+      return this.#rejected(
+        command.commandId,
+        "PI_REPLACE_UNSUPPORTED",
+        "Pi does not support replacing the active turn.",
+      );
+    }
+    try {
+      const outcome = await handle.submitUserMessage(
+        `${text}${attachments.note}`,
+        command.delivery,
+        command.commandId,
+        attachments.images,
+        resources,
+        command.settle ?? "turn",
+      );
+      return outcome.kind === "delivered"
+        ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened)
+        : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
+    } catch (error) {
+      // The prompt reached Pi and something after it failed. "Unknown" is the
+      // only truthful receipt: the turn may well have run.
+      return this.#unknown(command.commandId, error);
+    }
+  }
+
+  /**
+   * Put one blocked tool call to a person, and do not come back until answered.
+   *
+   * The wait is unbounded by design: the runtime awaits this with no timeout of
+   * its own, so nothing here needs to invent one and a question left up
+   * overnight costs a parked promise. `signal` is the other half of that
+   * bargain — it is the only notice this side gets that the turn the question
+   * belongs to has stopped waiting, and a host that ignores it strands the card
+   * it opened.
+   *
+   * The `opened` emit is awaited, and its failure deliberately left to
+   * propagate. A question whose fact never committed is a question nobody was
+   * shown, so parking on it would block the turn on an answer that cannot
+   * arrive; rejecting instead tells the runtime the host could not obtain one,
+   * which lets the refusal stand and be recorded. That is the honest account of
+   * a question that was never asked.
+   */
+  async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
+    if (!isBudgetCause(request.cause) && !isConfirmCause(request.cause)) {
+      throw new Error("This host request is not a budget extension or confirmation.");
+    }
+    const offer = askOffer(request);
+    const interactionId = isBudgetCause(request.cause)
+      ? budgetAskInteractionId(request.toolCallId)
+      : isCredentialConfirmCause(request.cause)
+        ? credentialAskInteractionId(request.toolCallId)
+        : confirmAskInteractionId(request.toolCallId);
+    await this.#observe({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: this.#now(),
+      interaction: {
+        id: interactionId,
+        kind: offer.kind,
+        title: askTitle(request),
+        detail: request.reason,
+        options: offer.options,
+        multiple: false,
+        native: this.#native,
+      },
+    });
+    const withdraw = (): void => {
+      void this.#withdraw(interactionId, true);
+    };
+    const parked: ParkedAsk = {
+      request,
+      settle: Promise.withResolvers<RuntimeAskChoice>(),
+      forget: () => signal.removeEventListener("abort", withdraw),
+    };
+    this.#asked.set(interactionId, parked);
+    // Read rather than trusted to the listener: a signal that aborted while the
+    // `opened` fact was committing will never fire again, and this question
+    // would then park for the life of the Session on a turn that gave up on it.
+    if (signal.aborted) withdraw();
+    else signal.addEventListener("abort", withdraw, { once: true });
+    return parked.settle.promise;
+  }
+
+  /**
+   * Put one of the model's own questions to a person, and wait for their answer.
+   *
+   * Everything {@link PiBinding.#ask} says about the wait holds here: no timeout,
+   * `signal` is the only notice that the turn stopped waiting, and the `opened`
+   * emit is awaited with its failure left to propagate, because parking on a
+   * question nobody was shown blocks the turn on an answer that cannot arrive.
+   * A rejection reaches the model as a failed tool call, which is what actually
+   * happened to it.
+   *
+   * The options are the model's rather than Volli's: whatever it offered, mapped
+   * onto the ledger's own option shape and not checked against any vocabulary —
+   * an id that reads like a refusal is one of the model's answers and refuses
+   * nothing.
+   *
+   * Whether a person may say something the model did not list is what `prompts`
+   * is here to record, and every question this opens declares one — options or
+   * not. The default admits free text: a person asked to choose between two
+   * things the model imagined must be able to say a third, so `custom` is true
+   * unless the model closed it with `allowOther: false`. `custom` lives on a
+   * prompt and nowhere else, so a question that left `prompts` off would be
+   * durably saying the opposite — and history, not the card, is what a later
+   * reader has to go on. The flat `options` and `multiple` stay beside it: a
+   * reader that predates prompts still sees the choice, and only loses the part
+   * it could not have rendered anyway.
+   */
+  async #askUser(
+    request: RuntimeAskUserRequest,
+    signal: AbortSignal,
+  ): Promise<SessionInteractionResolution> {
+    const interactionId = askUserInteractionId(request.toolCallId);
+    const options: SessionInteractionOption[] = (request.options ?? []).map((option) => ({
+      id: option.id,
+      label: option.label,
+      description: option.description ?? null,
+    }));
+    const multiple = request.multiple === true;
+    // A closed question with nothing to choose between asks for an answer that
+    // cannot be given, so the model's `false` is overruled exactly there rather
+    // than opening a card no press can ever satisfy.
+    const custom = options.length === 0 || request.allowOther !== false;
+    await this.#observe({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: this.#now(),
+      interaction: {
+        id: interactionId,
+        kind: "question",
+        title: request.question,
+        detail: null,
+        options,
+        multiple,
+        prompts: [
+          {
+            id: DEFAULT_INTERACTION_PROMPT_ID,
+            label: request.question,
+            detail: null,
+            options,
+            multiple,
+            custom,
+          },
+        ],
+        native: this.#native,
+      },
+    });
+    const withdraw = (): void => {
+      void this.#withdraw(interactionId, true);
+    };
+    const parked: ParkedAskUser = {
+      settle: Promise.withResolvers<SessionInteractionResolution>(),
+      forget: () => signal.removeEventListener("abort", withdraw),
+    };
+    this.#askedUser.set(interactionId, parked);
+    // Read rather than trusted to the listener, for the reason spelled out in
+    // {@link PiBinding.#ask}: a signal that aborted while the `opened` fact was
+    // committing will never fire again.
+    if (signal.aborted) withdraw();
+    else signal.addEventListener("abort", withdraw, { once: true });
+    return parked.settle.promise;
+  }
+
+  /** Whether either kind of question is still waiting under this id. */
+  #awaiting(interactionId: string): boolean {
+    return this.#asked.has(interactionId) || this.#askedUser.has(interactionId);
+  }
+
+  /**
+   * Hand one answer to whichever kind of question was waiting for it.
+   *
+   * The two readings are the whole reason this is one function and not a shared
+   * one: a host permission's option ids are the runtime's private evidence for a
+   * verdict, and the model's are the model's own, handed back exactly as a
+   * person chose them. False means nothing was still waiting.
+   */
+  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean {
+    const parkedUser = this.#takeUser(interactionId);
+    if (parkedUser !== undefined) {
+      parkedUser.settle.resolve(resolution);
+      return true;
+    }
+    const parked = this.#take(interactionId);
+    if (parked === undefined) return false;
+    // `askChoice` is the runtime's own private reading of a decision the ledger
+    // already holds in the person's own option ids.
+    const choice = askChoice(parked.request, resolution.optionIds);
+    parked.settle.resolve(choice);
+    return true;
+  }
+
+  /**
+   * Claim a parked question, so that exactly one path can end it.
+   *
+   * The map delete is the dedupe, and everything that ends an ask goes through
+   * here to get it: an answer, a withdrawal, an abort and a release all reach
+   * for the same question, and the second one to arrive must find nothing.
+   *
+   * Dropping the abort listener is not what makes that work — a withdrawal
+   * arriving after the claim finds nothing and does nothing. What it buys is
+   * that a question which has ended holds no reference back into this binding,
+   * so how long the runtime keeps its signal around afterwards cannot matter.
+   */
+  #take(interactionId: string): ParkedAsk | undefined {
+    const parked = this.#asked.get(interactionId);
+    if (parked === undefined) return undefined;
+    this.#asked.delete(interactionId);
+    parked.forget();
+    return parked;
+  }
+
+  /** The same claim over the model's own questions. */
+  #takeUser(interactionId: string): ParkedAskUser | undefined {
+    const parked = this.#askedUser.get(interactionId);
+    if (parked === undefined) return undefined;
+    this.#askedUser.delete(interactionId);
+    parked.forget();
+    return parked;
+  }
+
+  /**
+   * Stop asking one question, telling the Session unless it already knows.
+   *
+   * The parked promise is *rejected*, never resolved with a refusal. A refusal
+   * is a decision, and a withdrawal is the absence of one; resolving would print
+   * a choice nobody made, which is the exact failure `interaction.cancelled`
+   * exists to avoid. The runtime reads a rejection as "the host could not obtain
+   * an answer" and lets its own refusal stand, which is what actually happened.
+   */
+  async #withdraw(interactionId: string, announce: boolean): Promise<void> {
+    // Either map, one claim: the Engine cancels an interaction by id and has no
+    // reason to know which kind of question it was, and only one of the two can
+    // be holding any id.
+    const parked = this.#take(interactionId) ?? this.#takeUser(interactionId);
+    if (parked === undefined) return;
+    try {
+      if (announce) {
+        await this.#observe({
+          kind: "interaction",
+          state: "cancelled",
+          occurredAt: this.#now(),
+          interactionId,
+          reason: "withdrawn",
+        });
+      }
+    } catch {
+      // A cancellation the Session could not record still ends here. Whatever
+      // failed is the sink's own failure to report, and there is nothing this
+      // side could do about it in any case; what it must not do is leave the
+      // runtime parked on a promise that release is waiting to settle.
+    }
+    parked.settle.reject(new Error("The question was withdrawn before anyone answered it."));
+  }
+
+  #accepted(
+    commandId: string,
+    delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"],
+    turnOpened?: boolean,
+  ): DeliveryReceipt {
+    return {
+      commandId,
+      status: "accepted",
+      acceptedAt: this.#now(),
+      native: this.#native,
+      // Both fields are transport answers only. The durable Receipt still says
+      // that the Command was accepted; the live caller learns how it landed.
+      ...(delivery === undefined ? {} : { delivery }),
+      ...(turnOpened === undefined ? {} : { turnOpened }),
+    };
+  }
+
+  #rejected(
+    commandId: string,
+    code: string,
+    detail: string,
+    severity?: CommandRefusalSeverity,
+  ): DeliveryReceipt {
+    return {
+      commandId,
+      status: "rejected",
+      code,
+      detail,
+      native: this.#native,
+      // Absent, never explicitly `undefined`: a key JSON would drop is a key
+      // structured clone would have carried across as a present `undefined`.
+      ...(severity === undefined ? {} : { severity }),
+    };
+  }
+
+  #unknown(commandId: string, error: unknown): DeliveryReceipt {
+    return { commandId, status: "unknown", detail: errorMessage(error), native: this.#native };
+  }
+
+  /**
+   * Everything Pi says, forwarded once; the Session Engine decides what it means.
+   *
+   * Two things are suppressed here rather than there, because both are facts
+   * about this binding's own lifecycle that the Engine cannot see.
+   *
+   * **A released binding does not admit new observations.** Pi's own close
+   * lands here on the way out of `release`, and the Engine writes
+   * `attachment.closed` itself once `release` resolves; letting Pi's arrive
+   * first would delete the binding before that write and throw
+   * "already closed" out of every executor-stop command.
+   *
+   * This covers only what has not been admitted yet. An observation already
+   * past it fans out into several Session facts on the far side of this seam,
+   * and this flag cannot reach into that — a fan-out admitted a moment before
+   * `release` would otherwise write its tail after the close, where the ledger
+   * refuses it rather than files it late, and the rejection surfaces back
+   * through Pi's observer. The Session Engine stops its own observation
+   * pipeline for exactly that reason; the guarantee is enforced there, not
+   * inferred from `close()` happening to await `waitForIdle()`.
+   *
+   * **An attachment fact needs a binding to be about.** Before the handle
+   * exists, `started` is the Engine's own `attachment.opened` said twice and
+   * `failed` is the rejection `attach` is about to throw. The guard names that
+   * one kind because it is the only one that can arrive that early: everything
+   * else follows from a turn, and a turn needs the handle. Widening it would
+   * risk dropping a refusal that had already reached the model, which is the one
+   * ordering this must never produce.
+   */
+  #observe(observation: RuntimeObservation): Promise<void> {
+    if (this.#released) return Promise.resolve();
+    if (observation.kind === "attachment" && this.#handle === null) return Promise.resolve();
+    // A turn over — completed or interrupted — ends every Browser Tab hold
+    // this attachment has (VC-239). Told before the fact is recorded rather
+    // than after: a hold outliving its turn by even the sink's write would be
+    // a hold with nobody driving, and the person's pill would say otherwise.
+    if (observation.kind === "turn" && observation.state !== "started") {
+      this.#browser?.turnEnded();
+    }
+    return this.#sink.emit(observation);
+  }
+}
+
+/**
+ * Pi takes one text string plus typed resources; a `UIMessage` may carry
+ * several text parts. Resource extraction stays separate so the runtime can
+ * frame them for delivery while retaining their identity across compaction.
+ */
+function messageText(message: UIMessage): string {
+  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
+}

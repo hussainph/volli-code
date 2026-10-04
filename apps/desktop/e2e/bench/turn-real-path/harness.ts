@@ -60,8 +60,8 @@ import {
 import {
   createPiRuntimeHost,
   type PiRuntimeContext,
-} from "../../../src/main/session-runtime/pi-adapter";
-import { createFileTranscriptArtifactStore } from "../../../src/main/session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/pi-adapter";
+import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
 
 import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 

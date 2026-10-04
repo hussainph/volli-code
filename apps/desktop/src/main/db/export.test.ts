@@ -24,7 +24,7 @@ import {
 } from "@volli/host-core/db/projects-repo";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createTicketSessionDelegationStore } from "../session-runtime/delegation-store";
+import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
 import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
 import { archiveTicket, insertTicket } from "@volli/host-core/db/tickets-repo";

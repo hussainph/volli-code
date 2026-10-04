@@ -9,9 +9,9 @@ plain Node/Vitest at the exact `.nvmrc` version, not the Electron executable:
 vp run --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' test:coverage --maxWorkers=$(nproc)
 ```
 
-It covers `session-engine`, `session-rpc`, `agent-runtime` and `shared` today
-(and the other non-desktop workspace suites). `host-protocol`, `host-core` and
-`apps/hostd` join through those directory filters as they appear. They must
+It covers `session-engine`, `session-rpc`, `agent-runtime`, `shared`,
+`host-protocol` and `host-core` (and the other non-desktop workspace suites)
+through those directory filters. `apps/hostd` joins when it appears. They must
 provide `test:coverage`: the CI policy self-test refuses a host manifest that
 would otherwise silently skip. This lane runs on **every PR**, including every
 host-path change, and `CI gate` requires success. There is no duplicate host

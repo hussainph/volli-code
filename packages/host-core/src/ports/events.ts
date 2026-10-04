@@ -20,6 +20,8 @@
  */
 import type {
   DataChangeScope,
+  FileChangedEvent,
+  DirChangedEvent,
   HarnessEventNotice,
   PendingArmedRun,
   PendingArmedRunSettledNotice,
@@ -38,6 +40,10 @@ import type {
 
 /** Every fact a host announces, by topic. A topic is the channel name minus `volli:`. */
 export interface HostEventMap {
+  /** A subscribed client's open file changed; addressed by the watch. */
+  "file-changed": FileChangedEvent;
+  /** A subscribed client's expanded directory changed; addressed by the watch. */
+  "dir-changed": DirChangedEvent;
   /**
    * Planning data changed outside a client's own request. Carries the best
    * scope the publisher knows; `{}` means anything may have changed.
@@ -74,13 +80,23 @@ export interface HostEventMap {
 }
 
 export type HostEventTopic = keyof HostEventMap;
+/** Subscription events are addressed only; a broadcast port cannot publish them. */
+export type HostClientEventTopic =
+  | "worktree-changed"
+  | "worktree-watch-error"
+  | "file-changed"
+  | "dir-changed"
+  | "terminal-data"
+  | "terminal-exit"
+  | "terminal-park-state";
+export type HostBroadcastEventTopic = Exclude<HostEventTopic, HostClientEventTopic>;
 
 /**
  * Sends a fact to every connected client. Fire-and-forget: a host never waits
  * on, or learns about, delivery. A host with no client connected drops it.
  */
 export interface HostEventBus {
-  publish<T extends HostEventTopic>(topic: T, payload: HostEventMap[T]): void;
+  publish<T extends HostBroadcastEventTopic>(topic: T, payload: HostEventMap[T]): void;
 }
 
 /**
@@ -89,7 +105,8 @@ export interface HostEventBus {
  * its own hook on unsubscribe; disconnect releases its subscriptions immediately.
  * Desktop adapts exactly the requesting WebContents, never every window.
  */
-export interface HostClientEventSink extends HostEventBus {
+export interface HostClientEventSink {
+  publish<T extends HostClientEventTopic>(topic: T, payload: HostEventMap[T]): void;
   readonly id: string;
   isClosed(): boolean;
   onceClosed(listener: () => void): void;

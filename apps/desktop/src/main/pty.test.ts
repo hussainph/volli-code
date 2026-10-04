@@ -103,7 +103,7 @@ import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
 import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
-import { importBlob } from "./blob-import";
+import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
 import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
 import { insertProject } from "@volli/host-core/db/projects-repo";
@@ -124,7 +124,7 @@ import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { syncProjectRoots } from "@volli/host-core/project-roots";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */

@@ -16,6 +16,12 @@ export default defineConfig({
       // apps/desktop/vite.config.ts until that test can move.
       include: [
         "src/index.ts",
+        // File/blob/template services moved with their tests at unchanged 100% (VC-557).
+        "src/blob-attach.ts",
+        "src/blob-collect.ts",
+        "src/blob-protocol.ts",
+        "src/turn-attachments.ts",
+        "src/prompt-templates.ts",
         // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
         // for the reason the process modules above are: it is a concurrency
         // guard, so its branches are the ones no screenshot and no manual pass
@@ -38,6 +44,8 @@ export default defineConfig({
         // missed no-clobber branch overwrites what a person put in their own
         // login shell. Neither is visible anywhere until the laptop swaps.
         "src/session-concurrency.ts",
+        "src/session-runtime/boot-recovery.ts",
+        "src/session-runtime/sessions.ts",
         "src/session-control/activity-watch.ts",
         // The turn boundary that decides unread (VC-30), beside the watch it
         // decorates: main is the only process that knows both that a turn ended

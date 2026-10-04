@@ -17,7 +17,7 @@
  * events and are sent directly.
  */
 import { BrowserWindow } from "electron";
-import type { HostEventBus, HostEventMap, HostEventTopic } from "@volli/host-core/ports";
+import type { HostEventBus, HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import type { PendingArmedRun } from "@volli/shared";
 import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
 import type {
@@ -55,7 +55,7 @@ const dataChanges = createDataChangeCoalescer({
 });
 
 /** How each host topic reaches the windows: its channel, and for one, its cadence. */
-const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => void } = {
+const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[T]) => void } = {
   "data-changed": (change) => dataChanges.queue(change),
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
   "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),
@@ -68,13 +68,6 @@ const WINDOW_DELIVERY: { [T in HostEventTopic]: (payload: HostEventMap[T]) => vo
   "pending-armed-run-settled": (notice) =>
     sendToEveryWindow("volli:pending-armed-run-settled", notice),
   "worktree-phase": (event) => sendToEveryWindow("volli:worktree-phase", event),
-  "worktree-changed": (event) => sendToEveryWindow("volli:worktree-changed", event),
-  "worktree-watch-error": (event) => sendToEveryWindow("volli:worktree-watch-error", event),
-  // Addressed topics: the terminal supervisor publishes these only through
-  // the attached client's sink (`client-event-sink.ts`), never on the bus.
-  "terminal-data": (event) => sendToEveryWindow("volli:terminal-data", event),
-  "terminal-exit": (event) => sendToEveryWindow("volli:terminal-exit", event),
-  "terminal-park-state": (event) => sendToEveryWindow("volli:terminal-park-state", event),
 };
 
 /** host-core's `HostEventBus` over every open window. */

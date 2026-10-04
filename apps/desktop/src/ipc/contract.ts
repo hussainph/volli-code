@@ -1,3 +1,22 @@
+import type {
+  FileMutationResult,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/host-core/file-types";
+export type {
+  FileMutationResult,
+  FileContent,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchMatch,
+  FileSearchFile,
+  FileSearchLimit,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/host-core/file-types";
+export type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 // The Electron IPC catalog: every channel this app speaks, declared once.
 //
 // Type-only module, and it must stay that way. All three desktop processes may
@@ -10,6 +29,42 @@
 //
 // It lives in the app rather than in @volli/shared because a transport catalog
 // is knowledge of Electron, and that package is pure domain code.
+
+import type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanInventory,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
+export type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanCandidate,
+  PiSessionOrphanSkipped,
+  PiSessionOrphanInventory,
+  PiSessionOrphanKept,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
+
+import type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
+export type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessKeyState,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
 
 import type { ExternalAppId } from "../external-app-ids";
 import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
@@ -51,8 +106,6 @@ import type {
   DiffStat,
   DirEntry,
   DoctorCheck,
-  FileKind,
-  FileSource,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   HarnessAdapter,
@@ -71,7 +124,6 @@ import type {
   McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
-  DecisionModelCatalogEntry,
   DecisionModelSetting,
   DeliberateMoveChoice,
   ModelSelection,
@@ -583,12 +635,6 @@ export interface WorktreeOrphanDeleteInput {
   path: string;
 }
 
-/** The explicit Pi cleanup names only items from one main-owned inventory. */
-export interface PiSessionOrphanReclaimInput {
-  scanRevision: string;
-  itemIds: string[];
-}
-
 /** A reap names only processes from one main-owned scan revision (VC-341). */
 export interface OrphanProcessReapInput {
   scanRevision: string;
@@ -704,14 +750,6 @@ export interface FileWriteInput extends FilePathInput {
 export interface FileRenameInput extends FilePathInput {
   toRelPath: string;
 }
-
-/**
- * What the create/rename/duplicate track resolves with: the project-relative
- * path the entry now has (plan §4.5). Named rather than echoed back from the
- * request because the caller does not always know it — `duplicate` derives a
- * free name in main, and the renderer opens exactly what was created.
- */
-export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
 
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
@@ -1023,7 +1061,7 @@ export type DataIpcChannel = keyof VolliDataIpcContract;
 /**
  * Global artifacts + `@file` refs, the
  * Project Files workspace (issue #106), and Files' external-app launch/reveal
- * surface — the file channels `src/main/volli-fs.ts` owns.
+ * surface — the file channels `src/main/volli-fs-ipc.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
@@ -1569,48 +1607,6 @@ export interface VolliModelAccessIpcContract {
 
 export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
 
-/** The attempt id every later message about one sign-in is correlated by. */
-export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
-
-/** Which search provider this profile brings, if any. `off` is the default. */
-export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
-
-/**
- * The providers that authenticate with a key a person pastes.
- *
- * Named apart from {@link WebAccessProvider} because carrying a credential is
- * what decides most of this surface: a keyed provider has a secret row, a key
- * state to report, and a "replace stored key" affordance, while SearXNG has an
- * address and `off` has neither.
- */
-export type KeyedWebAccessProvider = "brave" | "exa";
-
-/**
- * What the renderer may know about a stored API key: that there is one, or that
- * there is none.
- *
- * A state rather than the value, and there is no third member that carries one.
- * There was a third member — "unreadable", for a key the OS keychain would no
- * longer open — until the keys stopped being keychain material. A key the
- * profile holds is a key it can read.
- */
-export type WebAccessKeyState = "absent" | "present";
-
-/** The whole of what Settings is told about Web Access. */
-export interface WebAccessSettingsView {
-  provider: WebAccessProvider;
-  /** The normalized instance URL a person configured, or null. Never a secret. */
-  searxngUrl: string | null;
-  /**
-   * What is stored for each keyed provider, and never what it is.
-   *
-   * One entry per provider rather than one for the selected one, because the
-   * rows are independent: configuring Exa does not discard a Brave key, and a
-   * person switching back should not be asked to paste one they already gave.
-   */
-  keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
-}
-
 export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;
 
 /**
@@ -1664,35 +1660,13 @@ export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
 
 // ---- decision models (VC-478) ---------------------------------------------
 
-/**
- * Everything Settings is told about decision models, for one page.
- *
- * `project` is present when the page asked about a project: its override, or
- * `null` when it inherits. `catalog` is every cloud classifier Pi offers, each
- * with whether this profile has signed in to its provider — the only
- * credential fact the renderer is given, and a state rather than a value.
- */
-export interface DecisionModelSettingsView {
-  global: DecisionModelSetting;
-  project?: DecisionModelSetting | null;
-  catalog: readonly DecisionModelCatalogEntry[];
-}
-
 export type DecisionModelResult = Result<{
   settings: DecisionModelSettingsView;
   /** The project row as the write left it, when the write was a project's. */
   project?: Project;
 }>;
 
-/** What a connection test found, end to end: one small question asked for real. */
-export type DecisionModelTestView =
-  | { ok: true; elapsedMs: number; probability: number }
-  | { ok: false; elapsedMs: number; message: string };
-
 export type DecisionModelTestResult = Result<{ test: DecisionModelTestView }>;
-
-/** Which setting a write changes: the app-wide one, or one project's override. */
-export type DecisionModelScope = { scope: "global" } | { scope: "project"; projectId: string };
 
 /**
  * The decision model setting (VC-478), on its own door.
@@ -2940,18 +2914,6 @@ export interface TicketMovedNotice {
 }
 
 /**
- * Result types below travel as typed discriminated unions rather than
- * thrown errors: `ipcMain.handle` rejections serialize into useless
- * strings across the IPC boundary, and every failure must be surfaceable
- * in the UI.
- *
- * {@link Result} is the shared shape every one of them had by hand: a success
- * carrying payload `T`, or a failure carrying an `error` string. Bare
- * `Result` (no payload) is a plain ok/error ack.
- */
-export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
-
-/**
  * The app-owned database actions. `undefined` reads its size; neither action
  * accepts a renderer-supplied path.
  */
@@ -3225,122 +3187,7 @@ export type PromptTemplateIndexResult = Result<{
   skills: SkillReference[];
 }>;
 
-/**
- * A read file's content, discriminated by how the renderer must render it:
- * `text` (utf8, `truncated` when the ~1 MiB cap was hit), `image` (inline
- * `data:` URI), or `binary` (NUL-sniffed or oversize — stub + reveal only).
- */
-export type FileContent =
-  | { type: "text"; text: string; truncated: boolean }
-  | { type: "image"; dataUrl: string }
-  | { type: "binary" };
-
-/**
- * A resolved file read — returned by `volli:file-read`. `source` says which
- * checkout it came from (drives the worktree tab badge); `size`/`mtime` are the
- * on-disk stats; `content` carries the render-ready payload.
- */
-export type FileReadResult = Result<{
-  source: FileSource;
-  kind: FileKind;
-  size: number;
-  mtime: number;
-  content: FileContent;
-}>;
-
-/** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
-export type FileWriteResult = Result<{ mtime: number }>;
-
 // ---- find across files (plan §4.7) ----------------------------------------
-
-/**
- * One matched line, as the Search page draws it and opens it.
- *
- * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
- * the file hands them straight to `revealLineInCenter`/`setPosition` without a
- * translation step nobody would think to test. `preview` is the matched line,
- * possibly windowed around the match (a minified bundle's single 400 KB line is
- * not a preview), and `start`/`end` are the match's offsets INSIDE that
- * preview — never into the original line, which the renderer never sees.
- */
-export interface FileSearchMatch {
-  line: number;
-  column: number;
-  preview: string;
-  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
-  start: number;
-  end: number;
-}
-
-/** Every match in one file, in file order — the Search page's group. */
-export interface FileSearchFile {
-  relPath: string;
-  matches: readonly FileSearchMatch[];
-}
-
-/**
- * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
- * `truncated` flag, saying WHICH bound was hit rather than only that one was:
- *
- *  - `none`    — ripgrep ran to completion; this is everything there is.
- *  - `matches` — the match cap was reached and the search was stopped there.
- *  - `time`    — the time budget ran out; what is here is what had arrived.
- */
-export type FileSearchLimit = "none" | "matches" | "time";
-
-/**
- * A completed search — returned by `volli:search`. `matches` counts what is
- * carried in `files` (not what exists on disk, which a capped search cannot
- * know), and `limit` is why counting stopped.
- */
-export type FileSearchResult = Result<{
-  files: readonly FileSearchFile[];
-  matches: number;
-  limit: FileSearchLimit;
-}>;
-
-/**
- * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
- * insertable directly as an `@ref` — returned by `volli:artifact-create`.
- */
-export type ArtifactCreateResult = Result<{ relPath: string }>;
-
-/**
- * The last word a watch subscription gets: main has torn the subscription down
- * and will never send for it again (issue #134). Every holder of that watch owes
- * itself a re-arm or an honest "live updates are off" — its `watch()` hold is
- * now a hold on nothing. Only ever `true`; ORDINARY change events omit the field
- * entirely, so `event.final === true` is the whole test.
- *
- * It cannot be inferred from the payload: the dominant teardown (the watched
- * directory is gone for good) does carry `revision: null`, but a watcher that
- * fails to REWIRE over a directory still present sends a final event that reads
- * exactly like ordinary news.
- */
-interface FinalWatchEvent {
-  final?: true;
-}
-
-/** The single watched file a `volli:file-changed` push event fired for. */
-export interface FileChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  /** The worktree owner; Main-checkout files always normalize this to null. */
-  ticketId: string | null;
-  relPath: string;
-  source: FileSource;
-  /** Current on-disk mtime after the debounce, or null when the file is unreadable. */
-  revision: number | null;
-}
-
-/**
- * The single watched directory a `volli:dir-changed` push event fired for
- * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
- * {@link FileChangedEvent} there is no `source` to disambiguate.
- */
-export interface DirChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  relPath: string;
-}
 
 // ---- ticket worktrees ------------------------------------------------------
 
@@ -3446,50 +3293,6 @@ export type WorktreeTrimResult = Result<{ report: WorktreeTrimSweepReport }>;
 
 /** The trim settings — returned by `volli:worktree-trim-settings-get`/`-set`. */
 export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings }>;
-
-/** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */
-export interface PiSessionOrphanCandidate {
-  itemId: string;
-  path: string;
-  sessionId: string;
-  sizeBytes: number;
-}
-
-/** A jsonl-shaped entry the scanner refused to treat as a deletion candidate. */
-export interface PiSessionOrphanSkipped {
-  path: string;
-  reason: string;
-}
-
-/** The exact proposal displayed before Pi cleanup can be confirmed. */
-export interface PiSessionOrphanInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: PiSessionOrphanCandidate[];
-  candidateCount: number;
-  /** What removing every candidate frees: the sidecars and the saved tool output beside them. */
-  candidateBytes: number;
-  skipped: PiSessionOrphanSkipped[];
-  /**
-   * Long tool results saved across every Session (VC-469): how much there is
-   * now, and the bound past which the oldest are removed first.
-   */
-  toolOutput: { files: number; bytes: number; limitBytes: number };
-}
-
-/** One reviewed candidate main kept after its mandatory pre-unlink re-check. */
-export interface PiSessionOrphanKept {
-  candidate: PiSessionOrphanCandidate;
-  reason: string;
-}
-
-/** What one explicit Pi cleanup actually did. */
-export interface PiSessionOrphanReclaimReport {
-  removed: PiSessionOrphanCandidate[];
-  kept: PiSessionOrphanKept[];
-  removedCount: number;
-  removedBytes: number;
-}
 
 export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
 export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;
