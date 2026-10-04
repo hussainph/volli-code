@@ -667,7 +667,6 @@ export default defineConfig(({ mode }) => ({
         // that no cleanup surface will ever list again.
         "**/packages/host-core/src/project-relink.ts",
         "**/src/main/pty.ts",
-        "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/update-ipc.ts",
         "**/src/main/shutdown-deadline.ts",

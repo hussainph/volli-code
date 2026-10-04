@@ -16,7 +16,7 @@
 
 import { breatheShouldWake, isParkCandidate, treeIsCpuQuiet } from "@volli/shared";
 import type { TerminalIoResult } from "@volli/shared";
-import type { ParkConfig, ProcessInspector } from "../park";
+import type { ParkConfig, ProcessInspector } from "./park";
 
 /** The park-relevant view of a live session. Structurally satisfied by the
  *  manager's Session (same mutable objects — the controller and manager share

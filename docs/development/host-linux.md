@@ -114,33 +114,39 @@ limits its build context to the toolchain manifests, not local credentials.
 
 ## Native modules: keep host and Electron installs separate
 
-`@volli/host-core` and desktop depend on `better-sqlite3`; only desktop depends
-on `node-pty`. Desktop's postinstall runs
-`electron-rebuild -f -w node-pty,better-sqlite3`. SQLite 13 is N-API and loads
-its bundled `prebuilds/<platform>-<arch>.node` under both Node and Electron, so
-the Electron rebuild is deliberately a no-op for it and host-core's tests load
-the same package under plain Node in the host lane with no rebuild step. PTY
-must be built for **Node**, not inherited from that Electron install. No host
-native rebuild is wired in before a host package needs it.
+`@volli/host-core` and desktop both depend on `better-sqlite3` and, since
+VC-560, `node-pty` (the terminal supervisor moved into host-core). Desktop's
+postinstall runs `electron-rebuild -f -w node-pty,better-sqlite3`. SQLite 13
+is N-API and loads its bundled `prebuilds/<platform>-<arch>.node` under both
+Node and Electron, so the Electron rebuild is deliberately a no-op for it and
+host-core's tests load the same package under plain Node with no rebuild step.
 
-For VC-560, after a host package declares node-pty, use an **isolated Linux
-host install/job** with no desktop postinstall, then force its Node build:
+node-pty 1.1.0 is N-API too, but ships prebuilds only for macOS and Windows.
+On macOS the Electron rebuild's `build/Release/pty.node` also loads under
+plain Node, so host-core's PTY tests run on a desktop checkout as-is. On Linux
+the package compiles from source at install, and in a full workspace install
+desktop's postinstall then rebuilds it against Electron's headers. The host
+lane does not lean on that: **Test (packages)** rebuilds node-pty for its own
+Node and probes it before the tests run:
 
 ```sh
-# After the host-only install, under the repo's Node version:
-env npm_config_runtime=node \
+# The same commands CI runs after the job's install, from packages/host-core:
+env -u npm_config_arch -u npm_config_target_arch \
+    npm_config_runtime=node \
     npm_config_target="$(node -p 'process.versions.node')" \
     npm_config_disturl=https://nodejs.org/download/release \
     npm_config_build_from_source=true \
-    pnpm rebuild node-pty
-# From the host package that declares the dependencies:
-node -e 'require("node-pty"); const DB = require("better-sqlite3"); new DB(":memory:").close()'
+    vp rebuild node-pty
+node scripts/probe-node-pty.mjs
 ```
 
 `npm_config_build_from_source=true` makes node-pty's install script remove its
-prebuilds and run node-gyp; the image supplies the compiler/Python tools. Clear
-any inherited Electron header/runtime environment first. Never do this to the
-shared desktop dependency tree, or run `electron-rebuild` afterward: those
-builds must not overwrite one another. VC-560 should add this to the host lane
-only when host tests actually load native dependencies, with an explicit load
-probe and any necessary host-side build-tool declaration.
+prebuilds and run node-gyp; the runner and the image supply the compiler and
+Python. The probe loads node-pty from host-core and runs one shell through it,
+naming the failure otherwise. That job never runs Electron, so rebuilding its
+tree is safe; the desktop jobs keep their own Electron build. **Never do this
+to a desktop dependency tree you will run Electron from**, or run
+`electron-rebuild` over a host tree: those builds must not overwrite one
+another. A host-only install (the devcontainer's filtered install) never runs
+desktop's postinstall, so node-pty's own install script already builds it for
+the running Node; the probe is still the check.

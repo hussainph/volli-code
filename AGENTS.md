@@ -8,7 +8,7 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main host: composes `@volli/host-core`, Pi runtime hosting, node-pty, the `volli` CLI socket, notifications and Electron adapters. This is the only place Electron APIs run.
+- `apps/desktop/src/main/` — Electron main host: composes `@volli/host-core`, Pi runtime hosting, the terminal IPC adapter, the `volli` CLI socket, notifications and Electron adapters. This is the only place Electron APIs run.
 - `apps/desktop/src/preload/` — the typed `contextBridge` API and the only bridge between renderer and main. Keep it thin and explicit.
 - `apps/desktop/src/renderer/` — React UI and Zustand stores. UI state is a projection of durable main-process state plus ephemeral view state. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
@@ -41,7 +41,7 @@ The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs ho
 ## Conventions
 
 - Keep ticket rules and automatic movement logic pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; xterm.js (DOM renderer) never leaves renderer terminal components, and the user's real Ghostty config stays the appearance source the engine maps from. `node-pty` needs `pnpm -C apps/desktop run rebuild:native` after every install to match Electron's ABI; better-sqlite3 13 is N-API and ships its own prebuild that both Electron and plain Node load, so the same command is a deliberate no-op for it.
+- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves the host (host-core's terminal supervisor in `packages/host-core/src/pty`, driven by desktop's IPC adapter in `src/main/pty`); xterm.js (DOM renderer) never leaves renderer terminal components, and the user's real Ghostty config stays the appearance source the engine maps from. `node-pty` needs `pnpm -C apps/desktop run rebuild:native` after every install (the build desktop ships; it is N-API, so plain Node loads it too); better-sqlite3 13 is N-API and ships its own prebuild that both Electron and plain Node load, so the same command is a deliberate no-op for it.
 - Keep the desktop licence notice generated, never hand-authored. `apps/desktop/THIRD-PARTY-NOTICES` is derived from the resolved production dependency set of the desktop app and the bundled `volli` CLI by `node scripts/generate-third-party-notices.mjs`; `electron-builder.yml` ships it and the root `LICENSE` into the `.app` under `Contents/Resources`. What no dependency walk can see — platform-native packages, build-time sources whose output ships, vendored source, and notices a workspace package owns — lives as a reviewed entry in `apps/desktop/notices/sources.json` or in that package's own `notices/` manifest, and provenance nobody has established is recorded as unresolved rather than guessed. Regenerate after any change to the production dependency set; `pnpm run check:notices` (CI) fails on a stale notice, on packaging that stops shipping it, and on a shipped package no notice covers.
 - Name ticket worktree branches `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
 - Use a branch, commit, and PR workflow. Never commit directly to `main`.

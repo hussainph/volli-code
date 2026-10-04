@@ -91,10 +91,22 @@ it("keeps subscription events off the broadcast port at the type boundary", () =
   expectTypeOf<
     Extract<
       Parameters<import("./events").HostEventBus["publish"]>[0],
-      "file-changed" | "dir-changed" | "worktree-changed" | "worktree-watch-error"
+      | "file-changed"
+      | "dir-changed"
+      | "worktree-changed"
+      | "worktree-watch-error"
+      | "terminal-data"
+      | "terminal-exit"
+      | "terminal-park-state"
     >
   >().toEqualTypeOf<never>();
   expectTypeOf<Parameters<import("./events").HostClientEventSink["publish"]>[0]>().toEqualTypeOf<
-    "file-changed" | "dir-changed" | "worktree-changed" | "worktree-watch-error"
+    | "file-changed"
+    | "dir-changed"
+    | "worktree-changed"
+    | "worktree-watch-error"
+    | "terminal-data"
+    | "terminal-exit"
+    | "terminal-park-state"
   >();
 });

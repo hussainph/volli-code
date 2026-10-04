@@ -1,8 +1,10 @@
 // The terminal IPC surface (extracted from the former monolithic pty.ts per
 // issue #99): the native destructive-close confirm gate, the renderer request
-// guards, and `registerTerminalIpcHandlers` — the wiring that turns a
-// PtyManager into the live `volli:terminal-*` channels plus the before-quit
-// kill gate. Every guard and comment here moved verbatim from the manager.
+// guards, and `registerTerminalIpcHandlers` — the wiring that turns
+// host-core's terminal supervisor (`PtyManager`, VC-560) into the live
+// `volli:terminal-*` channels plus the before-quit kill gate. Each request's
+// sender is adapted to the supervisor's client through `clientEventSink`:
+// exactly that window, with its `destroyed` hook as the disconnect.
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
@@ -19,13 +21,30 @@ import type {
 import type { VolliIpcChannel } from "../../ipc/contract";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import type { DbHandle } from "../data-ipc";
+import { windowEventBus } from "../broadcast";
+import { clientEventSink } from "../client-event-sink";
+import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { SpawnLedger } from "../process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "@volli/host-core/session-control";
 import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { AgentRuntimeEnvironment } from "./manager";
-import { PtyManager } from "./manager";
+import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
+import { PtyManager } from "@volli/host-core/pty/manager";
+import { worktreeDeps } from "../worktree-host";
+
+/**
+ * What the terminal supervisor asks of desktop (VC-560): the window event bus,
+ * the worktree bundle and the harness-file writer desktop composed inline
+ * before the supervisor moved into host-core.
+ */
+export function desktopPtyHost(): PtyHost {
+  return {
+    events: windowEventBus,
+    worktreeDeps,
+    ensureHarnessWorkspaceFiles,
+  };
+}
 
 /**
  * Native modal confirm for a destructive close over `busy` sessions; resolves
@@ -164,7 +183,7 @@ function isCreateRequest(
  * app lifecycle can kill every PTY on quit. Every handler validates its args
  * at runtime — renderer-supplied types are never trusted — and returns a
  * typed result rather than throwing across the IPC boundary. Mutating handlers
- * hand `event.sender` to the manager, which honors a session only for the
+ * hand `event.sender`'s client to the manager, which honors a session only for the
  * window that created it (VC-509): a second surface cannot write, run, resize,
  * kill, park, wake or keep awake another window's PTY.
  */
@@ -191,8 +210,10 @@ export function registerTerminalIpcHandlers(
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
+  const host = desktopPtyHost();
   const manager = handle.ok
     ? new PtyManager(
+        host,
         handle.db,
         "",
         undefined,
@@ -205,7 +226,7 @@ export function registerTerminalIpcHandlers(
         new SpawnLedger(handle.db),
         concurrencyEnvReader,
       )
-    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
+    : new PtyManager(host, null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is
@@ -218,7 +239,7 @@ export function registerTerminalIpcHandlers(
       if (!isCreateRequest(request, launchable)) {
         return Promise.resolve({ ok: false, error: "Invalid terminal request" });
       }
-      return manager.create(event.sender, request);
+      return manager.create(clientEventSink(event.sender), request);
     },
   );
 
@@ -228,7 +249,7 @@ export function registerTerminalIpcHandlers(
       if (typeof sessionId !== "string" || typeof data !== "string") {
         return { ok: false, error: "Invalid terminal write" };
       }
-      return manager.write(event.sender, sessionId, data);
+      return manager.write(clientEventSink(event.sender), sessionId, data);
     },
   );
 
@@ -245,7 +266,7 @@ export function registerTerminalIpcHandlers(
       if (trimmed.length === 0) {
         return Promise.resolve({ ok: false, error: "Invalid terminal command" });
       }
-      return manager.runCommand(event.sender, sessionId, trimmed);
+      return manager.runCommand(clientEventSink(event.sender), sessionId, trimmed);
     },
   );
 
@@ -255,7 +276,7 @@ export function registerTerminalIpcHandlers(
       if (typeof sessionId !== "string" || typeof cols !== "number" || typeof rows !== "number") {
         return { ok: false, error: "Invalid terminal resize" };
       }
-      return manager.resize(event.sender, sessionId, cols, rows);
+      return manager.resize(clientEventSink(event.sender), sessionId, cols, rows);
     },
   );
 
@@ -265,7 +286,7 @@ export function registerTerminalIpcHandlers(
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal kill" };
       }
-      return manager.kill(event.sender, sessionId);
+      return manager.kill(clientEventSink(event.sender), sessionId);
     },
   );
 
@@ -276,7 +297,7 @@ export function registerTerminalIpcHandlers(
         return Promise.resolve({ ok: false, error: "Invalid terminal park" });
       }
       // A user-initiated park bypasses the visible/keep-awake auto-park guards.
-      return manager.park(event.sender, sessionId, { manual: true });
+      return manager.park(clientEventSink(event.sender), sessionId, { manual: true });
     },
   );
 
@@ -286,7 +307,7 @@ export function registerTerminalIpcHandlers(
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal wake" };
       }
-      return manager.wake(event.sender, sessionId);
+      return manager.wake(clientEventSink(event.sender), sessionId);
     },
   );
 
@@ -296,7 +317,7 @@ export function registerTerminalIpcHandlers(
       if (typeof sessionId !== "string" || typeof keepAwake !== "boolean") {
         return { ok: false, error: "Invalid terminal keep-awake" };
       }
-      return manager.setKeepAwake(event.sender, sessionId, keepAwake);
+      return manager.setKeepAwake(clientEventSink(event.sender), sessionId, keepAwake);
     },
   );
 
@@ -308,7 +329,7 @@ export function registerTerminalIpcHandlers(
     (event, ...args: unknown[]): void => {
       const [sessionId, visible] = args;
       if (typeof sessionId !== "string" || typeof visible !== "boolean") return;
-      manager.setVisible(event.sender, sessionId, visible);
+      manager.setVisible(clientEventSink(event.sender), sessionId, visible);
     },
   );
 
@@ -328,7 +349,7 @@ export function registerTerminalIpcHandlers(
     const [sessionId, chars] = args;
     if (typeof sessionId !== "string") return;
     if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return;
-    manager.ack(event.sender, sessionId, chars);
+    manager.ack(clientEventSink(event.sender), sessionId, chars);
   });
 
   // Kill every PTY on quit so no orphaned shells outlive the app — but a
