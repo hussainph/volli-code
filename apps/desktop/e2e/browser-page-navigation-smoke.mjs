@@ -3,7 +3,7 @@
  * Acceptance smoke for VC-243 against the built app: a real Browser port can
  * drive page-owned navigation in a Headless tab by link click, submit-button
  * click, and Enter in a focused form field. The fixture is loopback-only and
- * every action runs through the same desktopBrowserPort factory Sessions use.
+ * every action runs through the same browserAgentPort factory Sessions use.
  *
  * Run (needs a display and the built app):
  *   pnpm run build

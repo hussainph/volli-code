@@ -316,7 +316,8 @@ import { prepareTurnAttachments } from "@volli/host-core/turn-attachments";
 import { blobProtocolResponse } from "@volli/host-core/blob-protocol";
 import { blobsRoot } from "@volli/host-core/blob-store";
 import { getBlob } from "@volli/host-core/db/blobs-repo";
-import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
+import { BROWSER_DEFAULT_BOUNDS } from "@volli/host-core/browser/backend";
+import { BrowserTabHost } from "./browser/tab-host";
 import { getAutoReapPolicy } from "./process/auto-reap-settings";
 import { createAutoReapWatch } from "./process/auto-reap-watch";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
@@ -328,17 +329,17 @@ import { relayShellNotices } from "./shell/shell-notices";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "@volli/host-core/session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
-import { desktopBrowserPort } from "./browser/agent-port";
+import { browserAgentPort } from "@volli/host-core/browser/agent-port";
 import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
   createCursorOverlay,
   type CursorOverlay,
 } from "./browser/cursor-overlay";
-import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
-import { BrowserPictureStore } from "./browser/picture-store";
-import { browserTraceDisk, browserTracesRoot } from "./browser/trace-disk";
-import { BrowserTraceStore } from "./browser/trace-store";
+import { browserPictureDisk, browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
+import { BrowserPictureStore } from "@volli/host-core/browser/picture-store";
+import { browserTraceDisk, browserTracesRoot } from "@volli/host-core/browser/trace-disk";
+import { BrowserTraceStore } from "@volli/host-core/browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
@@ -1513,9 +1514,9 @@ app.whenReady().then(async () => {
               throw new Error("The Browser host is not ready; retry the attachment.");
             }
             // The wake hold (VC-252) and the cursor (VC-239) ride the one
-            // desktop composition; see `desktopBrowserPort`.
-            return desktopBrowserPort({
-              host,
+            // composition every caller shares; see `browserAgentPort`.
+            return browserAgentPort({
+              backend: host,
               scope: { projectId: scope.projectId, ticketId: scope.ticketId },
               // The hold is taken in this name and judged against it (VC-239):
               // the adapter states it from the attachment, never the model.
@@ -3217,15 +3218,15 @@ app.whenReady().then(async () => {
   // A smoke seam (VC-239), unset in every ordinary launch: `browser-tab-smoke.mjs`
   // starts no Session and takes no model turn, yet has to prove a hold and a
   // visible cursor. It builds the SAME port the adapter builds — one factory,
-  // `desktopBrowserPort`, so the two cannot drift — in a Session's name it
+  // `browserAgentPort`, so the two cannot drift — in a Session's name it
   // invents, and drives a tab exactly as a Session would. Gated on the
   // variable AND on an unpackaged app, like the other dev-only doors: a
   // shipped build exposes nothing whatever its environment says.
   if (isDev && process.env["VOLLI_BROWSER_PROBE"] === "1") {
     (globalThis as { volliBrowserProbe?: unknown }).volliBrowserProbe = {
       port: (scope: { projectId: string; ticketId: string | null }, sessionId: string) =>
-        desktopBrowserPort({
-          host: browserTabs,
+        browserAgentPort({
+          backend: browserTabs,
           scope,
           session: { sessionId, attachmentId: `${sessionId}:probe` },
           cursorFor: (tabId) => cursorOverlay.driverFor(tabId),

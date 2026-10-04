@@ -193,6 +193,10 @@
       "types": "./src/pty/*.ts",
       "import": "./src/pty/*.ts"
     },
+    "./browser/*": {
+      "types": "./src/browser/*.ts",
+      "import": "./src/browser/*.ts"
+    },
     "./agent-commands": {
       "types": "./src/agent-commands.ts",
       "import": "./src/agent-commands.ts"

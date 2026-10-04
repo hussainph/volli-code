@@ -8,7 +8,7 @@ import {
   takeoverNotice,
   type HoldNotice,
 } from "./hold-notices";
-import type { BrowserHoldEvent } from "./tab-host";
+import type { BrowserHoldEvent } from "@volli/host-core/browser/backend";
 
 const A = { sessionId: "ses-a", attachmentId: "att-a" };
 
