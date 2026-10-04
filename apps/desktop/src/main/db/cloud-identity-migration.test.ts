@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
 import { insertSession } from "../session-control/test-support";
+import { buildBackupDataDocument, validateBackupDataDocument } from "../backup/data-document";
 import { getProjectById, insertProject } from "./projects-repo";
 import { getTicket, insertTicket, nextTicketNumberForProject } from "./tickets-repo";
 import { openRawDb, testProject, testSession, testTicket } from "./test-helpers";
@@ -264,6 +265,42 @@ describe("cloud identity migration (058)", () => {
     for (const table of IDENTITY_TABLES) expect(tableRows(db)[table], table).toEqual(rows[table]);
     expect(db.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("backs up populated epoch history and refuses a v57-writer document that omits it", () => {
+    const f = version57();
+    migrate(f.db, f.path);
+    seedIdentityRows(f.db);
+    f.db
+      .prepare(
+        "INSERT INTO workspace_epochs (workspace_id, epoch, host_id, created_at) VALUES (?, 2, ?, 60)",
+      )
+      .run(WORKSPACE, HOST_B);
+    const document = buildBackupDataDocument(f.db, { appVersion: "v58", now: 0 });
+
+    expect(document.tables.workspace_epochs?.rows).toEqual([
+      [WORKSPACE, 1, HOST_A, 20],
+      [WORKSPACE, 2, HOST_B, 60],
+    ]);
+    expect(validateBackupDataDocument(document).ok).toBe(true);
+    // A v57 writer's included-table list omits workspace_epochs, but stamps
+    // the actual db user_version (58). Ordinary read/write compatibility does
+    // not make that incomplete backup safe. Never infer missing history is 0.
+    const stableDocument = {
+      ...document,
+      appVersion: "v57",
+      tables: Object.fromEntries(
+        Object.entries(document.tables).filter(([table]) => table !== "workspace_epochs"),
+      ),
+    };
+    expect(stableDocument.schemaVersion).toBe(58);
+    const validation = validateBackupDataDocument(stableDocument);
+    expect(validation.ok).toBe(false);
+    if (!validation.ok) {
+      expect(validation.problems).toContainEqual(
+        expect.objectContaining({ message: "Data document is missing table workspace_epochs." }),
+      );
+    }
   });
 
   it("holds at most one host identity", () => {
