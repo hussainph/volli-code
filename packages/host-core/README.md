@@ -45,14 +45,14 @@ if (!host.database.ok) console.error(host.database.error);
 
 ## What is here
 
-| Path                     | Exports                                                                                                                     | Moved in |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                     | VC-553   |
-| `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`) | VC-553   |
-| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                         | VC-553   |
-| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power and client-capability ports, with their headless answers | VC-554   |
-| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                         | VC-560   |
-| `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
+| Path                     | Exports                                                                                                                                        | Moved in |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                                        | VC-553   |
+| `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`)                    | VC-553   |
+| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                                            | VC-553   |
+| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power, client-capability, trash and secret-key ports, with their headless answers | VC-554   |
+| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                                            | VC-560   |
+| `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                                               | VC-553   |
 
 VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `@volli/host-core/session-control/*`), `src/session-control/session-wake.ts`,
@@ -76,9 +76,10 @@ VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
 exports. `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
 desktop callers not yet moved pass those same facts through `worktree-host.ts`.
 `repository-turn.ts` is byte-identical: its per-process ordering has not changed.
-The repository-turn coverage entry moves at 100%; project roots and relink stay
-in desktop's 100% gate, pointing at their new paths, because their covering tests
-still compose desktop modules. The ensure test stays there for its blob importer.
+Repository-turn and project-relink coverage run here at 100%, beside their
+tests. The ensure test also runs here, including its host-core blob importer.
+Project roots remain in desktop's 100% gate: host-core tests reach the registry,
+but desktop's IPC/PTY tests still cover branches this package does not.
 
 VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
@@ -230,11 +231,11 @@ the shared ledger; terminal, data and runtime consumers must receive the
 composed engine and never construct a fallback. The wake decorator lives beside
 the activity watch in `src/session-control/`.
 
-Coverage entries for the activity/read/peek watches and concurrency budget
-move with their tests at the unchanged 100% thresholds. `db/export.ts` remains
-in desktop's gate: its test still composes the desktop delegation store. The
-cross-ledger transaction test and full host-notice integration test also stay
-in desktop until their remaining desktop dependencies move.
+Coverage entries for the activity/read/peek watches, concurrency budget and
+`db/export.ts` run here at unchanged 100% thresholds. The export test and
+`db/transaction-gate-ledgers.test.ts` compose host-core ledgers and run in the
+Linux packages lane. The full host-notice integration test stays in desktop
+until its remaining desktop dependencies move.
 
 ### Persistence
 
@@ -454,14 +455,15 @@ move**: no behavior change, no migration, and the app is identical with the
    - A test whose imports all land in host-core moves with `git mv`.
    - A test that still composes desktop modules stays in desktop at its old
      path and imports from `@volli/host-core`. It moves in the ticket that
-     moves its last desktop dependency. Examples: `apps/desktop/src/main/db/*.test.ts`
-     and `transaction-gate-ledgers.test.ts`.
+     moves its last desktop dependency. For example,
+     `apps/desktop/src/main/volli-fs-ipc.test.ts` still composes the desktop
+     IPC adapter.
 6. **Coverage moves with the test.** A protected entry in
    `apps/desktop/vite.config.ts` moves to this package's `vite.config.ts`
    when host-core's own tests hold it at 100%. Check that with
    `vp test run <test> --coverage --coverage.include=<file>`. If its test
    must stay in desktop, re-point the desktop entry to
-   `**/packages/host-core/src/<path>`, as `db/export.ts` is.
+   `**/packages/host-core/src/<path>`, as `project-roots.ts` is.
 7. **Fix every path reference.** `rg` the old directory across:
    - e2e and bench scripts (`ssrLoadModule("/apps/desktop/src/main/...")`, `load("src/main/...")`);
    - `apps/desktop/scripts`;
