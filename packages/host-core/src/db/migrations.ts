@@ -8,6 +8,11 @@
  * nothing to protect yet. After success, an existing database may be compacted
  * before exact-name retention deletes older migration copies while preserving
  * the new rollback point.
+ *
+ * A database NEWER than this build is not migrated at all: `openVolliDb`
+ * checks it first (`schema-compatibility.ts`), and this runner finds nothing
+ * pending. Read "Breaking an older reader" above {@link MIGRATIONS} before
+ * adding a migration.
  */
 import { randomUUID } from "node:crypto";
 import { copyFileSync, lstatSync, renameSync, rmSync } from "node:fs";
@@ -26,6 +31,7 @@ import {
   logMigrationCompaction,
   skippedMigrationCompaction,
 } from "./migration-compaction";
+import { raiseMinReaderVersion } from "./schema-compatibility";
 import {
   assertSessionStorageContentUnchanged,
   computeSessionStorageContentDigest,
@@ -46,6 +52,17 @@ export interface Migration {
    * transaction, the backup and the `user_version` bump stay the runner's.
    */
   apply?(db: Database.Database): void;
+  /**
+   * Whether this migration breaks builds whose schema head is below it (VC-602).
+   * `true` raises the database's minimum reader version to this migration's
+   * own version, in the same transaction, so an older build refuses the file
+   * instead of running against a schema it cannot use. Omit it for anything
+   * additive — see "Breaking an older reader" above {@link MIGRATIONS}.
+   *
+   * Part of the migration's lock fingerprint once it is `true`: a shipped
+   * migration cannot gain or lose it.
+   */
+  raisesMinReader?: true;
 }
 
 /**
@@ -2389,6 +2406,46 @@ BEGIN
 END;
 `;
 
+/**
+ * Every migration, in order. Append only; a shipped entry is frozen by
+ * `migrations.lock.json`.
+ *
+ * ## Breaking an older reader (VC-602)
+ *
+ * A canary or newer build migrates a profile; the person then runs an older
+ * build against it (a channel switch, a manual DMG install). That older build
+ * finds `user_version` above its own head and opens the file anyway, running
+ * no migration, unless the file's minimum reader version is above its head
+ * (`schema-compatibility.ts`). So every migration answers one question: **can
+ * a build that knows nothing about this migration still read, write and back
+ * up a database that has run it, without harm to either build?**
+ *
+ * Yes (the default, leave `raisesMinReader` off):
+ *  - a new table older builds never touch, a new index;
+ *  - a new nullable column, or one with a default that older inserts satisfy;
+ *  - a trigger or constraint that every older write still satisfies;
+ *  - AND the newer build tolerates what an older build leaves behind: rows it
+ *    inserts without the new column, a new table it does not maintain, and a
+ *    backup bundle stamped with ITS head that omits the new tables and
+ *    columns (a newer build restores that bundle by migrating it up, so the
+ *    new data must be expendable or rebuilt on open).
+ *
+ * No (set `raisesMinReader: true`):
+ *  - dropping or renaming a table or column an older build reads or writes;
+ *  - a NOT NULL column without a default on a table older builds insert into;
+ *  - a CHECK, foreign key or trigger that an older build's writes can break;
+ *  - changing what an existing column, `app_state` value or JSON payload means,
+ *    or a value older builds parse strictly (Session Events are exempt: they
+ *    are tolerant on read by rule);
+ *  - moving data so an older build reads half of it, or writes where the newer
+ *    build no longer looks;
+ *  - new state a newer build must never find empty after restoring an older
+ *    build's backup, such as epoch or fence history (`host-identity.md`).
+ *
+ * When unsure, raise it: a refusal names itself and the remedy, while a wrong
+ * "compatible" corrupts silently. `app_state` and its
+ * `volli:min-reader-version` key are permanent; no migration may remove them.
+ */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2699,6 +2756,9 @@ export const MIGRATIONS: readonly Migration[] = [
  * on a column that is already there, and a lineage can be re-offered a version
  * it already ran.
  */
+/** This build's schema head: the newest migration it knows. */
+export const SCHEMA_HEAD: number = MIGRATIONS.at(-1)?.version ?? 0;
+
 function applyMigration053ProjectDecisionModel(db: Database.Database): void {
   const columns = db.pragma("table_info(projects)") as { name: string }[];
   if (columns.some(({ name }) => name === "decision_model")) return;
@@ -3239,6 +3299,8 @@ export interface MigrateOptions {
    * refusal, not a truncation.
    */
   toVersion?: number;
+  /** Tests only: a migration list other than {@link MIGRATIONS}. */
+  migrations?: readonly Migration[];
 }
 
 /**
@@ -3261,9 +3323,9 @@ export function migrate(
     });
   }
   const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
-  const pending = MIGRATIONS.filter(
-    (migration) => migration.version > currentVersion && migration.version <= ceiling,
-  ).toSorted((a, b) => a.version - b.version);
+  const pending = (options.migrations ?? MIGRATIONS)
+    .filter((migration) => migration.version > currentVersion && migration.version <= ceiling)
+    .toSorted((a, b) => a.version - b.version);
   if (pending.length === 0) {
     logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
     return false;
@@ -3365,6 +3427,11 @@ export function migrate(
       // parameters, and `migration.version` is an internal integer literal
       // from MIGRATIONS above, never renderer-supplied input.
       db.pragma(`user_version = ${migration.version}`);
+      // In the same transaction as the schema change: an older build must never
+      // see this version without the floor that keeps it out.
+      if (migration.raisesMinReader === true) {
+        raiseMinReaderVersion(db, migration.version, Date.now());
+      }
     }
 
     const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];

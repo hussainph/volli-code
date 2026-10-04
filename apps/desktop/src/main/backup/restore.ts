@@ -30,6 +30,7 @@ import Database from "better-sqlite3";
 
 import { blobsRoot, writeBlob } from "../blob-store";
 import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
 import {
   createFileTranscriptArtifactStore,
@@ -43,7 +44,7 @@ import {
   type BackupManifest,
   type ReadBackupBundle,
 } from "./bundle";
-import { decodeValue } from "./data-document";
+import { decodeValue, isSchemaMarkerRow } from "./data-document";
 import type { BackupDataDocument, BackupProblem } from "./data-document";
 import { BACKUP_INCLUDED_TABLES } from "./decisions";
 
@@ -162,15 +163,18 @@ function writeRows(
     // triggers' guesses go first.
     if (table === "ticket_event_sequence") db.exec("DELETE FROM ticket_event_sequence");
     if (table === "session_event_sequence") db.exec("DELETE FROM session_event_sequence");
-    counts[table] = data.rows.length;
-    if (data.rows.length === 0) continue;
+    // A hand-built or foreign bundle's schema marker is never written back:
+    // the migrations this restore runs own the restored file's floor.
+    const rows = data.rows.filter((row) => !isSchemaMarkerRow(table, data.columns, row));
+    counts[table] = rows.length;
+    if (rows.length === 0) continue;
     const pathIndex = table === "projects" ? data.columns.indexOf("path") : -1;
     const idIndex = table === "projects" ? data.columns.indexOf("id") : -1;
     const statement = db.prepare(
       `INSERT INTO "${table}" (${data.columns.map((column) => `"${column}"`).join(", ")})
        VALUES (${data.columns.map(() => "?").join(", ")})`,
     );
-    for (const row of data.rows) {
+    for (const row of rows) {
       const values = row.map((value, index) => {
         if (index === pathIndex) {
           const id = String(decodeValue(row[idIndex] ?? null));
@@ -231,10 +235,17 @@ async function verifyStagedProfile(
   // that is the intended outcome rather than a false alarm: two writers filling
   // one table during a restore is a question someone has to answer here.
   for (const [table, expected] of Object.entries(counts)) {
-    const actual = (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
-    if (actual !== expected) {
+    // The schema marker is the migrations' own row, not the bundle's.
+    const actual = (
+      table === "app_state"
+        ? db
+            .prepare(`SELECT COUNT(*) AS n FROM app_state WHERE key IS NOT ?`)
+            .get(MIN_READER_VERSION_KEY)
+        : db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get()
+    ) as { n: number };
+    if (actual.n !== expected) {
       problems.push(
-        problem("verify", `${table} restored ${actual} rows; the bundle carried ${expected}.`),
+        problem("verify", `${table} restored ${actual.n} rows; the bundle carried ${expected}.`),
       );
     }
   }

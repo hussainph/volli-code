@@ -420,6 +420,14 @@ export const DATABASE_RECOVERY_IPC = {
     guard: (args: unknown[]): args is [] => args.length === 0,
     invalidError: "Invalid database recovery request",
   },
+  "volli:database-recovery-fault": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-quit": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
 };
 
 // ---- data-IPC descriptor table ------------------------------------------

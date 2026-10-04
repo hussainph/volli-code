@@ -4,11 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type {
+  DatabaseOpenFault,
+  DatabaseRecoveryFaultResult,
   DatabaseRecoveryListResult,
   DatabaseRecoveryRestoreResult,
   DatabaseSafetyCopy,
+  Result,
+  UpdateUiState,
 } from "../../../ipc/contract";
-import { BootErrorPanel } from "./boot-error-panel";
+import { BootErrorPanel, DOWNLOAD_URL, NEWER_VERSION_TITLE } from "./boot-error-panel";
 
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const CLEAN: DatabaseSafetyCopy = {
@@ -60,8 +64,65 @@ function bridge(
     if (restoreResult instanceof Error) throw restoreResult;
     return restoreResult;
   });
-  vi.stubGlobal("api", { databaseRecovery: { list, restore } });
-  return { list, restore };
+  const fault = vi.fn(async (): Promise<DatabaseRecoveryFaultResult> => ({
+    ok: true,
+    fault: "unreadable",
+  }));
+  const quit = vi.fn(async (): Promise<Result> => ({ ok: true }));
+  const updates = updater();
+  vi.stubGlobal("api", { databaseRecovery: { list, restore, fault, quit }, updates });
+  return { list, restore, fault, quit, updates };
+}
+
+function updaterState(overrides: Partial<UpdateUiState> = {}): UpdateUiState {
+  return {
+    supported: true,
+    phase: "idle",
+    currentVersion: "0.4.0",
+    targetVersion: null,
+    percent: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function updater(initial: UpdateUiState = updaterState()) {
+  let listener: ((state: UpdateUiState) => void) | undefined;
+  return {
+    state: vi.fn(async () => ({ ok: true as const, state: initial })),
+    check: vi.fn(async (): Promise<Result> => ({ ok: true })),
+    install: vi.fn(async (): Promise<Result> => ({ ok: true })),
+    onState: vi.fn((callback: (state: UpdateUiState) => void) => {
+      listener = callback;
+      return () => {
+        listener = undefined;
+      };
+    }),
+    push: (state: UpdateUiState) => listener?.(state),
+  };
+}
+
+/** A main process whose database came from a newer Volli (VC-602). */
+function newerBridge(
+  fault: DatabaseOpenFault = "newer-version",
+  initial: UpdateUiState = updaterState(),
+) {
+  const main = bridge({ ok: true, backups: [] });
+  main.fault.mockResolvedValue({ ok: true, fault });
+  main.updates.state.mockResolvedValue({ ok: true, state: initial });
+  return main;
+}
+
+function buttonLabelled(label: string): HTMLButtonElement {
+  const found = [...container.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (found === undefined) throw new Error(`No button labelled ${label}`);
+  return found;
+}
+
+function downloadLink(): HTMLAnchorElement | null {
+  return container.querySelector(`a[href="${DOWNLOAD_URL}"]`);
 }
 
 async function mount(
@@ -257,5 +318,119 @@ describe("BootErrorPanel", () => {
     await act(async () => stale.resolve({ ok: true, backups: [] }));
     expect(restoreButton().disabled).toBe(false);
     expect(text()).not.toContain("No local backup checks clean");
+  });
+
+  it("names a database from a newer Volli, without the raw error", async () => {
+    const main = newerBridge();
+    main.list.mockResolvedValue({
+      ok: true,
+      backups: [CLEAN, { name: "volli.db.backup-v99", modifiedAt: 4000, integrity: "newer" }],
+    });
+    await mount("This database was created by a newer version of Volli. Nothing was changed.");
+
+    expect(container.querySelector("h1")?.textContent).toBe(NEWER_VERSION_TITLE);
+    expect(text()).toContain(
+      "This version can't open it, so nothing was changed. Update Volli, or restore an older backup.",
+    );
+    expect(text()).not.toContain("Volli couldn't load its data");
+    expect([...container.querySelectorAll("li span")].map((span) => span.textContent)).toEqual([
+      "newer version",
+      "clean",
+    ]);
+    // Restoring an older backup is the same action as on the damaged screen.
+    expect(restoreButton().disabled).toBe(false);
+  });
+
+  it("checks for updates, then offers the download page when nothing is newer", async () => {
+    const main = newerBridge();
+    await mount();
+    expect(downloadLink()).toBeNull();
+
+    await act(async () => buttonLabelled("Check for updates").click());
+    expect(main.updates.check).toHaveBeenCalledOnce();
+    // Nothing is said about the result until the check has actually run.
+    expect(text()).not.toContain("No newer version");
+    await act(async () => main.updates.push(updaterState({ phase: "checking" })));
+    expect(buttonLabelled("Checking…").disabled).toBe(true);
+    await act(async () => main.updates.push(updaterState({ phase: "idle" })));
+    expect(text()).toContain("No newer version on this update channel.");
+    expect(downloadLink()?.target).toBe("_blank");
+  });
+
+  it("shows the download, then installs the update on request", async () => {
+    const main = newerBridge();
+    await mount();
+    await act(async () =>
+      main.updates.push(updaterState({ phase: "downloading", targetVersion: "0.5.0", percent: 3 })),
+    );
+    expect(text()).toContain("Downloading Volli 0.5.0…");
+    expect(buttonLabelled("Check for updates").disabled).toBe(true);
+    await act(async () =>
+      main.updates.push(updaterState({ phase: "downloaded", targetVersion: "0.5.0" })),
+    );
+    expect(text()).toContain("Volli 0.5.0 is ready.");
+    await act(async () => buttonLabelled("Restart to update").click());
+    expect(main.updates.install).toHaveBeenCalledOnce();
+
+    main.updates.install.mockResolvedValueOnce({
+      ok: false,
+      error: "No update has been downloaded yet.",
+    });
+    await act(async () => buttonLabelled("Restart to update").click());
+    expect(text()).toContain("Couldn't install the update.");
+  });
+
+  it("says when a check fails, and offers the download page", async () => {
+    const main = newerBridge();
+    await mount();
+    await act(async () =>
+      main.updates.push(updaterState({ phase: "error", error: "network down" })),
+    );
+    expect(text()).toContain("Couldn't check for updates.");
+    expect(downloadLink()).not.toBeNull();
+  });
+
+  it("offers the download page instead of a check when this build has no updater", async () => {
+    newerBridge("newer-version", updaterState({ supported: false }));
+    await mount();
+    expect(downloadLink()?.textContent).toBe("Open the download page");
+    expect(
+      [...container.querySelectorAll("button")].some((b) => b.textContent === "Check for updates"),
+    ).toBe(false);
+  });
+
+  it("quits on request, and says so when it cannot", async () => {
+    const main = newerBridge();
+    await mount();
+    await act(async () => buttonLabelled("Quit Volli").click());
+    expect(main.quit).toHaveBeenCalledOnce();
+    expect(text()).not.toContain("Couldn't quit Volli.");
+
+    main.quit.mockRejectedValueOnce(new Error("ipc closed"));
+    await act(async () => buttonLabelled("Quit Volli").click());
+    expect(text()).toContain("Couldn't quit Volli.");
+  });
+
+  it("keeps working when the updater cannot be read or watched", async () => {
+    const main = newerBridge();
+    main.updates.state.mockRejectedValue(new Error("no updater"));
+    main.updates.onState.mockImplementation(() => {
+      throw new Error("no listener");
+    });
+    await mount();
+    expect(container.querySelector("h1")?.textContent).toBe(NEWER_VERSION_TITLE);
+    expect(downloadLink()).not.toBeNull();
+    expect(buttonLabelled("Quit Volli")).toBeTruthy();
+  });
+
+  it.each([
+    ["the read throws", () => Promise.reject(new Error("no such channel"))],
+    ["main refuses it", () => Promise.resolve({ ok: false as const, error: "nope" })],
+  ])("falls back to the damaged-database screen when %s", async (_label, read) => {
+    const main = bridge();
+    main.fault.mockImplementation(read);
+    await mount();
+    expect(container.querySelector("h1")?.textContent).toBe("Volli couldn't load its data");
+    expect(downloadLink()).toBeNull();
   });
 });

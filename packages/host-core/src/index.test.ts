@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -9,6 +10,9 @@ import {
   throwTransactionViolation,
 } from "./index";
 import type { HostCore } from "./index";
+import Database from "better-sqlite3";
+import { SCHEMA_HEAD } from "./db/migrations";
+import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 
 const dirs: string[] = [];
 const opened: HostCore[] = [];
@@ -60,6 +64,7 @@ describe("createHostCore", () => {
     );
     expect(core.dbPath).toBe(databasePath);
     expect(core.database.ok).toBe(true);
+    expect(core.databaseFailure).toBeNull();
   });
 
   it("installs the transaction-ownership handler the host chose", () => {
@@ -110,9 +115,53 @@ describe("createHostCore", () => {
       ok: false,
       error: expect.stringContaining("damaged header") as unknown,
     });
+    expect(core.databaseFailure).toEqual({ kind: "other" });
     expect(log.error).toHaveBeenCalledWith(
       "[volli] failed to open database:",
       expect.stringContaining("damaged header"),
     );
+  });
+
+  it("refuses a database from a newer Volli with a typed failure, touching nothing (VC-602)", () => {
+    const root = dataDir();
+    const seed = compose(
+      { log: { error: vi.fn() } },
+      { dataDir: root, onTransactionViolation: throwTransactionViolation, devDiagnostics: false },
+    );
+    if (!seed.database.ok) throw new Error(seed.database.error);
+    seed.database.db.close();
+    opened.pop();
+    const stamp = new Database(seed.dbPath);
+    stamp.pragma(`user_version = ${SCHEMA_HEAD + 1}`);
+    stamp
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
+      .run(MIN_READER_VERSION_KEY, String(SCHEMA_HEAD + 1));
+    stamp.pragma("wal_checkpoint(TRUNCATE)");
+    stamp.close();
+    const hash = () => createHash("sha256").update(readFileSync(seed.dbPath)).digest("hex");
+    const before = hash();
+
+    const log = { error: vi.fn() };
+    const core = compose(
+      { log },
+      { dataDir: root, onTransactionViolation: throwTransactionViolation, devDiagnostics: false },
+    );
+
+    expect(core.database).toEqual({
+      ok: false,
+      error:
+        "This database was created by a newer version of Volli. Nothing was changed. Update Volli, or restore an older backup.",
+    });
+    expect(core.databaseFailure).toEqual({
+      kind: "newer-version",
+      schemaVersion: SCHEMA_HEAD + 1,
+      supportedVersion: SCHEMA_HEAD,
+      minReaderVersion: SCHEMA_HEAD + 1,
+    });
+    expect(log.error).toHaveBeenCalledWith(
+      "[volli] failed to open database:",
+      expect.stringContaining(`Database schema ${SCHEMA_HEAD + 1} is newer`),
+    );
+    expect(hash()).toBe(before);
   });
 });

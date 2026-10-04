@@ -141,6 +141,7 @@ import type {
   VenueSnapshotResult,
 } from "../ipc/contract";
 import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import {
   deleteComment,
   getComment,
@@ -1456,6 +1457,11 @@ export function registerDataIpcHandlers(
     },
 
     "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+      // The schema floor is the migration runner's alone (VC-602): a renderer
+      // write could lock older builds out of this database, or let them in.
+      if (key === MIN_READER_VERSION_KEY) {
+        return { ok: false, error: "This app state key is owned by the database." };
+      }
       setAppState(db, key, value, Date.now());
       return { ok: true };
     },

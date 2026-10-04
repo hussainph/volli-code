@@ -25,6 +25,7 @@ import { blobFilePath, blobsRoot } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "@volli/host-core/db/migrations";
 import { openRawDb } from "@volli/host-core/db/test-helpers";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
@@ -445,6 +446,120 @@ describe("restoreBackupBundle — an older bundle from a supported app version",
       source = createFixtureProfile();
     },
   );
+});
+
+/** The data document a bundle carries, parsed. */
+function dataDocument(bytes: Buffer): {
+  schemaVersion: number;
+  tables: Record<string, { columns: string[]; rows: unknown[][] }>;
+} {
+  const data = unpackArchive(bytes).find((entry) => entry.path === "data.json");
+  if (data === undefined) throw new Error("bundle has no data document");
+  return JSON.parse(data.bytes.toString("utf8")) as ReturnType<typeof dataDocument>;
+}
+
+describe("restoreBackupBundle — a backup of a database from a newer build (VC-602)", () => {
+  /**
+   * What a newer, compatible build leaves behind as far as this build can see:
+   * an additive table, an additive column with data in it, a `user_version`
+   * past this head, and a floor this head satisfies.
+   */
+  function newerCompatibleBundle(): Buffer {
+    source = createFixtureProfile();
+    source.db.exec(`
+      CREATE TABLE future_feature (id TEXT PRIMARY KEY);
+      INSERT INTO future_feature VALUES ('only-the-newer-build-knows');
+      ALTER TABLE tickets ADD COLUMN future_column TEXT DEFAULT 'newer';
+    `);
+    source.db.pragma(`user_version = ${HEAD_SCHEMA + 1}`);
+    source.db
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
+      .run(MIN_READER_VERSION_KEY, String(HEAD_SCHEMA));
+    return createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "0.2.0-test",
+      now: 1_700_000_000_000,
+    }).bytes;
+  }
+
+  it("stamps this build's head and carries only this build's tables and columns", () => {
+    const document = dataDocument(newerCompatibleBundle());
+
+    expect(document.schemaVersion).toBe(HEAD_SCHEMA);
+    expect(document.tables["future_feature"]).toBeUndefined();
+    expect(document.tables["tickets"]?.columns).not.toContain("future_column");
+    // The floor describes the source file, not data; a restore derives its own.
+    const appState = document.tables["app_state"];
+    const keyIndex = appState?.columns.indexOf("key") ?? -1;
+    expect(appState?.rows.map((row) => row[keyIndex])).not.toContain(MIN_READER_VERSION_KEY);
+  });
+
+  it("restores, which no build could do with a bundle stamped by the file's version", async () => {
+    const target = targetProfile();
+    const result = await restoreBackupBundle({
+      bundle: newerCompatibleBundle(),
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.bundleSchemaVersion).toBe(HEAD_SCHEMA);
+    const db = restoredDb(target.root);
+    try {
+      expect(db.pragma("user_version", { simple: true })).toBe(HEAD_SCHEMA);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM tickets").get()).toEqual({ n: 2 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("never writes a schema marker a bundle carries, and still verifies its counts", async () => {
+    const bytes = bundleBytes();
+    const entries = unpackArchive(bytes);
+    const data = entries.find((entry) => entry.path === "data.json");
+    const manifestEntry = entries.find((entry) => entry.path === "manifest.json");
+    if (data === undefined || manifestEntry === undefined) throw new Error("bundle is incomplete");
+    const document = JSON.parse(data.bytes.toString("utf8")) as {
+      tables: Record<string, { columns: string[]; rows: unknown[][] }>;
+    };
+    const appState = document.tables["app_state"]!;
+    appState.rows.push(
+      appState.columns.map((column) =>
+        column === "key" ? MIN_READER_VERSION_KEY : column === "value" ? "999" : 1,
+      ),
+    );
+    data.bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+    const manifest = JSON.parse(manifestEntry.bytes.toString("utf8")) as {
+      entries: Array<{ path: string; sizeBytes: number; sha256: string }>;
+    };
+    const entry = manifest.entries.find((item) => item.path === "data.json")!;
+    entry.sizeBytes = data.bytes.length;
+    entry.sha256 = createHash("sha256").update(data.bytes).digest("hex");
+    manifestEntry.bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: packArchive(entries),
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      // A forged floor of 999 would lock this very build out of its restore.
+      expect(
+        db.prepare("SELECT value FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
 });
 
 /** The claim every refusal makes: the profile is exactly as it was. */
