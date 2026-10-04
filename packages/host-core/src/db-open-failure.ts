@@ -31,6 +31,7 @@
  */
 
 import { errorMessage } from "@volli/shared";
+import { DatabaseFromNewerVersionError } from "./db/schema-compatibility";
 
 /**
  * The supported Node range, as printed in diagnostics. Kept in sync with the
@@ -104,6 +105,48 @@ const DEV_NATIVE_MODULE_REMEDY =
   `the repo's .nvmrc), re-run \`pnpm install\` to rebuild native modules, and ` +
   `relaunch.`;
 
+/**
+ * The typed classification of a failed open, for a host that routes on it
+ * rather than on the sentence (VC-602). Desktop shows the named "newer
+ * version" recovery screen for `newer-version`; a headless host can refuse to
+ * serve with the same reason.
+ */
+export type DbOpenFailure =
+  | {
+      kind: "newer-version";
+      /** The file's `user_version`. */
+      schemaVersion: number;
+      /** This build's schema head. */
+      supportedVersion: number;
+      /** The file's floor; `null` when unreadable. */
+      minReaderVersion: number | null;
+    }
+  | { kind: "native-module" }
+  | { kind: "other" };
+
+/** Classifies a failed `openVolliDb`. */
+export function classifyDbOpenFailure(error: unknown): DbOpenFailure {
+  if (error instanceof DatabaseFromNewerVersionError) {
+    return {
+      kind: "newer-version",
+      schemaVersion: error.schemaVersion,
+      supportedVersion: error.supportedVersion,
+      minReaderVersion: error.minReaderVersion,
+    };
+  }
+  return isNativeModuleFailure(errorMessage(error)) ? { kind: "native-module" } : { kind: "other" };
+}
+
+/**
+ * What a person who did not build this app is told about a database from a
+ * newer Volli: what happened, that nothing changed, and the two ways out.
+ * Version numbers stay in the log, where {@link dbOpenFailureLogLine} puts
+ * them. Carries its own framing, like {@link USER_NATIVE_MODULE_REMEDY}.
+ */
+export const USER_NEWER_VERSION_REMEDY =
+  "This database was created by a newer version of Volli. Nothing was changed. " +
+  "Update Volli, or restore an older backup.";
+
 /** Who the message is for. `dev` is `!app.isPackaged` at the one call site. */
 export interface DbOpenFailureAudience {
   /** A development build, where the repo, nvm and pnpm all exist. */
@@ -143,6 +186,9 @@ export function describeDbOpenFailure(
   // message ('disk full', 'permission denied') speaks for itself — keeps the
   // message and gets the frame that says which subsystem it came from.
   if (!audience.dev && isNativeModuleFailure(message)) return USER_NATIVE_MODULE_REMEDY;
+  if (!audience.dev && error instanceof DatabaseFromNewerVersionError) {
+    return USER_NEWER_VERSION_REMEDY;
+  }
   return `${DB_OPEN_FRAME}: ${developerDetail(message)}`;
 }
 

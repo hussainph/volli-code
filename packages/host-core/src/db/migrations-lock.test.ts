@@ -57,6 +57,50 @@ describe("shipped migration lock", () => {
     );
   });
 
+  // VC-602: whether a migration raises the minimum reader version shipped with
+  // it. Declaring it on (or off) after the fact would let an older build open a
+  // file it cannot use, or lock one out for nothing.
+  it("rejects declaring raisesMinReader on a shipped migration", () => {
+    for (const version of [1, MIGRATIONS.at(-1)!.version]) {
+      const declared = MIGRATIONS.map((migration) =>
+        migration.version === version
+          ? { ...migration, raisesMinReader: true as const }
+          : migration,
+      );
+      expect(() => assertMigrationLock(declared, migrationFingerprints(declared), lock)).toThrow(
+        `you edited shipped migration ${version}: add a new migration instead`,
+      );
+    }
+  });
+
+  it("locks a new migration's raisesMinReader declaration with it", () => {
+    const version = MIGRATIONS.at(-1)!.version + 1;
+    const raising = [
+      ...MIGRATIONS,
+      { version, name: "breaking", sql: "SELECT 1;", raisesMinReader: true as const },
+    ];
+    const additive = [...MIGRATIONS, { version, name: "breaking", sql: "SELECT 1;" }];
+    const raisingFingerprints = migrationFingerprints(raising);
+    expect(raisingFingerprints[version]).not.toBe(migrationFingerprints(additive)[version]);
+    const locked = JSON.parse(appendMissingMigrationLocks(raising, raisingFingerprints, text));
+    expect(() => assertMigrationLock(raising, raisingFingerprints, locked)).not.toThrow();
+    // Dropping the declaration once locked is an edit, too.
+    expect(() => assertMigrationLock(additive, migrationFingerprints(additive), locked)).toThrow(
+      `you edited shipped migration ${version}: add a new migration instead`,
+    );
+  });
+
+  it("accepts raisesMinReader only as true or absent", () => {
+    const version = MIGRATIONS.at(-1)!.version + 1;
+    const malformed = [
+      ...MIGRATIONS,
+      { version, name: "x", sql: "SELECT 1;", raisesMinReader: false as unknown as true },
+    ];
+    expect(() => migrationFingerprints(malformed)).toThrow(
+      `Migration ${version}: raisesMinReader must be \`true\` or omitted`,
+    );
+  });
+
   it("rejects a deliberate edit to shipped apply source", () => {
     assertSourceEdit('column.name === "attendance"', 'column.name === "changed_attendance"', 33);
   });

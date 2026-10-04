@@ -2701,15 +2701,30 @@ export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 export interface DatabaseSafetyCopy {
   name: string;
   modifiedAt: number;
-  integrity: "clean" | "damaged" | "unavailable";
+  /**
+   * `newer`: the copy checks clean but comes from a newer Volli this build
+   * cannot open (VC-602), so restore passes over it.
+   */
+  integrity: "clean" | "damaged" | "unavailable" | "newer";
 }
 
 export type DatabaseRecoveryListResult = Result<{ backups: DatabaseSafetyCopy[] }>;
 export type DatabaseRecoveryRestoreResult = Result<{ restoredBackup: string }>;
 
+/**
+ * Why the database failed to open, as far as the recovery screen needs to
+ * know: `newer-version` names the "database is from a newer Volli" variant
+ * (VC-602); everything else is `unreadable`.
+ */
+export type DatabaseOpenFault = "unreadable" | "newer-version";
+export type DatabaseRecoveryFaultResult = Result<{ fault: DatabaseOpenFault }>;
+
 export interface VolliDatabaseRecoveryIpcContract {
   "volli:database-recovery-list": { args: []; result: DatabaseRecoveryListResult };
   "volli:database-recovery-restore": { args: []; result: DatabaseRecoveryRestoreResult };
+  "volli:database-recovery-fault": { args: []; result: DatabaseRecoveryFaultResult };
+  /** Quits Volli from the recovery screen; only while the database is unavailable. */
+  "volli:database-recovery-quit": { args: []; result: Result };
 }
 
 /** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */

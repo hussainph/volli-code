@@ -38,6 +38,9 @@ export default defineConfig({
         // wrong is work a person never sees they have, and nothing on screen
         // says the dot was the part that was broken.
         "src/db/session-read-repo.ts",
+        // The downgrade guard (VC-602): a branch read wrong either opens a
+        // database this build cannot use or locks a person out of their own.
+        "src/db/schema-compatibility.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

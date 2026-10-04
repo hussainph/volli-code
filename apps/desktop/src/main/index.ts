@@ -943,6 +943,8 @@ app.whenReady().then(async () => {
     dbPath,
     userData: app.getPath("userData"),
     degraded: !dbHandle.ok,
+    // A database from a newer Volli gets its own recovery screen (VC-602).
+    fault: hostCore.databaseFailure?.kind === "newer-version" ? "newer-version" : "unreadable",
     restart: () => {
       // Let the IPC reply paint success before restarting the entire service
       // graph; degraded handlers must not be replaced with partially live ones.
@@ -951,6 +953,7 @@ app.whenReady().then(async () => {
         app.quit();
       }, 750);
     },
+    quit: () => setTimeout(() => app.quit(), 0),
   });
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
   installExperimentalSettings(

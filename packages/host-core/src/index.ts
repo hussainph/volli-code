@@ -18,13 +18,19 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { openVolliDb } from "./db";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
-import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
+import {
+  classifyDbOpenFailure,
+  dbOpenFailureLogLine,
+  describeDbOpenFailure,
+} from "./db-open-failure";
+import type { DbOpenFailure } from "./db-open-failure";
 import {
   createHostSessionServices,
   type HostSessionPorts,
   type HostSessionServices,
 } from "./session-services";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
+export type { DbOpenFailure } from "./db-open-failure";
 
 export {
   logTransactionViolation,
@@ -68,6 +74,13 @@ export interface HostCore extends HostSessionServices {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
+  /**
+   * Why the database did not open, typed for routing (VC-602): `null` when it
+   * opened. `database.error` is the sentence every degraded surface answers
+   * with; this is what a host branches on, such as desktop's "database is
+   * from a newer Volli" screen.
+   */
+  readonly databaseFailure: DbOpenFailure | null;
 }
 
 /** `<dataDir>/volli.db`: where a host keeps its database unless told otherwise. */
@@ -90,6 +103,7 @@ export function defaultDatabasePath(dataDir: string): string {
 export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): HostCore {
   const dbPath = options.databasePath ?? defaultDatabasePath(options.dataDir);
   let database: DbHandle;
+  let databaseFailure: DbOpenFailure | null = null;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = openVolliDb(dbPath, { onTransactionViolation: options.onTransactionViolation });
@@ -103,12 +117,14 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     // log keeps the raw message plus the dev-loop remedy either way, so a
     // packaged user's report is still diagnosable.
     database = { ok: false, error: describeDbOpenFailure(error, { dev: options.devDiagnostics }) };
+    databaseFailure = classifyDbOpenFailure(error);
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
   }
   return {
     dataDir: options.dataDir,
     dbPath,
     database,
+    databaseFailure,
     ...createHostSessionServices(database.ok ? database.db : null, ports),
   };
 }

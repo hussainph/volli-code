@@ -1,8 +1,10 @@
 import Database from "better-sqlite3";
 import { closeSync, existsSync, openSync, readSync } from "node:fs";
-import { migrate } from "./migrations";
+import { migrate, SCHEMA_HEAD } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
 import { assertNoPendingDatabaseRecovery } from "./recovery-pending";
+import { checkSchemaCompatibility } from "./schema-compatibility";
+import type { SchemaCompatibility } from "./schema-compatibility";
 import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
 import type { TransactionViolationHandler } from "./transaction-gate";
 
@@ -35,7 +37,13 @@ export function assertDatabaseHeader(dbPath: string): void {
  * `wal_autocheckpoint` (see below) and, when migrations run, a bounded ANALYZE
  * refreshes the planner statistics without making routine opens write.
  *
- * Runs any pending migrations.
+ * Runs any pending migrations — unless the file is from a newer build
+ * (VC-602). Before anything opens it for writing, the read-only preflight
+ * compares its `user_version` and minimum reader version with this build's
+ * schema head (`schema-compatibility.ts`): a newer, compatible file opens
+ * with no migration and its `user_version` untouched, and a newer,
+ * incompatible one throws `DatabaseFromNewerVersionError` with the file
+ * byte-for-byte as it was.
  * The parent directory must already exist; `src/main/index.ts` creates it
  * (and catches everything this throws) before calling in, since that's also
  * where the open+migrate failure is turned into the degraded IPC story.
@@ -57,6 +65,7 @@ export function openVolliDb(
   const openLock = options.allowPendingRecovery ? undefined : acquireDatabaseOpenLock(dbPath);
   try {
     if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
+    let compatibility: SchemaCompatibility | undefined;
     if (existsSync(dbPath)) {
       // Read-only preflight cannot checkpoint/delete a damaged WAL on close or
       // overwrite a clean migration safety copy before recovery becomes available.
@@ -69,6 +78,12 @@ export function openVolliDb(
             "The local database failed its integrity check. Restore from the last backup that checks clean.",
           );
         }
+        // The downgrade guard, on the read-only handle. A refusal opens no
+        // writable handle, checkpoints nothing and takes no safety copy: the
+        // db file and its WAL stay byte-identical; `-shm`, an index with no
+        // data, may be created or reset by SQLite's read-only reader, exactly
+        // as the preflight above already does.
+        compatibility = checkSchemaCompatibility(check, SCHEMA_HEAD);
       } finally {
         check.close();
       }
@@ -92,6 +107,11 @@ export function openVolliDb(
       // disk footprint while the automatic checkpoint still amortizes to a page
       // or two per commit.
       db.pragma("wal_autocheckpoint = 400");
+      if (compatibility?.newer === true) {
+        console.warn(
+          `[volli] database schema ${compatibility.schemaVersion} is newer than this build's ${SCHEMA_HEAD} and declares it compatible; opening without migrating.`,
+        );
+      }
       const migrated = migrate(db, dbPath);
       // Post-migration, so it sees the final schema. A bounded ANALYZE
       // (`analysis_limit` keeps each table's scan proportional — SQLite's own
