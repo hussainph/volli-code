@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vite-plus/test";
-import { BackgroundShellHost } from "../shell/background-shell-host";
+import { BackgroundShellHost } from "./background-shell-host";
 
 it("redacts combined pipe chunks for start, incremental/tail tools and renderer, failing closed", async () => {
   const root = mkdtempSync(join(process.cwd(), ".secret-shell-test-"));

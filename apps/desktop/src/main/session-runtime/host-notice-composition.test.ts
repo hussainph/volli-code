@@ -22,7 +22,7 @@ describe("host notice composition", () => {
       "const { hostNoticeOutbox, sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore",
     );
     expect(source).toContain("outbox: hostNoticeOutbox");
-    before("browserTabsRef = browserTabs", "await shellHostNotices?.recover()");
+    before("createRuntimeAssembly({", "await shellHostNotices?.recover()");
     before("await closeStaleAttachments({", "await shellHostNotices?.recover()");
     expect(source).toContain("delivery: shellHostNotices");
     expect(source).toContain("sessionWakeBus.subscribe(({ event }) => listener(event))");
