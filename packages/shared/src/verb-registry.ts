@@ -65,7 +65,7 @@ export type VerbActor = "any" | "session" | "role";
 
 /**
  * Where the verb's one handler binding lives: `main` answers over the agent
- * socket (`apps/desktop/src/main/agent-commands.ts`), `cli` answers locally in
+ * socket (`packages/host-core/src/agent-commands.ts`), `cli` answers locally in
  * the `volli` process and never opens a socket.
  */
 export type VerbHandlerSite = "main" | "cli";
@@ -2075,7 +2075,7 @@ export const VERB_REGISTRY = [
     // bundle only." So the whole of that ticket is this row plus one name in
     // one bundle — no CLI verb, no IPC channel of its own, and no second
     // implementation of a Run. The handler binding resolves the same Run door
-    // (`main/automations/run.ts`) the palette, the rail and the board already
+    // (`packages/host-core/src/automations/run.ts`) the palette, the rail and the board already
     // call, which is what makes a Run an agent started indistinguishable in
     // its record from a Run a person started by hand.
     //

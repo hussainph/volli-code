@@ -93,7 +93,7 @@ try {
   const concurrencyModule = await vite.ssrLoadModule(
     "/packages/host-core/src/session-concurrency.ts",
   );
-  const commandsModule = await vite.ssrLoadModule("/apps/desktop/src/main/agent-commands.ts");
+  const commandsModule = await vite.ssrLoadModule("/packages/host-core/src/agent-commands.ts");
 
   db = openVolliDb(join(temporaryDirectory, "volli.db"));
   for (let index = 0; index < PROJECT_COUNT; index += 1) {

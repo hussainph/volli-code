@@ -56,8 +56,8 @@ import {
   recordHarnessTrust,
   restoreRegisteredHarness,
 } from "@volli/host-core/db/harness-registry-repo";
-import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
-import type { DecidedHarnessManifest } from "./harness-registry";
+import { decideRegisteredHarnesses, scanHarnessManifests } from "@volli/host-core/harness-registry";
+import type { DecidedHarnessManifest } from "@volli/host-core/harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 

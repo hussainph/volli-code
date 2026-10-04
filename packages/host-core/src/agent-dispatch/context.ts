@@ -47,9 +47,9 @@ import type {
   SessionHarnessNotice,
   SessionStartedNotice,
   TicketMovedNotice,
-} from "../../ipc/contract";
+} from "@volli/shared";
 
-import type { NotificationOutcome, NotificationRequest } from "../notifications/dispatch";
+import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import type { Sessions } from "@volli/host-core/session-runtime/sessions";
 import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";

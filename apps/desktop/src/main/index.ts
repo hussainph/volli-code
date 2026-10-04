@@ -116,22 +116,10 @@ import {
 } from "@volli/host-core/db/projects-repo";
 import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
 import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import {
-  getAutomation,
-  getAutomationRun,
-  listAllAutomations,
-  listAutomationsForProject,
-  listColumnArmings,
-  listProjectRunsForAutomation,
-  listRunsForProject,
-  listRunsForTicket,
-  listSkippedOccurrencesForAutomation,
-  listSkippedOccurrencesForProject,
-} from "@volli/host-core/db/automations-repo";
+import { listAutomationsForProject } from "@volli/host-core/db/automations-repo";
 import {
   getTicket,
   getTicketBrief,
-  getTicketRow,
   listWorktreeHoldersForSessions,
   listWorktreeRefs,
 } from "@volli/host-core/db/tickets-repo";
@@ -139,23 +127,7 @@ import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
 import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
 import { catchUpSessionResumptions } from "@volli/host-core/session-runtime/session-resumptions";
 import type { SessionOrigin } from "@volli/shared";
-import {
-  beginPendingArmedRunAttempt,
-  deletePendingArmedRun,
-  deletePendingArmedRunAttempt,
-  deletePendingArmedRunForTicket,
-  getPendingArmedRun,
-  getPendingArmedRunAttempt,
-  listPendingArmedRunAttempts,
-  listPendingArmedRuns,
-  putPendingArmedRun,
-  updatePendingArmedRunAttemptError,
-} from "@volli/host-core/db/pending-armed-runs-repo";
-import { enabledAutomationIds } from "./automations/enablement";
-import {
-  createPendingArmedRunCoordinator,
-  type PendingArmedRunCoordinator,
-} from "./automations/pending-armed-runs";
+import { type PendingArmedRunCoordinator } from "@volli/host-core/automations/pending-armed-runs";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
 import {
@@ -208,18 +180,8 @@ import {
 import { loadSkills } from "@volli/host-core/skills";
 import { loadPromptTemplates } from "@volli/host-core/prompt-templates";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
-import { createAutomationEngine } from "./automations/engine";
-import { createAutomationRunner } from "./automations/run";
-import type { AutomationRunner } from "./automations/run";
-import { createAutomationService } from "./automations/service";
-import { createAutomationScheduler } from "./automations/scheduler";
-import type { AutomationScheduler } from "./automations/scheduler";
-import {
-  advanceScheduleCursor,
-  readScheduleCursors,
-  rebaseScheduleCursor,
-} from "./automations/schedule-cursor";
-import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
+import type { AutomationRunner } from "@volli/host-core/automations/run";
+import type { AutomationScheduler } from "@volli/host-core/automations/scheduler";
 import {
   assertDefaultModelAvailable,
   readCodeModePolicy,
@@ -263,25 +225,18 @@ import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
 import {
   broadcastDataChanged,
-  broadcastHarnessEvent,
-  broadcastPendingArmedRuns,
-  broadcastPendingArmedRunSettled,
-  broadcastSessionHarness,
   broadcastSessionRetitled,
   broadcastSessionsInterrupted,
-  broadcastSessionStarted,
   broadcastSystemAppearance,
   broadcastUpdateState,
   windowEventBus,
 } from "./broadcast";
-import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
-import { createAgentToolDoor } from "./agent-tool-door";
+import { actorSessionTicketDisplay } from "@volli/host-core/agent-dispatch/resolution";
 import { createDelegations } from "@volli/host-core/session-runtime/delegate-session";
 import type { Delegations } from "@volli/host-core/session-runtime/delegate-session";
-import type { AgentToolDoor } from "./agent-tool-door";
-import { subscribeTicketWake } from "./ticket-wake";
-import { createWatches } from "./watches";
-import type { Watches } from "./watches";
+import type { AgentToolDoor } from "@volli/host-core/agent-tool-door";
+import { subscribeTicketWake } from "@volli/host-core/ticket-wake";
+import type { Watches } from "@volli/host-core/watches";
 import { getComment } from "@volli/host-core/db/comments-repo";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
@@ -298,8 +253,7 @@ import {
   composeProjectBrief,
   composeSubagentBrief,
   composeTicketBrief,
-  createAgentCommandService,
-} from "./agent-commands";
+} from "@volli/host-core/agent-commands";
 import {
   acquireVolliAppProfile,
   ensureVolliCliShim,
@@ -309,17 +263,14 @@ import {
   decideRegisteredHarnesses,
   scanHarnessManifests,
   trustedHarnessAdapters,
-} from "./harness-registry";
+} from "@volli/host-core/harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
 import { installSmokeBootCapture } from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
-import {
-  createAgentSocketLifecycle,
-  registerAgentSocketWillQuit,
-  startAgentSocket,
-} from "./agent-socket";
+import { createHostAgentSocket } from "@volli/host-core/agent-services";
+import { registerAgentSocketWillQuit } from "./agent-socket-quit";
 import { createLoginPathBootstrap } from "./login-path-adoption";
 import {
   ADOPTION_PROBE,
@@ -443,12 +394,7 @@ const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
 applyQuietAppPolicy(app, nativeWindowPolicy);
 
 const isDev = !app.isPackaged;
-const agentSocket = createAgentSocketLifecycle({
-  start: startAgentSocket,
-  reportFailure: (error) => {
-    console.error("[volli] failed to close agent socket:", errorMessage(error));
-  },
-});
+const agentSocket = createHostAgentSocket();
 const shutdownAgentSocket = agentSocket.shutdown;
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
@@ -1771,44 +1717,16 @@ app.whenReady().then(async () => {
   // Automations own a transport-neutral command/event/projection core. Keep
   // the runner mutable until below: Session RPC's attach door closes over it,
   // so a human Retry can resume a durable first-message intent too.
-  const automationEngine =
-    sessionDb === null
-      ? null
-      : createAutomationEngine({
-          ledger: new SqliteAutomationLedger(sessionDb),
-          now: Date.now,
-          nextId: randomUUID,
-        });
-  const automationService =
-    sessionDb === null || automationEngine === null
-      ? null
-      : createAutomationService({
-          engine: automationEngine,
-          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
-          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
-          listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
-          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
-          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
-          skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
-          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
-          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
-          ...(piRuntimeHost === null
-            ? {}
-            : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
-          onMutation: (change) => broadcastDataChanged(change),
-          // Create, enable, and schedule-changing commands establish the new
-          // lifecycle before the scheduler's asynchronous refresh. Relaunch
-          // can therefore still account for a due time missed in that gap.
-          rebaseScheduleCursor: (automationId, through) => {
-            rebaseScheduleCursor(sessionDb, { automationId, through }, Date.now());
-          },
-          // Every record write can add, retime or remove a schedule, and the
-          // enabled switch decides whether one may fire here at all — so the
-          // timer re-reads after each rather than waiting out its own tick.
-          onAutomationsChanged: () => {
-            void automationScheduler?.refresh();
-          },
-        });
+  const automationEngine = hostCore.automations.createEngine();
+  const automationService = hostCore.automations.createService(automationEngine, {
+    ...(piRuntimeHost === null
+      ? {}
+      : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
+    // Every record write can retime a schedule or switch it off.
+    onAutomationsChanged: () => {
+      void automationScheduler?.refresh();
+    },
+  });
   let automationRunner: AutomationRunner | null = null;
   let automationScheduler: AutomationScheduler | null = null;
   let pendingArmedRuns: PendingArmedRunCoordinator | null = null;
@@ -2309,9 +2227,8 @@ app.whenReady().then(async () => {
       return null;
     }
     const db = sessionDb;
-    watches = createWatches({
+    watches = hostCore.agentServices.createWatches({
       subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
-      subscribeTicketWake,
       runtime: sessionRuntime,
       sessionEngine,
       readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
@@ -2354,7 +2271,7 @@ app.whenReady().then(async () => {
   agentToolDoor =
     sessionDb === null || sessionDelegation === null
       ? null
-      : createAgentToolDoor({
+      : hostCore.agentServices.createToolDoor({
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
@@ -2396,8 +2313,6 @@ app.whenReady().then(async () => {
           ...(autoTitler === null
             ? {}
             : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-          onMutation: (change) => broadcastDataChanged(change),
-          onSessionStarted: (notice) => broadcastSessionStarted(notice),
           actorTicketDisplay: (ticketId) =>
             actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
           now: () => Date.now(),
@@ -2980,14 +2895,8 @@ app.whenReady().then(async () => {
   // and resumes this same runner's durable message intent.
   automationRunner =
     sessions !== null && sessionRuntime !== null && sessionDb !== null && automationEngine !== null
-      ? createAutomationRunner({
+      ? hostCore.automations.createRunner({
           engine: automationEngine,
-          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
-          findRun: (runId) => getAutomationRun(sessionDb, runId),
-          findTicket: (ticketId) => getTicket(sessionDb, ticketId),
-          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
-          listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
-          listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
           sessions,
           promptSupply: async (projectId) => {
             const project = getProjectById(sessionDb, projectId);
@@ -3046,14 +2955,6 @@ app.whenReady().then(async () => {
           ...(autoTitler === null
             ? {}
             : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
-          // property rather than sending `undefined` for it: the Electron
-          // transport would carry that by structured clone, and an HTTP one
-          // would mangle it (docs/BOUNDARIES.md rule 3).
-          onRunStarted: ({ projectId, run }) =>
-            broadcastDataChanged(
-              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
-            ),
         })
       : null;
 
@@ -3061,63 +2962,7 @@ app.whenReady().then(async () => {
   // renderer. Its SQLite row survives window count (and a relaunch), one timer
   // serves that row, and every renderer receives the same full projection.
   if (sessionDb !== null) {
-    const pendingDb = sessionDb;
-    pendingArmedRuns = createPendingArmedRunCoordinator({
-      now: Date.now,
-      nextId: randomUUID,
-      listPending: () => listPendingArmedRuns(pendingDb),
-      getPending: (id) => getPendingArmedRun(pendingDb, id),
-      putPending: (pending) => putPendingArmedRun(pendingDb, pending),
-      deletePending: (id) => deletePendingArmedRun(pendingDb, id),
-      deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
-      beginAttempt: (id, commandId, fallbackError) =>
-        beginPendingArmedRunAttempt(pendingDb, id, commandId, fallbackError),
-      listAttempts: () => listPendingArmedRunAttempts(pendingDb),
-      getAttempt: (id) => getPendingArmedRunAttempt(pendingDb, id),
-      updateAttemptError: (id, error) => updatePendingArmedRunAttemptError(pendingDb, id, error),
-      deleteAttempt: (id) => deletePendingArmedRunAttempt(pendingDb, id),
-      readTicket: (ticketId) => {
-        const row = getTicketRow(pendingDb, ticketId);
-        if (row === undefined || row.archived_at !== null) return undefined;
-        const ticket = getTicket(pendingDb, ticketId);
-        const project = getProjectById(pendingDb, row.project_id);
-        if (ticket === undefined || project === undefined) return undefined;
-        return {
-          projectId: ticket.projectId,
-          status: ticket.status,
-          displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
-        };
-      },
-      readPlanning: (projectId) => ({
-        automations: listAutomationsForProject(pendingDb, projectId),
-        armings: listColumnArmings(pendingDb, projectId),
-        enabledAutomationIds: enabledAutomationIds(pendingDb),
-      }),
-      run: async ({ commandId, automationId, ticketId }) => {
-        const runner = automationRunner;
-        if (runner === null) {
-          return {
-            ok: false,
-            code: "RUN_FAILED",
-            error: "The Session runtime is not available this launch.",
-          };
-        }
-        // A Deliberate column move retains the attended semantics its renderer
-        // expiry door had. Only ownership of the timer moved into main.
-        return runner.run({
-          commandId,
-          target: { kind: "automation", automationId },
-          ticketId,
-          modelOverride: null,
-          attendance: "attended",
-        });
-      },
-      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
-      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-      onPendingChanged: broadcastPendingArmedRuns,
-      onSettled: broadcastPendingArmedRunSettled,
-      log: (message) => console.error(message),
-    });
+    pendingArmedRuns = hostCore.automations.createPendingArmedRuns(() => automationRunner)!;
     pendingArmedRuns.start();
     app.on("before-quit", () => pendingArmedRuns?.stop());
   }
@@ -3138,50 +2983,8 @@ app.whenReady().then(async () => {
   // be recorded as skips by the next launch that can.
   const runnerForSchedule = automationRunner;
   if (runnerForSchedule !== null && automationEngine !== null && sessionDb !== null) {
-    const scheduleDb = sessionDb;
     const scheduleEngine = automationEngine;
-    automationScheduler = createAutomationScheduler({
-      now: Date.now,
-      listAutomations: () => Promise.resolve(listAllAutomations(scheduleDb)),
-      enabledAutomationIds: () => scheduleEngine.enabledAutomationIds(),
-      readCursors: () => Promise.resolve(readScheduleCursors(scheduleDb)),
-      advanceCursor: (input) => {
-        advanceScheduleCursor(scheduleDb, input, Date.now());
-        return Promise.resolve();
-      },
-      recordSkip: async (input) => {
-        const outcome = await scheduleEngine.recordSkip(input);
-        if (!outcome.ok) {
-          // Fail the step rather than resolving over it. The scheduler advances
-          // its cursor only after a step settles, so a refused write leaves the
-          // occurrence owed and the next pass records it again under the same
-          // derived command id. Swallowing it here would step past a skip that
-          // never reached the ledger — a skip that looks exactly like a
-          // silence, which is the one outcome VC-112 forbids.
-          throw new Error(outcome.error);
-        }
-        // The Automations page reads its history on arrival and on every
-        // planning change, so a skip recorded while it is open lands without
-        // anyone reloading.
-        broadcastDataChanged({ projectId: input.skip.projectId });
-      },
-      startRun: async (input) => {
-        // UNATTENDED (VC-133), and this is the case VC-112 names outright:
-        // "a column move is attended because a person is right there; a
-        // schedule is not." A timer fired this; the app may not even have a
-        // window open. If its Session stops for a person, this is how they
-        // find out.
-        const outcome = await runnerForSchedule.runForProject({
-          ...input,
-          attendance: "unattended",
-        });
-        return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
-      },
-      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
-      clearTimer: (handle) => {
-        clearTimeout(handle);
-      },
-    });
+    automationScheduler = hostCore.automations.createScheduler(scheduleEngine, runnerForSchedule)!;
     const scheduler = automationScheduler;
     void scheduler.start().catch((error: unknown) => {
       console.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`);
@@ -4015,7 +3818,7 @@ app.whenReady().then(async () => {
 
   try {
     const execute = dbHandle.ok
-      ? createAgentCommandService({
+      ? hostCore.agentServices.createCommands({
           db: dbHandle.db,
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
@@ -4027,7 +3830,6 @@ app.whenReady().then(async () => {
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
           readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
-          notify: (request) => notifications.deliver(request),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
@@ -4095,34 +3897,14 @@ app.whenReady().then(async () => {
           ...(autoTitler !== null
             ? { refineAutoTitle: (input) => void autoTitler.refine(input) }
             : {}),
-          // The no-redirect rule (VC-13 decision 2): a start pushes a toast
-          // notice; the toast's action is the only thing that ever opens the
-          // new session's tab.
-          onSessionStarted: (notice) => broadcastSessionStarted(notice),
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.
           interruptTicketSessions: interruptTicketSessionsAnnounced,
-          // A socket command that commits a planning mutation reaches the
-          // renderer via this broadcast. The service reports the exact ticket it
-          // resolved and touched (CONCEPT #42 — it owns the display-id→ticket
-          // resolution), so a CLI `ticket comment`/`ticket move`/… lands on THAT
-          // ticket's open surfaces promptly while other tickets' readers stand
-          // down. Read-only commands and no-ops (e.g. a same-column move) never
-          // fire it, so a stray broadcast can't slip through.
-          onMutation: (change) => broadcastDataChanged(change),
           // An explicit `volli ticket move` is the other Deliberate-move door.
           // It reaches the same one main-owned pending arrival as renderer IPC;
           // no renderer has to exist for the timer to fire.
           onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
-          // The involuntary channel's fan-out (harness-events): every canonical
-          // event a hook reports reaches every window, so a session's activity
-          // state stops being guessed from PTY output alone.
-          onHarnessEvent: (notice) => broadcastHarnessEvent(notice),
-          // The other involuntary channel: a harness's own wrapper announced
-          // that IT is what is now running in that terminal. Fired only on a
-          // change, so this is never chatter.
-          onSessionHarness: (notice) => broadcastSessionHarness(notice),
           // The `env` block `volli identify` prints (VC-94): the PATH main
           // adopted, its latest non-interactive provenance, the measured tools
           // resolved against it (and which of them this workspace implies),

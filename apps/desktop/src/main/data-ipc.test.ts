@@ -263,7 +263,7 @@ import {
   resetDeletionLeasesForTest,
 } from "@volli/host-core/worktree/deletion-lease";
 import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
-import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
+import { subscribeTicketWake, type TicketWake } from "@volli/host-core/ticket-wake";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   MAX_INLINE_IMAGE_BYTES,

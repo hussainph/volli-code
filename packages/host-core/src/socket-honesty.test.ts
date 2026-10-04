@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
-import { createAgentCommandService } from "./agent-commands";
+import { createAgentCommandService } from "@volli/host-core/agent-commands";
 import { insertProject, updateProjectAuthorityPolicy } from "@volli/host-core/db/projects-repo";
 import { listTicketsByProject, insertTicket } from "@volli/host-core/db/tickets-repo";
 import { listComments } from "@volli/host-core/db/comments-repo";

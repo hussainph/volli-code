@@ -196,6 +196,50 @@
     "./browser/*": {
       "types": "./src/browser/*.ts",
       "import": "./src/browser/*.ts"
+    },
+    "./agent-commands": {
+      "types": "./src/agent-commands.ts",
+      "import": "./src/agent-commands.ts"
+    },
+    "./agent-tool-door": {
+      "types": "./src/agent-tool-door.ts",
+      "import": "./src/agent-tool-door.ts"
+    },
+    "./agent-socket": {
+      "types": "./src/agent-socket.ts",
+      "import": "./src/agent-socket.ts"
+    },
+    "./agent-watch": {
+      "types": "./src/agent-watch.ts",
+      "import": "./src/agent-watch.ts"
+    },
+    "./watches": {
+      "types": "./src/watches.ts",
+      "import": "./src/watches.ts"
+    },
+    "./ticket-wake": {
+      "types": "./src/ticket-wake.ts",
+      "import": "./src/ticket-wake.ts"
+    },
+    "./harness-registry": {
+      "types": "./src/harness-registry.ts",
+      "import": "./src/harness-registry.ts"
+    },
+    "./automations/*": {
+      "types": "./src/automations/*.ts",
+      "import": "./src/automations/*.ts"
+    },
+    "./agent-dispatch/*": {
+      "types": "./src/agent-dispatch/*.ts",
+      "import": "./src/agent-dispatch/*.ts"
+    },
+    "./agent-services": {
+      "types": "./src/agent-services.ts",
+      "import": "./src/agent-services.ts"
+    },
+    "./automation-services": {
+      "types": "./src/automation-services.ts",
+      "import": "./src/automation-services.ts"
     }
   },
   "scripts": {

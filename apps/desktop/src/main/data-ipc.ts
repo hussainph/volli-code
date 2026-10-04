@@ -206,7 +206,7 @@ import {
 } from "@volli/host-core/ticket-commands";
 import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
 import { broadcastDataChanged, broadcastSessionActivity } from "./broadcast";
-import { withTicketWake } from "./ticket-wake";
+import { withTicketWake } from "@volli/host-core/ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
