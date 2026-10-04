@@ -19,7 +19,7 @@
  * **Signing in is a person's act.** {@link McpOAuthBroker.signIn} runs only
  * because a person pressed *Sign in* in Settings, or answered *Allow* to a
  * `confirm.mcp-sign-in` question an agent's call raised. It listens on a
- * loopback port (`OAuthCallbackServer`), registers Volli with the
+ * loopback port (`McpOAuthCallbackServer`), registers Volli with the
  * authorization server when it has to (dynamic client registration) or uses
  * the pre-registered client the person configured, opens the authorization
  * page in the browser with PKCE, exchanges the code, and checks the result by
@@ -36,7 +36,6 @@ import {
   discoverAuthorizationServerMetadata,
   McpOAuthAuthorizationRequiredError,
   McpOAuthProvider,
-  OAuthCallbackServer,
   OAuthError,
   OAuthInsecureEndpointError,
   OAuthIssuerMismatchError,
@@ -46,7 +45,6 @@ import {
   selectResource,
   type McpOAuthState,
   type McpOAuthStateStore,
-  type OAuthCallbackServerOptions,
   type OAuthClientInformationMixed,
   type OAuthTokens,
 } from "@earendil-works/pi-mcp/oauth";
@@ -67,6 +65,7 @@ import type {
   McpStoredOAuthState,
 } from "./credential-store";
 import { boundedFetch } from "./client";
+import { McpOAuthCallbackServer, type McpOAuthCallbackOptions } from "./oauth-callback";
 import {
   connectionProblemIn,
   McpConnectionProblem,
@@ -163,7 +162,7 @@ function isLoopback(hostname: string): boolean {
 export function mcpOAuthCallbackOptions(
   config: McpOAuthClientConfig | undefined,
   timeoutMs: number = MCP_SIGN_IN_TIMEOUT_MS,
-): OAuthCallbackServerOptions {
+): McpOAuthCallbackOptions {
   if (config?.callbackUrl !== undefined) {
     const url = new URL(config.callbackUrl);
     const hostname = url.hostname.replace(/^\[|\]$/g, "");
@@ -485,7 +484,7 @@ export class McpOAuthBroker {
         message: `${server.name} is not a server Volli signs in to: only a remote server without its own Authorization header uses OAuth.`,
       };
     }
-    let callback: OAuthCallbackServer | null = null;
+    let callback: McpOAuthCallbackServer | null = null;
     try {
       options.signal.throwIfAborted();
       const clientSecret = resolveMcpOAuthClientSecret(
@@ -587,7 +586,9 @@ export class McpOAuthBroker {
         // must not become an unhandled one while the browser opens.
         waiting.catch(() => undefined);
         options.signal.throwIfAborted();
-        await this.#openExternal(url.href);
+        await untilAborted(this.#openExternal(url.href), options.signal, () => {
+          void callback?.close().catch(() => undefined);
+        });
         const { code, iss } = await untilAborted(waiting, options.signal, () => {
           void callback?.close().catch(() => undefined);
         }).catch((error: unknown) => {
@@ -690,23 +691,23 @@ export class McpOAuthBroker {
   async #listen(
     serverId: string,
     target: McpOAuthServer,
-  ): Promise<{ server: OAuthCallbackServer; chosenByVolli: boolean }> {
+  ): Promise<{ server: McpOAuthCallbackServer; chosenByVolli: boolean }> {
     const options = mcpOAuthCallbackOptions(target.oauth, this.#timeoutMs);
     if (options.port !== 0 || target.oauth?.callbackUrl !== undefined) {
-      return { server: await OAuthCallbackServer.listen(options), chosenByVolli: false };
+      return { server: await McpOAuthCallbackServer.listen(options), chosenByVolli: false };
     }
     const recorded = this.#store.read(serverId)?.callbackPort;
     if (recorded !== undefined) {
       try {
         return {
-          server: await OAuthCallbackServer.listen({ ...options, port: recorded }),
+          server: await McpOAuthCallbackServer.listen({ ...options, port: recorded }),
           chosenByVolli: true,
         };
       } catch {
         // Taken: any free port, as RFC 8252 allows.
       }
     }
-    return { server: await OAuthCallbackServer.listen(options), chosenByVolli: true };
+    return { server: await McpOAuthCallbackServer.listen(options), chosenByVolli: true };
   }
 
   /**
