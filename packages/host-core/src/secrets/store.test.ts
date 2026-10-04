@@ -15,11 +15,12 @@ import {
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { isSecretName, SecretStore, type SecretCodec } from "./store";
+import type { SecretKeyPort } from "../ports/secret-key";
+import { isSecretName, SecretStore } from "./store";
 
 // A real authenticated cipher fixture: unlike base64, neither metadata nor
 // values are recoverable from the file without the injected codec's key.
-function codec(): SecretCodec {
+function codec(): SecretKeyPort {
   const key = randomBytes(32);
   return {
     isEncryptionAvailable: vi.fn(() => true),
@@ -41,7 +42,7 @@ function codec(): SecretCodec {
 
 let dir: string;
 let path: string;
-let encryption: SecretCodec;
+let encryption: SecretKeyPort;
 let store: SecretStore;
 beforeEach(() => {
   dir = mkdtempSync(join(process.cwd(), ".secret-store-test-"));
@@ -54,7 +55,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function unavailable(): SecretCodec {
+function unavailable(): SecretKeyPort {
   return {
     isEncryptionAvailable: vi.fn(() => false),
     encryptString: vi.fn(() => {

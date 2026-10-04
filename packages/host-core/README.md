@@ -57,6 +57,10 @@ VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
+VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
+from desktop, and the headless file-key adapter. The secret-key port it seals
+through is `src/ports/secret-key.ts`.
+
 ### Session composition
 
 `createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
@@ -135,6 +139,34 @@ in desktop until their remaining desktop dependencies move.
   electron-builder ships with the app. A new native or path-reading
   dependency here must also be a desktop dependency, whitelisted for
   packaging. `verify-packed-requires.mjs` fails the build otherwise.
+
+### Secrets
+
+`SecretStore` keeps persistent Session secrets in `session-secrets.enc` beside
+the database, and seals the file through a `SecretKeyPort` that the host passes
+to its constructor. It is not on `HostCorePorts`, because the store is built by
+the host, next to the services that use it.
+
+| Host    | Passes                                                         | Envelope |
+| ------- | -------------------------------------------------------------- | -------- |
+| Desktop | `keychainSecretCodec(safeStorage)`, unchanged since VC-481     | `VSC1`   |
+| `hostd` | `fileSecretKey({ path: secretKeyFilePath(dataDir) })`          | `VSF1`   |
+
+The file key is `<dataDir>/session-secrets.key`, or the absolute path in
+`VOLLI_SECRET_KEY_FILE`. It is created atomically with mode 0600 the first
+time a secret is saved. A key file other users can read, or one owned by
+another user, is refused, as ssh refuses such a private key. Sealed secrets
+whose key is missing or different are refused, never re-keyed. Each refusal is
+a `SecretKeyUnavailableError` whose message names the fix and never a key byte;
+the store passes it through and keeps every other failure generic.
+
+**Threat model, in one breath.** The file key protects stored secrets from
+other local users and from copies of the data directory made without the key,
+such as backup bundles (which carry neither file). It does not protect them
+from root, from the host's own user and its Sessions, or from anyone who can
+read both the data directory and the key file. The full paragraph, cross-machine
+restore, and where Pi's `auth.json` lives for `hostd` are in
+[docs/secrets.md](../../docs/secrets.md#headless-hosts).
 
 ## Moving a service cluster in
 

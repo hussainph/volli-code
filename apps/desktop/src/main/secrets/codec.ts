@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import type { SecretCodec } from "./store";
+import type { SecretKeyPort } from "@volli/host-core/secrets";
 
 interface Keychain {
   isEncryptionAvailable(): boolean;
@@ -13,7 +13,7 @@ const MAGIC = Buffer.from("VSC1");
  * another keychain access. Nothing touches the keychain until secrets exist.
  * The wrapped key travels only inside the excluded encrypted credential file.
  */
-export function keychainSecretCodec(keychain: Keychain): SecretCodec {
+export function keychainSecretCodec(keychain: Keychain): SecretKeyPort {
   let key: Buffer | undefined;
   let wrapped: Buffer | undefined;
   const available = () =>

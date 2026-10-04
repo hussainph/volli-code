@@ -198,7 +198,7 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
-import { SecretStore } from "./secrets/store";
+import { SecretStore } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "./secrets/service";
 import { retiresSessionSecrets } from "./secrets/lifetime";

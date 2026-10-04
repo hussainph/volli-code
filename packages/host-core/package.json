@@ -29,6 +29,10 @@
       "types": "./src/session-concurrency.ts",
       "import": "./src/session-concurrency.ts"
     },
+    "./secrets": {
+      "types": "./src/secrets/index.ts",
+      "import": "./src/secrets/index.ts"
+    },
     "./db": {
       "types": "./src/db/index.ts",
       "import": "./src/db/index.ts"

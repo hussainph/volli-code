@@ -63,6 +63,50 @@ export interface RestoreRequest {
   now: number;
 }
 
+/**
+ * What a restore says about credentials (VC-559).
+ *
+ * No bundle carries a credential, encrypted or not, whichever secret-key
+ * adapter sealed them on the machine that wrote it: the macOS keychain, a
+ * headless host's key file, or one this build has never heard of. So a bundle
+ * from a Mac restores onto a headless host, or back, exactly as it restores
+ * onto the machine that made it, and nothing undecryptable is ever written.
+ * What the restore leaves alone is this profile's own credential files
+ * (`session-secrets.enc`, a headless `session-secrets.key`,
+ * `mcp-credentials.json`) and Pi's `auth.json` outside the profile: they are
+ * not profile entries the swap moves. The person re-enters on this machine
+ * whatever was stored only on the other one.
+ */
+export interface RestoreCredentials {
+  /** Always false. Kept as a field so a reader never has to infer it. */
+  carried: false;
+  /** What to enter or sign in to again here, unless this profile already had it. */
+  reenter: readonly RestoreCredentialKind[];
+  /** The sentence a restore surface shows. */
+  message: string;
+}
+
+export type RestoreCredentialKind =
+  | "session-secrets"
+  | "mcp-credentials"
+  | "web-search-keys"
+  | "model-sign-ins";
+
+export const RESTORE_CREDENTIALS: RestoreCredentials = Object.freeze({
+  carried: false,
+  reenter: Object.freeze([
+    "session-secrets",
+    "mcp-credentials",
+    "web-search-keys",
+    "model-sign-ins",
+  ] as const),
+  message:
+    "Backups never carry credentials. Anything stored only on the machine that made this " +
+    "backup needs entering again here: saved Session secrets, MCP server values and " +
+    "sign-ins, web search keys, and model provider sign-ins. Credentials this profile " +
+    "already had are unchanged.",
+});
+
 export interface RestoreReport {
   /** Where the profile that was there before now sits, untouched. */
   replacedPath: string;
@@ -73,6 +117,8 @@ export interface RestoreReport {
   usage: { rows: number; meteredFrom: number };
   artifactsVerified: number;
   projectPaths: Record<string, string>;
+  /** No credential travelled; what to re-enter. See {@link RestoreCredentials}. */
+  credentials: RestoreCredentials;
 }
 
 export type RestoreResult =
@@ -506,6 +552,7 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
         usage,
         artifactsVerified: countArtifacts(bundle.manifest),
         projectPaths: { ...request.projectPaths },
+        credentials: RESTORE_CREDENTIALS,
       },
     };
   } catch (error) {

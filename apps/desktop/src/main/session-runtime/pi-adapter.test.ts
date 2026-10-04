@@ -5,7 +5,7 @@ import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 import { closeStaleAttachments } from "./boot-recovery";
 import { randomUUID } from "node:crypto";
 import { SecretService } from "../secrets/service";
-import { SecretStore } from "../secrets/store";
+import { SecretStore } from "@volli/host-core/secrets";
 
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { openRawDb, openTestDb, testProject } from "@volli/host-core/db/test-helpers";
