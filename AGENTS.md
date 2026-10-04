@@ -18,6 +18,7 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 - `packages/host-core/` (`@volli/host-core`) — the host's services composed without Electron: `createHostCore(ports, options)`, the ports a host answers (`src/ports`: event bus, addressed client event sink, attention delivery, power, client capabilities), the SQLite open, migrations and repos (`src/db`), and the transaction-ownership guard. Worktrees/git/change sets, project roots, blob/ticket commands, Session/runtime wiring, MCP, Code Mode, Web Access, decisions, model sign-in, Automations, verb dispatch, the agent Unix socket, the terminal (node-pty) supervisor (`src/pty`), and the agent browser's engine-agnostic half (`src/browser`: the `BrowserBackend` seam, shared tab registry, CDP controller and agent port) also live here; desktop retains their IPC doors. Electron main calls it and wires the result by the pattern in its `README.md`. Do not import Electron.
 - `packages/agent-runtime/` (`@volli/agent-runtime`) — the product-owned executor boundary, Pi implementation, deterministic workspace/secret guards and host-API actor policy, prompt assembly, model access, and safe web tools.
 - `packages/cli/` (`@volli/cli`) — the built agent-facing `volli` CLI, which communicates with Electron main over the local Unix socket.
+- `apps/hostd/` (`@volli/hostd`) — `volli-hostd`, the headless host: it composes `@volli/host-core` with headless ports and serves the agent socket on Linux and macOS, so the `volli` CLI works against it unchanged. Do not import Electron. Packaging, health, shutdown and the systemd/launchd templates are in its `README.md`.
 - `packages/font-notices/` (`@volli/font-notices`) — the third-party font license notices the public sites must publish beside the font binaries they redistribute. `src/` is pure rendering with no Node or DOM imports; `check-dist.mjs` and its `check-font-notices` CLI are the build gate that reads a finished `dist/` and shares no code with the renderer.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
@@ -76,7 +77,8 @@ The global `vp` toolchain CLI is used by this repository. Node and pnpm versions
 `Test (packages)` is the plain-Node Linux host lane, pinned by `.nvmrc`; new host
 packages must provide `test:coverage`. `Check + Build` enforces zero Electron
 imports across all packages and hostd, including transitive relative imports.
-`Build (host container)` is path-filtered and required by `CI gate` when selected.
+`Build (host container)` is path-filtered and required by `CI gate` when selected;
+it also builds the hostd linux-x64 artifact in that image and boots it.
 Host development image, native ABI isolation and inventory commands:
 `docs/development/host-linux.md`.
 

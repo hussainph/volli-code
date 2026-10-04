@@ -12,6 +12,7 @@ export {
 } from "../ports/secret-key";
 export {
   fileSecretKey,
+  inspectSecretKeyFile,
   SECRET_KEY_FILE_ENV,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,

@@ -310,6 +310,10 @@ another user, is refused, as ssh refuses such a private key. Sealed secrets
 whose key is missing or different are refused, never re-keyed. Each refusal is
 a `SecretKeyUnavailableError` whose message names the fix and never a key byte;
 the store passes it through and keeps every other failure generic.
+`inspectSecretKeyFile(path)` raises the same refusals for an existing key
+without creating one, so `hostd` can refuse to boot on a bad key instead of
+finding it at the first save. A filesystem without hard links is its own
+refusal, `no-hard-links`, naming the manual `openssl rand` fallback.
 
 **Threat model, in one breath.** The file key protects stored secrets from
 other local users and from copies of the data directory made without the key,
