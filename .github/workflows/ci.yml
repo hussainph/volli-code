@@ -485,9 +485,9 @@ jobs:
         working-directory: apps/desktop
         run: vp test run --merge-reports="$RUNNER_TEMP/desktop-blobs" --coverage
 
-  # Every other package's suite and its own coverage gate, unsharded: together
-  # they take about 50s, less than a desktop shard. Each package's thresholds
-  # are judged in place, exactly as before.
+  # Every other package's suite and its own coverage gate, unsharded. Each
+  # package's thresholds are judged in place. This runs in parallel with the
+  # desktop lanes; its duration grows with the host surface and native tests.
   #
   # The filter selects by DIRECTORY and then subtracts the desktop app, and
   # both halves matter. An exclusion-only filter (`--filter '!@volli/desktop'`)
@@ -497,8 +497,8 @@ jobs:
   # under apps/ or packages/ is picked up with no edit here; one without a
   # `test:coverage` script is skipped, as `-r` skipped apps/docs.
   # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
-  # covers session-engine, session-rpc, agent-runtime and shared; host-protocol,
-  # host-core and apps/hostd join automatically when added with test:coverage.
+  # covers session-engine, session-rpc, agent-runtime, shared and host-core.
+  # Future host-protocol and apps/hostd suites join with test:coverage.
   # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
   test-packages:
     name: Test (packages)
