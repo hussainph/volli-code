@@ -54,19 +54,19 @@ function positionOf(source: string, needle: string): number {
 
 describe("the boot order recovery depends on", () => {
   const source = bootSource();
-  const hostAssigned = positionOf(source, "browserTabsRef = browserTabs");
+  const hostConstructed = positionOf(source, "const browserTabs = new BrowserTabHost({");
   const recoverySweep = positionOf(source, "await closeStaleAttachments({");
 
   it("still has both statements this rule is about", () => {
     // A rename that silently stopped this file from checking anything is the
     // one failure mode a source scan has, so it is asserted rather than
     // assumed: -1 here means the guard, not the boot order, needs updating.
-    expect(hostAssigned).toBeGreaterThan(-1);
+    expect(hostConstructed).toBeGreaterThan(-1);
     expect(recoverySweep).toBeGreaterThan(-1);
   });
 
-  it("assigns the Browser host before boot recovery reconciles anything", () => {
-    expect(hostAssigned).toBeLessThan(recoverySweep);
+  it("constructs the Browser host before boot recovery reconciles anything", () => {
+    expect(hostConstructed).toBeLessThan(recoverySweep);
   });
 
   it("keeps the guard that force-closes an attachment recovery could not rehydrate", () => {

@@ -100,6 +100,15 @@ the picture and trace stores and their disks, and `trace-steps` moved
 byte-identical; `agent-port` moved without its Electron wire. See
 [Browser backend](#browser-backend).
 
+VC-622's first desktop-only slice adds `session-runtime/assembly`: synchronous,
+inert Pi attachment assembly over the host's existing engine, model access,
+MCP/Code Mode/Web Access owners, secret service and attachment identities. Browser
+and shell ports are construction inputs; birth membership derives from those
+capabilities, preserving desktop's shipped tool order. Venue and sandbox assets
+are explicit options. The runtime and peek share one transcript artifact store.
+Session facade/agent commands, recovery gating and the single composition
+`close()` are the next desktop-only slice; hostd does not run Sessions yet.
+
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot
 order, so legacy web keys migrate before any store reads them, and sign-in

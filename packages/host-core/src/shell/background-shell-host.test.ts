@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { SpawnLedgerSpawn } from "@volli/shared";
 
-import type { BackgroundShellState } from "../../ipc/contract";
+import type { BackgroundShellState } from "./background-shell-host";
 import { BackgroundShellHost, type BackgroundShellOwner } from "./background-shell-host";
 
 const owner: BackgroundShellOwner = {

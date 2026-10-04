@@ -10,11 +10,12 @@
  * Two rules, both structural, both read off the actual source tree rather than
  * asserted about a mock:
  *
- * 1. **No OpenTelemetry outside `src/main/observability`.** The renderer renders
- *    untrusted model output and the preload is the sandboxed bridge; a tracer in
- *    either is an exporter behind a hostile surface. Confining the SDK to one
- *    directory also means "telemetry is off" is checkable by reading one module
- *    rather than by auditing a process.
+ * 1. **OpenTelemetry stays in host-core's observability directory.** The exporter
+ *    moved to `@volli/host-core` (VC-622), so no desktop source —
+ *    renderer, preload or main — has a reason to name an OpenTelemetry package
+ *    any more. The renderer renders untrusted model output and the preload is
+ *    the sandboxed bridge; a tracer in either is an exporter behind a hostile
+ *    surface.
  *
  * 2. **Nothing reads or writes `OTEL_*` through `process.env`.** Volli
  *    configures both signal exporters from a Settings row. Writing the same configuration into the
@@ -24,14 +25,15 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 /** `apps/desktop/src`, from this file rather than from a working directory. */
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
 
-/** The one directory allowed to name an OpenTelemetry package. */
-const EXPORTER_DIR = join(SRC, "main", "observability");
+/** The move must keep both static guards on the exporter and its new neighbours. */
+const HOST_SRC = join(SRC, "../../../packages/host-core/src");
+const HOST_EXPORTER_DIR = join(HOST_SRC, "observability");
 
 function sourceFiles(root: string): string[] {
   const found: string[] = [];
@@ -60,6 +62,7 @@ function sourceFiles(root: string): string[] {
 const SELF = fileURLToPath(import.meta.url);
 
 const ALL_SOURCES = sourceFiles(SRC).filter((path) => path !== SELF);
+const HOST_SOURCES = sourceFiles(HOST_SRC);
 
 describe("OpenTelemetry stays in Electron main", () => {
   it("finds the desktop sources it is meant to be checking", () => {
@@ -70,16 +73,17 @@ describe("OpenTelemetry stays in Electron main", () => {
     expect(ALL_SOURCES.some((path) => path.startsWith(join(SRC, "preload")))).toBe(true);
   });
 
-  it("is named by no file outside src/main/observability", () => {
-    const offenders = ALL_SOURCES.filter(
+  it("is named only by host-core's observability modules (VC-622)", () => {
+    const offenders = [...ALL_SOURCES, ...HOST_SOURCES].filter(
       (path) =>
-        !path.startsWith(EXPORTER_DIR) && readFileSync(path, "utf8").includes("@opentelemetry/"),
+        !path.startsWith(HOST_EXPORTER_DIR) &&
+        readFileSync(path, "utf8").includes("@opentelemetry/"),
     );
-    expect(offenders.map((path) => path.slice(SRC.length))).toEqual([]);
+    expect(offenders.map((path) => relative(SRC, path))).toEqual([]);
   });
 
-  it("is reachable from the exporter's own modules, so the rule above has teeth", () => {
-    const naming = sourceFiles(EXPORTER_DIR).filter((path) =>
+  it("is reachable from the exporter's own modules in @volli/host-core, so the rule above has teeth", () => {
+    const naming = sourceFiles(HOST_EXPORTER_DIR).filter((path) =>
       readFileSync(path, "utf8").includes("@opentelemetry/"),
     );
     expect(naming.length).toBeGreaterThan(0);
@@ -97,25 +101,27 @@ describe("OpenTelemetry stays in Electron main", () => {
 });
 
 describe("OTEL_* never enters the process environment", () => {
-  it("is read or written by no desktop source", () => {
+  it("is read or written by no desktop or host-core source", () => {
     // Matches `process.env.OTEL_…` and `process.env["OTEL_…"]` in either
     // direction. The Settings owner passes an explicit address to both OTLP
     // signal exporters, so no source has a reason to inspect an ambient value.
     const accesses = /process\.env(?:\.OTEL_|\[\s*["'`]OTEL_)/;
-    const offenders = ALL_SOURCES.filter((path) => accesses.test(readFileSync(path, "utf8")));
-    expect(offenders.map((path) => path.slice(SRC.length))).toEqual([]);
+    const offenders = [...ALL_SOURCES, ...HOST_SOURCES].filter((path) =>
+      accesses.test(readFileSync(path, "utf8")),
+    );
+    expect(offenders.map((path) => relative(SRC, path))).toEqual([]);
   });
 
   it("is not set on this process by the exporter modules themselves", async () => {
     const before = Object.keys(process.env).filter((name) => name.startsWith("OTEL_"));
-    // Importing every exporter module is the strongest available check that
-    // module-load side effects do not configure OpenTelemetry through the
-    // environment — which is how most OTel setups are wired, and is exactly
-    // what Volli must not do.
-    await import("./otlp");
-    await import("./settings");
-    await import("./sink");
-    await import("./genai");
+    // Importing every exporter module — from @volli/host-core, where they
+    // moved (VC-622) — is the strongest available check that module-load side
+    // effects do not configure OpenTelemetry through the environment — which is
+    // how most OTel setups are wired, and is exactly what Volli must not do.
+    await import("@volli/host-core/observability/otlp");
+    await import("@volli/host-core/observability/settings");
+    await import("@volli/host-core/observability/sink");
+    await import("@volli/host-core/observability/genai");
     expect(Object.keys(process.env).filter((name) => name.startsWith("OTEL_"))).toEqual(before);
   });
 });

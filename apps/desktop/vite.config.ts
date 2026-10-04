@@ -622,13 +622,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
-        // The agent-observability export boundary (VC-119). The mapping module
-        // is the ONLY place Volli's metadata-only vocabulary becomes somebody
-        // else's attribute names, and the sink is the bound that stops a
-        // collector from reaching a turn — both are enrolled here for the same
-        // reason the IPC handlers are: a missed branch is a privacy or a
-        // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
-        // `index.ts`: it is transport bootstrap around an SDK.
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression
@@ -640,10 +633,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/notifications/dispatch.ts",
         "**/src/main/notifications/ipc.ts",
         "**/src/main/notifications/settings.ts",
-        "**/src/main/observability/genai.ts",
+        // The agent-observability export boundary (VC-119). The mapping module,
+        // the settings owner and the sink moved to @volli/host-core with their
+        // tests (VC-622); their unchanged 100% gate moved to that package's
+        // vite.config.ts. The IPC door stays here.
         "**/src/main/observability/ipc.ts",
-        "**/src/main/observability/settings.ts",
-        "**/src/main/observability/sink.ts",
         // The process IPC door stays here; the sweep and its unchanged 100%
         // gate moved with its tests to @volli/host-core (VC-618).
         "**/src/main/process/ipc.ts",

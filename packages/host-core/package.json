@@ -33,6 +33,22 @@
       "types": "./src/secrets/index.ts",
       "import": "./src/secrets/index.ts"
     },
+    "./secrets/*": {
+      "types": "./src/secrets/*.ts",
+      "import": "./src/secrets/*.ts"
+    },
+    "./shell/*": {
+      "types": "./src/shell/*.ts",
+      "import": "./src/shell/*.ts"
+    },
+    "./observability/*": {
+      "types": "./src/observability/*.ts",
+      "import": "./src/observability/*.ts"
+    },
+    "./login-path-adoption": {
+      "types": "./src/login-path-adoption.ts",
+      "import": "./src/login-path-adoption.ts"
+    },
     "./db": {
       "types": "./src/db/index.ts",
       "import": "./src/db/index.ts"
@@ -282,6 +298,12 @@
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "0.99.2",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/otlp-exporter-base": "0.221.0",
+    "@opentelemetry/otlp-transformer": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-metrics": "2.10.0",
+    "@opentelemetry/sdk-trace": "2.10.0",
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/shared": "workspace:*",
