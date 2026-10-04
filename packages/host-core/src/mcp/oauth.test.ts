@@ -10,7 +10,8 @@
  * way approving consent would.
  */
 import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
+import { once } from "node:events";
+import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpServerDraft, RuntimeAskChoice, RuntimeAskRequest } from "@volli/shared";
@@ -48,6 +49,7 @@ function harness(
   options: {
     environment?: Record<string, string>;
     requestTimeoutMs?: number;
+    signInTimeoutMs?: number;
     /** Stand-in for the browser; approves at once unless replaced. */
     browser?: (url: string) => Promise<void>;
   } = {},
@@ -60,6 +62,7 @@ function harness(
       opened.push(url);
       await (options.browser ?? approveInBrowser)(url);
     },
+    ...(options.signInTimeoutMs === undefined ? {} : { signInTimeoutMs: options.signInTimeoutMs }),
     ...(options.requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs: options.requestTimeoutMs }),
@@ -196,6 +199,80 @@ describe("signing in to a remote MCP server", () => {
     const database = databaseText();
     for (const token of fixture.issuedTokens) expect(database).not.toContain(token);
   });
+
+  it.each([
+    "success",
+    "cancel",
+    "cancel while opening browser",
+    "caller abort",
+    "timeout",
+    "browser failure",
+  ] as const)(
+    "settles %s and releases the callback port with a browser preconnection still open",
+    async (ending) => {
+      fixture = await startOAuthFixture();
+      let idle: Socket | undefined;
+      let callbackPort = 0;
+      const browserOpened = Promise.withResolvers<void>();
+      const browserOpening = Promise.withResolvers<void>();
+      const caller = new AbortController();
+      const cancelled =
+        ending === "cancel" ||
+        ending === "cancel while opening browser" ||
+        ending === "caller abort";
+      const h = harness({
+        signInTimeoutMs: ending === "timeout" ? 1_000 : 5_000,
+        browser: async (url) => {
+          const redirect = new URL(new URL(url).searchParams.get("redirect_uri")!);
+          callbackPort = Number(redirect.port);
+          idle = createConnection({ host: "127.0.0.1", port: callbackPort });
+          idle.on("error", () => undefined); // A forced server close may reset TCP.
+          await once(idle, "connect");
+          // An HTTP roundtrip is a barrier: the listener has accepted the
+          // earlier TCP connection before we trigger cancellation/failure.
+          await fetch(redirect, { headers: { connection: "close" } });
+          browserOpened.resolve();
+          if (ending === "success") await approveInBrowser(url);
+          if (ending === "browser failure") throw new Error("browser did not open");
+          if (ending === "cancel while opening browser") await browserOpening.promise;
+        },
+      });
+      const server = remote(fixture.mcpUrl);
+      const outcome = h.settings.signIn({ projectId: "p1", server, signal: caller.signal });
+      try {
+        await browserOpened.promise;
+        // No HTTP was sent on this socket. It must not hold sign-in completion
+        // behind node:http's graceful close, even after a different socket
+        // delivered the successful callback.
+        expect(idle!.destroyed).toBe(false);
+        const socketClosed = new Promise<void>((resolve) => idle!.once("close", () => resolve()));
+        if (ending === "caller abort") caller.abort(new Error("caller stopped waiting"));
+        else if (cancelled) h.broker.cancelSignIn(server.id);
+        const result = await withinDeadline(outcome, ending === "timeout" ? 3_000 : 1_500);
+        expect(result).toMatchObject({
+          ok: ending === "success",
+          ...(ending === "success" ? {} : { cancelled }),
+        });
+        if (ending === "timeout") expect(result.message).toContain("Nobody finished signing in");
+        await withinDeadline(socketClosed);
+        expect(h.broker.signingIn(server.id)).toBe(false);
+        // Binding the exact port proves the listener is gone, not just that
+        // Settings stopped waiting while a detached close leaked resources.
+        const reuse = createServer();
+        try {
+          reuse.listen(callbackPort, "127.0.0.1");
+          await once(reuse, "listening");
+        } finally {
+          await new Promise<void>((resolve) => reuse.close(() => resolve()));
+        }
+      } finally {
+        idle?.destroy();
+        browserOpening.resolve();
+        h.broker.cancelSignIn(server.id);
+        await outcome;
+      }
+    },
+  );
 
   it("refreshes an expired access token for a running Session without asking anyone", async () => {
     fixture = await startOAuthFixture();
@@ -438,6 +515,42 @@ describe("signing in — scope, time limits and who may stop it", () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
+  it.each(["headers", "body"] as const)(
+    "bounds the post-callback token exchange when %s never completes",
+    async (hangCodeExchange) => {
+      fixture = await startOAuthFixture({ hangCodeExchange });
+      let redirectUrl: string | undefined;
+      const h = harness({
+        requestTimeoutMs: 300,
+        browser: async (url) => {
+          redirectUrl = new URL(url).searchParams.get("redirect_uri")!;
+          await approveInBrowser(url);
+        },
+      });
+      const server = remote(fixture.mcpUrl);
+      const result = await withinDeadline(h.settings.signIn({ projectId: "p1", server }), 3_000);
+      expect(result).toMatchObject({ ok: false, cancelled: false });
+      expect(fixture.seen.tokenGrants).toEqual(["authorization_code"]);
+      expect(h.broker.signingIn(server.id)).toBe(false);
+      expect(h.broker.signInState(server)).not.toBe("signed-in");
+      await expect(fetch(redirectUrl!)).rejects.toThrow();
+    },
+  );
+
+  it("bounds the post-callback verification probe's session DELETE", async () => {
+    fixture = await startOAuthFixture({ hangSessionDelete: true });
+    const h = harness();
+    const server = remote(fixture.mcpUrl);
+    // pi-mcp gives session termination its own one-second abort deadline.
+    await expect(
+      withinDeadline(h.settings.signIn({ projectId: "p1", server }), 3_000),
+    ).resolves.toEqual({
+      ok: true,
+      message: "Signed in to Fixture OAuth.",
+    });
+    expect(h.broker.signingIn(server.id)).toBe(false);
+  });
+
   it("gives up on a refresh the authorization server never answers, without calling it a sign-in", async () => {
     fixture = await startOAuthFixture({ hangRefresh: true });
     const h = harness({ requestTimeoutMs: 300 });
@@ -656,6 +769,23 @@ describe("mcpOAuthCallbackOptions", () => {
     );
   });
 });
+
+async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 1_500): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("sign-in or callback cleanup did not settle")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function freePort(): Promise<number> {
   const server = createServer();
