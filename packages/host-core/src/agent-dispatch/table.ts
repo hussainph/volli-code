@@ -33,6 +33,7 @@ import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
+import { projectAddVerb } from "./project-verbs";
 import {
   boardVerb,
   identifyVerb,
@@ -136,6 +137,9 @@ export const AGENT_VERB_TABLE: {
   // run in a bash pipeline actually cheap.
   conflicts: { handle: conflictsVerb, envSession: "resolve" },
   "project.list": { handle: projectListVerb, envSession: "resolve" },
+  // The person's bootstrap write (VC-623). Reads no Session; `resolve` only so
+  // the dispatch computes the actor it attributes, like every other write.
+  "project.add": { handle: projectAddVerb, envSession: "resolve" },
   "label.list": { handle: labelListVerb, envSession: "resolve" },
   // Reads Tickets and labels and writes both; no Session is in the answer.
   // `envSession` still resolves, because the merge is attributed history.

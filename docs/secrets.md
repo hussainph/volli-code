@@ -113,6 +113,11 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   by another adapter. The keychain adapter answers a `VSF1` store with its
   usual "Could not decrypt secret storage."
 
+The operator token (VC-623) is not a Session secret and is not kept here: the
+host stores only its verifier, in a root-owned file outside the data
+directory, and the plaintext lives in the operator's own home
+(`apps/hostd/README.md`, "Operators").
+
 **Threat model.** The key file protects stored secrets from other users on the
 machine: both files are 0600, and a key file that others can read is refused.
 It also protects them from anyone holding a copy of the data directory without

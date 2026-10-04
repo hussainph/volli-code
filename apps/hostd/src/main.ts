@@ -7,7 +7,10 @@
  * `status` exits 0 serving, 1 refusing, 3 not serving.
  */
 import { EXIT_CONFIG, HostdBootError } from "./boot-error";
-import { parseHostdArgs, USAGE } from "./args";
+import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
+
+import { parseHostdArgs, USAGE, type HostdCommand } from "./args";
+import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
 import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
 import { checkStatus, LIVE_PROBES, statusExitCode } from "./status";
@@ -40,12 +43,31 @@ async function main(): Promise<number> {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       return statusExitCode(report.verdict);
     }
+    case "operator-token":
+      return runOperatorToken(command, {
+        uid: () => process.getuid!(),
+        rootUid: 0,
+        lookupUser: lookupSystemUser,
+        // "": the operator's home from the password database, never root's $HOME.
+        writeTokenAsUser: (user, token) => writeTokenAsUser(user, token, ""),
+        now: () => new Date(),
+        out: (text) => process.stdout.write(text),
+        err: (text) => process.stderr.write(text),
+      });
     case "serve":
-      return serve(command.dataDir, command.socketPath, logger);
+      return serve(command, logger);
   }
 }
 
-async function serve(dataDir: string, socketPath: string, logger: HostdLogger): Promise<number> {
+async function serve(
+  command: Extract<HostdCommand, { kind: "serve" }>,
+  logger: HostdLogger,
+): Promise<number> {
+  const { dataDir, socketPath } = command;
+  // A person's credential is never inherited by the host, nor so by any
+  // Session it starts (VC-623): an operator who exported it in the shell that
+  // launched hostd keeps it in that shell.
+  delete process.env[VOLLI_OPERATOR_TOKEN_ENV];
   routeConsole(logger);
   let running: RunningHostd | undefined;
   let finish!: (code: number) => void;
@@ -116,6 +138,8 @@ async function serve(dataDir: string, socketPath: string, logger: HostdLogger): 
     running = await startHostd({
       dataDir,
       socketPath,
+      socketMode: command.socketMode,
+      operatorsFile: command.operatorsFile,
       version: HOSTD_VERSION,
       env: process.env,
       logger,

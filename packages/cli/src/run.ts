@@ -23,7 +23,8 @@ import type {
   AgentResponse,
 } from "@volli/shared";
 
-import { agentRequestEnv, AgentClientError } from "./client";
+import { agentRequestEnv, AgentClientError, operatorTokenFor } from "./client";
+import type { OperatorTokenFileRead } from "./client";
 import { bareHelpText, resolveHelp } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
@@ -48,6 +49,11 @@ export interface RunCliDependencies {
    * filesystem to script; defaults to the real one.
    */
   pathExists?(path: string): boolean;
+  /**
+   * Reads the operator's token file (VC-623). Called only when this process
+   * carries no Session evidence; absent means there is no file to read.
+   */
+  readOperatorToken?(): Promise<OperatorTokenFileRead>;
 }
 
 function clientError(error: unknown): AgentError {
@@ -409,11 +415,25 @@ export async function runCli(
       command === "doctor" && invocation.args["dryRun"] !== true
         ? { ...invocation.args, ...(await doctorObservation(dependencies)) }
         : invocation.args;
+    // The person's credential on a headless host (VC-623). Never beside a
+    // Session's environment: `operatorTokenFor` returns nothing there without
+    // reading anything, so an agent's request is byte-for-byte what it was.
+    const operator = await operatorTokenFor(
+      dependencies.env,
+      dependencies.readOperatorToken ?? (async () => null),
+    );
+    if (operator.warning !== undefined) dependencies.stderr(operator.warning);
     const request: AgentRequest = {
       v: 1,
       cmd: command,
       args,
-      ctx: { cwd: dependencies.cwd, env: agentRequestEnv(dependencies.env) },
+      ctx: {
+        cwd: dependencies.cwd,
+        env: agentRequestEnv(
+          dependencies.env,
+          operator.token === undefined ? {} : { operatorToken: operator.token },
+        ),
+      },
     };
     if (args["dryRun"] === true) {
       const refusal = await previewContractRefusal(socketPath, request, dependencies);

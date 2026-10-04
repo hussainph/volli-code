@@ -41,6 +41,11 @@ export default defineConfig({
         // when wrong — one duplicates a project, the other strands checkouts
         // that no cleanup surface will ever list again.
         "src/project-relink.ts",
+        // Registering a folder as a project (VC-623), lifted out of desktop's
+        // IPC handler so the operator's `volli project add` on a headless host
+        // applies the same rules. A branch wrong here is a second project for
+        // one folder, or two projects sharing one ticket prefix.
+        "src/project-create.ts",
         // The ports every moved service asks its host through (VC-554), and
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.

@@ -43,11 +43,16 @@ import { dirname } from "node:path";
 import type Database from "better-sqlite3";
 import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/shared";
 import { createHostCore, throwTransactionViolation, type HostCore } from "@volli/host-core";
-import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
+import {
+  createAgentSocketLifecycle,
+  startAgentSocket,
+  type AgentSocketMode,
+} from "@volli/host-core/agent-socket";
 
 import { HostdBootError } from "./boot-error";
 import { acquireInstanceLock } from "./instance-lock";
 import type { HostdLogger } from "./log";
+import { openOperators } from "./operators";
 import { headlessPorts } from "./ports";
 import { openHeadlessSecrets, type HeadlessSecrets } from "./secrets";
 import {
@@ -64,6 +69,19 @@ export interface HostdOptions {
   readonly version: string;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly logger: HostdLogger;
+  /** `0o600` unless `--socket-mode 660` lets the service's group reach it (VC-623). */
+  readonly socketMode?: AgentSocketMode;
+  /**
+   * The root-owned operator verifier file (VC-623, `operators.ts`);
+   * `--operators`, defaulting to `DEFAULT_OPERATORS_FILE`. A missing file
+   * means no operator token is accepted.
+   */
+  readonly operatorsFile: string;
+  /**
+   * Who must own the operators file: root. A test seam only, never an argument
+   * or a variable — whoever owns that file can mint a person.
+   */
+  readonly operatorsOwnerUid?: number;
   readonly now?: () => Date;
   /**
    * How long a stop waits, after the socket has closed, for requests still
@@ -134,6 +152,14 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
   async function boot(): Promise<RunningHostd> {
     const secrets = openHeadlessSecrets(dataDir, options.env);
     logger.info("secrets ready", { keyPath: secrets.keyPath, key: secrets.key });
+    // The person's credential (VC-623): judged now, so an operators file the
+    // service account could write refuses boot rather than minting people.
+    const operators = openOperators({
+      path: options.operatorsFile,
+      trustedOwnerUid: options.operatorsOwnerUid ?? 0,
+      processUid: process.getuid!(),
+      logger,
+    });
 
     // Every execution the socket accepted, until it settles. The socket's own
     // close stops waiting at its request timeout; the stop below waits for
@@ -167,6 +193,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     try {
       await socket.start({
         socketPath,
+        socketMode: options.socketMode ?? 0o600,
         execute: (request) => track(ready.then((execute) => execute(request))),
       });
     } catch (error) {
@@ -196,6 +223,12 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
             // Non-null whenever the database opened (`createHostSessionServices`).
             sessionEngine: host.sessionEngine!,
             appVersion: options.version,
+            verifyOperatorToken: operators.verify,
+            // The audit line beside each operator write. `SO_PEERCRED` would
+            // add the peer's uid and pid, but Node's `net` cannot read it
+            // without a native addon; the login the token names is the
+            // attribution (README, "Operators").
+            onOperatorWrite: (record) => logger.info("operator write", { ...record }),
           }).execute,
         );
         publish("serving");

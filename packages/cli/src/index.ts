@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+import { OPERATOR_TOKEN_HOME_PATH } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
-import { agentRequestEnv, requestAgent } from "./client";
+import { agentRequestEnv, readOperatorTokenFile, requestAgent } from "./client";
 import { runHook } from "./hook";
 import { observeEnvironment } from "./doctor";
 import { runCli } from "./run";
@@ -210,6 +213,12 @@ async function main(): Promise<void> {
     request: (path, request) =>
       requestAgent(path, request, { timeoutMs: timeoutForCommand(request.cmd) }),
     helpRequest: (path, request) => requestAgent(path, request, { timeoutMs: 500 }),
+    readOperatorToken: () =>
+      readOperatorTokenFile(join(homedir(), ...OPERATOR_TOKEN_HOME_PATH), {
+        lstat: (path) => lstat(path),
+        readFile: (path) => readFile(path, "utf8"),
+        uid: () => process.getuid?.() ?? null,
+      }),
     launch: (timeoutMs) => {
       return launchApp(
         {

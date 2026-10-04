@@ -13,7 +13,8 @@ export type HostdBootFailure =
   | "secret-key"
   | "secret-store"
   | "socket"
-  | "already-running";
+  | "already-running"
+  | "operators";
 
 export class HostdBootError extends Error {
   readonly reason: HostdBootFailure;

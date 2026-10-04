@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createConnection } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -27,6 +27,7 @@ import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 
 import { HostdBootError } from "./boot-error";
+import { runOperatorToken, writeTokenAsUser } from "./operator-token";
 import type { HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
 import { readStatus, statusFilePath, type HostdState } from "./status";
@@ -146,6 +147,9 @@ async function boot(
     socketPath?: string;
     env?: Record<string, string>;
     drainTimeoutMs?: number;
+    socketMode?: 0o600 | 0o660;
+    /** Leaves the owner to hostd's own default, root. */
+    rootOwnsOperators?: boolean;
   } = {},
   log = logger(),
 ): Promise<RunningHostd> {
@@ -156,6 +160,11 @@ async function boot(
     version: "9.9.9-test",
     env: options.env ?? {},
     logger: log,
+    // Never the machine's own /etc file: a scratch one, trusted as this user
+    // the way production trusts root.
+    operatorsFile: join(root, "operators"),
+    ...(options.rootOwnsOperators === true ? {} : { operatorsOwnerUid: process.getuid!() }),
+    ...(options.socketMode === undefined ? {} : { socketMode: options.socketMode }),
     ...(options.drainTimeoutMs === undefined ? {} : { drainTimeoutMs: options.drainTimeoutMs }),
   });
   running.push(host);
@@ -175,7 +184,12 @@ async function refused(
 }
 
 /** One request over the agent socket, as the `volli` CLI sends it. */
-function ask(socketPath: string, cmd: string, args: object = {}): Promise<AgentResponse> {
+function ask(
+  socketPath: string,
+  cmd: string,
+  args: object = {},
+  env: AgentRequest["ctx"]["env"] = {},
+): Promise<AgentResponse> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     let body = "";
@@ -184,7 +198,7 @@ function ask(socketPath: string, cmd: string, args: object = {}): Promise<AgentR
     socket.on("end", () => resolve(JSON.parse(body) as AgentResponse));
     socket.on("error", reject);
     socket.on("connect", () =>
-      socket.end(`${JSON.stringify({ v: 1, cmd, args, ctx: { cwd: root, env: {} } })}\n`),
+      socket.end(`${JSON.stringify({ v: 1, cmd, args, ctx: { cwd: root, env } })}\n`),
     );
   });
 }
@@ -293,6 +307,134 @@ describe("booting against an empty data directory", () => {
     await running.pop()!.stop("crash");
     writeFileSync(statusFilePath(dataDir), JSON.stringify({ ...crashed, state: "serving" }));
     expect((await boot()).status().state).toBe("serving");
+  });
+});
+
+/**
+ * VC-623's acceptance on the real host: an operator token issued by
+ * `operator-token` registers a project and creates a ticket over the socket;
+ * a token-less caller and a Session-token caller get exactly the refusals they
+ * got before.
+ */
+describe("an operator at the host's shell", () => {
+  const me = { login: userInfo().username, uid: process.getuid!(), gid: process.getgid!() };
+
+  /** Issues a token for this user, as `sudo volli-hostd operator-token` would. */
+  function issue(action: "issue" | "revoke" = "issue"): string {
+    const home = join(root, "home");
+    const code = runOperatorToken(
+      {
+        kind: "operator-token",
+        action,
+        login: me.login,
+        operatorsFile: join(root, "operators"),
+        serviceUser: "volli-test-service",
+      },
+      {
+        uid: () => me.uid,
+        rootUid: me.uid,
+        lookupUser: (login) => (login === me.login ? me : null),
+        writeTokenAsUser: (user, token) => writeTokenAsUser(user, token, home),
+        now: () => new Date(0),
+        out: () => undefined,
+        err: () => undefined,
+      },
+    );
+    expect(code).toBe(0);
+    return readFileSync(join(home, ".config", "volli", "operator-token"), "utf8").trim();
+  }
+
+  it("registers a project and creates a ticket, as the person", async () => {
+    const token = issue();
+    const log = logger();
+    await boot({ socketMode: 0o660 }, log);
+    const socketPath = join(root, "data", "volli.sock");
+    const repo = join(root, "acme");
+    mkdirSync(repo);
+    const operator = { operatorToken: token };
+
+    expect(statSync(socketPath).mode & 0o777).toBe(0o660);
+    expect(await ask(socketPath, "project.add", { id: repo }, operator)).toMatchObject({
+      ok: true,
+      data: { created: true, project: { name: "acme", prefix: "AC", path: repo } },
+    });
+    expect(
+      await ask(socketPath, "ticket.create", { title: "Over SSH", project: "AC" }, operator),
+    ).toMatchObject({ ok: true, data: { ticket: { id: "AC-1", title: "Over SSH" } } });
+    expect(await ask(socketPath, "ticket.events", { id: "AC-1" })).toMatchObject({
+      ok: true,
+      data: { events: [expect.objectContaining({ actor: "user" })] },
+    });
+    // One audit line per write, naming who, and never the token.
+    expect(log.info).toHaveBeenCalledWith("operator write", {
+      login: me.login,
+      cmd: "project.add",
+      ok: true,
+      code: null,
+    });
+    expect(log.info).toHaveBeenCalledWith(
+      "operator write",
+      expect.objectContaining({ cmd: "ticket.create", ok: true }),
+    );
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain(token);
+  });
+
+  it("leaves a token-less caller and a Session-token caller exactly where they were", async () => {
+    const token = issue();
+    await boot();
+    const socketPath = join(root, "data", "volli.sock");
+    const repo = join(root, "bravo");
+    mkdirSync(repo);
+    // hostd starts no Session yet, so any Session token it is shown is one it
+    // did not mint — the case VC-163 refuses.
+    const session = { session: "abcdef12-3456-7890-abcd-ef1234567890", token: "minted-elsewhere" };
+
+    for (const env of [{}, session, { ...session, operatorToken: token }]) {
+      for (const [cmd, args] of [
+        ["project.add", { id: repo }],
+        ["ticket.create", { title: "Nope", project: repo }],
+      ] as const) {
+        const answer = await ask(socketPath, cmd, args, env);
+        expect(answer, `${cmd} ${JSON.stringify(env)}`).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN_ACTOR" },
+        });
+      }
+    }
+    expect(await ask(socketPath, "project.list")).toMatchObject({ data: { projects: [] } });
+  });
+
+  it("stops accepting a token from the request after it is revoked", async () => {
+    const token = issue();
+    await boot();
+    const socketPath = join(root, "data", "volli.sock");
+    const repo = join(root, "charlie");
+    mkdirSync(repo);
+
+    issue("revoke");
+
+    expect(
+      await ask(socketPath, "project.add", { id: repo }, { operatorToken: token }),
+    ).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+  });
+
+  it("trusts only root's operators file by default", async () => {
+    writeFileSync(join(root, "operators"), "", { mode: 0o644 });
+
+    const error = await refused({ rootOwnsOperators: true });
+
+    expect(error.reason).toBe("operators");
+    expect(error.message).toContain("not to uid 0");
+  });
+
+  it("refuses to boot when the service account could write the operators file", async () => {
+    writeFileSync(join(root, "operators"), "", { mode: 0o666 });
+    chmodSync(join(root, "operators"), 0o666);
+
+    const error = await refused();
+
+    expect(error.reason).toBe("operators");
+    expect(stateOf(join(root, "data"))).toBeUndefined();
   });
 });
 

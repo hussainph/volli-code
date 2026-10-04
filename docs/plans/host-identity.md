@@ -260,6 +260,42 @@ No token, secret or hardware fingerprint is added by this migration. A managed
 control-plane device/account registry must reference these public identities,
 not introduce another identity for the same paired principal.
 
+## Operator token (VC-623): amendment to VC-92 §6.3
+
+VC-92 §6.3 ruled that a socket caller with no evidence is not the person:
+absence of a Session token is `unauthenticated`, never `user`. That stands.
+This amendment adds one piece of evidence that **is** proof, for a headless
+host only:
+
+- **An absent token still grants nothing.** A request with no token, or with a
+  Session token (valid or not), or with a `VOLLI_SESSION` claim, is judged
+  exactly as VC-163 judged it. The door does not read an operator token beside
+  any Session evidence, and the CLI does not send one.
+- **A hostd-issued operator token is proof of the person.** Root issues it at
+  the host's shell (`sudo volli-hostd operator-token --for <login>`); the
+  plaintext lives only in that login's own 0600 file, and hostd keeps only a
+  verifier (SHA-256 of 256 random bits) in a root-owned file, compared in
+  constant time. A request carrying a valid one is the `user` actor:
+  attributed as the app's own writes are, governed by each project's `user`
+  policy.
+- **No Session can become the person.** Sessions run as hostd's service
+  account, which cannot read a token file, write the verifier file (hostd
+  refuses to boot if it could) or run the issuer; no socket verb mints. The
+  person's verbs (registry actor `user`, today `project.add`) are judged by
+  the door's actor alone, so no project policy can extend one to a Session.
+- **Revocable without a rebuild**: removing the verifier line holds from the
+  next request. **Desktop issues none and verifies none**; there the app is
+  the person's door.
+
+It is an **M1 bootstrap and break-glass credential**, a long-lived bearer
+secret held on one box, not a device identity. It names a login for audit, not
+a `deviceId`, and is not stored in `devices`. Key-bound, short-lived device
+credentials (the host protocol's F5 direction) may supersede it; until then a
+paired device and an operator both map to the `user` policy actor. Its limit:
+when the operator's uid is the service account's (a foreground or
+single-user host), nothing separates operator from Sessions. Operator
+commands and the full model: `apps/hostd/README.md`, "Operators".
+
 ## Ticket display numbers: authority only
 
 `projects.next_ticket_number` is allocated by

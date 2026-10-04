@@ -48,6 +48,80 @@ export function agentRequestEnv(
   };
 }
 
+/**
+ * What reading the operator's token file found: the token, a reason not to
+ * use it, or nothing there.
+ */
+export type OperatorTokenFileRead =
+  | { readonly token: string }
+  | { readonly warning: string }
+  | null;
+
+/**
+ * The operator token this invocation sends, if any (VC-623).
+ *
+ * The precedence rule is the whole of this function, and its first line is the
+ * one that matters: **beside any Session evidence, none — and the file is never
+ * read.** A Session's `volli` keeps sending exactly what it sent before this
+ * existed, so the agent path does not change, and a Session that can somehow
+ * see a person's token still cannot present it beside its own identity. The
+ * door enforces the same rule from its side; this keeps the CLI from asking.
+ *
+ * Otherwise `VOLLI_OPERATOR_TOKEN`, then the operator's own 0600 file. Empty
+ * values are absent, as everywhere in the request environment.
+ */
+export async function operatorTokenFor(
+  env: Readonly<Record<string, string | undefined>>,
+  readTokenFile: () => Promise<OperatorTokenFileRead>,
+): Promise<{ token?: string; warning?: string }> {
+  if (env["VOLLI_SESSION_TOKEN"] !== undefined || env["VOLLI_SESSION"] !== undefined) return {};
+  const exported = env["VOLLI_OPERATOR_TOKEN"]?.trim();
+  if (exported) return { token: exported };
+  const read = await readTokenFile();
+  if (read === null) return {};
+  return "token" in read ? { token: read.token } : { warning: read.warning };
+}
+
+/** The file-system calls {@link readOperatorTokenFile} makes; tests script them. */
+export interface OperatorTokenFileSystem {
+  lstat(path: string): Promise<{ isFile(): boolean; mode: number; uid: number }>;
+  readFile(path: string): Promise<string>;
+  /** The invoking user's uid, or `null` where the platform has none. */
+  uid(): number | null;
+}
+
+/**
+ * Reads the operator token file, refusing it the way ssh refuses a private
+ * key: a file other users can read, that another user owns, or that is not a
+ * regular file is not used, and the warning names the fix. A missing or empty
+ * file is simply no token.
+ */
+export async function readOperatorTokenFile(
+  path: string,
+  fs: OperatorTokenFileSystem,
+): Promise<OperatorTokenFileRead> {
+  let stat;
+  try {
+    stat = await fs.lstat(path);
+  } catch {
+    return null;
+  }
+  const uid = fs.uid();
+  if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) {
+    return {
+      warning: `volli: not using ${path}: it must be a regular file you own that only you can read (chmod 600 ${path}).\n`,
+    };
+  }
+  let text;
+  try {
+    text = await fs.readFile(path);
+  } catch {
+    return null;
+  }
+  const token = text.trim();
+  return token.length === 0 ? null : { token };
+}
+
 export class AgentClientError extends Error {
   constructor(
     readonly code: AgentErrorCode,

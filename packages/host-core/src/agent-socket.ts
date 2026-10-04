@@ -17,6 +17,14 @@ const MAX_CONNECTIONS = 64;
 export interface AgentSocketOptions {
   socketPath: string;
   requestTimeoutMs?: number;
+  /**
+   * The socket file's mode once it listens: `0o600` (the default, and what
+   * desktop always uses) or `0o660`, so a headless host's operators reach it
+   * through the service's group (VC-623). Group access is reach, not
+   * authority: without an operator token that group's callers read and never
+   * write, because the admission gate judges every request on its own.
+   */
+  socketMode?: AgentSocketMode;
   execute(request: AgentRequest): Promise<AgentResponse>;
 }
 
@@ -25,6 +33,9 @@ export interface AgentSocketServer {
 }
 
 type SetSocketMode = (socketPath: string, mode: number) => Promise<void>;
+
+/** The two modes a socket may take; see {@link AgentSocketOptions.socketMode}. */
+export type AgentSocketMode = 0o600 | 0o660;
 
 export type ShutdownAgentSocket = () => Promise<void>;
 
@@ -140,7 +151,7 @@ function parseRequest(line: string): AgentRequest | AgentResponse {
   }
   const env = parsed["ctx"]["env"];
   if (
-    [env["session"], env["ticket"], env["socket"]].some(
+    [env["session"], env["ticket"], env["socket"], env["operatorToken"]].some(
       (value) => value !== undefined && typeof value !== "string",
     )
   ) {
@@ -410,7 +421,7 @@ export async function startAgentSocket(
   // yield, so quit can close and unlink it without waiting for publication.
   claim(server);
   try {
-    await setSocketMode(options.socketPath, 0o600);
+    await setSocketMode(options.socketPath, options.socketMode ?? 0o600);
   } catch (error) {
     await server.close().catch(() => undefined);
     throw error;
