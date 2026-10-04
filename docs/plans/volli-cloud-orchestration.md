@@ -26,7 +26,7 @@ You are an **orchestrator, not an implementer**:
 | M2 One host protocol | VC-542 | Desktop attaches to a local or remote `hostd` and feels identical. Close the lid; turns continue. |
 | M3 Workers and venues | VC-543 | Tickets run on the box and the laptop at once; a ticket moves mid-flight. |
 | M4 Workspace mobility | VC-544 | "Move workspace to This Mac" after cancelling the box. |
-| M5 Mobile | VC-545 | Answer an agent's question from a phone, lid closed. |
+| M5 Mobile (0.4.0) | VC-545 | Answer an agent's question from a phone, lid closed. |
 | M6 Volli Cloud | VC-546 | Sign in on a new laptop, "Run in cloud", no configuration. (Mostly a private repo.) |
 
 Each milestone ticket lists its work tickets. Work-ticket briefs for M0 and M1 are complete. M2–M6 briefs are **stubs** that you expand before starting them (section 7).
@@ -112,13 +112,14 @@ VC-549 and VC-550 reference each other: tell each Session the other exists and t
 2. VC-564 (WebSocket transport) and VC-574 (channel and app_state classification) go first.
 3. Then the area tickets VC-565–VC-573 in parallel lanes. They are the biggest parallel stretch, so use it.
 4. Then VC-575 (pairing), VC-576 (connection UX), VC-577 (local hostd), VC-578 (attention delivery).
-5. VC-579 is the owner's dogfood week.
-6. VC-587 (M4 table classification) can run during M2.
+5. VC-637 (throwaway mobile test client served by `hostd`) after VC-564, VC-565, VC-575 and VC-578. Keep it to its three surfaces (board, what needs me, answer a question). Anything it cannot reach without Electron is an M2 protocol bug, not a reason to grow it toward M5.
+6. VC-579 is the owner's dogfood week. VC-637 is done when the owner answers an agent's question from a phone during it.
+7. VC-587 (M4 table classification) can run during M2.
 
 **Waves D–F:**
 - M3 after M2's demo.
 - M4 alongside M3.
-- M5 once M2's board and session areas have landed.
+- M5 ships in 0.4.0, after 0.3.0 (owner ruling, 2026-10-04).
 - M6 only when the owner says so.
 
 ### Hotspot files
@@ -225,4 +226,4 @@ Bring these to the owner. Batch them into the end-of-pass comment, and use `voll
 
 ## 11. Definition of done for the program
 
-0.3.0 ships when M0–M4 demos have passed, the owner has dogfooded lid-closed on the box for at least two weeks, the default flips (desktop always through a host; per-workspace databases), and the old paths are deleted. M5 and M6 can follow 0.3.0.
+0.3.0 ships when M0–M4 demos have passed, the owner has dogfooded lid-closed on the box for at least two weeks, the default flips (desktop always through a host; per-workspace databases), and the old paths are deleted. M5 (mobile) ships in 0.4.0 (owner ruling, 2026-10-04). M6 follows when the owner says so.
