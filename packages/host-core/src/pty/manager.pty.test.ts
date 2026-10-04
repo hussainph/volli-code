@@ -1,3 +1,4 @@
+import { createTestSessionEngine } from "../testing/session-engine";
 /**
  * The terminal supervisor against a REAL node-pty under plain Node (VC-560).
  *
@@ -120,11 +121,11 @@ beforeEach(async () => {
     host,
     testDb.db,
     "",
+    createTestSessionEngine(testDb.db),
     undefined,
     parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
     null,
     "",
-    null,
     ledger.ledger,
   );
 });

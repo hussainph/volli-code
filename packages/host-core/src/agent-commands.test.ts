@@ -59,7 +59,7 @@ import {
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "./testing/session-engine";
 import { writeModelAccessDefault } from "@volli/host-core/session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
@@ -181,7 +181,7 @@ function createAgentCommandService(
   }
   return createAgentCommandServiceBase({
     ...options,
-    sessionEngine: options.sessionEngine ?? createDesktopSessionEngine(options.db),
+    sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
   });
 }
@@ -315,7 +315,7 @@ describe("agent command service", () => {
       reporting: [],
       skillConflicts: [],
     }));
-    const engine = createDesktopSessionEngine(ctx.db);
+    const engine = createTestSessionEngine(ctx.db);
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -1117,7 +1117,7 @@ describe("agent command service", () => {
       ctx.db,
       testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
     );
-    const engine = createDesktopSessionEngine(ctx.db);
+    const engine = createTestSessionEngine(ctx.db);
     const provenance = {
       source: { kind: "system" as const, id: "test", detail: null },
       venue: { id: "local", kind: "local" as const },
@@ -2104,7 +2104,7 @@ describe("agent command service", () => {
       ctx.db,
       testSession("project-one", null, { id: sessionId, title: "Terminal", createdAt: 900 }),
     );
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 900 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 900 });
     const structured = await sessionEngine.createSession({
       commandId: "structured-create",
       projectId: "project-one",
@@ -2191,7 +2191,7 @@ describe("agent command service", () => {
       source: { kind: "user" as const, id: "test", detail: null },
       venue: { id: "local" as const, kind: "local" as const },
     };
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 1_000 });
     const tiered = await sessionEngine.createSession({
       commandId: "create-tiered",
       projectId: "project-one",
@@ -2280,7 +2280,7 @@ describe("agent command service", () => {
       source: { kind: "adapter" as const, id: "pi", detail: null },
       venue: { id: "local" as const, kind: "local" as const },
     };
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 1_000 });
     // Three chat Sessions in the three states a row can honestly be in.
     const working = await sessionEngine.createSession({
       commandId: "create-working",
@@ -2764,7 +2764,7 @@ describe("agent command service", () => {
         ctx.db,
         testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
       );
-      const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+      const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 1_000 });
       const created = await sessionEngine.createSession({
         commandId: "chat-create",
         projectId: "project-one",
@@ -2970,7 +2970,7 @@ describe("agent command service", () => {
       const storeless = createAgentCommandService({
         db: ctx.db,
         appVersion: "1.2.3",
-        sessionEngine: createDesktopSessionEngine(ctx.db),
+        sessionEngine: createTestSessionEngine(ctx.db),
       });
       const peek = async (id: unknown) =>
         storeless.execute({
@@ -3118,12 +3118,12 @@ describe("agent command service", () => {
     });
     expect((events as { data: { events: unknown[] } }).data.events).toHaveLength(1);
     expect(JSON.stringify(events)).not.toContain(sessionId);
-    expect(
-      (await createDesktopSessionEngine(ctx.db).getSession({ sessionId }))?.signal,
-    ).toMatchObject({
-      signal: "blocked",
-      reason: "Waiting for credentials",
-    });
+    expect((await createTestSessionEngine(ctx.db).getSession({ sessionId }))?.signal).toMatchObject(
+      {
+        signal: "blocked",
+        reason: "Waiting for credentials",
+      },
+    );
     expect(mutations).toEqual([
       { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
     ]);
@@ -3138,7 +3138,7 @@ describe("agent command service", () => {
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", "ticket-one", { id: sessionId }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
     const submit = sessionEngine.submit.bind(sessionEngine);
     sessionEngine.submit = async () => {
@@ -3171,7 +3171,7 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     await sessionEngine.submit({
       commandId: "archive-before-signal",
       sessionId,
@@ -3205,7 +3205,7 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const listed = vi.spyOn(sessionEngine, "listSessions");
     const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
 
@@ -3261,7 +3261,7 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
 
     for (const cmd of ["session.done", "session.blocked"] as const) {
@@ -3313,7 +3313,7 @@ describe("agent command service", () => {
         testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
       );
       insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 6 }));
-      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const sessionEngine = createTestSessionEngine(ctx.db);
       const created = await sessionEngine.createSession({
         commandId: "create-structured",
         projectId: "project-one",
@@ -3474,7 +3474,7 @@ describe("agent command service", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     // A structured (chat) Session: created through the engine, never given a
     // terminal attachment — exactly what `volli session start` produces.
     const created = await sessionEngine.createSession({
@@ -3522,7 +3522,7 @@ describe("agent command service", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const created = await sessionEngine.createSession({
       commandId: "create-structured",
       projectId: "project-one",
@@ -3605,7 +3605,7 @@ describe("agent command service", () => {
 
     it("preserves independent native fields when a wrapper announce races a session link", async () => {
       linkService();
-      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const sessionEngine = createTestSessionEngine(ctx.db);
       const observe = sessionEngine.observe.bind(sessionEngine);
       let delayFirstNativeWrite = true;
       sessionEngine.observe = async (observation) => {
@@ -3866,7 +3866,7 @@ describe("agent command service", () => {
 
     it("does not report a minted id when its native write loses the live attachment", async () => {
       announceService("cursor");
-      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const sessionEngine = createTestSessionEngine(ctx.db);
       const observe = sessionEngine.observe.bind(sessionEngine);
       let closeAfterHarnessWrite = true;
       sessionEngine.observe = async (observation) => {
@@ -6896,7 +6896,7 @@ describe("reads over a session the socket did not start", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 900 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 900 });
     const structured = await sessionEngine.createSession({
       commandId: "structured-create",
       projectId: "project-one",
@@ -7016,7 +7016,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
         worktreePath: "/wt/VC-1",
       }),
     );
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const created = await sessionEngine.createSession({
       commandId: "create-structured",
       projectId: "project-one",
@@ -7058,7 +7058,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
         worktreePath: "/wt/VC-1",
       }),
     );
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const created = await sessionEngine.createSession({
       commandId: "create-structured",
       projectId: "project-one",
@@ -7092,7 +7092,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
     );
-    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const sessionEngine = createTestSessionEngine(ctx.db);
     const created = await sessionEngine.createSession({
       commandId: "create-structured",
       projectId: "project-one",
@@ -7153,7 +7153,7 @@ describe("volli cost", () => {
       testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, usesWorktree: false }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",

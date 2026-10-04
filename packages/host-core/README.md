@@ -55,7 +55,7 @@ if (!host.database.ok) console.error(host.database.error);
 | `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                            | VC-553   |
 
 VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
-`@volli/host-core/session-control/*`), `src/session-wake.ts`,
+`@volli/host-core/session-control/*`), `src/session-control/session-wake.ts`,
 `src/session-concurrency.ts` and the outbox/resumption adapters under
 `src/session-runtime/` (`@volli/host-core/session-runtime/*`).
 
@@ -224,9 +224,11 @@ composition uses: `events`, `attention`, `log`, `listOpenNativeBindings` and
 construction, so desktop can bind notifications and the runtime
 after the database is known. Desktop wires `onFocusedSessionsChanged` to the
 returned read watch, and supplies the runtime-dependent scheduled-resume
-observer after the runtime exists. `createDesktopSessionEngine` retains its
-name for existing callers but is now the single engine construction site in
-host-core; host composition passes the shared ledger into it.
+observer after the runtime exists. Engine construction is private to the
+Sessions module (`src/sessions/engine.ts`, not a package export). It requires
+the shared ledger; terminal, data and runtime consumers must receive the
+composed engine and never construct a fallback. The wake decorator lives beside
+the activity watch in `src/session-control/`.
 
 Coverage entries for the activity/read/peek watches and concurrency budget
 move with their tests at the unchanged 100% thresholds. `db/export.ts` remains

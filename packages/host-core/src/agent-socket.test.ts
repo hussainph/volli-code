@@ -22,7 +22,7 @@ import {
   testSession,
   type TestDb,
 } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "./testing/session-engine";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
@@ -334,7 +334,7 @@ describe("agent socket", () => {
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
       db: ctx.db,
-      sessionEngine: createDesktopSessionEngine(ctx.db),
+      sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => "ticket-internal",

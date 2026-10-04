@@ -46,7 +46,7 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "./testing/session-engine";
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ctx: TestDb;
@@ -63,7 +63,7 @@ function scenario() {
     testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
   );
   insertSession(ctx.db, testSession("project-one", null, { id: SESSION_ID }));
-  const sessionEngine = createDesktopSessionEngine(ctx.db);
+  const sessionEngine = createTestSessionEngine(ctx.db);
   const listSessions = vi.spyOn(sessionEngine, "listSessions");
   const getSession = vi.spyOn(sessionEngine, "getSession");
   // Both verbs below are coordination tier, so both need an authenticated

@@ -55,7 +55,6 @@ import { createCommandRun } from "./command-run";
 import type { CommandRunOutcome } from "./command-run";
 import { ParkController } from "./park-controller";
 import {
-  createDesktopSessionEngine,
   terminalNativeReference,
   terminalSessionRecord,
   type TerminalAttachmentDetail,
@@ -288,7 +287,6 @@ export class PtyManager {
   /** Callers parked on {@link PtyManager.runCommand}, by the session running it. */
   private readonly commandRuns = new Map<string, PromiseWithResolvers<CommandRunOutcome>>();
   /** One app-owned durable Session Engine; tests may lazily compose one around their test db. */
-  private readonly sessionEngine: SessionEngine | null;
   /**
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
    * #99. It reads this manager's live `sessions` map (the SAME instance) and
@@ -315,6 +313,8 @@ export class PtyManager {
    *                   session persists a durable record, so with no db `create`
    *                   fails outright (surfacing {@link dbError}).
    * @param dbError    the open failure to report when `db` is `null`.
+   * @param sessionEngine the host's composed engine, or `null` in degraded mode.
+   *                   Required: the supervisor never constructs a writer.
    * @param inspector  process-tree inspection seam (real by default; tests
    *                   inject a fake so no `ps`/`pgrep`/`lsof` ever spawn).
    * @param parkConfig warm-park tuning; disabled config makes every park path a
@@ -339,15 +339,14 @@ export class PtyManager {
     private readonly host: PtyHost,
     private readonly db: Database.Database | null,
     private readonly dbError: string,
+    private readonly sessionEngine: SessionEngine | null,
     private readonly inspector: ProcessInspector = createProcessInspector(),
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly blobsRootPath: string = "",
-    sessionEngine: SessionEngine | null = null,
     private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
     concurrencyEnvReader: SessionConcurrencyEnvReader | null = null,
   ) {
-    this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
     this.concurrencyEnvReader = concurrencyEnvReader;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —

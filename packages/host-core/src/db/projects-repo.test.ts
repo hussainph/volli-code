@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createDesktopSessionEngine } from "../session-control";
+import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "../session-control/test-support";
 import { testProject, testSession, testTicket, openTestDb } from "@volli/host-core/db/test-helpers";
 import type { TestDb } from "@volli/host-core/db/test-helpers";
@@ -30,7 +30,7 @@ describe("deleteProject", () => {
     insertProject(ctx.db, project);
     insertTicket(ctx.db, ticket);
     insertSession(ctx.db, session);
-    await createDesktopSessionEngine(ctx.db).submit({
+    await createTestSessionEngine(ctx.db).submit({
       commandId: "signal-session-1",
       sessionId: session.id,
       intent: { kind: "session.signal", signal: "blocked", reason: "Needs approval" },

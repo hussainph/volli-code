@@ -22,7 +22,7 @@ import {
   updateProjectCanvas,
   updateProjectThemeOverride,
 } from "@volli/host-core/db/projects-repo";
-import { createDesktopSessionEngine } from "@volli/host-core/session-control";
+import { createTestSessionEngine } from "../test-session-engine";
 import { insertSession } from "@volli/host-core/session-control/test-support";
 import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
 import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
@@ -189,7 +189,7 @@ describe("buildExportDocument — populated db", () => {
       "signal-receipt-event",
       "signal-receipt",
     ];
-    const sessionEngine = createDesktopSessionEngine(ctx.db, {
+    const sessionEngine = createTestSessionEngine(ctx.db, {
       now: () => 35,
       nextId: () => {
         const id = generatedIds.shift();
@@ -582,7 +582,7 @@ describe("buildExportDocument — populated db", () => {
       "receipt",
       "message-event",
     ];
-    const sessionEngine = createDesktopSessionEngine(ctx.db, {
+    const sessionEngine = createTestSessionEngine(ctx.db, {
       now: () => 1,
       nextId: () => {
         const id = ids.shift();
@@ -768,7 +768,7 @@ describe("buildExportDocument — populated db", () => {
     const project = testProject({ id: "proj-1" });
     insertProject(ctx.db, project);
     insertTicket(ctx.db, testTicket(project.id, { id: "ticket-1", usesWorktree: false }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 1 });
     const created = await sessionEngine.createSession({
       commandId: "usage-session",
       projectId: project.id,

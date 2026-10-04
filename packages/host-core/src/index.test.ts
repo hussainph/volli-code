@@ -16,6 +16,28 @@ import type { HostCore, HostCorePorts } from "./index";
 import Database from "better-sqlite3";
 import { SCHEMA_HEAD } from "./db/migrations";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
+import { insertProject } from "./db/projects-repo";
+import { testProject } from "./db/test-helpers";
+import * as sessionLedgerModule from "./session-control/sqlite-ledger";
+import * as sessionControl from "./session-control";
+import { createDesktopSessionRuntime, type DesktopSessionRuntimeOptions } from "./session-runtime";
+import { PtyManager } from "./pty/manager";
+import type { SessionWake } from "./session-control/session-wake";
+
+// Consumer construction must not become optional again. These checks run in
+// the package typecheck without making invalid calls against a live database.
+type RuntimeRequiresEngine =
+  {} extends Pick<DesktopSessionRuntimeOptions, "sessionEngine"> ? false : true;
+const runtimeRequiresEngine: RuntimeRequiresEngine = true;
+type TerminalParameters = ConstructorParameters<typeof PtyManager>;
+type TerminalRequiresEngine = [
+  TerminalParameters[0],
+  TerminalParameters[1],
+  string,
+] extends TerminalParameters
+  ? false
+  : true;
+const terminalRequiresEngine: TerminalRequiresEngine = true;
 
 const dirs: string[] = [];
 const opened: HostCore[] = [];
@@ -68,6 +90,96 @@ function headlessOptions(root: string): Parameters<typeof createHostCore>[1] {
 }
 
 describe("createHostCore", () => {
+  it("keeps construction private and every composed consumer on one Session writer", async () => {
+    expect(runtimeRequiresEngine).toBe(true);
+    expect(terminalRequiresEngine).toBe(true);
+    expect(sessionControl).not.toHaveProperty("createDesktopSessionEngine");
+    expect(sessionControl).not.toHaveProperty("createHostSessionEngine");
+    expect(() => import.meta.resolve("@volli/host-core/sessions/engine")).toThrow();
+
+    const construct = vi.spyOn(sessionLedgerModule, "createSqliteSessionLedger");
+    const ports = sessionPorts();
+    const core = createHostCore(ports, headlessOptions(dataDir()));
+    opened.push(core);
+    if (!core.database.ok) throw new Error(core.database.error);
+    const db = core.database.db;
+    const engine = core.sessionEngine!;
+    const writer = vi.spyOn(core.sessionLedger!, "transaction");
+    const project = testProject();
+    insertProject(db, project);
+    const wakes: SessionWake[] = [];
+    const unsubscribe = core.sessionWakeBus!.subscribe((wake) => wakes.push(wake));
+    const executor = {
+      id: "test",
+      durableIdNamespace: "test",
+      adapterVersion: "1",
+      runtime: { path: "test", version: "1", fingerprint: "test" },
+      attach: vi.fn(() => {
+        throw new Error("This test never attaches an executor");
+      }),
+    };
+    const runtime = createDesktopSessionRuntime({
+      db,
+      events: ports.events,
+      dataDir: core.dataDir,
+      transcriptDirectory: join(core.dataDir, "transcripts"),
+      sessionEngine: engine,
+      executor,
+    });
+    const manager = new PtyManager(
+      {
+        events: ports.events,
+        worktreeDeps: () => {
+          throw new Error("This test never starts a worktree");
+        },
+        ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
+      },
+      db,
+      "",
+      engine,
+    );
+    try {
+      expect(construct).toHaveBeenCalledTimes(1);
+      expect(construct.mock.results[0]?.value).toBe(core.sessionLedger);
+      writer.mockClear();
+      const created = await runtime.command({
+        commandId: "create-through-runtime",
+        command: {
+          kind: "session.create",
+          projectId: project.id,
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "One writer",
+        },
+      });
+      expect(writer).toHaveBeenCalled();
+      const sessionId = created.sessionId;
+      expect(wakes.some(({ event }) => event.sessionId === sessionId)).toBe(true);
+      await core.sessionActivityWatch!.flush();
+      expect(ports.events.publish).toHaveBeenCalledWith(
+        "session-activity",
+        expect.objectContaining({
+          row: expect.objectContaining({
+            record: expect.objectContaining({ sessionId }),
+          }),
+        }),
+      );
+      writer.mockClear();
+      await core.hostNoticeOutbox!.pending();
+      expect(writer).toHaveBeenCalledTimes(1);
+      writer.mockClear();
+      await engine.getSession({ sessionId });
+      expect(writer).toHaveBeenCalledTimes(1);
+      expect(construct).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      manager.killAll();
+      await runtime.close();
+      construct.mockRestore();
+      writer.mockRestore();
+    }
+  });
   it("opens and migrates <dataDir>/volli.db, creating the directory", () => {
     const root = join(dataDir(), "nested", "profile");
     const log = { error: vi.fn() };
