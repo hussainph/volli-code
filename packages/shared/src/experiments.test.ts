@@ -26,7 +26,7 @@ describe("experimental registry", () => {
 
   it("rejects unknown ids, including inherited object names, at runtime", () => {
     expect(requireExperimentId("cloud")).toBe("cloud");
-    for (const id of ["other", "constructor", "__proto__", undefined, 1]) {
+    for (const id of ["other", "Cloud", "constructor", "__proto__", undefined, 1]) {
       expect(() => requireExperimentId(id)).toThrow("Unknown experiment");
     }
   });
