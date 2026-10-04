@@ -14,6 +14,8 @@ import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import * as migrations from "./migrations";
 import { migrate } from "./migrations";
 
+const LATEST_SCHEMA_VERSION = migrations.MIGRATIONS.at(-1)!.version;
+
 const WORKSPACE = "6f0e8f7c-2b7c-4f43-9a55-0c8f3c1d2a01";
 const OTHER_WORKSPACE = "1d3a9a52-7a0e-4a4b-8a38-5f1b2c9e7d02";
 const TICKET = "a8b1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c04";
@@ -143,7 +145,8 @@ describe("cloud identity migration (058)", () => {
     const rowsBefore = tableRows(f.db);
     const schemaBefore = schemaObjects(f.db);
 
-    expect(migrate(f.db, f.path)).toBe(true);
+    // This assertion isolates 058's expand-only contract, not the current head.
+    expect(migrate(f.db, f.path, { toVersion: 58 })).toBe(true);
 
     expect(f.db.pragma("user_version", { simple: true })).toBe(58);
     const schemaAfter = schemaObjects(f.db);
@@ -164,7 +167,7 @@ describe("cloud identity migration (058)", () => {
       expect(rowsAfter[table], table).toEqual(rows);
     }
     expect(f.db.pragma("foreign_key_check")).toEqual([]);
-    expect(migrate(f.db, f.path)).toBe(false);
+    expect(migrate(f.db, f.path, { toVersion: 58 })).toBe(false);
   });
 
   it("gives a fresh install the same identity schema as an upgrade", () => {
@@ -179,7 +182,7 @@ describe("cloud identity migration (058)", () => {
     const path = freshPath();
     db = openRawDb(path);
     expect(migrate(db, path)).toBe(true);
-    expect(db.pragma("user_version", { simple: true })).toBe(58);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(schemaObjects(db).filter((object) => IDENTITY_TABLES.includes(object.tbl_name))).toEqual(
       upgradedSchema,
     );
@@ -187,7 +190,7 @@ describe("cloud identity migration (058)", () => {
 
   it("converges when version 58 is offered again, keeping every identity row", () => {
     const f = version57();
-    migrate(f.db, f.path);
+    migrate(f.db, f.path, { toVersion: 58 });
     seedIdentityRows(f.db);
     const rows = tableRows(f.db);
     const schema = schemaObjects(f.db);
@@ -212,7 +215,7 @@ describe("cloud identity migration (058)", () => {
     f.db.exec(CLOUD_IDENTITY_MIGRATION);
     f.db.exec(CLOUD_IDENTITY_MIGRATION);
 
-    expect(f.db.pragma("user_version", { simple: true })).toBe(58);
+    expect(f.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(f.db.prepare("SELECT total_changes() AS n").get()).toEqual(changes);
     expect(tableRows(f.db)).toEqual(rows);
     expect(schemaObjects(f.db)).toEqual(schema);
@@ -229,7 +232,7 @@ describe("cloud identity migration (058)", () => {
 
   it("opens a v58 database through the v57 migration ceiling and keeps old read/write paths working", () => {
     const f = version57();
-    migrate(f.db, f.path);
+    migrate(f.db, f.path, { toVersion: 58 });
     seedIdentityRows(f.db);
     const schema = schemaObjects(f.db);
     const rows = tableRows(f.db);
@@ -284,7 +287,7 @@ describe("cloud identity migration (058)", () => {
     ]);
     expect(validateBackupDataDocument(document).ok).toBe(true);
     // A v57 writer's included-table list omits workspace_epochs, but stamps
-    // the actual db user_version (58). Ordinary read/write compatibility does
+    // the actual db user_version. Ordinary read/write compatibility does
     // not make that incomplete backup safe. Never infer missing history is 0.
     const stableDocument = {
       ...document,
@@ -293,7 +296,7 @@ describe("cloud identity migration (058)", () => {
         Object.entries(document.tables).filter(([table]) => table !== "workspace_epochs"),
       ),
     };
-    expect(stableDocument.schemaVersion).toBe(58);
+    expect(stableDocument.schemaVersion).toBe(LATEST_SCHEMA_VERSION);
     const validation = validateBackupDataDocument(stableDocument);
     expect(validation.ok).toBe(false);
     if (!validation.ok) {
