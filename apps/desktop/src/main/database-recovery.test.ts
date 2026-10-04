@@ -55,14 +55,12 @@ vi.mock("electron", () => ({
   },
 }));
 
-import * as database from "./db";
-import { migrate, MIGRATIONS } from "./db/migrations";
-import { beginDatabaseRecovery, recoveryPendingPath } from "./db/recovery-pending";
-import {
-  DatabaseRecovery,
-  NO_CLEAN_BACKUP,
-  registerDatabaseRecoveryIpcHandlers,
-} from "./database-recovery";
+import * as database from "@volli/host-core/db";
+import { migrate, MIGRATIONS } from "@volli/host-core/db/migrations";
+import { beginDatabaseRecovery, recoveryPendingPath } from "@volli/host-core/db/recovery-pending";
+import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import { DatabaseRecovery, NO_CLEAN_BACKUP } from "@volli/host-core/database-recovery";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 
 let directory: string;
 let dbPath: string;
@@ -503,12 +501,92 @@ describe("DatabaseRecovery", () => {
   });
 });
 
-describe("database recovery IPC", () => {
-  function register(degraded = true) {
-    const restart = vi.fn();
-    registerDatabaseRecoveryIpcHandlers({ dbPath, userData: directory, degraded, restart });
-    return restart;
+describe("a safety copy from a newer Volli (VC-602)", () => {
+  /** A clean copy stamped past this build's head, with the given floor. */
+  function newerBackup(floor: number, modifiedAt: number): string {
+    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+    const path = backup(head, "newer", modifiedAt);
+    const db = new Database(path);
+    try {
+      db.pragma(`user_version = ${head + 1}`);
+      db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)").run(
+        MIN_READER_VERSION_KEY,
+        String(floor),
+      );
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      db.close();
+    }
+    // Same name family a newer build's migration leaves behind.
+    const renamed = `${dbPath}.backup-v${head + 1}`;
+    renameSync(path, renamed);
+    utimesSync(renamed, modifiedAt, modifiedAt);
+    return renamed;
   }
+
+  it("is listed as newer and passed over for the newest copy this build can open", () => {
+    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+    backup(1, "older", 1000);
+    const newer = newerBackup(head + 1, 3000);
+    const bytes = readFileSync(newer);
+
+    expect(recovery.list().map(({ name, integrity }) => ({ name, integrity }))).toEqual([
+      { name: `volli.db.backup-v${head + 1}`, integrity: "newer" },
+      { name: "volli.db.backup-v1", integrity: "clean" },
+    ]);
+    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(readFileSync(newer)).toEqual(bytes);
+  });
+
+  it("is clean, and restorable, when its floor admits this build", () => {
+    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+    newerBackup(head, 3000);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(recovery.list()[0]?.integrity).toBe("clean");
+    expect(recovery.restore()).toBe(`volli.db.backup-v${head + 1}`);
+    const restored = new Database(dbPath, { readonly: true });
+    try {
+      // Opened as a compatible newer file: never migrated down.
+      expect(restored.pragma("user_version", { simple: true })).toBe(head + 1);
+    } finally {
+      restored.close();
+    }
+  });
+});
+
+describe("database recovery IPC", () => {
+  function register(degraded = true, fault: "unreadable" | "newer-version" = "unreadable") {
+    const restart = vi.fn();
+    const quit = vi.fn();
+    registerDatabaseRecoveryIpcHandlers({
+      recovery,
+      degraded,
+      fault,
+      restart,
+      quit,
+    });
+    return Object.assign(restart, { quit });
+  }
+
+  it("names the fault and quits on request, only while degraded (VC-602)", () => {
+    const degraded = register(true, "newer-version");
+    expect(invoke("volli:database-recovery-fault")).toEqual({ ok: true, fault: "newer-version" });
+    expect(invoke("volli:database-recovery-quit")).toEqual({ ok: true });
+    expect(degraded.quit).toHaveBeenCalledOnce();
+    expect(degraded).not.toHaveBeenCalled();
+
+    const healthy = register(false);
+    expect(invoke("volli:database-recovery-fault")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("failed to open"),
+    });
+    expect(invoke("volli:database-recovery-quit")).toMatchObject({ ok: false });
+    expect(healthy.quit).not.toHaveBeenCalled();
+    expect(invoke("volli:database-recovery-quit", "now")).toEqual({
+      ok: false,
+      error: "Invalid database recovery request",
+    });
+  });
 
   it("lists and restores despite degraded data IPC, then requests restart only on success", () => {
     backup(1);

@@ -1,4 +1,4 @@
-import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+import { settleShutdownBeforeDeadline } from "@volli/host-core/shutdown-deadline";
 
 /**
  * The quit decision: whether ⌘Q is allowed to destroy work, and how a refusal
@@ -192,15 +192,20 @@ export function registerAcceptedQuitCoordinator(options: {
     void Promise.resolve().then(() => {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
+      const exitAfterCheckpoint = () => {
+        // app.exit destroys native windows synchronously. VC-536 captured
+        // macOS compositor teardown waiting on synchronous Viz IPC while
+        // entered from this shutdown checkpoint. Defer teardown until the
+        // checkpoint unwinds, without changing drain/quit bounds or re-issuing
+        // app.quit. Keep the Immediate referenced so the final drain cannot
+        // leave the terminal callback behind. Native exit is still unbounded.
+        setImmediate(() => options.lifecycle.exit(0));
+      };
       void settleShutdownBeforeDeadline({
         shutdowns: [options.shutdownNativeSessions, options.shutdownAgentSocket],
         deadlineMs: options.shutdownDeadlineMs,
         reportFailure: options.reportFailure,
-      }).then(
-        // Re-issuing app.quit() during before-quit is swallowed by Electron.
-        () => options.lifecycle.exit(0),
-        () => options.lifecycle.exit(0),
-      );
+      }).then(exitAfterCheckpoint, exitAfterCheckpoint);
     });
   });
 }

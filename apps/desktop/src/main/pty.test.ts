@@ -86,35 +86,45 @@ vi.mock("node-pty", () => ({ spawn }));
 // `parseSetupSentinel` stay REAL so the sentinel contract is exercised end to
 // end. The runtime deps bundle is replaced so phase broadcasts don't touch
 // electron and `worktreesHome` is a stable stand-in.
-vi.mock("./worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./worktree")>();
+vi.mock("@volli/host-core/worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
-vi.mock("./worktree-runtime", () => ({
+vi.mock("./worktree-host", () => ({
   worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
+}));
+vi.mock("@volli/host-core/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
-import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./pty";
+import { PtyManager } from "@volli/host-core/pty/manager";
+import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
-import { createAgentCommandService } from "./agent-commands";
-import type { ParkConfig, ProcessInspector } from "./park";
-import { importBlob } from "./blob-import";
-import { blobsRoot, removeBlob } from "./blob-store";
-import { listTicketEvents, recordSessionResumedOnce } from "./db/events-repo";
-import { insertProject } from "./db/projects-repo";
+import { createAgentCommandService } from "@volli/host-core/agent-commands";
+import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
+import { importBlob } from "@volli/host-core/blob-import";
+import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
+import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
   getSession,
   insertSession,
   listSessions,
   listTicketSessions,
-} from "./session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
+} from "@volli/host-core/session-control/test-support";
+import {
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/db/test-helpers";
 import type { HarnessId } from "@volli/shared";
-import { deleteTicket, insertTicket } from "./db/tickets-repo";
-import { syncProjectRoots } from "./project-roots";
-import { createDesktopSessionEngine } from "./session-control";
-import { createSessionTokenRegistry } from "./session-tokens";
+import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
+import { syncProjectRoots } from "@volli/host-core/project-roots";
+import { createTestSessionEngine } from "./test-session-engine";
+import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -149,10 +159,15 @@ function makeFakePty(pid = nextPid()) {
   };
 }
 
+let webContentsIdSeq = 0;
+
 /** A WebContents double; `destroyed` listener and destroyed-state are steerable. */
 function makeWebContents() {
   const eventListeners = new Map<string, () => void>();
+  webContentsIdSeq += 1;
   return {
+    // Electron's per-process id: what the supervisor's ownership check reads.
+    id: webContentsIdSeq,
     send: vi.fn(),
     destroyed: false,
     isDestroyed(): boolean {
@@ -170,33 +185,55 @@ function makeWebContents() {
 
 type WebContentsDouble = ReturnType<typeof makeWebContents>;
 
-/** Casts a WebContents double for the direct manager methods that take one. */
-const asWc = (double: WebContentsDouble): WebContents => double as unknown as WebContents;
+/** The supervisor's client for a WebContents double, as the IPC adapter builds it. */
+const asWc = (double: WebContentsDouble) => clientEventSink(double as unknown as WebContents);
 
-const invokeCreate = (sender: WebContentsDouble, req: unknown) =>
-  (handlers.get("volli:terminal-create" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender },
-    req,
-  ) as Promise<CreateTerminalSessionResult>;
+const invokeCreate = async (
+  sender: WebContentsDouble,
+  req: unknown,
+): Promise<CreateTerminalSessionResult> => {
+  const result = (await (
+    handlers.get("volli:terminal-create" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown
+  )({ sender }, req)) as CreateTerminalSessionResult;
+  if (result.ok) sessionOwners.set(result.sessionId, sender);
+  return result;
+};
 
-const invokeWrite = (sessionId: unknown, data: unknown) =>
+/**
+ * Sessions this suite has created, id → the webContents double that created
+ * them. The mutating invoke helpers below speak as that window by default (a
+ * session's creator is its owner), and take an explicit sender only where a
+ * test exercises the cross-window refusal (VC-509).
+ */
+const sessionOwners = new Map<string, WebContentsDouble>();
+
+/** The owning sender of a created session; a stranger window for ids no session backs. */
+const ownerOf = (sessionId: unknown): WebContentsDouble =>
+  (typeof sessionId === "string" ? sessionOwners.get(sessionId) : undefined) ?? makeWebContents();
+
+const invokeWrite = (sessionId: unknown, data: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-write" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
     data,
   ) as TerminalIoResult;
 
-const invokeResize = (sessionId: unknown, cols: unknown, rows: unknown) =>
+const invokeResize = (
+  sessionId: unknown,
+  cols: unknown,
+  rows: unknown,
+  from = ownerOf(sessionId),
+) =>
   (handlers.get("volli:terminal-resize" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
     cols,
     rows,
   ) as TerminalIoResult;
 
-const invokeKill = (sessionId: unknown) =>
+const invokeKill = (sessionId: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-kill" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
   ) as TerminalIoResult;
 
@@ -206,15 +243,15 @@ const invokeBusy = (sessionId: unknown) =>
     sessionId,
   ) as TerminalBusyResult;
 
-const invokeRun = (sessionId: unknown, command: unknown) =>
+const invokeRun = (sessionId: unknown, command: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-run" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
     command,
   ) as Promise<TerminalCommandResult>;
 
-/** Casts a WebContents double to the real type for calls typed against it directly (not through IPC). */
-const asWebContents = (sender: WebContentsDouble) => sender as unknown as WebContents;
+/** The supervisor's client for a WebContents double, for calls made directly (not through IPC). */
+const asWebContents = asWc;
 
 /** A `before-quit` event double with a spyable `preventDefault`. */
 const makeQuitEvent = () => ({ preventDefault: vi.fn() });
@@ -240,6 +277,7 @@ let root: string;
 let outside: string;
 let sessionTokens: ReturnType<typeof createSessionTokenRegistry>;
 let manager: ReturnType<typeof registerTerminalIpcHandlers>;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 let testDb: TestDb;
 let project: Project;
 
@@ -286,19 +324,18 @@ beforeEach(() => {
   // migrated db. The workspace ("w") must be a real project row (FK), rooted at
   // `root` so Board Session cwds and resolved ticket cwds land inside the synced root.
   testDb = openTestDb();
+  fixtureSessionEngine = createTestSessionEngine(testDb.db);
   project = testProject({ id: "w", path: root, ticketPrefix: "VC" });
   insertProject(testDb.db, project);
   // Fresh manager + handlers each test (Map overwrites); reset roots.
   sessionTokens = createSessionTokenRegistry();
-  manager = registerTerminalIpcHandlers(
-    { ok: true, db: testDb.db },
-    {
-      socketPath: "/profile/volli.sock",
-      binDir: "/profile/bin",
-      mintSessionToken: sessionTokens.mint,
-      revokeSessionToken: sessionTokens.revoke,
-    },
-  );
+  sessionOwners.clear();
+  manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, fixtureSessionEngine, {
+    socketPath: "/profile/volli.sock",
+    binDir: "/profile/bin",
+    mintSessionToken: sessionTokens.mint,
+    revokeSessionToken: sessionTokens.revoke,
+  });
   syncProjectRoots([root]);
 });
 
@@ -310,7 +347,7 @@ afterEach(() => {
 
 describe("volli:terminal-create", () => {
   it("preserves the new Session without inventing an attachment when executor.start is rejected", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
+    const sessionEngine = createTestSessionEngine(testDb.db);
     const submit = sessionEngine.submit.bind(sessionEngine);
     sessionEngine.submit = async (request) => {
       const result = await submit(request);
@@ -328,11 +365,10 @@ describe("volli:terminal-create", () => {
         },
       };
     };
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
 
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "w",
@@ -437,14 +473,11 @@ describe("volli:terminal-create", () => {
     // The wrapper reads its injected argv out of the environment, so the whole
     // hook configuration has to be in place before the first line is typed —
     // and it is session-independent, so one environment serves every session.
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      {
-        socketPath: "/profile/volli.sock",
-        binDir: "/profile/bin",
-        harnessEnv: { VOLLI_HARNESS_ARGV_CLAUDE_CODE: "'--settings' '{}'" },
-      },
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, fixtureSessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+      harnessEnv: { VOLLI_HARNESS_ARGV_CLAUDE_CODE: "'--settings' '{}'" },
+    });
 
     await createSession();
 
@@ -1235,7 +1268,7 @@ async function createTicketSession(ticketId: string, sender = makeWebContents())
     rows: 24,
     ticket: { ticketId },
   });
-  return { result, pty };
+  return { result, pty, sender };
 }
 
 /** Spawns a kickoff ticket session (auto-launch a harness) and returns its result + fake pty. */
@@ -1366,7 +1399,7 @@ describe("ticket sessions", () => {
         payload: { kind: "session_started", sessionId: result.sessionId, origin: { kind: "user" } },
       },
     ]);
-    const projection = await createDesktopSessionEngine(testDb.db).getSession({
+    const projection = await createTestSessionEngine(testDb.db).getSession({
       sessionId: result.sessionId,
     });
     expect(projection?.attachments).toEqual([
@@ -1386,12 +1419,12 @@ describe("ticket sessions", () => {
   });
 
   it("revokes the attachment token even when a native kill emits no exit", async () => {
-    const { result } = await createTicketSession("tk1");
+    const { result, sender } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
     const token = lastSpawnEnv()["VOLLI_SESSION_TOKEN"];
     expect(sessionTokens.verify(token)).toBe(result.sessionId);
 
-    expect(manager.kill(result.sessionId)).toEqual({ ok: true });
+    expect(manager.kill(asWc(sender), result.sessionId)).toEqual({ ok: true });
 
     expect(sessionTokens.verify(token)).toBeNull();
   });
@@ -1754,12 +1787,11 @@ describe("PtyManager.interruptTicketSessions", () => {
   });
 
   it("keeps interrupting the rest when one session's pty write throws", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    const sessionEngine = createTestSessionEngine(testDb.db);
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
@@ -1867,13 +1899,12 @@ describe("resume launch (issue #78)", () => {
   });
 
   it("keeps the latest linked native id and active harness when a terminal exits before resume", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
+    const sessionEngine = createTestSessionEngine(testDb.db);
     // Re-register the PTY door with the SAME writer the socket service uses.
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const { result: launched, pty: launchedPty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
       prompt: "go",
@@ -1921,12 +1952,11 @@ describe("resume launch (issue #78)", () => {
   });
 
   it("serializes concurrent PTY exit and agent signal through the injected Session Engine", async () => {
-    const sessionEngine = createDesktopSessionEngine(testDb.db);
-    manager = registerTerminalIpcHandlers(
-      { ok: true, db: testDb.db },
-      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      sessionEngine,
-    );
+    const sessionEngine = createTestSessionEngine(testDb.db);
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, sessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
     const { result: launched, pty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
       prompt: "go",
@@ -1976,7 +2006,7 @@ describe("resume launch (issue #78)", () => {
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
     expect(result.sessionId).toBe(prior.id);
-    const engine = createDesktopSessionEngine(testDb.db);
+    const engine = createTestSessionEngine(testDb.db);
     const projection = await engine.getSession({ sessionId: prior.id });
     expect(projection?.attachments.at(-1)).toMatchObject({
       origin: { kind: "user" },
@@ -2475,7 +2505,7 @@ describe("Board Session persistence", () => {
 
 describe("degraded database", () => {
   it("reports the db-open error and never spawns when the database is unavailable", async () => {
-    registerTerminalIpcHandlers({ ok: false, error: "disk full" });
+    registerTerminalIpcHandlers({ ok: false, error: "disk full" }, null);
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "w",
       cwd: root,
@@ -2514,7 +2544,14 @@ describe("warm park", () => {
 
   beforeEach(() => {
     parts = makeInspector();
-    parkManager = new PtyManager(testDb.db, "", parts.inspector, ENABLED_CONFIG);
+    parkManager = new PtyManager(
+      desktopPtyHost(),
+      testDb.db,
+      "",
+      fixtureSessionEngine,
+      parts.inspector,
+      ENABLED_CONFIG,
+    );
   });
 
   /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
@@ -2540,35 +2577,37 @@ describe("warm park", () => {
 
   describe("park", () => {
     it("reports a manually parked session through the read-only peek surface", async () => {
-      const { sessionId } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(parkManager.peek(sessionId, 1)?.status).toBe("parked");
     });
 
     it("stops parent first, then descendants, and re-collects a newly spawned child", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants
         .mockResolvedValueOnce([200]) // initial collect
         .mockResolvedValueOnce([200, 300]) // round 0: 300 appeared
         .mockResolvedValueOnce([200, 300]); // round 1: stable → break
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
       expect(stopCalls()).toEqual([pty.pid, 200, 300]);
     });
 
     it("bounds the re-collect loop at three rounds", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants
         .mockResolvedValueOnce([200])
         .mockResolvedValueOnce([200, 300])
         .mockResolvedValueOnce([200, 300, 400])
         .mockResolvedValueOnce([200, 300, 400, 500]);
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(stopCalls()).toEqual([pty.pid, 200, 300, 400, 500]);
     });
 
     it("pushes a park-state event on park", async () => {
       const { sessionId, sender } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
         sessionId,
         parked: true,
@@ -2579,23 +2618,27 @@ describe("warm park", () => {
     it("skips the park-state push when the window is destroyed", async () => {
       const { sessionId, sender } = await createParkSession();
       sender.destroyed = true;
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(sender.send).not.toHaveBeenCalled();
     });
 
     it("is a no-op on an already-parked session", async () => {
-      const { sessionId } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       parts.signal.mockClear();
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
       expect(parts.signal).not.toHaveBeenCalled();
     });
 
     it("an auto park request on an already-parked session stays auto (still breathes)", async () => {
-      const { sessionId, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: false });
+      const { sessionId, pty, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: false });
       parts.signal.mockClear();
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({ ok: true });
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
+        ok: true,
+      });
       await parkManager.sweep(idleNow()); // not upgraded to manual: the duty cycle touches it
       expect(contCalls()).toEqual([pty.pid]);
     });
@@ -2603,29 +2646,29 @@ describe("warm park", () => {
     it("auto-park refuses a visible session", async () => {
       const { sessionId, sender } = await createParkSession();
       parkManager.setVisible(asWc(sender), sessionId, true);
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
         ok: false,
         error: "Session is visible or kept awake",
       });
     });
 
     it("auto-park refuses a kept-awake session", async () => {
-      const { sessionId } = await createParkSession();
-      parkManager.setKeepAwake(sessionId, true);
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+      const { sessionId, sender } = await createParkSession();
+      parkManager.setKeepAwake(asWc(sender), sessionId, true);
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
         ok: false,
         error: "Session is visible or kept awake",
       });
     });
 
     it("auto-park refuses, before any SIGSTOP, a session whose PTY output landed mid-collect", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants.mockImplementationOnce(async () => {
         await tick(2); // let the ms clock advance past the entry baseline
         pty.emitData("resumed work");
         return [200];
       });
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
         ok: false,
         error: "Session became active while parking",
       });
@@ -2633,7 +2676,7 @@ describe("warm park", () => {
     });
 
     it("CONTs the half-stopped tree when buffered output drains during a rescan round", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants
         .mockResolvedValueOnce([200]) // initial collect: quiet
         .mockImplementationOnce(async () => {
@@ -2641,7 +2684,7 @@ describe("warm park", () => {
           pty.emitData("late buffered bytes"); // drains after the SIGSTOPs
           return [200];
         });
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
         ok: false,
         error: "Session became active while parking",
       });
@@ -2650,11 +2693,11 @@ describe("warm park", () => {
     });
 
     it("CONTs the stopped tree and propagates when a rescan round itself fails", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants
         .mockResolvedValueOnce([200])
         .mockRejectedValueOnce(new Error("pgrep unavailable"));
-      await expect(parkManager.park(sessionId, { manual: true })).rejects.toThrow(
+      await expect(parkManager.park(asWc(sender), sessionId, { manual: true })).rejects.toThrow(
         "pgrep unavailable",
       );
       expect(stopCalls()).toEqual([pty.pid, 200]);
@@ -2664,23 +2707,32 @@ describe("warm park", () => {
     it("manual park bypasses the visible and keep-awake guards", async () => {
       const { sessionId, sender, pty } = await createParkSession();
       parkManager.setVisible(asWc(sender), sessionId, true);
-      parkManager.setKeepAwake(sessionId, true);
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      parkManager.setKeepAwake(asWc(sender), sessionId, true);
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
       expect(stopCalls()).toEqual([pty.pid]);
     });
 
     it("errors on an unknown session", async () => {
-      expect(await parkManager.park("nope", { manual: true })).toEqual({
+      expect(await parkManager.park(asWc(makeWebContents()), "nope", { manual: true })).toEqual({
         ok: false,
         error: "Unknown terminal session",
       });
     });
 
     it("refuses even a manual park when parking is disabled", async () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const sender = makeWebContents();
@@ -2691,7 +2743,7 @@ describe("warm park", () => {
         rows: 24,
       });
       if (!created.ok) throw new Error(created.error);
-      expect(await disabled.park(created.sessionId, { manual: true })).toEqual({
+      expect(await disabled.park(asWc(sender), created.sessionId, { manual: true })).toEqual({
         ok: false,
         error: "Session parking is disabled",
       });
@@ -2699,12 +2751,12 @@ describe("warm park", () => {
     });
 
     it("bails without stopping anything when the session is killed during the initial collect", async () => {
-      const { sessionId } = await createParkSession();
+      const { sessionId, sender } = await createParkSession();
       parts.descendants.mockImplementationOnce(async () => {
-        parkManager.kill(sessionId);
+        parkManager.kill(asWc(sender), sessionId);
         return [200];
       });
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
         ok: false,
         error: "Session ended while parking",
       });
@@ -2712,16 +2764,16 @@ describe("warm park", () => {
     });
 
     it("continues the already-stopped tree when the session is killed during a rescan", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants
         .mockResolvedValueOnce([200]) // initial collect
         .mockImplementationOnce(async () => {
           // Kill lands between the stop pass and the rescan: park must CONT
           // what it stopped so the kill's pending SIGHUP can act on the tree.
-          parkManager.kill(sessionId);
+          parkManager.kill(asWc(sender), sessionId);
           return [200];
         });
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
         ok: false,
         error: "Session ended while parking",
       });
@@ -2732,19 +2784,19 @@ describe("warm park", () => {
 
   describe("wake", () => {
     it("continues the tree in reverse of the stop order", async () => {
-      const { sessionId, pty } = await createParkSession();
+      const { sessionId, pty, sender } = await createParkSession();
       parts.descendants.mockResolvedValueOnce([200, 300]).mockResolvedValueOnce([200, 300]);
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(stopCalls()).toEqual([pty.pid, 200, 300]);
-      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      expect(parkManager.wake(asWc(sender), sessionId)).toEqual({ ok: true });
       expect(contCalls()).toEqual([300, 200, pty.pid]);
     });
 
     it("pushes a park-state event on wake", async () => {
       const { sessionId, sender } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       sender.send.mockClear();
-      parkManager.wake(sessionId);
+      parkManager.wake(asWc(sender), sessionId);
       expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
         sessionId,
         parked: false,
@@ -2753,38 +2805,41 @@ describe("warm park", () => {
     });
 
     it("is a no-op on a running session", async () => {
-      const { sessionId } = await createParkSession();
-      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      const { sessionId, sender } = await createParkSession();
+      expect(parkManager.wake(asWc(sender), sessionId)).toEqual({ ok: true });
       expect(parts.signal).not.toHaveBeenCalled();
     });
 
     it("errors on an unknown session", () => {
-      expect(parkManager.wake("nope")).toEqual({ ok: false, error: "Unknown terminal session" });
+      expect(parkManager.wake(asWc(makeWebContents()), "nope")).toEqual({
+        ok: false,
+        error: "Unknown terminal session",
+      });
     });
   });
 
   describe("write / resize / kill interaction", () => {
     it("wakes a parked session before writing to it", async () => {
-      const { sessionId, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      const { sessionId, pty, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       expect(pty.write).not.toHaveBeenCalled();
-      expect(parkManager.write(sessionId, "ls\r")).toEqual({ ok: true });
+      expect(parkManager.write(asWc(sender), sessionId, "ls\r")).toEqual({ ok: true });
       expect(contCalls()).toEqual([pty.pid]);
       expect(pty.write).toHaveBeenCalledWith("ls\r");
     });
 
     it("does not wake a parked session on resize", async () => {
-      const { sessionId, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
-      expect(parkManager.resize(sessionId, 100, 40)).toEqual({ ok: true });
+      const { sessionId, pty, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
+      expect(parkManager.resize(asWc(sender), sessionId, 100, 40)).toEqual({ ok: true });
       expect(contCalls()).toEqual([]);
       expect(pty.resize).toHaveBeenCalledWith(100, 40);
     });
 
     it("continues a parked session before killing it", async () => {
-      const { sessionId, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
-      expect(parkManager.kill(sessionId)).toEqual({ ok: true });
+      const { sessionId, pty, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
+      expect(parkManager.kill(asWc(sender), sessionId)).toEqual({ ok: true });
       expect(contCalls()).toEqual([pty.pid]);
       expect(pty.kill).toHaveBeenCalledTimes(1);
     });
@@ -2798,7 +2853,8 @@ describe("warm park", () => {
       );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
-      const created = await parkManager.create(asWc(makeWebContents()), {
+      const sender = makeWebContents();
+      const created = await parkManager.create(asWc(sender), {
         workspaceId: "w",
         cwd: root,
         cols: 80,
@@ -2806,7 +2862,7 @@ describe("warm park", () => {
         ticket: { ticketId: "itk-park", kickoff: { harnessId: "codex", prompt: "go" } },
       });
       if (!created.ok) throw new Error(`expected session, got ${created.error}`);
-      await parkManager.park(created.sessionId, { manual: true });
+      await parkManager.park(asWc(sender), created.sessionId, { manual: true });
       pty.write.mockClear();
 
       const interrupted = await parkManager.interruptTicketSessions("itk-park");
@@ -2819,22 +2875,24 @@ describe("warm park", () => {
 
   describe("setVisible", () => {
     it("ignores a flip from a non-owning sender", async () => {
-      const { sessionId } = await createParkSession();
+      const { sessionId, sender } = await createParkSession();
       parkManager.setVisible(asWc(makeWebContents()), sessionId, true);
       // Visibility stayed false, so auto-park still proceeds.
-      expect(await parkManager.park(sessionId, { manual: false })).toEqual({ ok: true });
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: false })).toEqual({
+        ok: true,
+      });
     });
 
     it("wakes a parked session when its pane becomes visible", async () => {
       const { sessionId, sender, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       parkManager.setVisible(asWc(sender), sessionId, true);
       expect(contCalls()).toEqual([pty.pid]);
     });
 
     it("does not wake when a pane is hidden", async () => {
       const { sessionId, sender } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       parkManager.setVisible(asWc(sender), sessionId, false);
       expect(contCalls()).toEqual([]);
     });
@@ -2847,7 +2905,7 @@ describe("warm park", () => {
   describe("setKeepAwake", () => {
     it("pushes a park-state event reflecting the pin", async () => {
       const { sessionId, sender } = await createParkSession();
-      parkManager.setKeepAwake(sessionId, true);
+      parkManager.setKeepAwake(asWc(sender), sessionId, true);
       expect(sender.send).toHaveBeenCalledWith("volli:terminal-park-state", {
         sessionId,
         parked: false,
@@ -2856,22 +2914,22 @@ describe("warm park", () => {
     });
 
     it("wakes an already-parked session when pinned", async () => {
-      const { sessionId, pty } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
-      expect(parkManager.setKeepAwake(sessionId, true)).toEqual({ ok: true });
+      const { sessionId, pty, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
+      expect(parkManager.setKeepAwake(asWc(sender), sessionId, true)).toEqual({ ok: true });
       expect(contCalls()).toEqual([pty.pid]);
     });
 
     it("clearing the pin never wakes", async () => {
-      const { sessionId } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       parts.signal.mockClear();
-      parkManager.setKeepAwake(sessionId, false);
+      parkManager.setKeepAwake(asWc(sender), sessionId, false);
       expect(parts.signal).not.toHaveBeenCalled();
     });
 
     it("errors on an unknown session", () => {
-      expect(parkManager.setKeepAwake("nope", true)).toEqual({
+      expect(parkManager.setKeepAwake(asWc(makeWebContents()), "nope", true)).toEqual({
         ok: false,
         error: "Unknown terminal session",
       });
@@ -2880,10 +2938,17 @@ describe("warm park", () => {
 
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       await disabled.create(asWc(makeWebContents()), {
@@ -2980,11 +3045,18 @@ describe("warm park", () => {
     });
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
-      const manager2 = new PtyManager(testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        idleThresholdMs: 0,
-        quietSamplesRequired: 1,
-      });
+      const manager2 = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          idleThresholdMs: 0,
+          quietSamplesRequired: 1,
+        },
+      );
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const created = await manager2.create(asWc(makeWebContents()), {
@@ -3006,10 +3078,17 @@ describe("warm park", () => {
     });
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
-      const disabled = new PtyManager(testDb.db, "", parts.inspector, {
-        ...ENABLED_CONFIG,
-        enabled: false,
-      });
+      const disabled = new PtyManager(
+        desktopPtyHost(),
+        testDb.db,
+        "",
+        fixtureSessionEngine,
+        parts.inspector,
+        {
+          ...ENABLED_CONFIG,
+          enabled: false,
+        },
+      );
       expect(() => {
         disabled.startParkSweep();
         disabled.stopParkSweep();
@@ -3021,20 +3100,20 @@ describe("warm park", () => {
     /** Spawns a hidden session, auto-parks it, and clears signal/send history. */
     async function createAutoParked() {
       const created = await createParkSession();
-      await parkManager.park(created.sessionId, { manual: false });
+      await parkManager.park(asWc(created.sender), created.sessionId, { manual: false });
       parts.signal.mockClear();
       created.sender.send.mockClear();
       return created;
     }
 
     it("re-freezes a session whose breathe window stays quiet", async () => {
-      const { sessionId, pty } = await createAutoParked();
+      const { sessionId, pty, sender } = await createAutoParked();
       await parkManager.sweep(idleNow());
       expect(contCalls()).toEqual([pty.pid]);
       expect(stopCalls()).toEqual([pty.pid]);
       // Still parked: an explicit wake CONTs the re-frozen tree.
       parts.signal.mockClear();
-      parkManager.wake(sessionId);
+      parkManager.wake(asWc(sender), sessionId);
       expect(contCalls()).toEqual([pty.pid]);
     });
 
@@ -3089,8 +3168,8 @@ describe("warm park", () => {
     });
 
     it("never breathes a manually parked session", async () => {
-      const { sessionId } = await createParkSession();
-      await parkManager.park(sessionId, { manual: true });
+      const { sessionId, sender } = await createParkSession();
+      await parkManager.park(asWc(sender), sessionId, { manual: true });
       parts.signal.mockClear();
       await parkManager.sweep(idleNow());
       expect(contCalls()).toEqual([]);
@@ -3098,11 +3177,13 @@ describe("warm park", () => {
     });
 
     it("a Park Now landing mid-window beats a busy verdict and stays manual", async () => {
-      const { sessionId, pty } = await createAutoParked();
+      const { sessionId, pty, sender } = await createAutoParked();
       parts.cpuPercents.mockResolvedValue(new Map([[pty.pid, 5]])); // would wake
       const sweepDone = parkManager.sweep(idleNow());
       await tick(1);
-      expect(await parkManager.park(sessionId, { manual: true })).toEqual({ ok: true });
+      expect(await parkManager.park(asWc(sender), sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
       await sweepDone;
       expect(stopCalls()).toEqual([pty.pid]); // re-frozen despite the busy tree
       parts.signal.mockClear();
@@ -3111,10 +3192,10 @@ describe("warm park", () => {
     });
 
     it("leaves a session alone when it is killed during the window", async () => {
-      const { sessionId, pty } = await createAutoParked();
+      const { sessionId, pty, sender } = await createAutoParked();
       const sweepDone = parkManager.sweep(idleNow());
       await tick(1);
-      parkManager.kill(sessionId); // CONT-before-kill wakes it first
+      parkManager.kill(asWc(sender), sessionId); // CONT-before-kill wakes it first
       pty.emitExit(0); // the tree dies inside the window
       await sweepDone;
       expect(stopCalls()).toEqual([]);
@@ -3122,18 +3203,18 @@ describe("warm park", () => {
     });
 
     it("leaves a session running when explicitly woken during the window", async () => {
-      const { sessionId } = await createAutoParked();
+      const { sessionId, sender } = await createAutoParked();
       const sweepDone = parkManager.sweep(idleNow());
       await tick(1);
-      expect(parkManager.wake(sessionId)).toEqual({ ok: true });
+      expect(parkManager.wake(asWc(sender), sessionId)).toEqual({ ok: true });
       await sweepDone;
       expect(stopCalls()).toEqual([]);
     });
 
     it("skips a session woken during the sampling awaits", async () => {
-      const { sessionId } = await createAutoParked();
+      const { sessionId, sender } = await createAutoParked();
       parts.cpuPercents.mockImplementationOnce(async () => {
-        parkManager.wake(sessionId);
+        parkManager.wake(asWc(sender), sessionId);
         return new Map<number, number>();
       });
       await parkManager.sweep(idleNow());
@@ -3161,11 +3242,11 @@ describe("warm park", () => {
     });
 
     it("leaves a session killed during a failing breathe to the kill path", async () => {
-      const { sessionId, pty } = await createAutoParked();
+      const { sessionId, pty, sender } = await createAutoParked();
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         parts.descendants.mockImplementationOnce(async () => {
-          parkManager.kill(sessionId); // dies mid-inspection
+          parkManager.kill(asWc(sender), sessionId); // dies mid-inspection
           throw new Error("pgrep died");
         });
         await expect(parkManager.sweep(idleNow())).resolves.toBeUndefined();
@@ -3221,26 +3302,29 @@ describe("warm park", () => {
 });
 
 // The park/wake/keep-awake/set-visible IPC handlers validate their args and
-// forward to the manager. Valid-arg paths use an unknown session id so the
-// manager short-circuits before any (real) process inspection.
-const invokePark = (sessionId: unknown) =>
+// forward to the manager. Valid-arg paths run against a real owned session
+// where the manager's answer proves the forward (park refuses under the suite's
+// VOLLI_PARK_DISABLE before any real process inspection), and against unknown
+// ids for the pure refusals. The sender defaults to the session's owner via
+// `ownerOf`; the ownership tests at the end pass a foreign window explicitly.
+const invokePark = (sessionId: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-park" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
   ) as Promise<TerminalIoResult>;
 
-const invokeWake = (sessionId: unknown) =>
+const invokeWake = (sessionId: unknown, from = ownerOf(sessionId)) =>
   (handlers.get("volli:terminal-wake" satisfies VolliIpcChannel) as (...a: unknown[]) => unknown)(
-    { sender: {} },
+    { sender: from },
     sessionId,
   ) as TerminalIoResult;
 
-const invokeKeepAwake = (sessionId: unknown, keepAwake: unknown) =>
+const invokeKeepAwake = (sessionId: unknown, keepAwake: unknown, from = ownerOf(sessionId)) =>
   (
     handlers.get("volli:terminal-keep-awake" satisfies VolliIpcChannel) as (
       ...a: unknown[]
     ) => unknown
-  )({ sender: {} }, sessionId, keepAwake) as TerminalIoResult;
+  )({ sender: from }, sessionId, keepAwake) as TerminalIoResult;
 
 const sendSetVisible = (sender: unknown, sessionId: unknown, visible: unknown) =>
   (
@@ -3254,11 +3338,15 @@ describe("park/wake/keep-awake/set-visible IPC", () => {
     expect(await invokePark(42)).toEqual({ ok: false, error: "Invalid terminal park" });
   });
 
-  it("park forwards a valid id to the manager", async () => {
+  it("park forwards a valid owned id to the manager", async () => {
     // The suite runs under VOLLI_PARK_DISABLE, so the registered manager's
-    // park refuses before the unknown-session lookup — proving the handler
-    // forwarded the id into the manager either way.
-    expect(await invokePark("nope")).toEqual({ ok: false, error: "Session parking is disabled" });
+    // park refuses before any (real) process inspection — proving the handler
+    // forwarded the owned id into the manager either way.
+    const { sessionId } = await createSession();
+    expect(await invokePark(sessionId)).toEqual({
+      ok: false,
+      error: "Session parking is disabled",
+    });
   });
 
   it("wake rejects a non-string session id", () => {
@@ -3292,5 +3380,78 @@ describe("park/wake/keep-awake/set-visible IPC", () => {
 
   it("set-visible forwards valid args to the manager", () => {
     expect(() => sendSetVisible({}, "nope", true)).not.toThrow();
+  });
+});
+
+// VC-509: every mutating terminal channel honors a session only for the
+// webContents that created it. A second trusted surface (popout, detached
+// window, remote bridge) naming another window's session id is refused exactly
+// like an unknown id — no side effect, and no error that would confirm the
+// session exists.
+describe("terminal IPC ownership (VC-509)", () => {
+  it("refuses a non-owner's write, run and kill, and leaves the owner's working", async () => {
+    const owner = makeWebContents();
+    const intruder = makeWebContents();
+    const { sessionId, pty } = await createSession(owner);
+
+    expect(invokeWrite(sessionId, "echo pwned\r", intruder)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    await expect(invokeRun(sessionId, "echo pwned", intruder)).resolves.toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(invokeKill(sessionId, intruder)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(pty.write).not.toHaveBeenCalled();
+    expect(pty.kill).not.toHaveBeenCalled();
+
+    expect(invokeWrite(sessionId, "ls\r", owner)).toEqual({ ok: true });
+    expect(pty.write).toHaveBeenCalledWith("ls\r");
+
+    const run = invokeRun(sessionId, "pnpm install", owner);
+    pty.emitData("\n__VOLLI_SETUP_DONE:0__\n");
+    await expect(run).resolves.toEqual({ ok: true, exitCode: 0 });
+
+    expect(invokeKill(sessionId, owner)).toEqual({ ok: true });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a non-owner's resize, park, wake and keep-awake, and leaves the owner's working", async () => {
+    const owner = makeWebContents();
+    const intruder = makeWebContents();
+    const { sessionId, pty } = await createSession(owner);
+
+    expect(invokeResize(sessionId, 120, 40, intruder)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    await expect(invokePark(sessionId, intruder)).resolves.toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(invokeWake(sessionId, intruder)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(invokeKeepAwake(sessionId, true, intruder)).toEqual({
+      ok: false,
+      error: "Unknown terminal session",
+    });
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    expect(invokeResize(sessionId, 120, 40, owner)).toEqual({ ok: true });
+    expect(pty.resize).toHaveBeenCalledWith(120, 40);
+    expect(invokeWake(sessionId, owner)).toEqual({ ok: true });
+    expect(invokeKeepAwake(sessionId, true, owner)).toEqual({ ok: true });
+    // Parking is disabled suite-wide; reaching that refusal proves the owned id
+    // was honored and handed on to the controller.
+    await expect(invokePark(sessionId, owner)).resolves.toEqual({
+      ok: false,
+      error: "Session parking is disabled",
+    });
   });
 });

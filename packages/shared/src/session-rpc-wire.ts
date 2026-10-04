@@ -33,6 +33,8 @@ export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
  * live reference to it through `@volli/shared`.
  */
 export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
+  "settings.experiments",
+  "settings.setExperiment",
   "modelAccess.inspect",
   "modelAccess.defaults",
   "modelAccess.setDefault",

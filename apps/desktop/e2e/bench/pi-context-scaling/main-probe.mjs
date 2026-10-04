@@ -13,7 +13,7 @@
  *   bench (`bench/session-rpc/electron-main.cjs`) and VC-403 already use. Its
  *   values include the 1 ms timer period itself.
  * - A 10 ms `setInterval` whose raw gaps are kept — the `eventLoopLagDuring`
- *   pattern from `src/main/worktree/read.test.ts` (VC-369). A gap includes the
+ *   pattern from `packages/host-core/src/worktree/read.test.ts` (VC-369). A gap includes the
  *   10 ms period. These raw gaps are what the report pools across repetitions
  *   and what it lines up against the renderer's IPC samples in time, since a
  *   histogram's percentiles cannot be merged after the fact.

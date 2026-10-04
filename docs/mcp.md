@@ -152,7 +152,7 @@ a higher tier than the ambient authority its effect already lies within. A
 confirmation there would train a caller to click through the two that matter.
 
 The rule lives in one place in the code, `CONFIRMATION_RULE` in
-`apps/desktop/src/main/mcp/verbs.ts`, rather than being decided verb by verb.
+`packages/host-core/src/mcp/verbs.ts`, rather than being decided verb by verb.
 
 ## What the warnings mean
 
@@ -169,7 +169,7 @@ The command runs as your user account. It is not sandboxed, not containerised,
 and not restricted to the workspace. It can read anything you can read.
 
 The one thing it does **not** get is Volli's secrets. `mcpLaunchEnvironment()`
-in `apps/desktop/src/main/mcp/client.ts` hands a launched server a short fixed
+in `packages/host-core/src/mcp/client.ts` hands a launched server a short fixed
 allowlist — `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR` and the Windows
 equivalents — and nothing else is inherited. No model provider key, no Volli
 session token, no telemetry credential. The only additions are the environment
@@ -826,23 +826,23 @@ the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
 | Verb declarations | `packages/shared/src/verb-registry.ts` |
 | Role bundles | `packages/shared/src/agent-tool-surface.ts` |
 | Config checks, tool checks, safe names, warnings, provenance | `packages/shared/src/mcp.ts` |
-| Verb handlers | `apps/desktop/src/main/mcp/verbs.ts` |
-| Settings owner | `apps/desktop/src/main/mcp/settings.ts` |
-| Discovery | `apps/desktop/src/main/mcp/discovery.ts` |
-| Client, transports, launch environment | `apps/desktop/src/main/mcp/client.ts` |
+| Verb handlers | `packages/host-core/src/mcp/verbs.ts` |
+| Settings owner | `packages/host-core/src/mcp/settings.ts` |
+| Discovery | `packages/host-core/src/mcp/discovery.ts` |
+| Client, transports, launch environment | `packages/host-core/src/mcp/client.ts` |
 | Credential references, value checks, OAuth client settings | `packages/shared/src/mcp-credentials.ts` |
-| Resolving references and secrets at connect time | `apps/desktop/src/main/mcp/credentials.ts` |
-| The user-only credential file | `apps/desktop/src/main/mcp/credential-store.ts` |
-| OAuth: connection tokens, refresh, sign-in, sign-out | `apps/desktop/src/main/mcp/oauth.ts` |
-| Per-attachment connection owner | `apps/desktop/src/main/mcp/session-host.ts` |
+| Resolving references and secrets at connect time | `packages/host-core/src/mcp/credentials.ts` |
+| The user-only credential file | `packages/host-core/src/mcp/credential-store.ts` |
+| OAuth: connection tokens, refresh, sign-in, sign-out | `packages/host-core/src/mcp/oauth.ts` |
+| Per-attachment connection owner | `packages/host-core/src/mcp/session-host.ts` |
 | Result shape, cutting long results | `createMcpTool` in `packages/agent-runtime/src/pi/tools.ts` |
-| Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `apps/desktop/src/main/pi-tool-output.ts`, `apps/desktop/src/main/pi-session-orphans.ts` |
+| Saved tool output, its limits and lifetime | `packages/agent-runtime/src/pi/tool-output.ts`, `packages/host-core/src/pi-tool-output.ts`, `packages/host-core/src/pi-session-orphans.ts` |
 | Shared per-server bound | `packages/agent-runtime/src/mcp/server-budget.ts` |
 | Parallel-read marks | `withParallelReadEligibility` in `packages/shared/src/mcp.ts` |
 | Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |
-| Developer opt-in, stamping, attach narrowing, budget binding | `apps/desktop/src/main/mcp/parallel-dev-config.ts`, `dispatch-policy.ts` |
+| Developer opt-in, stamping, attach narrowing, budget binding | `packages/host-core/src/mcp/parallel-dev-config.ts`, `dispatch-policy.ts` |
 | Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
-| Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
+| Storage | `packages/host-core/src/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
 | Server dialog, tool picker | `mcp-server-dialog.tsx`, `mcp-tool-picker.tsx`, `mcp-tools-model.ts` (same folder) |
 | Tool hints (display-only labels) | `sanitizeMcpToolHints` in `packages/shared/src/mcp.ts` |

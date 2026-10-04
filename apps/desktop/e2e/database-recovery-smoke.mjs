@@ -12,9 +12,10 @@
  * Manually run (display required); not part of vp test. Never builds artifacts.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 
@@ -25,6 +26,7 @@ import {
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
+  descendantProcesses,
   launch,
   waitUntil,
   writeFakeLoginShell,
@@ -35,6 +37,8 @@ const NO_CLEAN = "No local backup checks clean. Nothing was restored.";
 const MANUAL = "Your database and safety copies are preserved for manual recovery.";
 const MARKER_KEY = "database-recovery-smoke";
 const MARKER_VALUE = "last-clean-saved-marker";
+const execFileAsync = promisify(execFile);
+const traceShutdown = process.env.VOLLI_RECOVERY_TRACE === "1";
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -90,15 +94,36 @@ async function fixture(name) {
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, label, stdout: "", stderr: "", page: null };
+  const run = { app, child: app.process(), label, stdout: "", stderr: "", page: null };
   runs.add(run);
   // Bounded log retention; neither seed nor app gets any real credentials.
-  app.process().stdout?.on("data", (chunk) => {
+  run.child.stdout?.on("data", (chunk) => {
     run.stdout = `${run.stdout}${chunk}`.slice(-24000);
   });
-  app.process().stderr?.on("data", (chunk) => {
+  run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
   });
+  if (traceShutdown) {
+    await bounded(`${label}: install shutdown trace`, () =>
+      app.evaluate(({ app: electronApp }) => {
+        const trace = (stage) =>
+          console.log(
+            "[recovery shutdown]",
+            Date.now(),
+            stage,
+            electronApp.isReady(),
+            process.getActiveResourcesInfo(),
+          );
+        electronApp.prependListener("before-quit", () => trace("before-quit"));
+        electronApp.on("will-quit", () => trace("will-quit"));
+        const exit = electronApp.exit;
+        electronApp.exit = function (...args) {
+          trace(`app.exit(${args.join(",")})`);
+          return exit.apply(this, args);
+        };
+      }),
+    );
+  }
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
   );
@@ -112,6 +137,76 @@ async function openApp(config, label) {
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
   return run;
+}
+
+async function sampleShutdownProcesses(run, metrics) {
+  const prefix = join(scratch, `${run.label.replaceAll(" ", "-")}-shutdown`);
+  let helpers = [];
+  try {
+    const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
+      timeout: 2000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    helpers = descendantProcesses(stdout, run.child.pid);
+  } catch (error) {
+    console.error(`shutdown process discovery: ${error.message}`);
+  }
+  const types = new Map(metrics.map(({ pid, type }) => [pid, type]));
+  const processes = [{ pid: run.child.pid, command: "tracked Electron main" }, ...helpers];
+  for (const entry of processes) entry.type = types.get(entry.pid) ?? "unknown";
+  await bounded(
+    "shutdown process evidence",
+    () => fs.writeFile(`${prefix}-processes.json`, `${JSON.stringify(processes, null, 2)}\n`),
+    2000,
+  ).catch((error) => console.error(`shutdown process evidence: ${error.message}`));
+  // Capture the GPU/Viz peer and renderer/utility helpers alongside main. Never
+  // select helpers globally by name: another Session's/live app is not ours.
+  await Promise.all(
+    processes.map(async ({ pid }) => {
+      try {
+        await execFileAsync(
+          "/usr/bin/sample",
+          [String(pid), "2", "-file", `${prefix}-${pid}.sample.txt`],
+          {
+            timeout: 7000,
+          },
+        );
+      } catch (error) {
+        console.error(`shutdown sample pid ${pid}: ${error.message}`);
+      }
+    }),
+  );
+}
+
+// Called only under VOLLI_RECOVERY_TRACE: no extra timers, process enumeration,
+// native sampling or round trips when tracing is unset.
+async function startShutdownTrace(run) {
+  // macOS may name GPU and Utility processes simply "Electron Helper". Record
+  // Electron's PID/type mapping while main still answers, before quit begins.
+  const metrics = await bounded("shutdown helper types", () =>
+    run.app.evaluate(({ app }) => app.getAppMetrics().map(({ pid, type }) => ({ pid, type }))),
+  ).catch((error) => {
+    console.error(`shutdown helper types: ${error.message}`);
+    return [];
+  });
+  const startedAt = Date.now();
+  let sample = Promise.resolve();
+  const timer =
+    process.platform === "darwin"
+      ? setTimeout(() => {
+          if (run.child.exitCode !== null || run.child.signalCode !== null) return;
+          sample = sampleShutdownProcesses(run, metrics).catch((error) =>
+            console.error(`shutdown samples: ${error.message}`),
+          );
+        }, 10000)
+      : undefined;
+  return async () => {
+    clearTimeout(timer);
+    await sample;
+    console.log(
+      `SHUTDOWN TRACE: ${run.label}: ${Date.now() - startedAt}ms\n${run.stdout}\n${run.stderr}`,
+    );
+  };
 }
 
 async function closeRun(run) {
@@ -128,7 +223,13 @@ async function closeRun(run) {
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  const finishTrace = traceShutdown ? await startShutdownTrace(run) : null;
+  let exit;
+  try {
+    exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  } finally {
+    if (finishTrace) await finishTrace();
+  }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   // Retain failed runs so the outer handler prints their stdout/stderr.
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
@@ -165,7 +266,10 @@ async function malformedHeader(config) {
 // Use the immutable production v1/v2 SQL snapshots, not a partial hand-written
 // app_state-only database (that can pass quick_check but cannot really migrate).
 async function legacySql(version) {
-  const source = await fs.readFile(join(APP_DIR, "src/main/db/migrations.ts"), "utf8");
+  const source = await fs.readFile(
+    join(APP_DIR, "../../packages/host-core/src/db/migrations.ts"),
+    "utf8",
+  );
   const constant = version === 1 ? "MIGRATION_001_INITIAL_SCHEMA" : "MIGRATION_002_TICKET_ARCHIVAL";
   const match = new RegExp(`const ${constant} = \x60([\\s\\S]*?)\x60;`).exec(source);
   assert.ok(match, `immutable v${version} fixture SQL was not found`);

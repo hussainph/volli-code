@@ -5,31 +5,43 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
+import type { BrowserTabState } from "@volli/shared";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import {
+  BROWSER_DEFAULT_BOUNDS,
+  BROWSER_MAX_TABS_PER_PROJECT,
+  BROWSER_MAX_TABS_PER_SESSION,
+  BROWSER_URL_MAX_CHARS,
+  BrowserSessionTabLimitError,
+  BrowserTabLimitError,
+  browserSessionPartition,
+  isAllowedBrowserUrl,
+} from "@volli/host-core/browser/backend";
+import {
+  BrowserPictureStore,
+  type BrowserPictureRecord,
+} from "@volli/host-core/browser/picture-store";
+import {
+  BROWSER_CONSOLE_MAX_CHARS,
+  BROWSER_TITLE_MAX_CHARS,
+} from "@volli/host-core/browser/tab-registry";
+import {
+  BrowserTraceStore,
+  type BrowserTraceStepInput,
+} from "@volli/host-core/browser/trace-store";
 
 import { BROWSER_START_URL } from "../../browser-start-page";
 import {
-  BROWSER_CONSOLE_MAX_CHARS,
-  BROWSER_DEFAULT_BOUNDS,
   BROWSER_INTERACTION_QUIET_MS,
-  BROWSER_MAX_TABS_PER_PROJECT,
-  BROWSER_MAX_TABS_PER_SESSION,
   BROWSER_PREVIEW_MAX_PENDING_CAPTURES,
   BROWSER_PREVIEW_TIMEOUT_MS,
-  BROWSER_TITLE_MAX_CHARS,
-  BROWSER_URL_MAX_CHARS,
-  BrowserSessionTabLimitError,
   BrowserStageUnavailableError,
   BrowserTabHost,
-  BrowserTabLimitError,
   browserRemoteWebPreferences,
-  browserSessionPartition,
   browserSurfaceBounds,
   isAllowedBrowserTarget,
-  isAllowedBrowserUrl,
 } from "./tab-host";
-import { BrowserPictureStore, type BrowserPictureRecord } from "./picture-store";
-import { BrowserTraceStore, type BrowserTraceStepInput } from "./trace-store";
 
 class FakeSession {
   permissionRequestHandler:
@@ -111,6 +123,13 @@ class FakeWebContents {
     const listeners = this.listeners.get(event) ?? [];
     listeners.push(listener);
     this.listeners.set(event, listeners);
+  }
+
+  removeListener(event: string, listener: (...args: unknown[]) => void): void {
+    this.listeners.set(
+      event,
+      (this.listeners.get(event) ?? []).filter((one) => one !== listener),
+    );
   }
 
   emit(event: string, ...args: unknown[]): void {
@@ -2725,5 +2744,64 @@ describe("BrowserTabHost traces (VC-453)", () => {
       expect.any(Error),
     );
     warn.mockRestore();
+  });
+});
+
+describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
+  function agentTab(): BrowserTabState {
+    return host.open({
+      url: "https://example.com/",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-1",
+    });
+  }
+
+  it("answers a tab's CDP wire with its own app-private debugger, never a port", async () => {
+    const tab = agentTab();
+    const sent: string[] = [];
+    let attached = false;
+    Object.assign(views[0]!.webContents, {
+      debugger: {
+        isAttached: () => attached,
+        attach: () => {
+          attached = true;
+        },
+        detach: () => {
+          attached = false;
+        },
+        sendCommand: async (method: string) => {
+          sent.push(method);
+          return {};
+        },
+      },
+    });
+
+    const wire = host.transportFor(tab.tabId);
+    await wire.send("Page.getLayoutMetrics");
+    expect(attached).toBe(true);
+    expect(sent.at(-1)).toBe("Page.getLayoutMetrics");
+    wire.dispose?.();
+    expect(attached).toBe(false);
+    expect(() => host.transportFor("opaque-missing")).toThrow("Unknown Browser Tab");
+  });
+
+  it("settles a load wait off the tab's own loading events", async () => {
+    const tab = agentTab();
+    const contents = views[0]!.webContents;
+    contents.loading = true;
+    let settled = false;
+    const wait = host.waitForLoad(tab.tabId, new AbortController().signal).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    contents.loading = false;
+    contents.emit("did-stop-loading");
+    await wait;
+    expect(settled).toBe(true);
+    expect(contents.listeners.get("did-stop-loading")).toHaveLength(1);
   });
 });

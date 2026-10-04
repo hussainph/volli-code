@@ -420,6 +420,14 @@ export const DATABASE_RECOVERY_IPC = {
     guard: (args: unknown[]): args is [] => args.length === 0,
     invalidError: "Invalid database recovery request",
   },
+  "volli:database-recovery-fault": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-quit": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
 };
 
 // ---- data-IPC descriptor table ------------------------------------------
@@ -1009,18 +1017,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session peek",
   },
-  "volli:session-stop": {
-    guard: (args): args is IpcArgs<"volli:session-stop"> => {
-      if (args.length !== 1) return false;
-      const [input] = args;
-      if (!isRecord(input)) return false;
-      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
-      // The reason is the durable why: absent, or a non-blank sentence.
-      const reason = input["reason"];
-      return reason === undefined || (typeof reason === "string" && reason.trim().length > 0);
-    },
-    invalidError: "Invalid session stop",
-  },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {
       if (args.length !== 1) return false;
@@ -1262,7 +1258,7 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
-// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// external-app channels `src/main/volli-fs-ipc.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
 /**

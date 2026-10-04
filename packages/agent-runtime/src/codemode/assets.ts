@@ -13,7 +13,7 @@
  * The desktop app passes an installed copy of this package in an unpackaged
  * build (the workspace's own), and the app's `app.asar.unpacked` directory in
  * a packaged one, where electron-builder ships both packages outside the
- * archive (apps/desktop/src/main/codemode/sandbox-assets.ts).
+ * archive (packages/host-core/src/codemode/sandbox-assets.ts).
  */
 
 import { realpathSync } from "node:fs";

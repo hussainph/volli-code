@@ -15,17 +15,25 @@ function before(first: string, second: string): void {
 }
 
 describe("host notice composition", () => {
-  it("shares the Session transaction queue, and recovers only after the executor ports and stale attachments", () => {
-    expect(source).toContain("createSqliteHostNoticeOutbox(watchedDb, sessionLedger)");
-    expect(source).toContain("ledger: sessionLedger");
-    before("browserTabsRef = browserTabs", "await shellHostNotices?.recover()");
+  it("consumes the host-core outbox, and recovers only after the executor ports and stale attachments", () => {
+    // The shared writer is exercised in host-core's session-services.test.ts;
+    // desktop consumes that service rather than constructing a second outbox.
+    expect(source).toContain(
+      "const { hostNoticeOutbox, sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore",
+    );
+    expect(source).toContain("outbox: hostNoticeOutbox");
+    before("createRuntimeAssembly({", "await shellHostNotices?.recover()");
     before("await closeStaleAttachments({", "await shellHostNotices?.recover()");
     expect(source).toContain("delivery: shellHostNotices");
     expect(source).toContain("sessionWakeBus.subscribe(({ event }) => listener(event))");
   });
 
-  it("releases host notice subscriptions before closing the runtime", () => {
-    before("shellHostNotices?.close()", "sessionRuntime?.close()");
+  it("passes the live notice and Session owners to host-core shutdown", () => {
+    // The notice-before-runtime order now lives in host-shutdown.test.ts.
+    // Desktop still supplies the live owners when the accepted quit runs.
+    expect(source).toMatch(
+      /shutdownNativeSessions:\s*\(\) =>\s*hostCore\.maintenance\.shutdownNativeSessions\(\{\s*sessionWatchdog,\s*scheduledResumeHost,\s*shellHostNotices,\s*sessionRpc,\s*sessionRuntime,\s*agentObservability,\s*\}\)/,
+    );
   });
 
   it("wires secret-safe fragment preview alongside ordinary shell output redaction", () => {

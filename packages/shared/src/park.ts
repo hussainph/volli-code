@@ -7,7 +7,7 @@
 // module holds only the pure, Node-free decision logic for the WARM tier: the
 // cheap synchronous eligibility gate and the CPU-quiet check the main-process
 // sweep layers process inspection on top of. Everything here is deterministic
-// and unit-tested; the actual signalling lives in apps/desktop/src/main/park.ts.
+// and unit-tested; the actual signalling lives in packages/host-core/src/pty/park.ts.
 //
 // HARD SAFETY RULE: never park a working session. These gates are one half of
 // the belt-and-braces guard set (the sweep adds CPU-quiet sampling and a

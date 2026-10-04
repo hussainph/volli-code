@@ -2,7 +2,7 @@
  * E2e smoke for backward-move interrupt + resume-on-re-entry.
  *
  * Two behaviors, both wired at the CLI/socket "agent-commands" choke point
- * (`apps/desktop/src/main/agent-commands.ts`'s `ticket.move` handler, shared
+ * (`packages/host-core/src/agent-commands.ts`'s `ticket.move` handler, shared
  * with the renderer's own drag-drop IPC path via
  * `ticket-commands.ts#interruptOnBackwardMove`):
  *

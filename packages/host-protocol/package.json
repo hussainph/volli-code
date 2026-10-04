@@ -1,0 +1,33 @@
+{
+  "name": "@volli/host-protocol",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@trpc/server": "^11.18.0"
+  },
+  "devDependencies": {
+    "@trpc/client": "^11.18.0",
+    "@types/node": "catalog:",
+    "@types/ws": "^8.18.1",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "ws": "^8.21.3"
+  }
+}

@@ -1,0 +1,350 @@
+/**
+ * TicketId-in worktree read verbs (worktree-support §2, CONCEPT #42). The
+ * shallow `getWorktreeStatus`/`diffStat` (status.ts/diff.ts) take an already
+ * assembled `{ worktreePath, branch, baseBranch }` and run git — leaving every
+ * caller to do ticket→identity resolution, the no-worktree discrimination, and
+ * the stamped-but-deleted disk check itself. That ceremony had drifted between
+ * the two doors (Electron IPC + the `volli` CLI): only the CLI checked disk
+ * existence, so the IPC door fed a deleted path straight into `getWorktreeStatus`
+ * and — because status.ts errs-dirty on any git failure — told the renderer a
+ * DELETED worktree had `uncommitted: true`.
+ *
+ * These verbs are the single composed answer (#42: "getState returns the single
+ * composed answer so no one joins DB + events + stores to learn what happened").
+ * Each takes `(deps, ticketId)` and returns a discriminated result BOTH doors map
+ * to their own vocabulary (agent error codes vs. renderer toasts). The contract
+ * unifies on the CLI's stance: a stamped-but-deleted worktree is its own
+ * `missing-on-disk` state, NEVER the errs-dirty `uncommitted: true` lie.
+ *
+ * The resolution itself ({@link resolveWorktreeTarget}) is exported, because
+ * `sync.ts` — the one worktree verb that WRITES (VC-185) — has to make exactly
+ * the same three discriminations before it merges anything, and a second copy
+ * of them is how the two doors drifted apart the first time. It is also what a
+ * caller that needs only the ticket's PATH should use: it touches the database
+ * and the disk and never spawns git (see `worktree-change-watch`, which used to
+ * run a whole five-child status read to learn one string).
+ *
+ * ## Every verb here is async (VC-369)
+ *
+ * `status` and `diff` were the last two on `execFileSync`, and they are the two
+ * the Details rail runs on every mount and every watch event — so the rail's
+ * refresh froze the Electron main process for the length of five serial git
+ * children. They now use the same injected `gitAsync` the Change Set reads use.
+ * Contracts are unchanged: the same discriminated arms, the same errs-dirty
+ * `uncommitted: true` on a failed read, the same nulls on a failed count.
+ */
+import { existsSync } from "node:fs";
+
+import type Database from "better-sqlite3";
+import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
+import type { WorktreeDiffMode } from "@volli/shared";
+
+import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import {
+  changeSetPaths,
+  changeSetSnapshot,
+  readChangeSetBaseFile,
+  type ChangeSetBaseFile,
+} from "./change-set";
+import { resolveChangeSetBaseRevision } from "./comparison-ref";
+import { diffStat } from "./diff";
+import { runGitCapturingAsync, stderrOf } from "./git";
+import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
+import type { RunGit, RunGitAsync } from "./types";
+
+/**
+ * The narrow deps the read verbs need — a structural subset of {@link
+ * import("./types").WorktreeDeps} (which satisfies it), so the IPC door passes
+ * its full `worktreeDeps(db)` unchanged. `worktreeExists` is the disk-existence
+ * seam (defaults to node's `existsSync`); the CLI door threads its own scripted
+ * predicate through it so tests can stamp a fictional worktree path.
+ */
+export interface WorktreeReadDeps {
+  db: Database.Database;
+  /**
+   * The synchronous runner. No read verb in this module uses it any more
+   * (VC-369 moved the last two, status and diff, onto {@link gitAsync}); it
+   * stays on the bundle because callers pass their full `WorktreeDeps`, whose
+   * write paths still have it.
+   */
+  git?: RunGit;
+  /**
+   * The non-blocking runner EVERY read verb here uses. Defaults to the real
+   * {@link runGitCapturingAsync} — never to a wrapper around `git`, which
+   * would quietly put those reads back on the main thread.
+   */
+  gitAsync?: RunGitAsync;
+  worktreeExists?: (path: string) => boolean;
+}
+
+/** The failure arms every ticketId-in worktree verb shares, discriminated by `kind`. */
+export type WorktreeReadFailure =
+  | { kind: "missing-ticket" }
+  /**
+   * `usesWorktree` separates the two futures this arm used to collapse: a
+   * worktree-scoped ticket that has simply not booted a Session yet (one
+   * materializes when it does, or the moment its scope is switched on), and a
+   * main-checkout ticket that will never have one at all. The CLI door tells
+   * an agent which of those it is looking at; without the flag its guidance
+   * had to guess, and guessed wrong in both directions (VC-98).
+   */
+  | { kind: "no-worktree"; displayId: string; usesWorktree: boolean }
+  | { kind: "missing-on-disk"; displayId: string; worktreePath: string };
+
+/** The discriminated result of {@link readWorktreeStatus}. */
+export type WorktreeStatusRead =
+  | WorktreeReadFailure
+  | {
+      kind: "ok";
+      displayId: string;
+      worktreePath: string;
+      branch: string | null;
+      baseBranch: string | null;
+      status: WorktreeStatusReport;
+    };
+
+/** The discriminated result of {@link readWorktreeDiff}. */
+export type WorktreeDiffRead =
+  | WorktreeReadFailure
+  | { kind: "diff-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; baseBranch: string | null; diff: DiffStat };
+
+/** The discriminated result of {@link readWorktreeChangeSet}. */
+export type WorktreeChangeSetRead =
+  | WorktreeReadFailure
+  | { kind: "change-set-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; changeSet: ChangeSetSnapshot };
+
+/** The uncapped current Change Set paths a collision scan needs. */
+export type WorktreeChangeSetPathsRead =
+  | WorktreeReadFailure
+  | { kind: "change-set-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; paths: readonly string[] };
+
+/** The discriminated result of {@link readWorktreeBaseFile}. */
+export type WorktreeBaseFileRead =
+  | WorktreeReadFailure
+  | { kind: "base-read-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; baseRevision: string; file: ChangeSetBaseFile };
+
+/** The resolved, on-disk worktree identity a verb git-queries against. */
+export interface ReadTarget {
+  displayId: string;
+  worktreePath: string;
+  branch: string | null;
+  baseBranch: string | null;
+}
+
+/**
+ * The shared ticket→identity resolution both verbs run before touching git:
+ * ticket row lookup → display id → no-worktree discrimination → the
+ * stamped-but-deleted disk check. Returns the failure arm directly, or the
+ * resolved {@link ReadTarget} to compose a git query from.
+ */
+export function resolveWorktreeTarget(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): WorktreeReadFailure | { kind: "ok"; target: ReadTarget } {
+  const ticket = getTicketRow(deps.db, ticketId);
+  if (!ticket) return { kind: "missing-ticket" };
+  const project = getProjectById(deps.db, ticket.project_id);
+  // A row with no project is as unresolvable as a missing ticket — the display
+  // id can't be derived, so callers get the same "no such thing" failure.
+  if (!project) return { kind: "missing-ticket" };
+  const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
+
+  if (ticket.worktree_path === null) {
+    return { kind: "no-worktree", displayId, usesWorktree: ticket.uses_worktree !== 0 };
+  }
+  const exists = deps.worktreeExists ?? existsSync;
+  if (!exists(ticket.worktree_path)) {
+    return { kind: "missing-on-disk", displayId, worktreePath: ticket.worktree_path };
+  }
+  return {
+    kind: "ok",
+    target: {
+      displayId,
+      worktreePath: ticket.worktree_path,
+      branch: ticket.branch,
+      baseBranch: ticket.base_branch,
+    },
+  };
+}
+
+/**
+ * Composes the finer Details-rail worktree status for a ticket: resolves its
+ * identity, discriminates the no-worktree / missing-on-disk cases, and (only for
+ * a present worktree) runs `getWorktreeStatus`. A deleted worktree reports
+ * `missing-on-disk`, never the errs-dirty `uncommitted: true`.
+ */
+export async function readWorktreeStatus(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeStatusRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const status = await getWorktreeStatus(deps.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: target.worktreePath,
+    branch: target.branch,
+    baseBranch: target.baseBranch,
+  });
+  return {
+    kind: "ok",
+    displayId: target.displayId,
+    worktreePath: target.worktreePath,
+    branch: target.branch,
+    baseBranch: target.baseBranch,
+    status,
+  };
+}
+
+/**
+ * Composes a worktree diff summary for a ticket in the requested mode: resolves
+ * identity, discriminates the same no-worktree / missing-on-disk cases, then
+ * runs `diffStat`. A `diffStat` failure (git error, or `merge-base` with no
+ * known base) surfaces as `diff-error` carrying the real message.
+ */
+export async function readWorktreeDiff(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+  mode: WorktreeDiffMode,
+): Promise<WorktreeDiffRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await diffStat(
+    deps.gitAsync ?? runGitCapturingAsync,
+    { worktreePath: target.worktreePath, baseBranch: target.baseBranch },
+    mode,
+  );
+  if (!result.ok) {
+    return { kind: "diff-error", displayId: target.displayId, error: result.error };
+  }
+  return {
+    kind: "ok",
+    displayId: target.displayId,
+    baseBranch: target.baseBranch,
+    diff: result.value,
+  };
+}
+
+/**
+ * Composes the unified Change Set snapshot for a ticket: resolves identity,
+ * discriminates no-worktree / missing-on-disk, then runs {@link changeSetSnapshot}.
+ */
+export async function readWorktreeChangeSet(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeChangeSetRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await changeSetSnapshot(deps.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: target.worktreePath,
+    baseBranch: target.baseBranch,
+  });
+  if (!result.ok) {
+    return { kind: "change-set-error", displayId: target.displayId, error: result.error };
+  }
+  return { kind: "ok", displayId: target.displayId, changeSet: result.value };
+}
+
+/**
+ * Composes the complete uncapped path set for a collision scan. This stays a
+ * sibling of the capped Change Set snapshot: UI transport may cap its rows,
+ * while scheduling must not miss a path merely because it appears late.
+ */
+export async function readWorktreeChangeSetPaths(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeChangeSetPathsRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await changeSetPaths(deps.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: target.worktreePath,
+    baseBranch: target.baseBranch,
+  });
+  if (!result.ok) {
+    return { kind: "change-set-error", displayId: target.displayId, error: result.error };
+  }
+  return { kind: "ok", displayId: target.displayId, paths: result.value };
+}
+
+/**
+ * Reads one path at the ticket Change Set's stamped base revision. Resolves
+ * the same identity/disk checks as the other read verbs, then resolves the base
+ * through the very same {@link resolveChangeSetBaseRevision} the snapshot uses —
+ * the two must agree on the merge base, or the diff a caller renders would be
+ * taken against a revision the Change Set never measured.
+ *
+ * `pinnedRevision` short-circuits that resolve. A caller rendering a snapshot
+ * already knows the revision it was stamped on, and the merge base can move
+ * between the snapshot and this read (the agent commits, someone fetches), so
+ * re-resolving would silently pair one side of a diff with a different base.
+ */
+export async function readWorktreeBaseFile(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+  path: string,
+  pinnedRevision?: string,
+): Promise<WorktreeBaseFileRead> {
+  const git = deps.gitAsync ?? runGitCapturingAsync;
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  if (pinnedRevision !== undefined && pinnedRevision.length > 0) {
+    return readAtRevision(git, target, pinnedRevision, path);
+  }
+  if (!target.baseBranch) {
+    return {
+      kind: "base-read-error",
+      displayId: target.displayId,
+      error: "No base branch is known for this worktree, so its Change Set cannot be computed.",
+    };
+  }
+  let baseRevision: string;
+  try {
+    const resolvedBase = await resolveChangeSetBaseRevision(
+      git,
+      target.worktreePath,
+      target.baseBranch,
+    );
+    if (!resolvedBase) {
+      return {
+        kind: "base-read-error",
+        displayId: target.displayId,
+        error: "No base branch is known for this worktree, so its Change Set cannot be computed.",
+      };
+    }
+    baseRevision = resolvedBase;
+  } catch (caught) {
+    return { kind: "base-read-error", displayId: target.displayId, error: stderrOf(caught) };
+  }
+  return readAtRevision(git, target, baseRevision, path);
+}
+
+/** The blob read itself, shared by the pinned and the freshly-resolved paths. */
+async function readAtRevision(
+  git: RunGitAsync,
+  target: ReadTarget,
+  baseRevision: string,
+  path: string,
+): Promise<WorktreeBaseFileRead> {
+  const file = await readChangeSetBaseFile(git, {
+    worktreePath: target.worktreePath,
+    baseRevision,
+    path,
+  });
+  if (!file.ok) {
+    return { kind: "base-read-error", displayId: target.displayId, error: file.error };
+  }
+  return {
+    kind: "ok",
+    displayId: target.displayId,
+    baseRevision,
+    file: file.value,
+  };
+}

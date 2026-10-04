@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { SecretStore } from "./store";
-import { SecretService } from "./service";
+import { SecretStore } from "@volli/host-core/secrets";
+import { SecretService } from "@volli/host-core/secrets/service";
 import { registerSecretIpc } from "./ipc";
 
 const { handlers } = vi.hoisted(() => ({

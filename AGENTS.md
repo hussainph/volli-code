@@ -8,21 +8,26 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main process: SQLite, Pi runtime hosting, node-pty, git/worktree execution, the `volli` CLI socket, and notifications. This is the only place Electron APIs run.
+- `apps/desktop/src/main/` — Electron main host: composes `@volli/host-core`, Pi runtime hosting, the terminal IPC adapter, the `volli` CLI socket startup and app-quit adapter (`agent-socket-quit.ts`), notifications and Electron adapters. This is the only place Electron APIs run.
 - `apps/desktop/src/preload/` — the typed `contextBridge` API and the only bridge between renderer and main. Keep it thin and explicit.
 - `apps/desktop/src/renderer/` — React UI and Zustand stores. UI state is a projection of durable main-process state plus ephemeral view state. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket rules, event types, Session semantics, branch/slug rules, and the Agent Runtime port plus `RuntimeObservation` vocabulary. Do not import Electron, Node, or DOM APIs.
 - `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, temporary native-executor migration contracts, runtime-observation translation, committed stream coordination, and AI SDK transcript vocabulary. It owns no transport or Node APIs.
 - `packages/session-rpc/` (`@volli/session-rpc`) — the thin tRPC edge for Session clients and sanitized diagnostics.
+- `packages/host-core/` (`@volli/host-core`) — the host's services composed without Electron: `createHostCore(ports, options)`, the ports a host answers (`src/ports`: event bus, addressed client event sink, attention delivery, power, client capabilities, trash, secret-key), the SQLite open, migrations and repos (`src/db`), and the transaction-ownership guard. Worktrees/git/change sets, project roots, blob/ticket commands, Session/runtime wiring (including Pi attachment assembly), background shells, the Session secret service, login PATH adoption, observability, MCP, Code Mode, Web Access, decisions, model sign-in, Automations, verb dispatch, the agent Unix socket, the terminal (node-pty) supervisor (`src/pty`), and the agent browser's engine-agnostic half (`src/browser`: the `BrowserBackend` seam, shared tab registry, CDP controller and agent port) also live here. Backup/restore, retention, database recovery, orphan scanning and process maintenance live here too (`host.maintenance`); desktop retains their IPC doors and app quit gates, while host shutdown drains Sessions/MCP/observability under the unchanged deadline. Electron main calls it and wires the result by the pattern in its `README.md`. Do not import Electron.
 - `packages/agent-runtime/` (`@volli/agent-runtime`) — the product-owned executor boundary, Pi implementation, deterministic workspace/secret guards and host-API actor policy, prompt assembly, model access, and safe web tools.
 - `packages/cli/` (`@volli/cli`) — the built agent-facing `volli` CLI, which communicates with Electron main over the local Unix socket.
+- `apps/hostd/` (`@volli/hostd`) — `volli-hostd`, the headless host: it composes `@volli/host-core` with headless ports and serves the agent socket on Linux and macOS, so the `volli` CLI works against it unchanged. Do not import Electron. Packaging, health, shutdown and the systemd/launchd templates are in its `README.md`.
 - `packages/font-notices/` (`@volli/font-notices`) — the third-party font license notices the public sites must publish beside the font binaries they redistribute. `src/` is pure rendering with no Node or DOM imports; `check-dist.mjs` and its `check-font-notices` CLI are the build gate that reads a finished `dist/` and shares no code with the renderer.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
 App data lives under Electron's `userData` directory. The agent-facing `volli` CLI communicates with main over a Unix socket.
 
 ## Architecture direction
+
+Volli Cloud's architecture ruling is [docs/plans/volli-cloud.md](docs/plans/volli-cloud.md) (VC-486).
+The [orchestration playbook](docs/plans/volli-cloud-orchestration.md) governs how that direction lands behind the `cloud` flag.
 
 - A Session is durable and owns identity and ordered local history before any live executor attaches. The temporary native-adapter contract, processes, terminal panes, and UI views never own Session lifetime.
 - Commands are explicit user intent. Persist intent before delivery; make acceptance idempotent and observable through durable receipts.
@@ -37,7 +42,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 ## Conventions
 
 - Keep ticket rules and automatic movement logic pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; xterm.js (DOM renderer) never leaves renderer terminal components, and the user's real Ghostty config stays the appearance source the engine maps from. `node-pty` needs `pnpm -C apps/desktop run rebuild:native` after every install to match Electron's ABI; better-sqlite3 13 is N-API and ships its own prebuild that both Electron and plain Node load, so the same command is a deliberate no-op for it.
+- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves the host (host-core's terminal supervisor in `packages/host-core/src/pty`, driven by desktop's IPC adapter in `src/main/pty`); xterm.js (DOM renderer) never leaves renderer terminal components, and the user's real Ghostty config stays the appearance source the engine maps from. `node-pty` needs `pnpm -C apps/desktop run rebuild:native` after every install (the build desktop ships; it is N-API, so plain Node loads it too); better-sqlite3 13 is N-API and ships its own prebuild that both Electron and plain Node load, so the same command is a deliberate no-op for it.
 - Keep the desktop licence notice generated, never hand-authored. `apps/desktop/THIRD-PARTY-NOTICES` is derived from the resolved production dependency set of the desktop app and the bundled `volli` CLI by `node scripts/generate-third-party-notices.mjs`; `electron-builder.yml` ships it and the root `LICENSE` into the `.app` under `Contents/Resources`. What no dependency walk can see — platform-native packages, build-time sources whose output ships, vendored source, and notices a workspace package owns — lives as a reviewed entry in `apps/desktop/notices/sources.json` or in that package's own `notices/` manifest, and provenance nobody has established is recorded as unresolved rather than guessed. Regenerate after any change to the production dependency set; `pnpm run check:notices` (CI) fails on a stale notice, on packaging that stops shipping it, and on a shipped package no notice covers.
 - Name ticket worktree branches `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
 - Use a branch, commit, and PR workflow. Never commit directly to `main`.
@@ -58,7 +63,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - `pnpm run build` then `pnpm start` — build and run the packaged application locally.
 - `pnpm typecheck` — type-check the root configuration and every workspace package.
 - `pnpm test` — run every workspace test suite. This is CI's job, not a pre-push step; see "CI is the gate" below.
-- `vp run -r test:coverage` — the coverage gate, holding `packages/shared` and a protected renderer surface at 100%. Thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about coverage. CI enforces it on every PR, running the desktop suite in shards and merging their coverage before it judges the thresholds. A person can run it locally; an agent does not.
+- `vp run -r test:coverage` — the coverage gate, holding `packages/shared`, host-core's protected host surface and a protected renderer surface at 100%. Thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about coverage. CI enforces it on every PR, running the desktop suite in shards and merging their coverage before it judges the thresholds. A person can run it locally; an agent does not.
 - `vp check` — run `vp fmt` and `vp lint`.
 - `act pull_request --container-architecture linux/amd64` — mirror CI's Linux jobs locally. This is for a person debugging the workflow itself, not a step before opening a PR.
 - `vp install` or `pnpm install` — install dependencies.
@@ -66,6 +71,16 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - `rg` (ripgrep) — the search tool for this repository, in place of `grep -r` or `find -exec grep`. It respects `.gitignore`, so it skips `node_modules/`, `coverage/` and build output; a plain `grep -r` walks all of them and returns generated coverage HTML as if it were source. Use `rg --files -g <glob>` for file listing, `rg -l` for name-only matches, and `-uu` only when you deliberately need ignored files. If `command -v rg` finds nothing, fall back to `git grep -n` (tracked files only, so the same exclusions), or to `grep -rn --exclude-dir={node_modules,coverage,dist,out,.git}` outside a repository.
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
+
+## Linux host boundary
+
+`Test (packages)` is the plain-Node Linux host lane, pinned by `.nvmrc`; new host
+packages must provide `test:coverage`. `Check + Build` enforces zero Electron
+imports across all packages and hostd, including transitive relative imports.
+`Build (host container)` is path-filtered and required by `CI gate` when selected;
+it also builds the hostd linux-x64 artifact in that image and boots it.
+Host development image, native ABI isolation and inventory commands:
+`docs/development/host-linux.md`.
 
 ## CI is the gate
 

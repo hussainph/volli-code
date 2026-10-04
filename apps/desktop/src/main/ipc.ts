@@ -11,13 +11,16 @@ import type {
 } from "../ipc/contract";
 // The project-roots registry lives in ./project-roots so main-process
 // consumers (this file, pty.ts) share one instance.
-import { isPathWithinRoots, syncProjectRoots } from "./project-roots";
-import { isInside } from "./worktree/paths";
-import { worktreesHome } from "./worktree-runtime";
+import { isRealPathWithinRoots, syncProjectRoots } from "@volli/host-core/project-roots";
+import { isInside } from "@volli/host-core/worktree/paths";
+import { worktreesHome } from "@volli/host-core/worktree-runtime";
 
 /** Project checkouts OR the app-owned worktree home (ticket Files navigator). */
 function isBrowsableFsPath(absPath: string): boolean {
-  return isPathWithinRoots(absPath) || isInside(worktreesHome(), absPath);
+  // Project roots are checked after symlink resolution: a link inside a
+  // project pointing outside must not pass on its path string alone. The
+  // worktree-home check canonicalizes both sides itself.
+  return isRealPathWithinRoots(absPath) || isInside(worktreesHome(), absPath);
 }
 
 // Failures travel back as typed result objects, never as rejections —
@@ -66,8 +69,10 @@ export function registerIpcHandlers(): void {
           // .git is noise in a file browser; other dotfiles (.env, .github…)
           // are exactly what developers come looking for.
           .filter((dirent) => dirent.name !== ".git")
-          // Symlinks are typed as files and never traversed — cheap closure
-          // of the symlink-escape hatch out of the project root.
+          // Symlinked entries read as files (Dirent uses lstat semantics), so
+          // walking this listing never descends through one — but a DIRECTLY
+          // requested path is followed for real, which is why the containment
+          // check above resolves symlinks instead of comparing strings.
           .map((dirent) => ({ name: dirent.name, kind: dirent.isDirectory() ? "dir" : "file" }));
         entries.sort(compareDirEntries);
         return { ok: true, entries };

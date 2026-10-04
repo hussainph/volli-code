@@ -1,0 +1,325 @@
+{
+  "name": "@volli/host-core",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./ports": {
+      "types": "./src/ports/index.ts",
+      "import": "./src/ports/index.ts"
+    },
+    "./session-control": {
+      "types": "./src/session-control/index.ts",
+      "import": "./src/session-control/index.ts"
+    },
+    "./session-control/*": {
+      "types": "./src/session-control/*.ts",
+      "import": "./src/session-control/*.ts"
+    },
+    "./session-runtime/*": {
+      "types": "./src/session-runtime/*.ts",
+      "import": "./src/session-runtime/*.ts"
+    },
+    "./session-concurrency": {
+      "types": "./src/session-concurrency.ts",
+      "import": "./src/session-concurrency.ts"
+    },
+    "./secrets": {
+      "types": "./src/secrets/index.ts",
+      "import": "./src/secrets/index.ts"
+    },
+    "./secrets/*": {
+      "types": "./src/secrets/*.ts",
+      "import": "./src/secrets/*.ts"
+    },
+    "./shell/*": {
+      "types": "./src/shell/*.ts",
+      "import": "./src/shell/*.ts"
+    },
+    "./observability/*": {
+      "types": "./src/observability/*.ts",
+      "import": "./src/observability/*.ts"
+    },
+    "./login-path-adoption": {
+      "types": "./src/login-path-adoption.ts",
+      "import": "./src/login-path-adoption.ts"
+    },
+    "./db": {
+      "types": "./src/db/index.ts",
+      "import": "./src/db/index.ts"
+    },
+    "./db/*": {
+      "types": "./src/db/*.ts",
+      "import": "./src/db/*.ts"
+    },
+    "./session-runtime": {
+      "types": "./src/session-runtime/index.ts",
+      "import": "./src/session-runtime/index.ts"
+    },
+    "./agent-runtime": {
+      "types": "./src/agent-runtime.ts",
+      "import": "./src/agent-runtime.ts"
+    },
+    "./agent-tools": {
+      "types": "./src/agent-tools.ts",
+      "import": "./src/agent-tools.ts"
+    },
+    "./session-env": {
+      "types": "./src/session-env.ts",
+      "import": "./src/session-env.ts"
+    },
+    "./session-tokens": {
+      "types": "./src/session-tokens.ts",
+      "import": "./src/session-tokens.ts"
+    },
+    "./pi-session-orphans": {
+      "types": "./src/pi-session-orphans.ts",
+      "import": "./src/pi-session-orphans.ts"
+    },
+    "./pi-tool-output": {
+      "types": "./src/pi-tool-output.ts",
+      "import": "./src/pi-tool-output.ts"
+    },
+    "./harness-install": {
+      "types": "./src/harness-install.ts",
+      "import": "./src/harness-install.ts"
+    },
+    "./login-shell-path": {
+      "types": "./src/login-shell-path.ts",
+      "import": "./src/login-shell-path.ts"
+    },
+    "./verb-input": {
+      "types": "./src/verb-input.ts",
+      "import": "./src/verb-input.ts"
+    },
+    "./mcp/*": {
+      "types": "./src/mcp/*.ts",
+      "import": "./src/mcp/*.ts"
+    },
+    "./codemode/*": {
+      "types": "./src/codemode/*.ts",
+      "import": "./src/codemode/*.ts"
+    },
+    "./web/*": {
+      "types": "./src/web/*.ts",
+      "import": "./src/web/*.ts"
+    },
+    "./decision/*": {
+      "types": "./src/decision/*.ts",
+      "import": "./src/decision/*.ts"
+    },
+    "./model-access/*": {
+      "types": "./src/model-access/*.ts",
+      "import": "./src/model-access/*.ts"
+    },
+    "./worktree": {
+      "types": "./src/worktree/index.ts",
+      "import": "./src/worktree/index.ts"
+    },
+    "./worktree-runtime": {
+      "types": "./src/worktree-runtime.ts",
+      "import": "./src/worktree-runtime.ts"
+    },
+    "./project-base-branch": {
+      "types": "./src/project-base-branch.ts",
+      "import": "./src/project-base-branch.ts"
+    },
+    "./project-relink": {
+      "types": "./src/project-relink.ts",
+      "import": "./src/project-relink.ts"
+    },
+    "./project-roots": {
+      "types": "./src/project-roots.ts",
+      "import": "./src/project-roots.ts"
+    },
+    "./blob-store": {
+      "types": "./src/blob-store.ts",
+      "import": "./src/blob-store.ts"
+    },
+    "./blob-materialize": {
+      "types": "./src/blob-materialize.ts",
+      "import": "./src/blob-materialize.ts"
+    },
+    "./ticket-move": {
+      "types": "./src/ticket-move.ts",
+      "import": "./src/ticket-move.ts"
+    },
+    "./ticket-commands": {
+      "types": "./src/ticket-commands.ts",
+      "import": "./src/ticket-commands.ts"
+    },
+    "./credential-helper-diagnostics": {
+      "types": "./src/credential-helper-diagnostics.ts",
+      "import": "./src/credential-helper-diagnostics.ts"
+    },
+    "./worktree/*": {
+      "types": "./src/worktree/*.ts",
+      "import": "./src/worktree/*.ts"
+    },
+    "./volli-fs": {
+      "types": "./src/volli-fs.ts",
+      "import": "./src/volli-fs.ts"
+    },
+    "./file-types": {
+      "types": "./src/file-types.ts",
+      "import": "./src/file-types.ts"
+    },
+    "./file-services": {
+      "types": "./src/file-services.ts",
+      "import": "./src/file-services.ts"
+    },
+    "./file-search": {
+      "types": "./src/file-search.ts",
+      "import": "./src/file-search.ts"
+    },
+    "./blob-attach": {
+      "types": "./src/blob-attach.ts",
+      "import": "./src/blob-attach.ts"
+    },
+    "./blob-collect": {
+      "types": "./src/blob-collect.ts",
+      "import": "./src/blob-collect.ts"
+    },
+    "./blob-import": {
+      "types": "./src/blob-import.ts",
+      "import": "./src/blob-import.ts"
+    },
+    "./blob-protocol": {
+      "types": "./src/blob-protocol.ts",
+      "import": "./src/blob-protocol.ts"
+    },
+    "./turn-attachments": {
+      "types": "./src/turn-attachments.ts",
+      "import": "./src/turn-attachments.ts"
+    },
+    "./prompt-templates": {
+      "types": "./src/prompt-templates.ts",
+      "import": "./src/prompt-templates.ts"
+    },
+    "./skills": {
+      "types": "./src/skills.ts",
+      "import": "./src/skills.ts"
+    },
+    "./pty/*": {
+      "types": "./src/pty/*.ts",
+      "import": "./src/pty/*.ts"
+    },
+    "./backup/*": {
+      "types": "./src/backup/*.ts",
+      "import": "./src/backup/*.ts"
+    },
+    "./process/*": {
+      "types": "./src/process/*.ts",
+      "import": "./src/process/*.ts"
+    },
+    "./orphan-scan": {
+      "types": "./src/orphan-scan.ts",
+      "import": "./src/orphan-scan.ts"
+    },
+    "./retention-runtime": {
+      "types": "./src/retention-runtime.ts",
+      "import": "./src/retention-runtime.ts"
+    },
+    "./quiet-windows": {
+      "types": "./src/quiet-windows.ts",
+      "import": "./src/quiet-windows.ts"
+    },
+    "./shutdown-deadline": {
+      "types": "./src/shutdown-deadline.ts",
+      "import": "./src/shutdown-deadline.ts"
+    },
+    "./host-shutdown": {
+      "types": "./src/host-shutdown.ts",
+      "import": "./src/host-shutdown.ts"
+    },
+    "./database-recovery": {
+      "types": "./src/database-recovery.ts",
+      "import": "./src/database-recovery.ts"
+    },
+    "./browser/*": {
+      "types": "./src/browser/*.ts",
+      "import": "./src/browser/*.ts"
+    },
+    "./agent-commands": {
+      "types": "./src/agent-commands.ts",
+      "import": "./src/agent-commands.ts"
+    },
+    "./agent-tool-door": {
+      "types": "./src/agent-tool-door.ts",
+      "import": "./src/agent-tool-door.ts"
+    },
+    "./agent-socket": {
+      "types": "./src/agent-socket.ts",
+      "import": "./src/agent-socket.ts"
+    },
+    "./agent-watch": {
+      "types": "./src/agent-watch.ts",
+      "import": "./src/agent-watch.ts"
+    },
+    "./watches": {
+      "types": "./src/watches.ts",
+      "import": "./src/watches.ts"
+    },
+    "./ticket-wake": {
+      "types": "./src/ticket-wake.ts",
+      "import": "./src/ticket-wake.ts"
+    },
+    "./harness-registry": {
+      "types": "./src/harness-registry.ts",
+      "import": "./src/harness-registry.ts"
+    },
+    "./automations/*": {
+      "types": "./src/automations/*.ts",
+      "import": "./src/automations/*.ts"
+    },
+    "./agent-dispatch/*": {
+      "types": "./src/agent-dispatch/*.ts",
+      "import": "./src/agent-dispatch/*.ts"
+    },
+    "./agent-services": {
+      "types": "./src/agent-services.ts",
+      "import": "./src/agent-services.ts"
+    },
+    "./automation-services": {
+      "types": "./src/automation-services.ts",
+      "import": "./src/automation-services.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage",
+    "migrations:lock": "node scripts/lock-migrations.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-mcp": "0.99.2",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/otlp-exporter-base": "0.221.0",
+    "@opentelemetry/otlp-transformer": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-metrics": "2.10.0",
+    "@opentelemetry/sdk-trace": "2.10.0",
+    "@volli/agent-runtime": "workspace:*",
+    "@volli/session-engine": "workspace:*",
+    "@volli/shared": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0",
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "1.1.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-codemode": "1.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "ai": "^7.0.83",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

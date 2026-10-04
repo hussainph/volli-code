@@ -9,7 +9,11 @@ import {
 } from "../data-export-copy";
 import type { UiZoomCommand, VolliIpcEvent } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
-import { buildExportDocument, defaultExportFilename, serializeExportDocument } from "./db/export";
+import {
+  buildExportDocument,
+  defaultExportFilename,
+  serializeExportDocument,
+} from "@volli/host-core/db/export";
 
 /**
  * Installs the application menu. Everything is the standard macOS template

@@ -1,6 +1,6 @@
 /**
  * Stress smoke for the full eight-tool Browser port (VC-351), against the BUILT
- * app through the production port — the SAME `desktopBrowserPort` the Pi
+ * app through the production port — the SAME `browserAgentPort` the Pi
  * adapter builds, via main's `VOLLI_BROWSER_PROBE` smoke seam (the one
  * `browser-tab-smoke.mjs` uses), plus the `VOLLI_SMOKE_BROWSER_HOST` door for
  * presentation and registry facts a port cannot see.

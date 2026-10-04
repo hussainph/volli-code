@@ -1,8 +1,10 @@
 // The terminal IPC surface (extracted from the former monolithic pty.ts per
 // issue #99): the native destructive-close confirm gate, the renderer request
-// guards, and `registerTerminalIpcHandlers` — the wiring that turns a
-// PtyManager into the live `volli:terminal-*` channels plus the before-quit
-// kill gate. Every guard and comment here moved verbatim from the manager.
+// guards, and `registerTerminalIpcHandlers` — the wiring that turns
+// host-core's terminal supervisor (`PtyManager`, VC-560) into the live
+// `volli:terminal-*` channels plus the before-quit kill gate. Each request's
+// sender is adapted to the supervisor's client through `clientEventSink`:
+// exactly that window, with its `destroyed` hook as the disconnect.
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
@@ -17,15 +19,31 @@ import type {
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
-import { blobsRoot } from "../blob-store";
+import { blobsRoot } from "@volli/host-core/blob-store";
 import type { DbHandle } from "../data-ipc";
-import { SpawnLedger } from "../process/spawn-ledger";
+import { windowEventBus } from "../broadcast";
+import { clientEventSink } from "../client-event-sink";
+import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
+import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
-import { createDesktopSessionEngine } from "../session-control";
-import { createSessionConcurrencyEnvReader } from "../session-concurrency";
-import type { SessionConcurrencyEnvReader } from "../session-concurrency";
-import type { AgentRuntimeEnvironment } from "./manager";
-import { PtyManager } from "./manager";
+import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
+import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
+import { PtyManager } from "@volli/host-core/pty/manager";
+import { worktreeDeps } from "../worktree-host";
+
+/**
+ * What the terminal supervisor asks of desktop (VC-560): the window event bus,
+ * the worktree bundle and the harness-file writer desktop composed inline
+ * before the supervisor moved into host-core.
+ */
+export function desktopPtyHost(): PtyHost {
+  return {
+    events: windowEventBus,
+    worktreeDeps,
+    ensureHarnessWorkspaceFiles,
+  };
+}
 
 /**
  * Native modal confirm for a destructive close over `busy` sessions; resolves
@@ -163,12 +181,15 @@ function isCreateRequest(
  * Registers the terminal IPC handlers and returns the backing manager so the
  * app lifecycle can kill every PTY on quit. Every handler validates its args
  * at runtime — renderer-supplied types are never trusted — and returns a
- * typed result rather than throwing across the IPC boundary.
+ * typed result rather than throwing across the IPC boundary. Mutating handlers
+ * hand `event.sender`'s client to the manager, which honors a session only for the
+ * window that created it (VC-509): a second surface cannot write, run, resize,
+ * kill, park, wake or keep awake another window's PTY.
  */
 export function registerTerminalIpcHandlers(
   handle: DbHandle,
+  sessionEngine: SessionEngine | null,
   agentRuntime: AgentRuntimeEnvironment | null = null,
-  sessionEngine: SessionEngine | null = handle.ok ? createDesktopSessionEngine(handle.db) : null,
   /**
    * The process's one reader of who is working (VC-339, VC-403). `index.ts`
    * passes the same instance the structured door uses, so both answer this
@@ -188,21 +209,32 @@ export function registerTerminalIpcHandlers(
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
+  const host = desktopPtyHost();
   const manager = handle.ok
     ? new PtyManager(
+        host,
         handle.db,
         "",
+        sessionEngine,
         undefined,
         undefined,
         agentRuntime,
         blobsRootPath,
-        sessionEngine,
         // Every terminal shell lands in the spawn ledger (VC-341), so a shell
         // that outlives this launch can still be attributed to its Session.
         new SpawnLedger(handle.db),
         concurrencyEnvReader,
       )
-    : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
+    : new PtyManager(
+        host,
+        null,
+        handle.error,
+        null,
+        undefined,
+        undefined,
+        agentRuntime,
+        blobsRootPath,
+      );
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is
@@ -215,17 +247,17 @@ export function registerTerminalIpcHandlers(
       if (!isCreateRequest(request, launchable)) {
         return Promise.resolve({ ok: false, error: "Invalid terminal request" });
       }
-      return manager.create(event.sender, request);
+      return manager.create(clientEventSink(event.sender), request);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-write" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, data: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, data: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof data !== "string") {
         return { ok: false, error: "Invalid terminal write" };
       }
-      return manager.write(sessionId, data);
+      return manager.write(clientEventSink(event.sender), sessionId, data);
     },
   );
 
@@ -234,7 +266,7 @@ export function registerTerminalIpcHandlers(
   // offered and the user accepted (VC-156).
   ipcMain.handle(
     "volli:terminal-run" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
+    (event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
       if (typeof sessionId !== "string" || typeof command !== "string") {
         return Promise.resolve({ ok: false, error: "Invalid terminal command" });
       }
@@ -242,69 +274,70 @@ export function registerTerminalIpcHandlers(
       if (trimmed.length === 0) {
         return Promise.resolve({ ok: false, error: "Invalid terminal command" });
       }
-      return manager.runCommand(sessionId, trimmed);
+      return manager.runCommand(clientEventSink(event.sender), sessionId, trimmed);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-resize" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, cols: unknown, rows: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, cols: unknown, rows: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof cols !== "number" || typeof rows !== "number") {
         return { ok: false, error: "Invalid terminal resize" };
       }
-      return manager.resize(sessionId, cols, rows);
+      return manager.resize(clientEventSink(event.sender), sessionId, cols, rows);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-kill" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): TerminalIoResult => {
+    (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal kill" };
       }
-      return manager.kill(sessionId);
+      return manager.kill(clientEventSink(event.sender), sessionId);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-park" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): Promise<TerminalIoResult> => {
+    (event, sessionId: unknown): Promise<TerminalIoResult> => {
       if (typeof sessionId !== "string") {
         return Promise.resolve({ ok: false, error: "Invalid terminal park" });
       }
       // A user-initiated park bypasses the visible/keep-awake auto-park guards.
-      return manager.park(sessionId, { manual: true });
+      return manager.park(clientEventSink(event.sender), sessionId, { manual: true });
     },
   );
 
   ipcMain.handle(
     "volli:terminal-wake" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown): TerminalIoResult => {
+    (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
         return { ok: false, error: "Invalid terminal wake" };
       }
-      return manager.wake(sessionId);
+      return manager.wake(clientEventSink(event.sender), sessionId);
     },
   );
 
   ipcMain.handle(
     "volli:terminal-keep-awake" satisfies VolliIpcChannel,
-    (_event, sessionId: unknown, keepAwake: unknown): TerminalIoResult => {
+    (event, sessionId: unknown, keepAwake: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof keepAwake !== "boolean") {
         return { ok: false, error: "Invalid terminal keep-awake" };
       }
-      return manager.setKeepAwake(sessionId, keepAwake);
+      return manager.setKeepAwake(clientEventSink(event.sender), sessionId, keepAwake);
     },
   );
 
   // Fire-and-forget (ipcRenderer.send) — pane visibility flips on every nav and
-  // needs no reply; the sender check mirrors the ack channel's window-scoping.
+  // needs no reply; like every mutating terminal channel it is scoped to the
+  // session's owning window (VC-509).
   ipcMain.on(
     "volli:terminal-set-visible" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const [sessionId, visible] = args;
       if (typeof sessionId !== "string" || typeof visible !== "boolean") return;
-      manager.setVisible(event.sender, sessionId, visible);
+      manager.setVisible(clientEventSink(event.sender), sessionId, visible);
     },
   );
 
@@ -324,7 +357,7 @@ export function registerTerminalIpcHandlers(
     const [sessionId, chars] = args;
     if (typeof sessionId !== "string") return;
     if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return;
-    manager.ack(event.sender, sessionId, chars);
+    manager.ack(clientEventSink(event.sender), sessionId, chars);
   });
 
   // Kill every PTY on quit so no orphaned shells outlive the app — but a

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { getAppState, setAppState } from "./db/app-state-repo";
-import { openTestDb } from "./db/test-helpers";
+import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { openTestDb } from "@volli/host-core/db/test-helpers";
 import { INSTALLATION_ID_APP_STATE_KEY, installationId } from "./installation-id";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;

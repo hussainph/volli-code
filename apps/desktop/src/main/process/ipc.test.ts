@@ -7,7 +7,7 @@ import type {
   OrphanProcessScanResult,
   VolliIpcChannel,
 } from "../../ipc/contract";
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
 import { ORPHAN_PROCESS_CHANNELS } from "../ipc-descriptors";
 
 const { handlers } = vi.hoisted(() => ({
@@ -22,9 +22,9 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { getAutoReapPolicy } from "./auto-reap-settings";
+import { getAutoReapPolicy } from "@volli/host-core/process/auto-reap-settings";
 import { registerOrphanProcessIpcHandlers } from "./ipc";
-import { OrphanProcessService } from "./orphan-processes";
+import { OrphanProcessService } from "@volli/host-core/process/orphan-processes";
 
 const NOW = 1_800_000_000_000;
 const worktree = {

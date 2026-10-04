@@ -363,13 +363,17 @@ export interface TicketEvent {
  * The latest durable Session outcome for one ticket, denormalized for the
  * sidebar's batched attention read. It crosses the existing IPC seam without
  * making immutable Session facts planner history.
+ *
+ * "Latest" is the one the owning ledger accepted most recently, in local
+ * ledger order — not the largest `createdAt`, which is what a source claimed
+ * and can move backwards with a clock (VC-512).
  */
 export interface LatestSessionSignal {
   ticketId: string;
   sessionId: string | null;
   signal: "done" | "blocked";
   reason: string | null;
-  /** Epoch milliseconds. */
+  /** Epoch milliseconds: when the signal's source said it happened. */
   createdAt: number;
 }
 

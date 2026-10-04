@@ -39,14 +39,22 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/volli-secrecy" },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
-import { readSecret } from "../db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { readSecret } from "@volli/host-core/db/secrets-repo";
+import { createTestSessionEngine } from "../test-session-engine";
 import { registerDataIpcHandlers } from "../data-ipc";
-import { createPiNativeAdapter, type PiRuntimeContext } from "../session-runtime/pi-adapter";
-import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
+import {
+  createPiNativeAdapter,
+  type PiRuntimeContext,
+} from "@volli/host-core/session-runtime/pi-adapter";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+} from "@volli/host-core/web/credential";
 import { registerWebAccessIpcHandlers } from "./ipc";
-import { webPortsFor } from "./ports";
-import { WebAccessSettings } from "./settings";
+import { webPortsFor } from "@volli/host-core/web/ports";
+import { WebAccessSettings } from "@volli/host-core/web/settings";
 
 const KEY = "BSA-super-secret-brave-key-42";
 const EXA_KEY = "exa-super-secret-second-key-77";
@@ -101,6 +109,7 @@ const context: PiRuntimeContext = {
 };
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 let settings: WebAccessSettings;
 
 async function invoke(channel: VolliIpcChannel, ...args: unknown[]): Promise<unknown> {
@@ -134,6 +143,7 @@ async function attach(): Promise<{ runtime: SpecRecordingRuntime; sink: Recordin
 beforeEach(() => {
   handlers.clear();
   ctx = openTestDb();
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
   settings = new WebAccessSettings({
     db: ctx.db,
     credentials: {
@@ -142,7 +152,7 @@ beforeEach(() => {
     },
   });
   registerWebAccessIpcHandlers(settings);
-  registerDataIpcHandlers({ ok: true, db: ctx.db }, {});
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 });
 
 afterEach(() => {

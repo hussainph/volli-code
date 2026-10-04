@@ -13,16 +13,16 @@ import {
 import { sessionHostNoticeMetadata } from "@volli/shared";
 import { readHostNotice } from "@volli/session-presentation";
 import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { createSessionWakeBus } from "../session-wake";
-import { insertProject } from "../db/projects-repo";
-import { buildBackupDataDocument } from "../backup/data-document";
-import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
-import { createPiNativeAdapter } from "./pi-adapter";
-import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
-import { createSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
-import type { HostNoticeDelivery } from "./host-notice-delivery";
+import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
+import { createSessionWakeBus } from "@volli/host-core/session-control/session-wake";
+import { insertProject } from "@volli/host-core/db/projects-repo";
+import { buildBackupDataDocument } from "@volli/host-core/backup/data-document";
+import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
+import { createPiNativeAdapter } from "@volli/host-core/session-runtime/pi-adapter";
+import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
+import { createSqliteHostNoticeOutbox } from "@volli/host-core/session-runtime/sqlite-host-notice-outbox";
+import type { HostNoticeDelivery } from "@volli/host-core/session-runtime/host-notice-delivery";
 
 let db: TestDb | undefined;
 let clock = 1000;
@@ -165,18 +165,14 @@ describe("SQLite host notice outbox", () => {
     const f = launch(db!.db, paths.directory);
     const sessionId = await create(f);
     const value = notice(sessionId);
-    const gate = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    const failedTransaction = f.writer.transaction(async () => {
-      entered.resolve();
-      await gate.promise;
+    const failedTransaction = f.writer.transaction(() => {
       throw new Error("rollback unrelated write");
     });
     const failure = expect(failedTransaction).rejects.toThrow("rollback unrelated write");
-    await entered.promise;
+    // The failed transaction has already rolled back, even before its promise
+    // settles. An independent outbox write cannot join it.
+    expect(db!.db.inTransaction).toBe(false);
     const put = f.outbox.put(value);
-    expect(db!.db.prepare("SELECT * FROM host_notice_outbox").all()).toEqual([]);
-    gate.resolve();
     await failure;
     expect(await put).toEqual(value);
     const bundle = buildBackupDataDocument(db!.db, { appVersion: "test", now: clock });

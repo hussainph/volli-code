@@ -225,24 +225,20 @@ async function drag(page, sourceBox, target) {
 }
 
 /**
- * Block until dnd-kit has finished a drag.
- *
- * The source card carries `opacity-40` for exactly as long as `isDragging` is
- * true (ticket-card.tsx), so its absence is the drop having been committed and
- * the overlay torn down. Every drag here used to end in a flat `sleep(500)`,
- * which is a bet on the drop animation; on a CI runner that bet expired
- * mid-drag and the board was read while still in its dragging DOM — which is
- * why the column headers came back null and every later check failed behind
- * it. Falls through on timeout so a genuinely stuck drag still fails on its
- * own assertion rather than here.
+ * Block until the gesture AND its retained overlay have gone. The dimming
+ * class belongs to the sortable wrapper, not its article; checking the old
+ * article.opacity-40 selector returned immediately even during a live drag.
+ * Overlay articles also inflate global card counts until teardown completes.
  */
 async function waitForDragSettled(page) {
-  await page
-    .waitForFunction(() => document.querySelector("article.opacity-40") === null, null, {
-      timeout: 10_000,
-    })
-    .catch(() => {});
-  await sleep(250);
+  await page.waitForFunction(
+    () =>
+      document.querySelector(
+        "[data-board-drag], [data-ticket-drag-preview], [data-board-ticket-slot] .opacity-40",
+      ) === null,
+    null,
+    { timeout: 10_000 },
+  );
 }
 
 /**
@@ -743,36 +739,70 @@ async function main() {
           sourceBox.y + sourceBox.height / 2,
         );
         await page.mouse.down();
-        await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, {
-          steps: 8,
-        });
-        await page.mouse.move(todoHeaderBox.x + 20, todoHeaderBox.y + 120, { steps: 20 });
-        await sleep(150);
-        const clusterCount = await page.getByLabel("2 tickets selected").count();
-        await page.mouse.up();
+        let clusterCount = 0;
+        try {
+          await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, {
+            steps: 8,
+          });
+          await page.mouse.move(todoHeaderBox.x + 20, todoHeaderBox.y + 120, { steps: 20 });
+          await waitUntil(
+            "multi-drag cluster and Todo landing to be ready",
+            async () =>
+              (await page.locator("[data-board-drag]").count()) === 1 &&
+              (await page.locator('[data-board-column="todo"][data-drop-aimed]').count()) === 1 &&
+              (await page.getByLabel("2 tickets selected").count()) === 1,
+            { timeout: 1_000, interval: 50 },
+          );
+          clusterCount = await page.getByLabel("2 tickets selected").count();
+        } finally {
+          await page.mouse.up();
+        }
+
+        // dnd-kit may retain the overlay's duplicate articles after release.
+        // An unscoped cardById().evaluate() then fails strict-mode resolution
+        // even though the real destination slots already animated. Read ONLY
+        // Todo's slots, in one snapshot, and wait for their actual animations
+        // to finish rather than betting another sleep on teardown/commit.
+        let slotState = null;
         const slotted = await waitUntil(
-          "multi-drag destination-slot transition",
-          async () =>
-            Promise.any(
-              [first, second].map(async (id) => {
-                const animation = await cardById(page, id).evaluate((article) => {
-                  const slot = article.closest("[data-board-ticket-slot]");
-                  return slot instanceof HTMLElement
-                    ? {
-                        transform: getComputedStyle(slot).transform,
-                        started: slot.dataset.boardSlotAnimated === "true",
-                      }
-                    : { transform: "", started: false };
-                });
-                if (!animation.started) throw new Error("not moving yet");
-                return true;
-              }),
-            ),
+          "multi-drag destination-slot transition to settle",
+          async () => {
+            slotState = await page.evaluate(
+              (ids) => {
+                const slots = Array.from(
+                  document.querySelectorAll('[data-board-column="todo"] [data-board-ticket-slot]'),
+                );
+                return {
+                  dragging: document.querySelector("[data-board-drag]") !== null,
+                  slots: ids.map((id) => {
+                    const slot = slots.find(
+                      (element) =>
+                        element.querySelector("article span.font-mono")?.textContent?.trim() === id,
+                    );
+                    return {
+                      id,
+                      started: slot?.getAttribute("data-board-slot-animated") === "true",
+                      settled:
+                        slot !== undefined &&
+                        slot
+                          .getAnimations()
+                          .every((animation) => ["finished", "idle"].includes(animation.playState)),
+                    };
+                  }),
+                };
+              },
+              [first, second],
+            );
+            return (
+              !slotState.dragging &&
+              slotState.slots.some((slot) => slot.started) &&
+              slotState.slots.every((slot) => slot.settled)
+            );
+          },
           { timeout: 1_000, interval: 50 },
         )
           .then(() => true)
           .catch(() => false);
-        await sleep(500);
 
         const todoAfterDrop = await columnCardIds(page, "Todo");
         const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
@@ -818,7 +848,7 @@ async function main() {
           JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
         return {
           ok,
-          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)}`,
+          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)} slots=${JSON.stringify(slotState)}`,
         };
       },
     );
@@ -896,16 +926,32 @@ async function main() {
       10,
       '"+ New" composer: Enter submits a card, Escape closes it, VC-12 appears (numbering continues)',
       async () => {
+        // Check 9's pill drop can retain a duplicate overlay article after the
+        // real card lands. Do not let that picture enter the baseline count.
+        await waitForDragSettled(page);
         const before = await page.locator("article").count();
         await page.getByRole("button", { name: "New", exact: true }).first().click();
-        await sleep(200);
-        await page.getByPlaceholder("Ticket title…").fill("Board smoke test card");
-        await page.keyboard.press("Enter");
-        await sleep(400);
-        await page.keyboard.press("Escape");
-        await sleep(300);
-        const after = await page.locator("article").count();
+        const title = page.getByPlaceholder("Ticket title…");
+        await waitUntil(
+          "inline composer title to be ready",
+          async () => (await title.isVisible()) && (await title.isEditable()),
+          { timeout: 3000 },
+        );
+        await title.fill("Board smoke test card");
+        await title.press("Enter");
         const vc12 = cardById(page, "VC-12");
+        await waitUntil(
+          "Enter to create VC-12 and reset the inline composer",
+          async () => (await vc12.count()) === 1 && (await title.inputValue()) === "",
+          { timeout: 3000 },
+        );
+        await title.press("Escape");
+        await waitUntil(
+          "Escape to unmount the inline composer",
+          async () => (await title.count()) === 0,
+          { timeout: 3000 },
+        );
+        const after = await page.locator("article").count();
         const vc12Count = await vc12.count();
         const ok = after === before + 1 && vc12Count === 1;
         return { ok, detail: `before=${before} after=${after} vc12Count=${vc12Count}` };
@@ -1317,8 +1363,18 @@ async function main() {
         await sleep(300);
         const paletteOpen = (await page.getByRole("dialog").count()) === 1;
         const composerClosed = (await page.getByPlaceholder("Ticket title").count()) === 0;
+        await search.focus();
+        await waitUntil(
+          "command palette search to receive focus",
+          () => search.evaluate((el) => el === document.activeElement),
+          { timeout: 3000 },
+        );
         await page.keyboard.press("Escape");
-        await sleep(300);
+        await waitUntil(
+          "command palette to unmount after Escape",
+          async () => (await page.locator('[role="dialog"]').count()) === 0,
+          { timeout: 3000 },
+        );
         const ok = paletteOpen && composerClosed;
         return { ok, detail: `paletteOpen=${paletteOpen} composerClosed=${composerClosed}` };
       },
@@ -1327,10 +1383,32 @@ async function main() {
     // === 20. Header "New ticket" button opens the dialog; Escape closes it ===
     await attempt(20, '"New ticket" header button opens the dialog; Escape closes it', async () => {
       await page.getByRole("button", { name: "New ticket", exact: true }).click();
-      await sleep(200);
+      const title = page
+        .locator('[data-testid="new-ticket-composer"]')
+        .getByPlaceholder("Ticket title");
+      await waitUntil(
+        "New-ticket composer to open with an editable title",
+        async () =>
+          (await page.getByRole("dialog").count()) === 1 &&
+          (await title.isVisible()) &&
+          (await title.isEditable()),
+        { timeout: 3000 },
+      );
+      // Monaco and Radix mount asynchronously; send Escape to the ready title,
+      // not to the header button that owned focus before the dialog opened.
+      await title.focus();
+      await waitUntil(
+        "New-ticket composer title to receive focus",
+        () => title.evaluate((el) => el === document.activeElement),
+        { timeout: 3000 },
+      );
       const openCount = await page.getByRole("dialog").count();
       await page.keyboard.press("Escape");
-      await sleep(300);
+      await waitUntil(
+        "New-ticket dialog to unmount after Escape",
+        async () => (await page.locator('[role="dialog"]').count()) === 0,
+        { timeout: 3000 },
+      );
       const closedCount = await page.getByRole("dialog").count();
       const ok = openCount === 1 && closedCount === 0;
       return { ok, detail: `open=${openCount} closedAfterEscape=${closedCount}` };

@@ -411,7 +411,7 @@ describe("the stored zone wins over the host", () => {
     // toward whatever machine happens to be running the test.
     //
     // The travelling laptop itself is proved one layer up, where a host clock
-    // exists to move: `main/automations/scheduler.test.ts`.
+    // exists to move: `packages/host-core/src/automations/scheduler.test.ts`.
     const after = Date.parse("2026-06-01T00:00:00Z");
     for (const timeZone of ["Pacific/Kiritimati", "Pacific/Niue", LONDON, NEW_YORK]) {
       const at = nextScheduleOccurrence({

@@ -15,7 +15,7 @@
  *      recorded before it.
  *
  * It takes no model turn. The Session's calls go through the SAME port a
- * Session gets (`desktopBrowserPort`, behind the `VOLLI_BROWSER_PROBE` door),
+ * Session gets (`browserAgentPort`, behind the `VOLLI_BROWSER_PROBE` door),
  * in the name of a real chat Session minted by one Send — whose turn fails on
  * the placeholder key below, which nothing here depends on.
  *

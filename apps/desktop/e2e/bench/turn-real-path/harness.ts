@@ -51,17 +51,17 @@ import {
 } from "@volli/session-engine";
 import { type ObservabilityEvent, type ObservabilitySink, type SessionLedger } from "@volli/shared";
 
-import { openVolliDb } from "../../../src/main/db";
-import { insertProject } from "../../../src/main/db/projects-repo";
+import { openVolliDb } from "@volli/host-core/db";
+import { insertProject } from "@volli/host-core/db/projects-repo";
 import {
   createCheckpointFailureReporter,
   createSqliteSessionLedger,
-} from "../../../src/main/session-control";
+} from "@volli/host-core/session-control";
 import {
   createPiRuntimeHost,
   type PiRuntimeContext,
-} from "../../../src/main/session-runtime/pi-adapter";
-import { createFileTranscriptArtifactStore } from "../../../src/main/session-runtime/transcript-artifacts";
+} from "@volli/host-core/session-runtime/pi-adapter";
+import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
 
 import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
@@ -228,7 +228,7 @@ function fixedLocations(directory: string): SessionLocationResolver {
   return { resolve: at, prepare: at, reaffirm: async () => undefined };
 }
 
-/** The desktop engine's host yield (`session-control/index.ts`), which is private there. */
+/** The host engine's yield (`packages/host-core/src/session-control/index.ts`), which is private there. */
 function yieldToMainProcess(): Promise<void> {
   return new Promise<void>((resolvePromise) => {
     setImmediate(resolvePromise);
@@ -385,7 +385,7 @@ async function compose(
     usageLimits: { fetch: refusingFetch },
   });
 
-  // `createDesktopSessionEngine`, with the ledger's transactions timed. The
+  // The host's private Session engine, with the ledger's transactions timed. The
   // ledger runs BEGIN IMMEDIATE and COMMIT outside the work callback, so the
   // handle it is given times those statements too. Both are filed under the
   // Session whose call queued the transaction: the ledger runs it as a
