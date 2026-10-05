@@ -13,7 +13,10 @@ const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8")
 describe("desktop runtime edge wiring", () => {
   it("hands the live runtime, RPC and exporter to the one lifecycle owner", () => {
     expect(source).toMatch(
-      /createSessionRuntimeLifecycle\(\{\s*host: hostCore,\s*ports: hostPorts,\s*runtime: sessionRuntime,\s*rpc: sessionRpc,\s*observability: agentObservability,/,
+      /createSessionRuntimeLifecycle\(\{\s*host: hostCore,\s*ports: hostPorts,\s*runtime: sessionRuntime,\s*rpc: \(\) => sessionRpc,\s*observability: agentObservability,/,
+    );
+    expect(source).toMatch(
+      /const readyRuntimeServices = await runtimeLifecycle\.ready\(\);\s*sessionRpc = createSessionRpc\(readyRuntimeServices\);/,
     );
   });
 

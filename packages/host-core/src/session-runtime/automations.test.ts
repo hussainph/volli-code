@@ -21,7 +21,7 @@ vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
 afterEach(() => vi.resetAllMocks());
 type Automations = HostCore["automations"];
 
-function fixture(db = true) {
+function fixture(db = true, piRuntime = true) {
   const engine = {};
   const service = {};
   const runner = { recover: vi.fn(async () => {}) };
@@ -52,7 +52,7 @@ function fixture(db = true) {
   } as unknown as HostCore;
   const owner = createRuntimeAutomations({
     host,
-    piRuntimeHost: pi as unknown as PiRuntimeHost,
+    piRuntimeHost: piRuntime ? (pi as unknown as PiRuntimeHost) : null,
     homeDir: "/home",
     log,
   });
@@ -138,6 +138,24 @@ describe("runtime automation assembly", () => {
     expect(f.scheduler.refresh).toHaveBeenCalledOnce();
   });
 
+  it("offers no model-access inspection when no Pi host booted", () => {
+    const f = fixture(true, false);
+    expect(Object.keys(f.make.createService.mock.calls[0]![1])).toEqual(["onAutomationsChanged"]);
+  });
+
+  it("logs a failed recovery or scheduler start instead of surfacing either", async () => {
+    const f = fixture();
+    f.runner.recover.mockRejectedValueOnce(new Error("ledger locked"));
+    f.scheduler.start.mockRejectedValueOnce(new Error("cursor unreadable"));
+    f.owner.start(f.ready());
+    await vi.waitFor(() => {
+      expect(f.log.error).toHaveBeenCalledWith("[volli] automation recovery failed: ledger locked");
+      expect(f.log.error).toHaveBeenCalledWith(
+        "[volli] automation scheduler could not start: cursor unreadable",
+      );
+    });
+  });
+
   it("uses stable directories but re-reads the project policy after async supply reads", async () => {
     const f = fixture();
     f.owner.start(f.ready());
@@ -157,6 +175,34 @@ describe("runtime automation assembly", () => {
     });
     vi.mocked(getProjectById).mockReturnValueOnce(project).mockReturnValueOnce(undefined);
     await expect(f.deps().promptSupply("p1")).rejects.toThrow("Unknown project");
+  });
+
+  it("refuses prompt supply when the project or either disk read cannot be used", async () => {
+    const f = fixture();
+    f.owner.start(f.ready());
+    vi.mocked(getProjectById).mockReturnValue(project);
+    vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
+    vi.mocked(getProjectById).mockReturnValueOnce(undefined);
+    await expect(f.deps().promptSupply("p1")).rejects.toThrow("Unknown project");
+    vi.mocked(loadPromptTemplates).mockResolvedValueOnce({
+      ok: false,
+      error: "templates unreadable",
+    });
+    await expect(f.deps().promptSupply("p1")).rejects.toThrow("templates unreadable");
+    vi.mocked(loadSkills).mockResolvedValueOnce({ ok: false, error: "skills unreadable" });
+    await expect(f.deps().promptSupply("p1")).rejects.toThrow("skills unreadable");
+  });
+
+  it("applies an empty mode map when the re-read project carries no skill modes", async () => {
+    const f = fixture();
+    f.owner.start(f.ready());
+    vi.mocked(getProjectById)
+      .mockReturnValueOnce(project)
+      .mockReturnValueOnce({ ...project, skillModes: undefined });
+    vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
+    await expect(f.deps().promptSupply("p1")).resolves.toEqual({ templates: [], skills: [] });
   });
 
   it("forwards exact command/message ids, resources and origin, and delivery failures", async () => {
