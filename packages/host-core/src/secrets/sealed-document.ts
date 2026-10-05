@@ -28,6 +28,7 @@
  *   own types. Anything else becomes one generic sentence: no codec, parser or
  *   filesystem text, cause or path.
  */
+import { CredentialKeyPendingError } from "../ports/credential-keyring";
 import { isSecretKeyUnavailable } from "../ports/secret-key";
 import {
   CredentialLockUnusableError,
@@ -118,6 +119,7 @@ export function isSealedOpenFailure(error: unknown): boolean {
 
 /** Errors that already say what happened without disclosing anything. */
 const PASS_THROUGH = [
+  CredentialKeyPendingError,
   SealedStoreUnreadableError,
   CredentialLockUnusableError,
   SealedStoreNewerError,

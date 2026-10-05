@@ -190,8 +190,26 @@ one writes (`n1-compatibility.test.ts`, against main's exact code).
   `host-credentials.key` (`VHK1 | wrapped key`), because the `VHC1` envelope
   has no room for one. It asks the keychain only to open a sealed file or to
   seal the first one, once per launch, and fails closed (`locked`) on an
-  unavailable keychain, Linux `basic_text`, a refused unwrap or a missing
-  wrapped file; it never makes a new key while a sealed file exists.
+  unavailable keychain, a refused unwrap or a missing wrapped file, and on
+  Linux on a store that protects nothing (`basic_text`, a `safeStorage`
+  without `getSelectedStorageBackend`, or a wrapping under Chromium's `v10`
+  fallback key, a compiled-in constant); it never makes a new key while a
+  sealed file exists.
+- **The typed store's keychain API is the asynchronous one** (VC-643
+  decision). Electron's synchronous `safeStorage` calls can block the thread
+  that makes them to collect a keychain prompt, and on Electron's main thread
+  no deadline or quit can interrupt that. So `host-credentials.key` is
+  wrapped and unwrapped only with `isAsyncEncryptionAvailable`,
+  `encryptStringAsync` and `decryptStringAsync`, from its first release: one
+  API for that file, never the synchronous one. The keyring's `unlock()`
+  fetches the key asynchronously, outside the credential lock, and can be
+  abandoned (`AbortSignal`: no keychain call starts after the abort, and
+  nothing fetched afterwards is kept); `resolve()` and `active()`, which run
+  under the lock, answer from what it fetched and otherwise throw
+  `CredentialKeyPendingError` (status `locked`/`key-pending`, transient,
+  never remembered). VC-644 and every later desktop family keep this API.
+  The shipped `VSC1` Session-secrets codec (`apps/desktop/src/main/secrets/codec.ts`)
+  keeps the synchronous API and its envelope, unchanged.
 - **The typed inventory** (`inventory.ts`, `credential-families.ts`). The
   plaintext is a schema version, a UUID, a commit generation and typed
   records, each with a UUID, a family, a fixed-field selector, a value, a
@@ -245,8 +263,23 @@ mirror back. The read switch is VC-644.
   nothing is written and no key is made.
 - **When it runs.** After first paint on every desktop launch (deletes
   included), and after every save or clear, which commit to SQLite first. One
-  synchronous attempt at the lock; a busy lock is retried asynchronously, so
-  Electron's main thread never waits on another process.
+  synchronous attempt at the lock; a busy lock, a key not fetched yet, or a
+  source that changed while sealing is finished asynchronously, so Electron's
+  main thread never waits on another process or the keychain. A copy sealed
+  while the source moved on is reported `pending` (`moved`, naming the
+  revision it sealed), never `sealed`.
+- **No new unattended keychain access** (VC-643 decision). The launch
+  reconcile runs with nobody at the keyboard, so it may fetch the keychain's
+  key only if this launch has already used the keychain successfully (the
+  Session-secrets store opened, or pre-023 web keys were carried out of it).
+  Otherwise the mirror stays `pending` (`key-pending`) and the next save or
+  clear a person makes fetches the key and seals it. Safe in step E: reads
+  come only from SQLite, and VC-644's switch reconciles explicitly.
+- **Stopped at quit.** When the accepted-quit coordinator accepts a quit
+  (`quit-gate.ts`, `stopBackgroundWork`), the launch timer is cancelled, a
+  busy retry stops, a key fetch in flight is abandoned rather than awaited,
+  and no reconcile or keychain call starts afterwards. The SQLite snapshot
+  and the commit stay synchronous under the credential lock.
 - **Honest outcomes.** The Settings view carries `sealing`: `sealed` (a copy of
   exactly the saved keys was written and read back), `pending` ("saved;
   sealing pending": the keychain is locked, the lock was busy, a write or sync

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { migrate } from "../db/migrations";
 import { deleteSecret, readSecret, writeSecret } from "../db/secrets-repo";
+import { CredentialKeyPendingError, type CredentialKeyring } from "../ports/credential-keyring";
 import { SecretKeyUnavailableError } from "../ports/secret-key";
 import { SealedStoreNewerError } from "../secrets/credential-state";
 import { CredentialLock, CredentialLockBusyError } from "../secrets/credential-lock";
@@ -21,7 +22,7 @@ import {
   type PublishStep,
 } from "../secrets/durable-file";
 import { fileCredentialKeyring } from "../secrets/file-key";
-import { keychainCredentialKeyring } from "../secrets/keychain-keyring";
+import { keychainCredentialKeyring, type CredentialKeychain } from "../secrets/keychain-keyring";
 import { CREDENTIAL_INVENTORY_FILE_NAME, SealedInventory } from "../secrets/inventory";
 import { SealedFileUnverifiedError, SealedStoreCorruptError } from "../secrets/sealed-document";
 import { runChild, startChild } from "../secrets/test-support/processes";
@@ -159,21 +160,20 @@ describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
     });
   });
 
-  it("is none, not pending, with no keys where the keychain cannot answer", () => {
+  it("is none, not pending, with no keys where the keychain cannot answer", async () => {
+    const keyring = keychainCredentialKeyring({
+      path: join(dir, "host-credentials.key"),
+      keychain: {
+        isAsyncEncryptionAvailable: async () => false,
+        encryptStringAsync: async () => Buffer.alloc(0),
+        decryptStringAsync: async () => ({ result: "" }),
+      },
+      platform: "darwin",
+    });
     const mirror = new WebCredentialMirror({
       db,
-      inventory: new SealedInventory({
-        path: inventoryPath,
-        keyring: keychainCredentialKeyring({
-          path: join(dir, "host-credentials.key"),
-          keychain: {
-            isEncryptionAvailable: () => false,
-            encryptString: () => Buffer.alloc(0),
-            decryptString: () => "",
-          },
-        }),
-        families: ["web-search"],
-      }),
+      inventory: new SealedInventory({ path: inventoryPath, keyring, families: ["web-search"] }),
+      keyring,
       onResult: () => {
         throw new Error("a log line that could not be written");
       },
@@ -181,7 +181,10 @@ describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
     expect(mirror.reconcile()).toMatchObject({ sealing: "none", written: false });
     expect(mirror.sealing()).toBe("none");
     writeSecret(db, BRAVE_SEARCH_KEY_SECRET, BRAVE, 1);
-    expect(mirror.reconcile()).toEqual({
+    // Under the lock the keychain is never asked: its key is not fetched yet.
+    expect(mirror.reconcile()).toEqual({ sealing: "pending", reason: "key-pending" });
+    // A person's save fetches it, off the lock; the keychain will not answer.
+    expect(await mirror.reconcileSoon({ person: true })).toEqual({
       sealing: "pending",
       reason: "locked",
       detail: "unavailable",
@@ -344,7 +347,10 @@ describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
     const lock = new CredentialLock(join(dir, "host-credentials.lock"));
     stores.brave.save("BSA-later");
     await lock.with(async () => {
-      expect(await mirror.reconcileSoon(30)).toEqual({ sealing: "pending", reason: "busy" });
+      expect(await mirror.reconcileSoon({ timeoutMs: 30 })).toEqual({
+        sealing: "pending",
+        reason: "busy",
+      });
     });
     expect(sealed()).toEqual({ brave: BRAVE });
   });
@@ -529,5 +535,244 @@ describe("the web keys' sealed mirror across processes", { timeout: 120_000 }, (
       expect(sealed()).toEqual(expected);
       expect(launch().settings.view().sealing).toBe("sealed");
     }
+  });
+});
+
+/** Electron's asynchronous safeStorage, counted, and able to stall like an unanswered prompt. */
+function asyncKeychain() {
+  const state = { calls: 0, stall: null as Promise<void> | null, stalled: false };
+  const call = async () => {
+    state.calls += 1;
+    if (state.stall !== null) {
+      state.stalled = true;
+      await state.stall;
+    }
+  };
+  const keychain: CredentialKeychain = {
+    isAsyncEncryptionAvailable: async () => {
+      await call();
+      return true;
+    },
+    encryptStringAsync: async (value) => {
+      await call();
+      return Buffer.from(`wrapped:${value}`);
+    },
+    decryptStringAsync: async (value) => {
+      await call();
+      return { result: value.toString().slice("wrapped:".length) };
+    },
+  };
+  return { keychain, state };
+}
+
+/** One launch's web stack over desktop's asynchronous keychain keyring. */
+function keychainLaunch(
+  keychain: CredentialKeychain,
+  options: { mayUnlockUnattended?: () => boolean; results?: WebMirrorResult[] } = {},
+) {
+  const keyring = keychainCredentialKeyring({
+    path: join(dir, "host-credentials.key"),
+    keychain,
+    inventoryPath,
+    platform: "darwin",
+  });
+  const mirror = new WebCredentialMirror({
+    db,
+    inventory: new SealedInventory({ path: inventoryPath, keyring, families: ["web-search"] }),
+    keyring,
+    ...(options.mayUnlockUnattended === undefined
+      ? {}
+      : { mayUnlockUnattended: options.mayUnlockUnattended }),
+    onResult: (result) => options.results?.push(result),
+  });
+  const stores = {
+    brave: new WebCredentialStore({ db, secretName: BRAVE_SEARCH_KEY_SECRET }),
+    exa: new WebCredentialStore({ db, secretName: EXA_SEARCH_KEY_SECRET }),
+  };
+  return { mirror, stores, settings: new WebAccessSettings({ db, credentials: stores, mirror }) };
+}
+
+/** What the sealed file holds, opened with a fresh asynchronous keyring. */
+async function sealedByKeychain(): Promise<Record<string, string>> {
+  const keyring = keychainCredentialKeyring({
+    path: join(dir, "host-credentials.key"),
+    keychain: asyncKeychain().keychain,
+    platform: "darwin",
+  });
+  await keyring.unlock!();
+  const inventory = new SealedInventory({ path: inventoryPath, keyring });
+  return Object.fromEntries(
+    inventory
+      .list("web-search")
+      .map((record) => [
+        record.selector["provider"],
+        inventory.get("web-search", record.selector)!.value as string,
+      ]),
+  );
+}
+
+describe("the web keys' mirror over an asynchronous keychain (VC-643)", { timeout: 60_000 }, () => {
+  it("asks the keychain unattended only once this launch already used it", async () => {
+    writeSecret(db, BRAVE_SEARCH_KEY_SECRET, BRAVE, 1);
+    const { keychain, state } = asyncKeychain();
+    let used = false;
+    const results: WebMirrorResult[] = [];
+    const { mirror, settings } = keychainLaunch(keychain, {
+      mayUnlockUnattended: () => used,
+      results,
+    });
+    // The launch reconcile: pending, and the keychain never asked.
+    expect(await settings.reconcileSealing()).toEqual({
+      sealing: "pending",
+      reason: "key-pending",
+    });
+    expect(state.calls).toBe(0);
+    expect(existsSync(inventoryPath)).toBe(false);
+    expect(describeWebSealing(results[0]!)).toBe(
+      "held in the profile database (legacy mode, not encrypted); sealed copy pending (key-pending)",
+    );
+    // Once the keychain answered something else this launch, it may.
+    used = true;
+    expect(await mirror.reconcileSoon()).toMatchObject({ sealing: "sealed", written: true });
+    expect(await sealedByKeychain()).toEqual({ brave: BRAVE });
+    // A host that never says so: never unattended.
+    const silent = keychainLaunch(asyncKeychain().keychain);
+    writeSecret(db, EXA_SEARCH_KEY_SECRET, EXA, 2);
+    expect(await silent.settings.reconcileSealing()).toEqual({
+      sealing: "pending",
+      reason: "key-pending",
+    });
+  });
+
+  it("seals after a person's save, fetching the key off the lock", async () => {
+    const { keychain, state } = asyncKeychain();
+    const results: WebMirrorResult[] = [];
+    const { settings } = keychainLaunch(keychain, { results });
+    // Saved; sealing pending while the key is fetched in the background.
+    expect(settings.saveKey("brave", BRAVE).sealing).toBe("pending");
+    expect(results[0]).toEqual({ sealing: "pending", reason: "key-pending" });
+    await vi.waitFor(() => expect(settings.view().sealing).toBe("sealed"));
+    expect(state.calls).toBe(2);
+    expect(await sealedByKeychain()).toEqual({ brave: BRAVE });
+    // Fetched once for the launch: the next save seals at once.
+    expect(settings.clearKey("brave").sealing).toBe("none");
+    expect(state.calls).toBe(2);
+  });
+
+  it("gives up on a key that stays pending, and on a keyring it cannot unlock", async () => {
+    writeSecret(db, BRAVE_SEARCH_KEY_SECRET, BRAVE, 1);
+    let unlocks = 0;
+    const stuck: CredentialKeyring = {
+      backend: "keychain",
+      probe() {},
+      resolve() {
+        throw new CredentialKeyPendingError();
+      },
+      active() {
+        throw new CredentialKeyPendingError();
+      },
+      async unlock() {
+        unlocks += 1;
+      },
+    };
+    const inventory = new SealedInventory({ path: inventoryPath, keyring: stuck });
+    const withUnlock = new WebCredentialMirror({ db, inventory, keyring: stuck });
+    expect(await withUnlock.reconcileSoon({ person: true })).toEqual({
+      sealing: "pending",
+      reason: "key-pending",
+    });
+    // Once, and once more for a key another process wrote meanwhile.
+    expect(unlocks).toBe(2);
+    const without = new WebCredentialMirror({ db, inventory });
+    expect(await without.reconcileSoon({ person: true })).toEqual({
+      sealing: "pending",
+      reason: "key-pending",
+    });
+    expect(unlocks).toBe(2);
+  });
+
+  it("says pending, naming the revision it sealed, when the source moved during the seal", async () => {
+    const results: WebMirrorResult[] = [];
+    const { mirror, stores } = launch({ results });
+    stores.brave.save(BRAVE);
+    const sealedRevision = revision();
+    // Another writer commits while the sealed file is being written.
+    faults.fsync = () => {
+      faults.fsync = null;
+      writeSecret(db, EXA_SEARCH_KEY_SECRET, EXA, 2);
+    };
+    expect(mirror.reconcile()).toEqual({
+      sealing: "pending",
+      reason: "moved",
+      revision: sealedRevision,
+    });
+    expect(describeWebSealing(results[0]!)).toBe(
+      "held in the profile database (legacy mode, not encrypted); sealed copy pending " +
+        `(moved: revision ${sealedRevision} sealed, the source has changed since)`,
+    );
+    expect(sealed()).toEqual({ brave: BRAVE });
+    expect(mirror.sealing()).toBe("pending");
+    // A restore's new lineage reads as moved too.
+    faults.fsync = () => {
+      faults.fsync = null;
+      db.exec("UPDATE web_credential_source SET source_id = lower(hex(randomblob(16)))");
+    };
+    stores.brave.save("BSA-again");
+    expect(mirror.reconcile()).toMatchObject({ sealing: "pending", reason: "moved" });
+    // The background run catches up.
+    expect(await mirror.reconcileSoon()).toMatchObject({ sealing: "sealed", keys: 2 });
+    expect(sealed()).toEqual({ brave: "BSA-again", exa: EXA });
+    expect(mirror.sealing()).toBe("sealed");
+  });
+
+  it("starts nothing after stop, cancels a busy retry, and abandons a key fetch", async () => {
+    // Stopped: no attempt, no lock, no keychain.
+    const { keychain, state } = asyncKeychain();
+    const results: WebMirrorResult[] = [];
+    const { mirror, settings } = keychainLaunch(keychain, {
+      mayUnlockUnattended: () => true,
+      results,
+    });
+    writeSecret(db, BRAVE_SEARCH_KEY_SECRET, BRAVE, 1);
+    // A fetch in flight, stalled at the keychain: abandoned, not awaited.
+    let release!: () => void;
+    state.stall = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = mirror.reconcileSoon();
+    // A second caller is owed one more run; stopping forgets it.
+    void mirror.reconcileSoon({ person: true });
+    await vi.waitFor(() => expect(state.stalled).toBe(true));
+    const asked = state.calls;
+    mirror.stop();
+    expect(await run).toEqual({ sealing: "pending", reason: "stopped" });
+    release();
+    await new Promise((settle) => setTimeout(settle, 20));
+    // Nothing the keychain answers afterwards starts another call or a seal.
+    expect(state.calls).toBe(asked);
+    expect(existsSync(inventoryPath)).toBe(false);
+    expect(mirror.reconcile()).toEqual({ sealing: "pending", reason: "stopped" });
+    expect(await mirror.reconcileSoon({ person: true })).toEqual({
+      sealing: "pending",
+      reason: "stopped",
+    });
+    // A save still commits; nothing reseals.
+    expect(settings.saveKey("exa", EXA).sealing).toBe("pending");
+    expect(readSecret(db, EXA_SEARCH_KEY_SECRET)).toBe(EXA);
+    expect(state.calls).toBe(asked);
+    expect(results.at(-1)).toEqual({ sealing: "pending", reason: "stopped" });
+
+    // A busy retry: its pause is cancelled at the stop, not waited out.
+    const busy = launch();
+    const lock = new CredentialLock(join(dir, "host-credentials.lock"));
+    await lock.with(async () => {
+      const retrying = busy.mirror.reconcileSoon({ timeoutMs: 60_000 });
+      await new Promise((settle) => setTimeout(settle, 30));
+      const stoppedAt = Date.now();
+      busy.settings.stopSealing();
+      expect(await retrying).toEqual({ sealing: "pending", reason: "stopped" });
+      expect(Date.now() - stoppedAt).toBeLessThan(50);
+    });
+    expect(existsSync(inventoryPath)).toBe(false);
   });
 });

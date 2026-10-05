@@ -32,7 +32,11 @@ import type {
   WebAccessSettingsView,
 } from "@volli/shared";
 import type { WebCredentialStore } from "./credential";
-import type { WebCredentialMirror, WebMirrorResult } from "./credential-mirror";
+import type {
+  WebCredentialMirror,
+  WebMirrorResult,
+  WebSealingPendingReason,
+} from "./credential-mirror";
 
 export type { KeyedWebAccessProvider, WebAccessProvider, WebAccessSettingsView };
 
@@ -100,6 +104,13 @@ export interface WebAccessSettingsOptions {
   mirror?: WebCredentialMirror | null;
   now?: () => number;
 }
+
+/** Why a save's reseal is finished in the background rather than left pending. */
+const RESEAL_LATER: ReadonlySet<WebSealingPendingReason> = new Set<WebSealingPendingReason>([
+  "busy",
+  "key-pending",
+  "moved",
+]);
 
 export class WebAccessSettings {
   readonly #db: Database.Database;
@@ -191,14 +202,25 @@ export class WebAccessSettings {
   }
 
   /**
-   * One attempt now, never a wait on another process (this runs on Electron's
-   * main thread); a busy lock is retried asynchronously, in the background.
+   * Stops sealing for the rest of this launch (an accepted quit): see
+   * {@link WebCredentialMirror.stop}. Saves and clears still commit to the
+   * database; nothing reseals after this.
+   */
+  stopSealing(): void {
+    this.#mirror?.stop();
+  }
+
+  /**
+   * One attempt now, never a wait on another process or the keychain (this
+   * runs on Electron's main thread). A busy lock, a key the keychain has not
+   * given yet, or a source that moved while sealing is finished in the
+   * background: a person saved or cleared, so the keychain may be asked.
    */
   #reseal(): void {
     if (this.#mirror === null) return;
     const result = this.#mirror.reconcile();
-    if (result.sealing === "pending" && result.reason === "busy") {
-      void this.#mirror.reconcileSoon();
+    if (result.sealing === "pending" && RESEAL_LATER.has(result.reason)) {
+      void this.#mirror.reconcileSoon({ person: true });
     }
   }
 

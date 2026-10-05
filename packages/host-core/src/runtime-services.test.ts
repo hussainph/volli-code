@@ -69,6 +69,7 @@ describe("staged host runtime services", () => {
     const dir = testDb.dbPath.replace(/[^/]+$/, "");
     const web = services.createWebAccess({
       keyring: fileCredentialKeyring({ path: `${dir}session-secrets.key` }),
+      mayUnlockUnattended: () => false,
       onResult: (result) => results.push(result),
     })!;
     expect(web.saveKey("exa", "exa-runtime-services-key").sealing).toBe("sealed");

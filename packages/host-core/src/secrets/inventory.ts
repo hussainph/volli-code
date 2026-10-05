@@ -40,7 +40,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import type { CredentialKeyring } from "../ports/credential-keyring";
+import { CredentialKeyPendingError, type CredentialKeyring } from "../ports/credential-keyring";
 import { SecretKeyUnavailableError, isSecretKeyUnavailable } from "../ports/secret-key";
 import {
   CREDENTIAL_FAMILIES,
@@ -443,8 +443,9 @@ export class SealedInventory {
 
   /**
    * The inventory, fresh, with the status it was read under; `null` while
-   * unavailable. A busy lock answers `busy` for this read only; anything else
-   * that stops the open is remembered until unlock.
+   * unavailable. A busy lock answers `busy`, and a key not fetched yet
+   * `key-pending`, for this read only; anything else that stops the open is
+   * remembered until unlock.
    */
   #read(): { inventory: Inventory | null; status: CredentialStatus } {
     if (this.#failure !== null) return { inventory: null, status: this.#status! };
@@ -455,6 +456,10 @@ export class SealedInventory {
     } catch (error) {
       if (error instanceof CredentialLockBusyError) {
         return { inventory: null, status: credentialsBusy(this.#families) };
+      }
+      // A key not fetched yet is for this read alone, like a busy lock.
+      if (error instanceof CredentialKeyPendingError) {
+        return { inventory: null, status: credentialStatusFor(error, this.#families) };
       }
       this.#fail(error);
       return { inventory: null, status: this.#status! };

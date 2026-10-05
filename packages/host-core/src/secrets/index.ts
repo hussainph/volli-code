@@ -14,10 +14,11 @@ export {
   type SecretKeyPort,
   type SecretKeyRefusal,
 } from "../ports/secret-key";
-export type {
-  CredentialKey,
-  CredentialKeyBackend,
-  CredentialKeyring,
+export {
+  CredentialKeyPendingError,
+  type CredentialKey,
+  type CredentialKeyBackend,
+  type CredentialKeyring,
 } from "../ports/credential-keyring";
 export {
   CREDENTIAL_FAMILIES,

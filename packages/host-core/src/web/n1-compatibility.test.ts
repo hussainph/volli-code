@@ -64,8 +64,9 @@ const MAIN_BLOBS: Readonly<Record<string, string>> = {
 const CHANGED_BY_VC_643 = new Set([
   ...Object.keys(MAIN_BLOBS),
   "db/web-credential-migration.ts",
-  // Type-only: erased, so never loaded at run time either way.
+  // Not on N-1's import graph: main imports only its types, which erase.
   "ports/credential-keyring.ts",
+  "ports/index.ts",
   "runtime-services.ts",
   "secrets/keychain-keyring.ts",
   "web/credential-mirror.ts",
@@ -112,12 +113,23 @@ function n1(dbPath: string, steps: unknown[]): Promise<N1Run> {
   });
 }
 
-/** Electron's safeStorage, as the desktop keyring sees it: a reversible stand-in. */
+/** Electron's safeStorage (its asynchronous API), as the desktop keyring sees it: a reversible stand-in. */
 const keychain: CredentialKeychain = {
-  isEncryptionAvailable: () => true,
-  encryptString: (value) => Buffer.from(`wrapped:${value}`),
-  decryptString: (value) => value.toString().slice("wrapped:".length),
+  isAsyncEncryptionAvailable: async () => true,
+  encryptStringAsync: async (value) => Buffer.from(`wrapped:${value}`),
+  decryptStringAsync: async (value) => ({ result: value.toString().slice("wrapped:".length) }),
 };
+
+/** The desktop keyring over `profile`, its key fetched, as a person's save leaves it. */
+async function desktopKeyring(profile: string) {
+  const keyring = keychainCredentialKeyring({
+    path: join(profile, CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+    keychain,
+    platform: "darwin",
+  });
+  await keyring.unlock!();
+  return keyring;
+}
 
 let root: string;
 let dbPath: string;
@@ -143,17 +155,16 @@ function openDb(path = dbPath): Database.Database {
 }
 
 /** This build's web stack over `profile`, sealed with the desktop keychain keyring. */
-function current(db: Database.Database, profile = root) {
+async function current(db: Database.Database, profile = root) {
+  const keyring = await desktopKeyring(profile);
   const mirror = new WebCredentialMirror({
     db,
     inventory: new SealedInventory({
       path: join(profile, CREDENTIAL_INVENTORY_FILE_NAME),
-      keyring: keychainCredentialKeyring({
-        path: join(profile, CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-        keychain,
-      }),
+      keyring,
       families: ["web-search"],
     }),
+    keyring,
   });
   const settings = new WebAccessSettings({
     db,
@@ -167,13 +178,10 @@ function current(db: Database.Database, profile = root) {
 }
 
 /** The sealed mirror's web keys, opened fresh: provider → value. */
-function sealed(profile = root): Record<string, string> {
+async function sealed(profile = root): Promise<Record<string, string>> {
   const inventory = new SealedInventory({
     path: join(profile, CREDENTIAL_INVENTORY_FILE_NAME),
-    keyring: keychainCredentialKeyring({
-      path: join(profile, CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-      keychain,
-    }),
+    keyring: await desktopKeyring(profile),
   });
   return Object.fromEntries(
     inventory
@@ -213,8 +221,8 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
 
   it("lets N-1 open, save, clear and attach on a mirrored profile; this build reconciles", async () => {
     let db = openDb();
-    current(db).settings.saveKey("brave", BRAVE);
-    expect(sealed()).toEqual({ brave: BRAVE });
+    (await current(db)).settings.saveKey("brave", BRAVE);
+    expect(await sealed()).toEqual({ brave: BRAVE });
     const before = sourceRevision(db);
     db.close();
 
@@ -245,12 +253,12 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_HEAD);
     expect(readMinReaderVersion(db)).toBe(58);
     expect(sourceRevision(db)).toBeGreaterThan(before);
-    const { settings, mirror } = current(db);
+    const { settings, mirror } = await current(db);
     expect(settings.view().sealing).toBe("pending");
     // The stale mirror still holds the key N-1 cleared until this build reconciles.
-    expect(sealed()).toEqual({ brave: BRAVE });
+    expect(await sealed()).toEqual({ brave: BRAVE });
     expect(mirror.reconcile()).toMatchObject({ sealing: "sealed", written: true, keys: 1 });
-    expect(sealed()).toEqual({ exa: EXA });
+    expect(await sealed()).toEqual({ exa: EXA });
     expect(settings.resolve()).toEqual({ configured: true, provider: "exa", apiKey: EXA });
     expect(settings.view()).toMatchObject({
       keys: { brave: "absent", exa: "present" },
@@ -261,8 +269,8 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
 
   it("lets N-1 bundle a mirrored profile without keys or step-E state, and restore it", async () => {
     let db = openDb();
-    current(db).settings.saveKey("brave", BRAVE);
-    current(db).settings.saveKey("exa", EXA);
+    (await current(db)).settings.saveKey("brave", BRAVE);
+    (await current(db)).settings.saveKey("exa", EXA);
     db.close();
     const bundlePath = join(root, "n1.volli-backup");
     const made = await n1(dbPath, [{ kind: "bundle", profileRoot: root, out: bundlePath }]);
@@ -301,16 +309,16 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
       { head: 58, userVersion: 58, floor: 58 },
       { configured: false, carriesExpected: false },
     ]);
-    expect(sealed(target)).toEqual({ brave: BRAVE, exa: EXA });
+    expect(await sealed(target)).toEqual({ brave: BRAVE, exa: EXA });
 
     // This build upgrades N-1's restored database straight from pre-E and
     // reconciles: the restored database has no keys, so neither has the
     // mirror, and nothing stale is merged back into `secrets`.
     db = openDb(targetDb);
     expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_HEAD);
-    const { settings, mirror } = current(db, target);
+    const { settings, mirror } = await current(db, target);
     expect(mirror.reconcile()).toMatchObject({ sealing: "none", written: true, keys: 0 });
-    expect(sealed(target)).toEqual({});
+    expect(await sealed(target)).toEqual({});
     expect(settings.view()).toMatchObject({
       keys: { brave: "absent", exa: "absent" },
       sealing: "none",
@@ -333,14 +341,17 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     expect(ours.ok).toBe(true);
     db = openDb(join(other, "volli.db"));
     expect(sourceRevision(db)).toBe(0);
-    expect(current(db, other).mirror.reconcile()).toMatchObject({ sealing: "none", keys: 0 });
-    expect(sealed(other)).toEqual({});
+    expect((await current(db, other)).mirror.reconcile()).toMatchObject({
+      sealing: "none",
+      keys: 0,
+    });
+    expect(await sealed(other)).toEqual({});
     db.close();
   });
 
   it("refuses, cleanly, a bundle this build made: N-1 knows no schema 59", async () => {
     const db = openDb();
-    current(db).settings.saveKey("brave", BRAVE);
+    (await current(db)).settings.saveKey("brave", BRAVE);
     db.close();
     // This is the standing rule for every migration (VC-602), not new here.
     const target = mkdtempSync(join(tmpdir(), "volli-web-n1-refuse-"));

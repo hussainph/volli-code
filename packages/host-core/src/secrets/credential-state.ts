@@ -45,6 +45,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, openSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+import { CredentialKeyPendingError } from "../ports/credential-keyring";
 import { isSecretKeyUnavailable, type SecretKeyRefusal } from "../ports/secret-key";
 import type { CredentialFamily } from "./credential-families";
 
@@ -72,6 +73,12 @@ export type CredentialReason =
    * Transient: reported for that one read, never remembered, never reset.
    */
   | "busy"
+  /**
+   * The key comes from an asynchronous backend (desktop's keychain, VC-643)
+   * and has not been fetched yet this launch. Transient, like `busy`: never
+   * remembered, never reset; fetching it is the way out.
+   */
+  | "key-pending"
   /**
    * The credential lock file cannot be used: a symlink, not a regular file,
    * another user's, or not lockable (VC-642). The store it guards may be
@@ -148,6 +155,7 @@ export function credentialsResettable(status: CredentialStatus): boolean {
     credentialsUnavailable(status) &&
     status.state !== "refused" &&
     status.reason !== "busy" &&
+    status.reason !== "key-pending" &&
     status.reason !== "lock-unusable"
   );
 }
@@ -183,6 +191,9 @@ export function credentialStatusFor(
   }
   if (error instanceof SealedStoreNewerError) {
     return { state: "locked", reason: "newer-format", unavailable: kinds };
+  }
+  if (error instanceof CredentialKeyPendingError) {
+    return { state: "locked", reason: "key-pending", unavailable: kinds };
   }
   return { state: "corrupt", reason: null, unavailable: kinds };
 }

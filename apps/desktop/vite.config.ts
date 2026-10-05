@@ -651,6 +651,10 @@ export default defineConfig(({ mode }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
+        // When the web keys' sealed mirror reconciles, and that an accepted quit
+        // stops it before it can start keychain work (VC-643). Every branch is
+        // a rule about teardown nobody watches.
+        "**/src/main/web/sealing-lifecycle.ts",
         "**/src/main/update-ipc.ts",
         // The host deadline is still covered by desktop's quit/socket integration tests.
         "**/packages/host-core/src/shutdown-deadline.ts",

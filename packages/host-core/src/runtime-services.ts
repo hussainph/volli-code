@@ -35,6 +35,12 @@ export interface WebKeySealingOptions {
    * mode, reported as sealing pending.
    */
   keyring?: CredentialKeyring | null;
+  /**
+   * Whether the unattended launch reconcile may fetch an asynchronous
+   * keyring's key (desktop: only once this launch already used the keychain).
+   * A person's save or clear always may. Absent: never unattended.
+   */
+  mayUnlockUnattended?: () => boolean;
   /** Each reconciliation's outcome: counts and reason codes, never a value. */
   onResult?: (result: WebMirrorResult) => void;
 }
@@ -112,6 +118,10 @@ export function createHostRuntimeServices(
                       keyring: sealing.keyring,
                       families: ["web-search"],
                     }),
+              keyring: sealing.keyring ?? null,
+              ...(sealing.mayUnlockUnattended === undefined
+                ? {}
+                : { mayUnlockUnattended: sealing.mayUnlockUnattended }),
               ...(sealing.onResult === undefined ? {} : { onResult: sealing.onResult }),
             }),
           }),
