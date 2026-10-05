@@ -1,29 +1,33 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname } from "node:path";
 import {
   isSecretKeyUnavailable,
   SecretKeyUnavailableError,
   type SecretKeyPort,
 } from "../ports/secret-key";
-import { credentialLockFor, CredentialLockBusyError, type CredentialLock } from "./credential-lock";
 import {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
   CREDENTIALS_READY,
   credentialStatusFor,
-  credentialsBusy,
-  CredentialLockUnusableError,
-  credentialsResettable,
-  SealedStoreNewerError,
+  credentialsUnavailable,
+  SealedStoreUnreadableError,
   type CredentialStatus,
   type SealedStoreArchive,
 } from "./credential-state";
 import { pendingNoticeSecretStart } from "./pending-notice-secret";
-import {
-  isSealedOpenFailure,
-  SealedDocument,
-  type SealedCodec,
-  type SealedDocumentOptions,
-} from "./sealed-document";
 
 import {
   payloadSecretSpans,
@@ -188,49 +192,23 @@ export interface SecretStoreReset {
   readonly status: CredentialStatus;
 }
 
-export interface SecretStoreOptions {
-  /** Defaults to `host-credentials.lock` beside the store (VC-642). */
-  readonly lock?: CredentialLock;
-  /** Lock wait and crash-test hooks; see {@link SealedDocumentOptions}. */
-  readonly document?: SealedDocumentOptions;
-}
-
-/** What a listing surface shows: one read's records and the status they were read under. */
-export interface SecretSnapshot {
-  readonly secrets: SecretMetadata[];
-  readonly credentials: CredentialStatus;
-}
-
 /**
  * Main-process-only credential owner. Scope is explicit person intent supplied
  * by the caller; this class never infers or widens it. Session values and the
  * redaction history live only for this store's lifetime (one application launch).
  * Persistent mutations commit on disk before changing the in-memory view.
  *
- * Persistent records live in the sealed file through the typed credential
- * module's engine (VC-642, `sealed-document.ts`), in the same file, envelope
- * and `{ version: 1, secrets }` payload as before, so an older build opens
- * what this one writes. Desktop, hostd and `volli-hostd credentials` may
- * share the file: every read-for-use (listing, availability, injection,
- * status) and every change takes the credential lock and reloads, and every
- * change applies only its own record to what it reloaded. So a secret revoked
- * in another process is not injected here by the next command, a secret saved
- * there is available here, and neither overwrites the other. Each newly seen
- * value joins the redaction history before it can be injected. A key removed
- * or replaced while the host runs is noticed by the next read (headless
- * key file; a keychain is not asked again, since that may prompt).
- *
  * A sealed file this store cannot open never throws from a read (VC-641,
  * `credential-state.ts`): listing, availability, injection and redaction
  * carry on with the Session-scoped values in memory, and {@link status} says
  * why stored ones are missing. Persistent saves are refused with the original
  * refusal until {@link unlock} or {@link reset}. The failure is remembered, so
- * a locked keychain is asked once, not by every read. Another process holding
- * the lock past the wait is momentary: stored records are unavailable to that
- * read, injection and saves say so, and nothing is remembered.
+ * a locked keychain is asked once, not by every read.
  */
 export class SecretStore {
-  readonly #document: SealedDocument<SecretRecord[]>;
+  readonly #path: string;
+  readonly #codec: SecretKeyPort;
+  #persistent: SecretRecord[] | null = null;
   #status: CredentialStatus | null = null;
   #failure: Error | null = null;
   #sessions: SecretRecord[] = [];
@@ -240,18 +218,15 @@ export class SecretStore {
    * `codec` is the host's secret-key adapter: the keychain on desktop, the key
    * file on a headless host (see `ports/secret-key.ts`).
    */
-  constructor(path: string, codec: SecretKeyPort, options: SecretStoreOptions = {}) {
-    this.#document = new SealedDocument(
-      path,
-      sessionSecretCodec(codec),
-      options.lock ?? credentialLockFor(path),
-      options.document,
-    );
+  constructor(path: string, codec: SecretKeyPort) {
+    this.#path = path;
+    this.#codec = codec;
   }
 
   /** Replaces the same name in the same scope, retaining its stable id. */
   put(input: SecretInput): SecretMetadata {
     validate(input);
+    const records = input.scope === "session" ? this.#sessions : this.#writable();
     const record: SecretRecord = {
       id: randomUUID(),
       name: input.name,
@@ -263,38 +238,23 @@ export class SecretStore {
         : {}),
       lastUsedAt: null,
     };
-    const replace = (records: SecretRecord[]): SecretRecord[] => {
-      const previous = records.find((item) => sameSlot(item, record));
-      if (previous) record.id = previous.id;
-      return [...records.filter((item) => !sameSlot(item, record)), record];
-    };
-    if (record.scope === "session") this.#sessions = replace(this.#sessions);
-    else this.#change(replace);
+    const previous = records.find((item) => sameSlot(item, record));
+    if (previous) record.id = previous.id;
+    const next = [...records.filter((item) => !sameSlot(item, record)), record];
+    if (record.scope === "session") this.#sessions = next;
+    else this.#persist(next);
     this.#history.set(record.value, record.name);
     return metadata(record);
   }
 
   /** Omit the filter to manage all scopes; a project filter includes global secrets. */
   list(projectId?: string): SecretMetadata[] {
-    return this.snapshot(projectId).secrets;
-  }
-
-  /**
-   * The listing and the status it was read under, from one read, so they
-   * never disagree: while another process holds the lock, the stored
-   * secrets are missing and the status says `busy`, never a stale `ready`.
-   */
-  snapshot(projectId?: string): SecretSnapshot {
-    const { records, status } = this.#read();
-    return {
-      secrets: [...records, ...this.#sessions]
-        .filter(
-          (item) =>
-            projectId === undefined || item.scope === "always" || item.projectId === projectId,
-        )
-        .map(metadata),
-      credentials: status,
-    };
+    return [...this.#readable(), ...this.#sessions]
+      .filter(
+        (item) =>
+          projectId === undefined || item.scope === "always" || item.projectId === projectId,
+      )
+      .map(metadata);
   }
 
   revoke(id: string): void {
@@ -303,27 +263,19 @@ export class SecretStore {
       return;
     }
     // A locked store lists no stored id, so there is nothing of it to revoke.
-    if (this.#failure !== null) return;
-    try {
-      this.#change((records) =>
-        records.some((item) => item.id === id) ? records.filter((item) => item.id !== id) : null,
-      );
-    } catch (error) {
-      // Found locked just now: the same as above. Anything else reaches the caller.
-      if (!isSealedOpenFailure(error)) throw error;
+    const records = this.#readable();
+    if (records.some((item) => item.id === id)) {
+      this.#persist(records.filter((item) => item.id !== id));
     }
   }
 
   /** Availability is metadata-only and never updates last use. */
   available(name: string, sessionId: string, projectId: string): boolean {
-    return this.#select(this.#read().records, sessionId, projectId).has(name);
+    return this.#select(sessionId, projectId).has(name);
   }
 
-  #select(
-    persistent: readonly SecretRecord[],
-    sessionId: string,
-    projectId: string,
-  ): Map<string, SecretRecord> {
+  #select(sessionId: string, projectId: string): Map<string, SecretRecord> {
+    const persistent = this.#readable();
     const selected = new Map<string, SecretRecord>();
     for (const scope of ["always", "project", "session"] as const) {
       for (const item of [...persistent, ...this.#sessions]) {
@@ -339,38 +291,19 @@ export class SecretStore {
     return selected;
   }
 
-  /**
-   * Nearest scope wins: session > project > always. Only injected values
-   * count as used. Reads what is stored now, under the lock, and records last
-   * use in the same commit, so a revocation anywhere is honoured by the next
-   * command. Locked stored credentials inject nothing. It never waits: another
-   * process holding the lock at that instant is {@link CredentialLockBusyError}
-   * at once, rather than a stalled thread or a command run without a value it
-   * was given.
-   */
+  /** Nearest scope wins: session > project > always. Only injected values count as used. */
   environment(sessionId: string, projectId: string): Record<string, string> {
-    const at = Date.now();
-    let persistent: readonly SecretRecord[] = [];
-    if (this.#failure === null) {
-      try {
-        this.#change((records) => {
-          persistent = records;
-          const used = new Set(
-            [...this.#select(records, sessionId, projectId).values()].map((item) => item.id),
-          );
-          if (!records.some((item) => used.has(item.id))) return null;
-          persistent = records.map((item) =>
-            used.has(item.id) ? Object.assign({}, item, { lastUsedAt: at }) : item,
-          );
-          return [...persistent];
-        });
-      } catch (error) {
-        if (!isSealedOpenFailure(error)) throw error;
-        persistent = [];
-      }
-    }
-    const selected = this.#select(persistent, sessionId, projectId);
+    const selected = this.#select(sessionId, projectId);
+    const persistent = this.#readable();
     const used = new Set([...selected.values()].map((item) => item.id));
+    const at = Date.now();
+    if (persistent.some((item) => used.has(item.id))) {
+      this.#persist(
+        persistent.map((item) =>
+          used.has(item.id) ? Object.assign({}, item, { lastUsedAt: at }) : item,
+        ),
+      );
+    }
     this.#sessions = this.#sessions.map((item) =>
       used.has(item.id) ? Object.assign({}, item, { lastUsedAt: at }) : item,
     );
@@ -379,7 +312,7 @@ export class SecretStore {
 
   /** Includes revoked/replaced values that may remain in process output this launch. */
   hasValues(): boolean {
-    this.#settle();
+    this.#readable();
     return this.#history.size > 0;
   }
 
@@ -394,7 +327,7 @@ export class SecretStore {
   }
 
   #redact(text: string, partial: boolean): string {
-    this.#settle();
+    this.#readable();
     if (text.length === 0 || (!partial && this.#history.size === 0)) return text;
     // Match source text only. A large stored credential must not become a
     // native regex (which can exceed the engine's compilation bound).
@@ -465,27 +398,22 @@ export class SecretStore {
   }
 
   /**
-   * Where stored credentials stand now, reading them again under the lock
-   * unless they are already known to be unavailable. Metadata only: no
-   * value, key byte or path. Another process holding the lock at that
-   * instant is `locked` (`busy`) for this answer alone.
+   * Where stored credentials stand, settling it now if nothing has asked yet.
+   * Metadata only: no value, key byte or path.
    */
   status(): CredentialStatus {
-    return this.#read().status;
+    this.#open();
+    return this.#status!;
   }
 
   /**
-   * The sentence behind a status that is not `ready` or `empty`, for an
-   * operator's log: a key or lock-file refusal names the fix and may name the
-   * file's path, never a key byte or a secret; a busy lock says so. `null`
-   * otherwise, a corrupt store included.
+   * The refusal sentence behind a `locked` or `refused` key, for an
+   * operator's log: it names the fix and may name the key file's path, never
+   * a key byte or a secret. `null` otherwise, a corrupt store included.
    */
   problem(): string | null {
-    if (this.status().reason === "busy") return new CredentialLockBusyError().message;
-    const failure = this.#failure;
-    return isSecretKeyUnavailable(failure) || failure instanceof CredentialLockUnusableError
-      ? failure.message
-      : null;
+    this.#open();
+    return isSecretKeyUnavailable(this.#failure) ? this.#failure.message : null;
   }
 
   /**
@@ -507,36 +435,26 @@ export class SecretStore {
    * starts empty, ready for the secrets to be entered again. Only for
    * `locked` or `corrupt`: open stored credentials are revoked instead, and a
    * `refused` key configuration is fixed instead, since moving a store that
-   * key may well open would not help. Person or local-admin intent only. The
-   * move happens under the credential lock.
+   * key may well open would not help. Person or local-admin intent only.
    */
   reset(now: Date = new Date()): SecretStoreReset {
     const status = this.status();
-    if (!credentialsResettable(status)) {
-      if (status.state === "refused") {
-        throw new Error(
-          "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
-        );
-      }
-      if (status.reason === "busy") throw new CredentialLockBusyError();
-      if (status.reason === "lock-unusable") {
-        throw new Error(
-          "Saved secrets are unused because their lock file cannot be used. Fix the lock " +
-            "file; a reset cannot, and the secrets may be fine.",
-        );
-      }
+    if (status.state === "refused") {
+      throw new Error(
+        "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+      );
+    }
+    if (!credentialsUnavailable(status)) {
       throw new Error("Saved secrets are not locked, so there is nothing to reset.");
     }
     let archived: SealedStoreArchive | null;
     try {
-      archived = this.#document.lock.withSync(() => archiveSealedStore(this.#document.path, now));
-    } catch (error) {
-      if (error instanceof CredentialLockBusyError) throw error;
+      archived = archiveSealedStore(this.#path, now);
+    } catch {
       // Never a path or a filesystem error's text.
       // eslint-disable-next-line preserve-caught-error
       throw new Error("Could not set the saved secrets aside.");
     }
-    this.#document.forget();
     this.#failure = null;
     this.#status = null;
     return {
@@ -546,120 +464,155 @@ export class SecretStore {
     };
   }
 
-  /** Settles the status the first time stored values matter (redaction). */
-  #settle(): void {
-    if (this.#status === null) this.#read();
+  #requireEncryption(): void {
+    if (!this.#codec.isEncryptionAvailable()) throw new Error("Secret encryption is unavailable.");
   }
 
-  /**
-   * Stored records for a read, fresh from disk, with the status they were
-   * read under: none while they are unavailable. A busy lock is `busy` for
-   * this read alone, never remembered; anything else that stops the open is
-   * remembered until unlock.
-   */
-  #read(): { records: SecretRecord[]; status: CredentialStatus } {
-    if (this.#failure !== null) return { records: [], status: this.#status! };
-    try {
-      const records = this.#adopt(this.#document.read());
-      return { records, status: this.#status! };
-    } catch (error) {
-      if (error instanceof CredentialLockBusyError) {
-        return { records: [], status: credentialsBusy() };
-      }
-      this.#fail(error);
-      return { records: [], status: this.#status! };
-    }
+  /** Stored records for a read: none while they are unavailable. */
+  #readable(): SecretRecord[] {
+    return this.#open() ?? [];
   }
 
-  /**
-   * Under the lock: reloads stored records and commits what `change` answers
-   * (`null`: nothing to commit). A locked store refuses with the reason it
-   * is locked; finding it locked now remembers that.
-   */
-  #change(change: (records: SecretRecord[]) => SecretRecord[] | null): void {
-    if (this.#failure !== null) throw this.#failure;
-    let written: boolean;
-    try {
-      ({ written } = this.#document.update((current) => change(this.#adopt(current))));
-    } catch (error) {
-      if (isSealedOpenFailure(error)) this.#fail(error);
-      throw error;
-    }
-    if (written) this.#status = CREDENTIALS_READY;
-  }
-
-  /** Takes what was just read: every value joins the redaction history before any use. */
-  #adopt(current: SecretRecord[] | null): SecretRecord[] {
-    const records = current ?? [];
-    for (const item of records) this.#history.set(item.value, item.name);
-    this.#status = current === null ? CREDENTIALS_EMPTY : CREDENTIALS_READY;
+  /** Stored records to change: a locked store refuses with the reason it is locked. */
+  #writable(): SecretRecord[] {
+    const records = this.#open();
+    if (records === null) throw this.#failure!;
     return records;
   }
 
-  #fail(error: unknown): void {
-    this.#failure = error as Error;
-    this.#status = credentialStatusFor(error);
+  /** Settles the status once per unlock; `null` while stored credentials are unavailable. */
+  #open(): SecretRecord[] | null {
+    if (this.#persistent !== null) return this.#persistent;
+    if (this.#failure !== null) return null;
+    try {
+      this.#codec.probe?.();
+      const records = this.#load();
+      this.#persistent = records ?? [];
+      this.#status = records === null ? CREDENTIALS_EMPTY : CREDENTIALS_READY;
+      return this.#persistent;
+    } catch (error) {
+      this.#failure = error as Error;
+      this.#status = credentialStatusFor(error);
+      return null;
+    }
   }
-}
 
-/**
- * The legacy Session-secrets file through a {@link SecretKeyPort}: the
- * port's envelope (`VSF1` or `VSC1`) around `{ version: 1, secrets }`,
- * byte-for-byte the format main has always written, so an older build reads
- * and writes this file as before. A newer `version` is left alone
- * (`newer-format`), never rewritten.
- */
-function sessionSecretCodec(port: SecretKeyPort): SealedCodec<SecretRecord[]> {
-  return {
-    probe: () => port.probe?.(),
-    open(bytes) {
-      if (!port.isEncryptionAvailable()) {
+  /** The sealed records, `null` when there is no sealed file, or a sanitized throw. */
+  #load(): SecretRecord[] | null {
+    let fd: number;
+    try {
+      fd = openSync(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      // Credential storage errors must not retain paths, values, or a nested cause.
+      throw new SealedStoreUnreadableError();
+    }
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error();
+      fchmodSync(fd, 0o600);
+      if (!this.#codec.isEncryptionAvailable()) {
         throw new SecretKeyUnavailableError(
           "unavailable",
           "Secret encryption is unavailable here, so saved secrets stay locked.",
         );
       }
-      return parseSecrets(port.decryptString(bytes));
-    },
-    seal(records) {
-      if (!port.isEncryptionAvailable()) throw new Error("Secret encryption is unavailable.");
-      return port.encryptString(JSON.stringify({ version: 1, secrets: records }));
-    },
-  };
-}
-
-function parseSecrets(text: string): SecretRecord[] {
-  const parsed: unknown = JSON.parse(text);
-  if (parsed === null || typeof parsed !== "object") throw new Error();
-  const file = parsed as { version?: unknown; secrets?: unknown };
-  if (typeof file.version === "number" && file.version > 1) throw new SealedStoreNewerError();
-  if (file.version !== 1 || !Array.isArray(file.secrets)) throw new Error();
-  const records: SecretRecord[] = [];
-  for (const candidate of file.secrets) {
-    if (candidate === null || typeof candidate !== "object") throw new Error();
-    const item = candidate as SecretRecord;
-    validate(item);
-    if (
-      !validId(item.id) ||
-      item.scope === "session" ||
-      item.sessionId !== undefined ||
-      (item.scope === "always" && item.projectId !== undefined) ||
-      (item.lastUsedAt !== null &&
-        (typeof item.lastUsedAt !== "number" ||
-          !Number.isFinite(item.lastUsedAt) ||
-          item.lastUsedAt < 0)) ||
-      records.some((previous) => previous.id === item.id || sameSlot(previous, item))
-    )
-      throw new Error();
-    // Whitelist fields: no unknown decrypted property can leak through list().
-    records.push({
-      id: item.id,
-      name: item.name,
-      value: item.value,
-      scope: item.scope,
-      ...(item.projectId !== undefined ? { projectId: item.projectId } : {}),
-      lastUsedAt: item.lastUsedAt,
-    });
+      const parsed: unknown = JSON.parse(this.#codec.decryptString(readFileSync(fd)));
+      if (parsed === null || typeof parsed !== "object") throw new Error();
+      const file = parsed as { version?: unknown; secrets?: unknown };
+      if (file.version !== 1 || !Array.isArray(file.secrets)) throw new Error();
+      const records: SecretRecord[] = [];
+      for (const candidate of file.secrets) {
+        if (candidate === null || typeof candidate !== "object") throw new Error();
+        const item = candidate as SecretRecord;
+        validate(item);
+        if (
+          !validId(item.id) ||
+          item.scope === "session" ||
+          item.sessionId !== undefined ||
+          (item.scope === "always" && item.projectId !== undefined) ||
+          (item.lastUsedAt !== null &&
+            (typeof item.lastUsedAt !== "number" ||
+              !Number.isFinite(item.lastUsedAt) ||
+              item.lastUsedAt < 0)) ||
+          records.some((previous) => previous.id === item.id || sameSlot(previous, item))
+        )
+          throw new Error();
+        // Whitelist fields: no unknown decrypted property can leak through list().
+        records.push({
+          id: item.id,
+          name: item.name,
+          value: item.value,
+          scope: item.scope,
+          ...(item.projectId !== undefined ? { projectId: item.projectId } : {}),
+          lastUsedAt: item.lastUsedAt,
+        });
+      }
+      for (const item of records) this.#history.set(item.value, item.name);
+      return records;
+    } catch (error) {
+      // A key a person must fix says how (its message never holds key bytes).
+      if (isSecretKeyUnavailable(error)) throw error;
+      // Never include the codec, parser or filesystem error, its cause, or the path.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error("Could not decrypt secret storage.");
+    } finally {
+      try {
+        closeSync(fd);
+      } catch {
+        // Closing the read descriptor is best-effort; never expose a cleanup error.
+      }
+    }
   }
-  return records;
+
+  #persist(records: SecretRecord[]): void {
+    const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    let fd: number | undefined;
+    try {
+      this.#requireEncryption();
+      const encrypted = this.#codec.encryptString(JSON.stringify({ version: 1, secrets: records }));
+      if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new Error();
+      fd = openSync(
+        temporary,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      );
+      writeFileSync(fd, encrypted);
+      fchmodSync(fd, 0o600);
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      renameSync(temporary, this.#path);
+    } catch (error) {
+      if (isSecretKeyUnavailable(error)) throw error;
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error("Could not persist encrypted secrets.");
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          /* Preserve the sanitized operation error. */
+        }
+      }
+      // Cleanup is best-effort; never let an underlying error disclose data.
+      try {
+        rmSync(temporary, { force: true });
+      } catch {
+        /* Nothing was committed. */
+      }
+    }
+    this.#persistent = records;
+    this.#status = CREDENTIALS_READY;
+    // Some filesystems cannot sync directories. The file itself is already synced.
+    try {
+      const directory = openSync(dirname(this.#path), "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    } catch {
+      /* Atomic rename has already committed. */
+    }
+  }
 }

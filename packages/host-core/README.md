@@ -85,6 +85,13 @@ VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
 from desktop, and the headless file-key adapter. The secret-key port it seals
 through is `src/ports/secret-key.ts`.
 
+VC-642 adds the typed sealed credential module beside it: the credential lock
+(`credential-lock.ts`), the durable file contract (`durable-file.ts`,
+`sealed-document.ts`), the key-id format and `VHC1` envelope
+(`credential-key-id.ts`, `sealed-envelope.ts`, keyring port
+`src/ports/credential-keyring.ts`) and the typed inventory (`inventory.ts`,
+`credential-families.ts`). See [docs/secrets.md](../../docs/secrets.md#the-typed-credential-module-vc-642).
+
 VC-555 completes `src/session-runtime/` (`@volli/host-core/session-runtime`
 and `/*`), and moves the agent runtime wiring, agent tools, Session environment
 and tokens, Pi sidecar/tool-output cleanup, harness installation and login-shell
