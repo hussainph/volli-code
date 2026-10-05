@@ -46,9 +46,47 @@ per launch, lazily when stored secrets exist**. Subsequent writes use the cached
 key. No keychain access at empty-profile startup or for Session-only values.
 There is no plaintext fallback, including Electron's Linux `basic_text` backend.
 An unavailable keychain or corrupt store fails closed and is never overwritten.
-An existing persistent inventory must unlock for injection and redaction, even
-when a newly requested credential would be Session-only.
-The file and its temporary siblings are excluded from Volli backups. A headless
+The file and its temporary siblings are excluded from Volli backups.
+
+### Locked credentials (VC-641)
+
+A lost or damaged key never stops a host. The store settles one **credential
+status** the first time it is asked (`secrets/credential-state.ts`):
+
+| Status | When | Stored secrets | Saves |
+|---|---|---|---|
+| `ready` | the sealed file opened | used | allowed |
+| `empty` | no sealed file yet, or after a reset | none | allowed |
+| `locked` | key missing, wrong, malformed or unreadable; keychain locked, denied or unavailable; store sealed by the other adapter; sealed file unreadable | not used | refused |
+| `refused` | key file unsafe: group/other access, another owner, not a regular file, relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
+| `corrupt` | the key opened and the file does not authenticate or parse | not used | refused |
+
+Only `ready` and `empty` are usable; the other three leave the sealed file
+byte-identical and make no key. Reads fail soft: listing, availability,
+injection and redaction carry on with the Session-scoped values in memory, so
+Sessions, the board and everything else keep working, and a request for a
+missing secret can still be answered with **Session** storage. What a locked
+store holds was never decrypted this launch, so no process can have it, and the
+redaction boundary stays whole. The status is remembered: a locked keychain is
+asked once per unlock, not by every read.
+
+Only material sealed under this key is gated: today, persistent Session
+secrets. Model sign-ins (Pi `auth.json`), web search keys and MCP credentials
+are not under this key yet and keep working; the typed store (VC-631) adds
+their kinds as each one moves in.
+
+Two ways out, both a person's or local admin's intent, never an agent verb:
+
+- **Unlock**: put the key back, unlock the keychain or fix the mode, then try
+  again (desktop: **Try again** in Settings → Configure → Secrets; hostd:
+  restart).
+- **Reset**: the sealed file is moved aside to
+  `session-secrets.enc.locked-<time>-<random>` beside it, never deleted, and the
+  store starts empty for the secrets to be entered again (desktop: **Reset…**,
+  confirmed; hostd: `volli-hostd credentials reset --yes`, with hostd
+  stopped). The archive is excluded from backups by the same
+  `session-secrets.enc*` rule and stays until a person deletes it; moving it
+  back undoes the reset. A reset does not make an unsafe key usable. A headless
 host seals the same file with a key file instead; see
 [Headless hosts](#headless-hosts).
 
@@ -88,8 +126,10 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   only runs when the file is absent. None of these messages quotes the key.
 - **Checked at boot.** `volli-hostd` settles all of this before it serves
   anything: it inspects an existing key file and opens an existing sealed
-  store, and refuses to start, naming the fix, rather than waiting for the
-  first Session to need a secret.
+  store, rather than waiting for the first Session to need a secret. A problem
+  is never a boot refusal (VC-641): hostd serves with credentials `locked`,
+  `refused` or `corrupt` in its status file and logs the fix
+  ([Locked credentials](#locked-credentials-vc-641)).
 - **Provisioning it for a service.** Install an admin-made key with
   `install -o <service-user> -m 600`, so it belongs to the user hostd runs as.
   A systemd `LoadCredential=` file is refused, and rightly: systemd owns it as
@@ -102,10 +142,11 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   `apps/hostd/README.md` ("Running under systemd") has the unit.
 - **Never re-keyed.** A key is only created to seal, and the store always opens
   what exists before it seals. So if `session-secrets.enc` exists and its key
-  file is missing, or is a different key, opening, saving, injecting and
-  redacting are all refused, with a message that says to put the key back or
-  delete `session-secrets.enc` and enter the secrets again. Nothing is written
-  over the sealed file, and no new key is made.
+  file is missing, or is a different key, stored secrets are locked: saving
+  is refused with a message that says to put the key back or reset
+  (`volli-hostd credentials reset`), and injection and redaction carry on
+  without them. Nothing is written over the sealed file, and no new key is
+  made.
 - **The envelope.** `VSF1 | key id | iv | tag | ciphertext`, AES-256-GCM with
   the header as associated data. The key id is a truncated, labelled SHA-256
   of the key. It tells a wrong key apart from a corrupt file and reveals

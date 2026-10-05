@@ -58,11 +58,25 @@ In order; each refusal is logged as one JSON line and exits **78**
    instance lock, whatever its `--socket`: an exclusive SQLite lock on
    `<data-dir>/hostd.lock`, atomic, held until stop, released by the kernel
    if the process dies. Two hosts never open one database.
-3. **Secrets, eagerly.** `fileSecretKey` loads lazily by design; a service
-   cannot wait for the first Session to find a bad key. A relative
-   `VOLLI_SECRET_KEY_FILE`, a key file with group or other access, owned by
-   another user, not a file or not one key line, or sealed secrets whose key is
-   missing or different: each refuses boot with the adapter's own sentence.
+3. **Secrets, eagerly, and never a refusal.** `fileSecretKey` loads lazily by
+   design; a service cannot wait for the first Session to find a bad key. So
+   hostd settles the key and the sealed store at boot, and a problem with
+   either boots the host anyway (VC-641): losing the key never bricks a host.
+   The status file's `credentials` says which, the log line
+   `serving without saved credentials` carries the adapter's own sentence
+   naming the fix, and stored secrets are neither used nor sealed over:
+
+   | Condition                                                                                                        | `credentials.state`                    |
+   | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+   | No sealed store                                                                                                  | `empty`                                |
+   | Sealed store opens                                                                                               | `ready`                                |
+   | Key missing, a different key, not one key line, unreadable; store sealed by the keychain or unreadable           | `locked`                               |
+   | Key file with group or other access, owned by another user, not a regular file; relative `VOLLI_SECRET_KEY_FILE` | `refused` (unsafe: never read for use) |
+   | The key opens and the store does not authenticate                                                                | `corrupt`                              |
+
+   Put the key back or fix it, then restart. Or give the stored secrets up:
+   [Credentials](#credentials).
+
 4. **Operators.** The operator verifier file (`/etc/volli-hostd-operators`, or
    `--operators`) is refused when it is not a regular file, root does not own
    it or its directory, or its group or others can write either: whoever can
@@ -178,7 +192,15 @@ hostd rewrites `<data-dir>/hostd-status.json` (atomically, mode 0600) at every
 state change: `starting`, `serving`, `refusing`, `stopping`, `stopped`. It
 holds paths, the pid, the version, the capabilities above and the database's
 state. When the database did not open, that state includes the sentence every
-verb answers with and the typed failure:
+verb answers with and the typed failure. `credentials` is the saved secrets'
+status (`ready`, `empty`, `locked`, `refused` or `corrupt`, see [Boot](#boot))
+with a typed reason and what it makes unavailable; never a key path or value:
+
+```json
+"credentials": { "state": "locked", "reason": "missing", "unavailable": ["session-env"] }
+```
+
+When the database did not open:
 
 ```json
 "database": {
@@ -194,7 +216,7 @@ believing it only when its pid is alive and its socket accepts a connection:
 
 | Exit | Verdict       | Meaning                                                      |
 | ---- | ------------- | ------------------------------------------------------------ |
-| 0    | `serving`     |                                                              |
+| 0    | `serving`     | Whatever `credentials` says: locked secrets are not down.    |
 | 1    | `refusing`    | Up, but the database did not open: read `database`.          |
 | 3    | `not-serving` | Stopped, starting, stopping, crashed, or socket unreachable. |
 
@@ -361,6 +383,29 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
   `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
   `MemoryDenyWriteExecute` (V8's JIT).
 
+### Credentials
+
+When saved secrets are `locked`, `refused` or `corrupt` and will not come back
+(the key is gone for good), set them aside and start over, with hostd stopped
+and the unit's `VOLLI_SECRET_KEY_FILE` in the environment:
+
+```sh
+sudo systemctl stop volli-hostd
+sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
+  credentials reset --data-dir /var/lib/volli-hostd          # says what it found
+sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
+  credentials reset --data-dir /var/lib/volli-hostd --yes    # sets it aside
+sudo systemctl start volli-hostd
+```
+
+It takes the instance lock (so it refuses while hostd runs), does nothing when
+secrets open or there are none, and moves `session-secrets.enc` to
+`session-secrets.enc.locked-<time>-<random>` beside it. Nothing is deleted: the
+archive is excluded from backups and stays until you delete it, and moving it
+back undoes the reset. The next save seals under the key file that is there, or
+a new one. A reset does not make an unsafe key usable: fix its mode or owner.
+It is never a socket verb.
+
 ### The secret key
 
 By default the key is created at `/var/lib/volli-hostd/session-secrets.key`
@@ -402,7 +447,9 @@ own data directory while the app runs: both would serve one database.
 
 ## Tests
 
-`vp test run --coverage` from this directory: boot, refusals, the
+`vp test run --coverage` from this directory: boot, refusals, a lost, wrong,
+malformed or unsafe key and a corrupt secret store against real board and
+Session history (`lost-key.test.ts`), the
 newer-version database, shutdown faults, the status check, and the operator
 token (issue, revoke, the verifier file's refusals, and an operator
 registering a project and creating a ticket over the socket while token-less

@@ -11,6 +11,19 @@ export {
   type SecretKeyRefusal,
 } from "../ports/secret-key";
 export {
+  archiveSealedStore,
+  CREDENTIALS_EMPTY,
+  CREDENTIALS_READY,
+  credentialStatusFor,
+  credentialsUnavailable,
+  SEALED_CREDENTIAL_KINDS,
+  SealedStoreUnreadableError,
+  type CredentialKind,
+  type CredentialReason,
+  type CredentialState,
+  type CredentialStatus,
+} from "./credential-state";
+export {
   fileSecretKey,
   inspectSecretKeyFile,
   SECRET_KEY_FILE_ENV,
@@ -27,4 +40,5 @@ export {
   type SecretInput,
   type SecretMetadata,
   type SecretScope,
+  type SecretStoreReset,
 } from "./store";
