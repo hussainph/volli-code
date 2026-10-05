@@ -35,6 +35,12 @@ import { readStatus, statusFilePath, type HostdState } from "./status";
 /** Faults a test can switch on in the modules hostd composes. */
 const faults = vi.hoisted(() => ({
   failStatusOn: null as string | null,
+  runtimeReadyError: false,
+  runtimeCloseError: false,
+  automationsUnavailable: false,
+  runtimeReadyGate: null as Promise<void> | null,
+  runtimeOwned: false,
+  order: [] as string[],
   socketCloseFails: false,
   busySites: null as ((target: string) => Promise<readonly unknown[]>) | null,
   /** When set, every command waits on it before it runs. */
@@ -66,6 +72,10 @@ vi.mock("@volli/host-core", async (importOriginal) => {
   return {
     ...actual,
     createHostCore: (...args: Parameters<typeof actual.createHostCore>) => {
+      // Early host-edge reads have no owner yet; no mutable executor backend
+      // is being supplied through these notification ports.
+      args[0].listOpenNativeBindings();
+      args[0].observeScheduledResume?.({} as never);
       const host = actual.createHostCore(...args);
       const createCommands: typeof host.agentServices.createCommands = (options) => {
         faults.busySites = options.busyWorktreeSites;
@@ -105,11 +115,42 @@ vi.mock("@volli/host-core/agent-socket", async (importOriginal) => {
       faults.execute = options.execute;
       const failing = (server: Server): Server => ({
         close: async () => {
+          faults.order.push("socket.close");
           await server.close();
           if (faults.socketCloseFails) throw new Error("close failed");
         },
       });
       return failing(await actual.startAgentSocket(options, (server) => claim(failing(server))));
+    },
+  };
+});
+
+vi.mock("./session-runtime", async (original) => {
+  const actual = await original<typeof import("./session-runtime")>();
+  return {
+    ...actual,
+    createHeadlessSessionRuntime: (
+      ...args: Parameters<typeof actual.createHeadlessSessionRuntime>
+    ) => {
+      const runtime = actual.createHeadlessSessionRuntime(...args);
+      faults.runtimeOwned = true;
+      return {
+        ...runtime,
+        ready: async () => {
+          if (faults.runtimeReadyGate !== null) await faults.runtimeReadyGate;
+          if (faults.runtimeReadyError) throw new Error("Session startup failed");
+          const ready = await runtime.ready();
+          return {
+            ...ready,
+            automationsAvailable: !faults.automationsUnavailable && ready.automationsAvailable,
+          };
+        },
+        close: async () => {
+          faults.order.push("runtime.close");
+          await runtime.close();
+          if (faults.runtimeCloseError) throw new Error("runtime close failed");
+        },
+      };
     },
   };
 });
@@ -122,6 +163,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  faults.runtimeReadyError = false;
+  faults.runtimeCloseError = false;
+  faults.automationsUnavailable = false;
+  faults.runtimeReadyGate = null;
+  faults.runtimeOwned = false;
+  faults.order = [];
   faults.failStatusOn = null;
   faults.socketCloseFails = false;
   faults.hold = null;
@@ -159,7 +206,7 @@ async function boot(
     dataDir,
     socketPath: options.socketPath ?? join(dataDir, "volli.sock"),
     version: "9.9.9-test",
-    env: options.env ?? {},
+    env: { HOME: join(root, "home"), PI_CODING_AGENT_DIR: join(root, "pi"), ...options.env },
     logger: log,
     // Never the machine's own /etc file: a scratch one, trusted as this user
     // the way production trusts root.
@@ -241,10 +288,10 @@ describe("booting against an empty data directory", () => {
       database: { ok: true, path: join(dataDir, "volli.db") },
       capabilities: {
         board: "available",
-        sessions: "unavailable",
+        sessions: "available",
         terminals: "unavailable",
         browser: "unavailable",
-        automations: "unavailable",
+        automations: "available",
       },
     });
     expect(readStatus(dataDir)).toMatchObject({ state: "serving", socketPath });
@@ -263,7 +310,7 @@ describe("booting against an empty data directory", () => {
         projects: [expect.objectContaining({ name: "Fixture p1", prefix: "FX", tickets: 0 })],
       },
     });
-    // Board writes need an authenticated Session; hostd has no runtime to mint one.
+    // Board writes still need a Session or operator token.
     expect(await ask(socketPath, "identify", { capabilities: true })).toMatchObject({
       ok: true,
       data: expect.objectContaining({ appVersion: "9.9.9-test" }),
@@ -647,6 +694,7 @@ describe("draining requests at shutdown", () => {
       release = resolve;
     });
     const answer = faults.execute!(request);
+    await Promise.resolve(); // Enter execute before stopping rejects new arrivals.
     const stopped = host.stop("SIGTERM");
     setTimeout(release, 20);
     expect(await answer).toMatchObject({ ok: true, data: { projects: [] } });
@@ -658,6 +706,7 @@ describe("draining requests at shutdown", () => {
     const host = await boot({ drainTimeoutMs: 10 }, log);
     faults.hold = new Promise(() => undefined);
     void faults.execute!(request);
+    await Promise.resolve();
     expect(await host.stop("SIGTERM")).toBe(false);
     expect(log.error).toHaveBeenCalledWith("abandoned requests still executing", { count: 1 });
     expect(existsSync(join(root, "data", "volli.db-wal"))).toBe(false);
@@ -702,5 +751,67 @@ describe("shutdown faults", () => {
     expect(log.error).toHaveBeenCalledWith("database did not close cleanly", {
       error: expect.any(Error),
     });
+  });
+});
+
+it("settles queued CLI requests on startup rejection and closes every owner", async () => {
+  const gate = Promise.withResolvers<void>();
+  faults.runtimeReadyGate = gate.promise;
+  faults.runtimeReadyError = true;
+  const booting = boot().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await vi.waitFor(() => expect(faults.runtimeOwned).toBe(true));
+  const answer = faults.execute!({
+    v: 1,
+    cmd: "project.list",
+    args: {},
+    ctx: { cwd: "/", env: {} },
+  });
+  gate.resolve();
+  expect(await booting).toBeInstanceOf(Error);
+  expect(await answer).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
+  expect(faults.order).toEqual(["runtime.close", "socket.close"]);
+  expect(existsSync(join(root, "data/volli.sock"))).toBe(false);
+  expect(existsSync(join(root, "data/volli.db-wal"))).toBe(false);
+});
+it("retains the startup failure even if runtime drain fails, and still closes socket/DB", async () => {
+  faults.runtimeReadyError = true;
+  faults.runtimeCloseError = true;
+  const log = logger();
+  await expect(boot({}, log)).rejects.toThrow("Session startup failed");
+  expect(log.error).toHaveBeenCalledWith("Session runtime did not close after failed startup", {
+    error: expect.any(Error),
+  });
+  expect(existsSync(join(root, "data/volli.sock"))).toBe(false);
+  expect(existsSync(join(root, "data/volli.db-wal"))).toBe(false);
+});
+it("rejects new requests while stopping and after stop, and reports failed runtime drain", async () => {
+  const log = logger();
+  const host = await boot({}, log);
+  faults.runtimeCloseError = true;
+  const stop = host.stop("SIGTERM");
+  const request: AgentRequest = { v: 1, cmd: "project.list", args: {}, ctx: { cwd: "/", env: {} } };
+  expect(await faults.execute!(request)).toMatchObject({
+    ok: false,
+    error: { code: "APP_UNREACHABLE" },
+  });
+  expect(await stop).toBe(false);
+  expect(await faults.execute!(request)).toMatchObject({
+    ok: false,
+    error: { code: "APP_UNREACHABLE" },
+  });
+  expect(log.error).toHaveBeenCalledWith("Session runtime did not close cleanly", {
+    error: expect.any(Error),
+  });
+  expect(faults.order).toEqual(["runtime.close", "socket.close"]);
+});
+
+it("reports a missing automation runner without hiding the ready Session runtime", async () => {
+  faults.automationsUnavailable = true;
+  expect((await boot()).status().capabilities).toMatchObject({
+    sessions: "available",
+    automations: "unavailable",
   });
 });

@@ -417,6 +417,31 @@ describe("BackgroundShellHost", () => {
     expect(exited).toEqual(["row-1"]);
   });
 
+  it("joins live and already-disposed processes, rejects new starts, and closes only once", async () => {
+    const exited: string[] = [];
+    const { host } = harness({
+      killGraceMs: 150,
+      ledger: { recordSpawn: () => "row", markExited: (id) => exited.push(id) },
+    });
+    await start(host, "exit 0");
+    expect(host.liveCwds()).toEqual([]);
+    const active = await start(host, "trap '' TERM; sleep 30");
+    const disposing = await start(host, "trap '' TERM; sleep 30", other);
+    expect(host.liveCwds()).toHaveLength(2);
+    host.disposeSession(other.sessionId);
+    // Forgetting an attachment must not hide a still-live process from trim or drain.
+    expect(host.liveCwds()).toHaveLength(2);
+    const close = host.close();
+    expect(host.close()).toBe(close);
+    await expect(start(host, "sleep 30")).rejects.toMatchObject({ rule: "shell.closing" });
+    await close;
+    expect(exited).toEqual(["row", "row", "row"]);
+    expect(host.liveCwds()).toEqual([]);
+    expect(host.listAll()).toEqual([]);
+    expect(() => process.kill(active.pid, 0)).toThrow();
+    expect(() => process.kill(disposing.pid, 0)).toThrow();
+  });
+
   it("marks nothing when the ledger declined to record the spawn", async () => {
     const exited: string[] = [];
     const { host } = harness({

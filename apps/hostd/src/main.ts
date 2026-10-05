@@ -17,6 +17,7 @@ import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator
 import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
 import { checkStatus, LIVE_PROBES, statusExitCode } from "./status";
+import { headlessRuntimePaths } from "./runtime-paths";
 import { HOSTD_VERSION } from "./version";
 
 /** Past this, a stop that has not finished is abandoned and the process exits 1. */
@@ -160,6 +161,7 @@ async function serve(
       version: HOSTD_VERSION,
       env: process.env,
       logger,
+      runtime: headlessRuntimePaths(__dirname, socketPath),
     });
   } catch (error) {
     if (error instanceof HostdBootError) {
