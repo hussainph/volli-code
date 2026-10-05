@@ -165,6 +165,7 @@ function fixture() {
     ports: { log, events: {} } as unknown as HostCorePorts,
     secrets: { store } as unknown as HeadlessSecrets,
     env: { HOME: "/home/service", PI_CODING_AGENT_DIR: "/auth", PATH: "/service/bin" },
+    socketPath: "/run/hostd.sock",
     options: { binDir: "/bin", venue: { id: "hostd", kind: "remote" as const } },
   };
   return {
@@ -214,7 +215,11 @@ describe("headless runtime ownership", () => {
     });
     expect(input).not.toHaveProperty("browser");
     await input.beforeExecution();
-    await input.concurrencyEnvFor("s");
+    // The agent's `volli` reaches this host, beside the budget (VC-563).
+    expect(await input.concurrencyEnvFor("s")).toEqual({
+      PATH: "/service/bin",
+      VOLLI_SOCKET: "/run/hostd.sock",
+    });
     await seam.concurrency.mock.lastCall![0].listAttachedSessions();
     const context = seam.context.mock.lastCall![0];
     await context.waitForBirth("s"); // Internal recovery must not wait for itself.
