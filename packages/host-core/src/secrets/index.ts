@@ -33,7 +33,8 @@ export {
   CredentialLock,
   CredentialLockBusyError,
   credentialLockFor,
-  CredentialLockUnavailableError,
+  CredentialLockUnusableError,
+  retryWhileBusy,
 } from "./credential-lock";
 export {
   publishSealedFile,
@@ -46,6 +47,7 @@ export {
 export {
   CREDENTIAL_INVENTORY_FILE_NAME,
   CredentialRevisionConflictError,
+  type CredentialRecordRef,
   INVENTORY_SCHEMA,
   SealedInventory,
   type ChangeOptions,
@@ -65,6 +67,8 @@ export {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
   CREDENTIALS_READY,
+  credentialsBusy,
+  credentialsResettable,
   credentialStatusFor,
   credentialsUnavailable,
   SEALED_CREDENTIAL_KINDS,

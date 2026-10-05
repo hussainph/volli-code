@@ -29,8 +29,20 @@ function session(
 interface Recorder {
   engine: BootRecoveryEngine;
   observed: SessionObservation[];
+  queried: string[];
   reconciled: Array<{ sessionId: string; attachmentId: string }>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
+}
+
+/** A promise the test settles at an exact step — no sleeps, no polling. */
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function recorder(
@@ -39,16 +51,21 @@ function recorder(
   reconcile?: (input: { sessionId: string; attachmentId: string }) => Promise<void>,
 ): Recorder {
   const observed: SessionObservation[] = [];
+  const queried: string[] = [];
   const reconciled: Array<{ sessionId: string; attachmentId: string }> = [];
   return {
     observed,
+    queried,
     reconciled,
     reconcile: async (input) => {
       reconciled.push(input);
       await reconcile?.(input);
     },
     engine: {
-      listSessions: async ({ projectId }) => byProject[projectId] ?? [],
+      listSessions: async ({ projectId }) => {
+        queried.push(projectId);
+        return byProject[projectId] ?? [];
+      },
       observe: async (observation) => {
         observed.push(observation);
         if (observe) await observe(observation);
@@ -61,6 +78,7 @@ function sweep(
   target: Recorder,
   projectIds: readonly string[],
   onError = vi.fn(),
+  shouldStop?: () => boolean,
 ): { run: Promise<number>; onError: ReturnType<typeof vi.fn> } {
   let sequence = 0;
   return {
@@ -72,6 +90,7 @@ function sweep(
       newId: () => `event-${++sequence}`,
       now: () => 1_700_000_000_000,
       onError,
+      ...(shouldStop === undefined ? {} : { shouldStop }),
     }),
   };
 }
@@ -370,5 +389,140 @@ describe("closeStaleAttachments", () => {
     expect(onError).toHaveBeenCalledOnce();
     expect(onError.mock.calls[0][0]).toBe("broken");
     expect(onError.mock.calls[0][1]).toBeInstanceOf(Error);
+  });
+
+  // Verifier note (VC-622 a3): the sweep used to keep sweeping after close.
+  // Once the host is closing it must start no new attachment or project work;
+  // a1, already in flight, finishes, and everything else waits for next launch.
+  it("starts no new attachment or project query once the host is closing", async () => {
+    let closing = false;
+    const target = recorder(
+      {
+        "project-1": [
+          session("session-1", [attachment({ id: "a1" }), attachment({ id: "a2" })], true),
+        ],
+        "project-2": [session("session-2", [attachment({ id: "a3" })])],
+      },
+      async (observation) => {
+        if (observation.kind === "attachment.closed" && observation.attachmentId === "a1") {
+          closing = true;
+        }
+      },
+    );
+
+    await expect(
+      sweep(target, ["project-1", "project-2"], vi.fn(), () => closing).run,
+    ).resolves.toBe(1);
+    expect(target.queried).toEqual(["project-1"]);
+    expect(target.observed.map(({ kind, attachmentId }) => ({ kind, attachmentId }))).toEqual([
+      { kind: "attention.raised", attachmentId: "a1" },
+      { kind: "attachment.closed", attachmentId: "a1" },
+    ]);
+  });
+
+  it.each(["permission", "permissions", "attention"])(
+    "starts no more durable work after closing during %s retirement",
+    async (stage) => {
+      const atWrite = deferred();
+      const release = deferred();
+      let closing = false;
+      const lost = session(
+        "s",
+        [attachment({ adapterId: stage === "attention" ? "terminal" : "pi" })],
+        true,
+      );
+      const target = recorder(
+        {
+          p: [
+            {
+              ...lost,
+              interactions: {
+                active: [
+                  { id: "first", attachmentId: "attachment-1", kind: "permission" },
+                  ...(stage === "permissions"
+                    ? [{ id: "second", attachmentId: "attachment-1", kind: "permission" as const }]
+                    : []),
+                ],
+              },
+            },
+          ],
+        },
+        async () => {
+          atWrite.resolve();
+          await release.promise;
+        },
+      );
+      const { run } = sweep(target, ["p"], vi.fn(), () => closing);
+      await atWrite.promise;
+      closing = true;
+      release.resolve();
+      await expect(run).resolves.toBe(0);
+      expect(target.observed.map(({ kind }) => kind)).toEqual([
+        stage === "attention" ? "attention.raised" : "interaction.cancelled",
+      ]);
+      expect(target.reconciled).toEqual([]);
+    },
+  );
+
+  it("answers nothing and queries nothing when the host is already closing", async () => {
+    const target = recorder({ "project-1": [session("session-1", [attachment()])] });
+
+    await expect(sweep(target, ["project-1"], vi.fn(), () => true).run).resolves.toBe(0);
+    expect(target.queried).toEqual([]);
+    expect(target.observed).toEqual([]);
+  });
+
+  // A reconcile rejected because the runtime closed is a stop, not a lost
+  // sidecar: no failure report, no partial_turn_interrupted, no forced close —
+  // the next launch finds the binding and reconciles it.
+  it("leaves an in-flight structured turn untouched when closing rejects its reconcile", async () => {
+    const parkedAt = deferred();
+    const release = deferred();
+    let closing = false;
+    let parkedCalls = 0;
+    const target = recorder(
+      { "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)] },
+      undefined,
+      async () => {
+        parkedCalls += 1;
+        if (parkedCalls === 1) {
+          parkedAt.resolve();
+          await release.promise;
+        }
+      },
+    );
+    const onError = vi.fn();
+    const { run } = sweep(target, ["project-1"], onError, () => closing);
+    await parkedAt.promise;
+    closing = true;
+    release.reject(new Error("runtime closed during shutdown"));
+    await expect(run).resolves.toBe(0);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(target.observed).toEqual([]);
+    await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
+    expect(target.reconciled).toEqual([
+      { sessionId: "session-1", attachmentId: "pi-1" },
+      { sessionId: "session-1", attachmentId: "pi-1" },
+    ]);
+  });
+
+  // Supplying the flag changes nothing about real failures while the host is
+  // still up: a failed reconcile is still reported, still records its
+  // Attention, and still closes the unusable attachment.
+  it("keeps the failure fallback when shouldStop is supplied but not closing", async () => {
+    const target = recorder(
+      { "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)] },
+      undefined,
+      async () => Promise.reject(new Error("sidecar missing")),
+    );
+    const onError = vi.fn();
+
+    await expect(sweep(target, ["project-1"], onError, () => false).run).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(target.observed).toMatchObject([
+      { kind: "attention.raised", attachmentId: "pi-1" },
+      { kind: "attachment.closed", attachmentId: "pi-1" },
+    ]);
   });
 });

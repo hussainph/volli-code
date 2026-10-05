@@ -77,6 +77,7 @@ function scenario() {
     token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
   };
   const service = createAgentCommandService({
+    busyWorktreeSites: async () => [],
     db: ctx.db,
     sessionEngine,
     appVersion: "1.2.3",

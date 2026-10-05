@@ -25,6 +25,11 @@ import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
 
+/** Expected host teardown, not a failed boot or a notice delivery error. */
+export class SessionRuntimeClosingError extends Error {
+  override name = "SessionRuntimeClosingError";
+}
+
 const recoveredServices = Symbol("recovered Session services");
 /** Only the lifecycle can issue this proof that boot recovery has finished. */
 export interface RecoveredSessionServices<Services> {
@@ -37,6 +42,7 @@ export interface SessionRuntimeLifecycle<Services> {
   ready(): Promise<RecoveredSessionServices<Services>>;
   close(): Promise<void>;
   observeScheduledResume(projection: SessionProjection): void;
+  /** Starts/joins recovery if needed; fresh external notices never bypass it. */
   relayShellNotice(notice: BackgroundShellNotice): void;
 }
 
@@ -44,10 +50,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
-  rpc: { close(): Promise<void> } | null;
+  /** A transport constructed from ready services may bind after recovery. */
+  rpc(): { close(): Promise<void> } | null;
   observability: AgentObservability | null;
   delegation: TicketSessionDelegationStore | null;
-  delegationsFor(): Delegations | null;
+  delegationsFor(): Pick<Delegations, "recover"> | null;
   /** Captured, never called until recovery finishes. */
   services(): Services;
   /** Synchronous host lifecycle hook; desktop installs its accepted-quit hold. */
@@ -121,7 +128,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       sessionWatchdog: watchdog,
       scheduledResumeHost: resume,
       shellHostNotices: notices,
-      sessionRpc: rpc,
+      sessionRpc: rpc(),
       sessionRuntime: runtime,
       agentObservability: observability,
     });
@@ -137,6 +144,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       try {
         await closeStaleAttachments({
           engine: sessionEngine,
+          shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null
               ? Promise.reject(
@@ -173,13 +181,15 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         }
       }
     }
-    if (closing) throw new Error("The Session runtime closed during recovery.");
+    if (closing)
+      throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     try {
       await notices?.recover();
     } catch (error) {
       ports.log.error("[volli] failed to recover host notices:", errorMessage(error));
     }
-    if (closing) throw new Error("The Session runtime closed during recovery.");
+    if (closing)
+      throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     if (database.ok && sessionEngine !== null) {
       setImmediate(() => {
         if (closing) return;
@@ -195,20 +205,42 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       void resume.start();
       ports.power.on("resume", wake);
     }
-    return { [recoveredServices]: true, services: options.services() };
+    const services = options.services();
+    return {
+      [recoveredServices]: true,
+      get services() {
+        // Close can win after ready resolves but before a host's continuation
+        // constructs its transport. Never bind that late consumer to a drain.
+        if (closing) throw new SessionRuntimeClosingError("The Session runtime is closing.");
+        return services;
+      },
+    };
+  }
+  function ready(): Promise<RecoveredSessionServices<Services>> {
+    if (closing)
+      return Promise.reject(new SessionRuntimeClosingError("The Session runtime is closing."));
+    boot ??= recover();
+    return boot;
   }
   return {
-    ready: () => {
-      if (closing) return Promise.reject(new Error("The Session runtime is closing."));
-      boot ??= recover();
-      return boot;
-    },
+    ready,
     close,
     observeScheduledResume: (projection) => {
       if (!closing) resume?.observe(projection);
     },
     relayShellNotice: (notice) => {
-      if (!closing) void relay?.(notice);
+      if (closing || relay === null) return;
+      // A fresh external notice cannot read the ledger while boot recovery is
+      // still reconciling it. Recovery's durable outbox remains an internal port.
+      void ready().then(
+        () => {
+          if (!closing) void relay(notice);
+        },
+        (error: unknown) => {
+          if (error instanceof SessionRuntimeClosingError) return;
+          ports.log.error("[volli] failed to ready a shell notice:", errorMessage(error));
+        },
+      );
     },
   };
 }

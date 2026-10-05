@@ -215,7 +215,7 @@ describe("file credential keyring", () => {
   });
 });
 
-describe("SealedInventory", () => {
+describe("SealedInventory", { timeout: 30_000 }, () => {
   it("starts empty, makes no key and no file until a save", () => {
     const store = open();
     expect(store.status()).toEqual({ state: "empty", reason: null, unavailable: [] });
@@ -268,26 +268,61 @@ describe("SealedInventory", () => {
     );
   });
 
-  it("commits against a revision: a late refresh loses to a sign-out or a new sign-in", () => {
+  it("commits against a record: a late refresh loses to a sign-out or a new sign-in", () => {
     const store = open();
     const other = open();
-    expect(() => store.put("web-search", WEB, "v", { expectRevision: 1 })).toThrow(
+    const nobody = { id: "00000000-0000-4000-8000-000000000000", revision: 1 };
+    expect(() => store.put("web-search", WEB, "v", { expect: nobody })).toThrow(
       CredentialRevisionConflictError,
     );
-    const read = store.put("web-search", WEB, "v1", { expectRevision: null });
-    expect(() => store.put("web-search", WEB, "again", { expectRevision: null })).toThrow(
+    const read = store.put("web-search", WEB, "v1", { expect: null });
+    expect(() => store.put("web-search", WEB, "again", { expect: null })).toThrow(
       CredentialRevisionConflictError,
     );
     other.put("web-search", WEB, "new sign-in");
-    expect(() =>
-      store.put("web-search", WEB, "late refresh", { expectRevision: read.revision }),
-    ).toThrow(CredentialRevisionConflictError);
-    expect(() => store.remove("web-search", WEB, { expectRevision: read.revision })).toThrow(
+    expect(() => store.put("web-search", WEB, "late refresh", { expect: read })).toThrow(
+      CredentialRevisionConflictError,
+    );
+    expect(() => store.remove("web-search", WEB, { expect: read })).toThrow(
       CredentialRevisionConflictError,
     );
     expect(store.get("web-search", WEB)?.value).toBe("new sign-in");
-    expect(store.remove("web-search", WEB, { expectRevision: 2 })).toBe(true);
-    expect(store.remove("web-search", WEB, { expectRevision: null })).toBe(false);
+    const current = store.get("web-search", WEB)!;
+    // The same id at another revision is not the record that was read either.
+    expect(() =>
+      store.put("web-search", WEB, "x", { expect: { id: current.id, revision: read.revision } }),
+    ).toThrow(CredentialRevisionConflictError);
+    const refreshed = store.put("web-search", WEB, "refreshed", { expect: current });
+    expect(refreshed.id).toBe(current.id);
+    expect(refreshed.revision).toBeGreaterThan(current.revision);
+    expect(store.remove("web-search", WEB, { expect: refreshed })).toBe(true);
+    expect(store.remove("web-search", WEB, { expect: null })).toBe(false);
+  });
+
+  it("never repeats a record's identity: remove, recreate, then a late refresh loses (ABA)", () => {
+    const store = open();
+    const selector = { provider: "verify" };
+    const old = store.put("pi-provider", selector, { type: "oauth", refresh: "old" });
+    store.remove("pi-provider", selector);
+    const newer = store.put("pi-provider", selector, { type: "oauth", refresh: "new-sign-in" });
+    expect(newer.id).not.toBe(old.id);
+    expect(newer.revision).toBeGreaterThan(old.revision);
+    expect(() =>
+      store.put(
+        "pi-provider",
+        selector,
+        { type: "oauth", refresh: "stale-refresh" },
+        { expect: old },
+      ),
+    ).toThrow(CredentialRevisionConflictError);
+    expect(store.get("pi-provider", selector)?.value).toEqual({
+      type: "oauth",
+      refresh: "new-sign-in",
+    });
+    // Revisions grow with every commit, so even a removed record's number is never reused.
+    const revisions = [old, newer, store.put("web-search", WEB, "w")].map((r) => r.revision);
+    expect(revisions).toEqual([...revisions].toSorted((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(3);
   });
 
   it("sees another instance's revocation on the next read, without restarting", () => {
@@ -484,32 +519,58 @@ describe("SealedInventory", () => {
     expect(() => again.reset()).toThrow(/^Could not set the saved credentials aside\.$/);
   });
 
-  it("answers unavailable, not empty, while another process holds the lock", async () => {
-    const store = open({ document: { lockTimeoutMs: 20 } });
+  it("answers busy for that read alone, never stale ready, while another process holds the lock", async () => {
+    const store = open();
     store.put("web-search", WEB, "v");
+    expect(store.status().state).toBe("ready");
     const child = startChild({ kind: "hold", lock: join(dir, "host-credentials.lock") });
+    const busy = { state: "locked", reason: "busy", unavailable: CREDENTIAL_FAMILIES };
     try {
       await child.next();
-      const document = { lockTimeoutMs: 20 };
-      const fresh = open({ document });
-      expect(fresh.status()).toEqual({
-        state: "locked",
-        reason: "store-unreadable",
-        unavailable: CREDENTIAL_FAMILIES,
-      });
+      expect(open().status()).toEqual(busy);
       expect(store.get("web-search", WEB)).toBeNull();
-      expect(store.status().state).toBe("ready");
+      // A store that was ready says busy, not ready, and its records and status agree.
+      expect(store.status()).toEqual(busy);
+      expect(store.snapshot("web-search")).toEqual({ records: [], status: busy });
       expect(store.list("web-search")).toEqual([]);
+      expect(store.problem()).toContain("busy");
       expect(() => store.put("web-search", WEB, "w")).toThrow("busy");
+      expect(() => store.reset()).toThrow("busy");
     } finally {
       child.process.kill("SIGKILL");
       await child.exited;
     }
     expect(open().get("web-search", WEB)?.value).toBe("v");
+    // Never remembered.
+    expect(store.snapshot("web-search")).toMatchObject({
+      records: [{ selector: WEB }],
+      status: { state: "ready" },
+    });
+  });
+
+  it("never offers a reset over a lock file it cannot use, and says how to fix it", () => {
+    const store = open();
+    store.put("web-search", WEB, "v");
+    const before = digest();
+    const lock = join(dir, "host-credentials.lock");
+    new CredentialLock(lock).close();
+    rmSync(lock);
+    mkdirSync(lock);
+    const blocked = open();
+    expect(blocked.status()).toEqual({
+      state: "locked",
+      reason: "lock-unusable",
+      unavailable: CREDENTIAL_FAMILIES,
+    });
+    expect(blocked.problem()).toContain(lock);
+    expect(() => blocked.reset()).toThrow("Fix the lock file");
+    expect(digest()).toBe(before);
+    rmSync(lock, { recursive: true });
+    expect(blocked.unlock().state).toBe("ready");
   });
 });
 
-describe("SealedInventory across processes", () => {
+describe("SealedInventory across processes", { timeout: 30_000 }, () => {
   const command = (kind: string, extra: Record<string, unknown>) => ({
     kind,
     path,
@@ -545,8 +606,9 @@ describe("SealedInventory across processes", () => {
     expect(await runChild(command("remove", { selector: WEB }))).toEqual({ removed: true });
     expect(parent.get("web-search", WEB)).toBeNull();
     parent.put("web-search", WEB, "second");
+    const second = parent.get("web-search", WEB)!;
     expect(await runChild(command("get", { selector: WEB }))).toMatchObject({
-      record: { value: "second", revision: 1 },
+      record: { value: "second", id: second.id, revision: second.revision },
     });
   });
 

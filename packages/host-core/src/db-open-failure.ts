@@ -39,7 +39,7 @@ import { DatabaseFromNewerVersionError } from "./db/schema-compatibility";
  * — main cannot read the root manifest at runtime (it is not packaged), so
  * the test is what keeps this string from drifting into a lie.
  */
-export const REQUIRED_NODE_RANGE = "^24.15.0";
+export const REQUIRED_NODE_RANGE = "^24.16.0";
 
 /**
  * The signatures a wrong-ABI or missing native build leaves in its error.

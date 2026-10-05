@@ -12,6 +12,11 @@
  *   read rather than the next launch. Sealed files are small; opening one is
  *   an AES-GCM pass and a parse, and a key backend caches by key id, so no
  *   read prompts a keychain twice for one key.
+ * - **Never a synchronous wait.** Both take the lock with one non-blocking
+ *   attempt: another process holding it is {@link CredentialLockBusyError}
+ *   at once. A caller that can wait retries asynchronously
+ *   (`retryWhileBusy`); Electron's main thread never stalls on another
+ *   process.
  * - **Scoped merges.** An update applies the caller's change to the document
  *   it just reloaded, never to a copy cached earlier, so two processes'
  *   changes to different records both survive.
@@ -24,7 +29,11 @@
  *   filesystem text, cause or path.
  */
 import { isSecretKeyUnavailable } from "../ports/secret-key";
-import { SealedStoreNewerError, SealedStoreUnreadableError } from "./credential-state";
+import {
+  CredentialLockUnusableError,
+  SealedStoreNewerError,
+  SealedStoreUnreadableError,
+} from "./credential-state";
 import { CredentialLockBusyError, type CredentialLock } from "./credential-lock";
 import {
   publishSealedFile,
@@ -49,8 +58,6 @@ export interface SealedCodec<T> {
 }
 
 export interface SealedDocumentOptions {
-  /** How long a read or update waits for another process's hold. */
-  readonly lockTimeoutMs?: number;
   /** See {@link PublishOptions.requireDirectorySync}. */
   readonly requireDirectorySync?: boolean;
   /** Crash-test hook, see {@link PublishOptions.step}. */
@@ -89,6 +96,7 @@ export function isSealedOpenFailure(error: unknown): boolean {
   return (
     isSecretKeyUnavailable(error) ||
     error instanceof SealedStoreUnreadableError ||
+    error instanceof CredentialLockUnusableError ||
     error instanceof SealedStoreNewerError ||
     error instanceof SealedStoreCorruptError
   );
@@ -97,6 +105,7 @@ export function isSealedOpenFailure(error: unknown): boolean {
 /** Errors that already say what happened without disclosing anything. */
 const PASS_THROUGH = [
   SealedStoreUnreadableError,
+  CredentialLockUnusableError,
   SealedStoreNewerError,
   CredentialLockBusyError,
   SealedFileChangedError,
@@ -125,7 +134,7 @@ export class SealedDocument<T> {
 
   /** The current document, or `null` when there is no sealed file. Takes the lock. */
   read(): T | null {
-    return this.lock.withSync(() => this.#current(), this.#options.lockTimeoutMs);
+    return this.lock.withSync(() => this.#current());
   }
 
   /**
@@ -157,7 +166,7 @@ export class SealedDocument<T> {
       }
       this.#bytes = sealed;
       return { document: next, written: true, synced };
-    }, this.#options.lockTimeoutMs);
+    });
   }
 
   /** Forgets what was opened, so nothing is ever published against a stale read. */

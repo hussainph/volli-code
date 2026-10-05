@@ -7,7 +7,7 @@
  */
 import { spawn } from "node:child_process";
 
-import { CredentialLock } from "../credential-lock";
+import { CredentialLock, retryWhileBusy } from "../credential-lock";
 import type { PublishStep } from "../durable-file";
 import { fileCredentialKeyring, fileSecretKey } from "../file-key";
 import { SealedInventory } from "../inventory";
@@ -88,15 +88,25 @@ switch (command.kind) {
   }
   case "put": {
     const store = inventory(command.path, command.key);
+    // A synchronous change refuses at once while another process holds the
+    // lock; a caller that can wait retries asynchronously, as a host would.
     for (const selector of command.selectors) {
-      store.put(command.family as never, selector, command.value);
+      await retryWhileBusy(
+        () => store.put(command.family as never, selector, command.value),
+        10_000,
+      );
     }
     say({ status: store.status().state });
     break;
   }
   case "remove": {
     const store = inventory(command.path, command.key);
-    say({ removed: store.remove(command.family as never, command.selector) });
+    say({
+      removed: await retryWhileBusy(
+        () => store.remove(command.family as never, command.selector),
+        10_000,
+      ),
+    });
     break;
   }
   case "get": {

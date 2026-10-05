@@ -225,6 +225,8 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         settle(
           host.agentServices.createCommands({
             db: handle.db,
+            // Until runtime composition lands, this host owns no execution sites.
+            busyWorktreeSites: async () => [],
             // Non-null whenever the database opened (`createHostSessionServices`).
             sessionEngine: host.sessionEngine!,
             appVersion: options.version,
