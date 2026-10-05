@@ -229,7 +229,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
             ...port,
             request: async (input, signal) => {
               const waiting = port.request(input, signal);
-              const list = service.list();
+              const list = await service.list();
               if (!list.ok) throw new Error("No request metadata");
               submitted = await invoke("volli:secret-submit", {
                 requestId: list.requests[0]!.id,
@@ -299,7 +299,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
           ledgerSpawns,
           submitted,
           waitingSnapshots,
-          projection: invoke("volli:secrets-list"),
+          projection: await invoke("volli:secrets-list"),
           logs: logs.map((log) => log.mock.calls),
         });
         expect(submitted).toEqual({ ok: true });
@@ -326,7 +326,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
           "‹secret:STRIPE_API_KEY›",
         );
         if (sealed !== null) {
-          expect(invoke("volli:secrets-list")).toMatchObject({
+          expect(await invoke("volli:secrets-list")).toMatchObject({
             ok: true,
             credentials: { state: "locked", reason: "unavailable" },
           });
@@ -440,7 +440,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
             ...port,
             request: async (input, signal) => {
               const waiting = port.request(input, signal);
-              const list = service.list();
+              const list = await service.list();
               if (!list.ok || list.requests.length !== 1) throw new Error("No request metadata");
               await service.submit(list.requests[0]!.id, sentinel, "session");
               return waiting;

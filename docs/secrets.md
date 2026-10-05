@@ -35,7 +35,12 @@ write-only replacement and revocation. Availability checks do not mark use; only
 subprocess injection updates last use. Revocation stops *future spawns* from
 receiving that scope's value, in every process sharing the profile (desktop,
 hostd, `volli-hostd credentials`): each injection reads the sealed file again
-under the credential lock (VC-642). A running process already has its environment;
+under the credential lock (VC-642). Nothing waits for that lock on Electron's
+main thread: a command started while another Volli process holds it fails at
+once with "busy, try again", and Settings waits for it asynchronously, briefly,
+then shows the secrets as busy rather than missing. The window between that
+read and the process starting is accepted (see the typed module below). A
+running process already has its environment;
 stop its background shell to retire that copy. Historical values remain in the
 launch's redaction set after replacement/revocation so old output stays scrubbed.
 
@@ -61,7 +66,7 @@ status** the first time it is asked (`secrets/credential-state.ts`):
 |---|---|---|---|
 | `ready` | the sealed file opened | used | allowed |
 | `empty` | no sealed file yet, or after a reset | none | allowed |
-| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable; credential lock unavailable; written by a newer Volli (`newer-format`) | not used | refused |
+| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable; written by a newer Volli (`newer-format`); the credential lock file unusable (`lock-unusable`: a symlink, not a file, another user's); another Volli process holding the lock at that instant (`busy`, for that read only) | not used | refused |
 | `refused` | key file unsafe: group/other access (including 0044, which denies its owner), another owner (told from its metadata when the open itself is denied), not a regular file; relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
 | `corrupt` | the key opened and the file does not authenticate or parse | not used | refused |
 
@@ -95,7 +100,9 @@ Two ways out, both a person's or local admin's intent, never an agent verb:
 - **Unlock**: put the key back, unlock the keychain or fix the mode, then try
   again (desktop: **Try again** in Settings → Configure → Secrets; hostd:
   restart).
-- **Reset** (`locked` or `corrupt` only): the sealed file is moved aside to
+- **Reset** (`locked` or `corrupt` only, and never for `busy` or
+  `lock-unusable`, where the store itself may be fine: wait and try again, or
+  move the lock file aside): the sealed file is moved aside to
   `session-secrets.enc.locked-<time>-<random>` beside it, and the store starts
   empty for the secrets to be entered again (desktop: **Reset…**, confirmed;
   hostd: `volli-hostd credentials reset --yes`, with hostd stopped). The move

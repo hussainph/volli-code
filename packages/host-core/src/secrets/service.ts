@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { SecretMetadata, SecretRequestMetadata, SecretScope } from "@volli/shared";
 import {
+  CredentialLockBusyError,
   isSecretName,
+  retryWhileBusy,
   type CredentialStatus,
   type SecretStore,
   type SecretWaitPublisher,
@@ -40,6 +42,13 @@ interface Pending {
   settle: (outcome: Outcome, announce?: boolean) => Promise<void>;
   abandon: () => void;
 }
+
+/**
+ * How long the person's door waits, asynchronously, for another Volli process
+ * to let go of the credential lock (VC-642). The thread stays free: each
+ * attempt refuses at once, and the next one is a timer away.
+ */
+export const CREDENTIAL_DOOR_WAIT_MS = 2_000;
 
 /** Values enter only through person IPC. The Engine owns waiting facts and
  * Attention; this map holds only the live promise correlations needed to deliver
@@ -134,25 +143,50 @@ export class SecretService {
     };
   }
 
-  list(projectId?: string): SecretsResult {
+  /**
+   * Stored secrets and their status from one read (VC-642), waiting
+   * asynchronously, bounded, while another process holds the lock; still busy
+   * after that, the status says `busy` and the listing holds only what is
+   * in memory.
+   */
+  async list(projectId?: string): Promise<SecretsResult> {
+    const snapshot = await whenFree(
+      () => this.store.snapshot(projectId),
+      (result) => result.credentials,
+    );
     return {
       ok: true,
       requests: [...this.#pending.values()]
         .map(({ metadata }) => Object.assign({}, metadata))
         .filter((m) => projectId === undefined || m.projectId === projectId),
-      secrets: this.store.list(projectId),
-      credentials: this.store.status(),
+      secrets: snapshot.secrets,
+      credentials: snapshot.credentials,
     };
   }
 
   /** Tries locked stored secrets again; a person's explicit action. */
-  unlock(): CredentialsResult {
-    return { ok: true, credentials: this.store.unlock() };
+  async unlock(): Promise<CredentialsResult> {
+    this.store.unlock();
+    return {
+      ok: true,
+      credentials: await whenFree(
+        () => this.store.status(),
+        (status) => status,
+      ),
+    };
+  }
+
+  /** Revokes a stored secret, waiting asynchronously while another process holds the lock. */
+  async revoke(id: string): Promise<void> {
+    await retryWhileBusy(() => this.store.revoke(id), CREDENTIAL_DOOR_WAIT_MS);
   }
 
   /** Sets locked stored secrets aside and starts empty; a person's explicit, confirmed action. */
-  reset(): CredentialsResult {
-    const { status, synced } = this.store.reset();
+  async reset(): Promise<CredentialsResult> {
+    const { status, synced } = await retryWhileBusy(
+      () => this.store.reset(),
+      CREDENTIAL_DOOR_WAIT_MS,
+    );
     if (!synced) {
       // The move happened; only its durability across a power cut is unknown.
       console.warn("[volli] saved secrets were set aside, but the directory could not be synced");
@@ -165,13 +199,21 @@ export class SecretService {
     if (pending === undefined) throw new Error("This credential request is no longer waiting.");
     if (!["session", "project", "always"].includes(scope)) throw new Error("Invalid secret scope.");
     const { metadata } = pending;
-    this.store.put({
-      name: metadata.name,
-      value,
-      scope,
-      sessionId: metadata.sessionId,
-      projectId: metadata.projectId,
-    });
+    const save = () =>
+      this.store.put({
+        name: metadata.name,
+        value,
+        scope,
+        sessionId: metadata.sessionId,
+        projectId: metadata.projectId,
+      });
+    try {
+      save();
+    } catch (error) {
+      if (!(error instanceof CredentialLockBusyError)) throw error;
+      // Another process has the lock: wait for it asynchronously, bounded.
+      return retryWhileBusy(save, CREDENTIAL_DOOR_WAIT_MS).then(() => pending.settle("signed in"));
+    }
     return pending.settle("signed in");
   }
 
@@ -181,16 +223,21 @@ export class SecretService {
     return pending.settle("declined");
   }
 
-  replace(id: string, value: string): void {
-    const metadata = this.store.list().find((m) => m.id === id);
-    if (metadata === undefined) throw new Error("This stored secret no longer exists.");
-    this.store.put({
-      name: metadata.name,
-      scope: metadata.scope,
-      ...(metadata.sessionId === undefined ? {} : { sessionId: metadata.sessionId }),
-      ...(metadata.projectId === undefined ? {} : { projectId: metadata.projectId }),
-      value,
-    });
+  /** Replaces a secret's value in place, waiting asynchronously while another process holds the lock. */
+  async replace(id: string, value: string): Promise<void> {
+    await retryWhileBusy(() => {
+      const { secrets, credentials } = this.store.snapshot();
+      if (credentials.reason === "busy") throw new CredentialLockBusyError();
+      const metadata = secrets.find((m) => m.id === id);
+      if (metadata === undefined) throw new Error("This stored secret no longer exists.");
+      this.store.put({
+        name: metadata.name,
+        scope: metadata.scope,
+        ...(metadata.sessionId === undefined ? {} : { sessionId: metadata.sessionId }),
+        ...(metadata.projectId === undefined ? {} : { projectId: metadata.projectId }),
+        value,
+      });
+    }, CREDENTIAL_DOOR_WAIT_MS);
   }
 
   async endSession(sessionId: string): Promise<void> {
@@ -201,5 +248,23 @@ export class SecretService {
     }
     this.store.endSession(sessionId);
     this.#owners.delete(sessionId);
+  }
+}
+
+/**
+ * Reads with `read` until its status is not `busy`, asynchronously, within
+ * {@link CREDENTIAL_DOOR_WAIT_MS}; then answers the last read, busy or not.
+ */
+async function whenFree<T>(read: () => T, status: (result: T) => CredentialStatus): Promise<T> {
+  let last: T | undefined;
+  try {
+    return await retryWhileBusy(() => {
+      last = read();
+      if (status(last).reason === "busy") throw new CredentialLockBusyError();
+      return last;
+    }, CREDENTIAL_DOOR_WAIT_MS);
+  } catch (error) {
+    if (!(error instanceof CredentialLockBusyError)) throw error;
+    return last!;
   }
 }

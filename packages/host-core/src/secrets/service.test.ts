@@ -40,7 +40,7 @@ describe("person-only secret request service", () => {
     const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
     try {
       const waiting = port.request(input, new AbortController().signal);
-      const before = service.list();
+      const before = await service.list();
       expect(before.ok).toBe(true);
       if (!before.ok) throw new Error("missing list");
       expect(before.requests[0]).toMatchObject({ name: input.name, agentSays: input.purpose });
@@ -50,9 +50,10 @@ describe("person-only secret request service", () => {
       expect(service.environment("s")[input.name]).toBe(sentinel);
       expect(port.redact(`echo ${sentinel}`)).toBe("echo ‹secret:STRIPE_API_KEY›");
       expect(
-        JSON.stringify([before, result, service.list(), logs.map((log) => log.mock.calls)]),
+        JSON.stringify([before, result, await service.list(), logs.map((log) => log.mock.calls)]),
       ).not.toContain(sentinel);
-      expect(service.list().ok && service.list()).not.toHaveProperty("value");
+      const listed = await service.list();
+      expect(listed.ok && listed).not.toHaveProperty("value");
     } finally {
       for (const log of logs) log.mockRestore();
     }
@@ -74,7 +75,7 @@ describe("person-only secret request service", () => {
   it("a done signal preserves live injection, and only executor close retires it", async () => {
     const { service, port } = setup();
     const first = port.request(input, new AbortController().signal);
-    const pending = service.list();
+    const pending = await service.list();
     if (!pending.ok) throw new Error("missing list");
     service.submit(pending.requests[0]!.id, sentinel, "session");
     expect(await first).toBe("signed in");
@@ -102,7 +103,7 @@ describe("person-only secret request service", () => {
     );
     const waiting = port.request(input, new AbortController().signal);
     expect(opened).toHaveBeenCalledTimes(1);
-    const list = service.list();
+    const list = await service.list();
     if (!list.ok) throw new Error("missing list");
     service.submit(list.requests[0]!.id, sentinel, "session");
     const resumed = vi.fn();
@@ -115,7 +116,7 @@ describe("person-only secret request service", () => {
     expect(await waiting).toBe("signed in");
     await port.dispose();
   });
-  it("has no credential submission/answer/prefill verb", () => {
+  it("has no credential submission/answer/prefill verb", async () => {
     expect(JSON.stringify(VERB_REGISTRY)).not.toContain("secret-submit");
     expect(JSON.stringify(VERB_REGISTRY)).not.toContain("secret-replace");
     const { port } = setup();
@@ -132,18 +133,18 @@ describe("person-only secret request service", () => {
     const { service, port } = setup();
     const controller = new AbortController();
     const waiting = port.request(input, controller.signal);
-    const list = service.list();
+    const list = await service.list();
     if (!list.ok) throw new Error("missing list");
     controller.abort();
     expect(await waiting).toBe("still missing");
     expect(() => service.submit(list.requests[0]!.id, sentinel, "session")).toThrow();
     const second = port.request(input, new AbortController().signal);
-    const next = service.list();
+    const next = await service.list();
     if (!next.ok) throw new Error("missing list");
     service.decline(next.requests[0]!.id);
     expect(await second).toBe("declined");
     const third = port.request(input, new AbortController().signal);
-    const last = service.list();
+    const last = await service.list();
     if (!last.ok) throw new Error("missing list");
     service.submit(last.requests[0]!.id, sentinel, "session");
     await third;
@@ -157,10 +158,10 @@ describe("person-only secret request service", () => {
       "still missing",
     );
     const waiting = port.request(input, new AbortController().signal);
-    const list = service.list();
+    const list = await service.list();
     if (!list.ok) throw new Error("missing list");
     expect(() => service.submit(list.requests[0]!.id, sentinel, "project")).toThrow();
-    expect(JSON.stringify(service.list())).not.toContain(sentinel);
+    expect(JSON.stringify(await service.list())).not.toContain(sentinel);
     service.decline(list.requests[0]!.id);
     expect(await waiting).toBe("declined");
   });
@@ -168,7 +169,7 @@ describe("person-only secret request service", () => {
     const { service, store, port } = setup();
     const dir = dirs.at(-1)!;
     writeFileSync(join(dir, "session-secrets.enc"), "sealed elsewhere");
-    const list = service.list();
+    const list = await service.list();
     expect(list).toMatchObject({
       ok: true,
       secrets: [],
@@ -176,15 +177,15 @@ describe("person-only secret request service", () => {
     });
     // Asking for a secret still reaches the person; Session storage still works.
     const waiting = port.request(input, new AbortController().signal);
-    const open = service.list();
+    const open = await service.list();
     if (!open.ok) throw new Error("missing list");
     expect(() => service.submit(open.requests[0]!.id, sentinel, "always")).toThrow();
     await service.submit(open.requests[0]!.id, sentinel, "session");
     expect(await waiting).toBe("signed in");
     expect(service.environment("s")).toEqual({ [input.name]: sentinel });
 
-    expect(service.unlock()).toEqual({ ok: true, credentials: store.status() });
-    expect(service.reset()).toEqual({
+    expect(await service.unlock()).toEqual({ ok: true, credentials: store.status() });
+    expect(await service.reset()).toEqual({
       ok: true,
       credentials: { state: "empty", reason: null, unavailable: [] },
     });
@@ -193,13 +194,13 @@ describe("person-only secret request service", () => {
     ]);
     expect(service.environment("s")).toEqual({ [input.name]: sentinel });
   });
-  it("warns when a reset could not be synced to disk, and still reports it done", () => {
+  it("warns when a reset could not be synced to disk, and still reports it done", async () => {
     const { service, store } = setup();
     const status = { state: "empty", reason: null, unavailable: [] } as const;
     vi.spyOn(store, "reset").mockReturnValue({ archive: "a", synced: false, status });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(service.reset()).toEqual({ ok: true, credentials: status });
+      expect(await service.reset()).toEqual({ ok: true, credentials: status });
       expect(warn).toHaveBeenCalledWith(
         "[volli] saved secrets were set aside, but the directory could not be synced",
       );

@@ -4,12 +4,19 @@
  * real child `node` processes with the headless key file.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { CREDENTIAL_LOCK_FILE_NAME, CredentialLock } from "./credential-lock";
+import { CREDENTIAL_LOCK_FILE_NAME, CredentialLock, retryWhileBusy } from "./credential-lock";
 import { fileSecretKey, SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "./file-key";
 import { SecretStore } from "./store";
 import { runChild, startChild } from "./test-support/processes";
@@ -32,7 +39,7 @@ const always = (name: string, value: string) => ({ name, value, scope: "always" 
 const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
 const temporaries = () => readdirSync(dir).filter((name) => name.endsWith(".tmp"));
 
-describe("Session secrets across processes", () => {
+describe("Session secrets across processes", { timeout: 30_000 }, () => {
   it("merges saves and last-use updates from several processes: none is lost", async () => {
     const parent = open();
     parent.put(always("PARENT_0", "parent-0"));
@@ -45,9 +52,20 @@ describe("Session secrets across processes", () => {
       }),
     );
     // Meanwhile the parent saves, and injects (which commits last use).
+    // Each synchronous attempt refuses at once while a child holds the lock;
+    // the parent retries asynchronously, as the person's door does.
     for (let i = 1; i <= 8; i += 1) {
-      parent.put({ name: `PARENT_${i}`, value: `parent-${i}`, scope: "project", projectId: "p" });
-      parent.environment("s", "p");
+      await retryWhileBusy(
+        () =>
+          parent.put({
+            name: `PARENT_${i}`,
+            value: `parent-${i}`,
+            scope: "project",
+            projectId: "p",
+          }),
+        10_000,
+      );
+      await retryWhileBusy(() => parent.environment("s", "p"), 10_000);
     }
     for (const child of children) expect(await child.next()).toEqual({ status: "ready" });
     await Promise.all(children.map((child) => child.exited));
@@ -125,7 +143,7 @@ describe("Session secrets across processes", () => {
   }, 30_000);
 });
 
-describe("a key lost while the host runs (VC-641's known limit)", () => {
+describe("a key lost while the host runs (VC-641's known limit)", { timeout: 30_000 }, () => {
   it("locks stored secrets at the next read, not the next launch, and keeps the file", () => {
     const store = open();
     store.put(always("STORED", "stored-sentinel"));
@@ -197,27 +215,72 @@ describe("a key lost while the host runs (VC-641's known limit)", () => {
     ).toEqual([item.id]);
   });
 
-  it("answers a command with an error, not without its secrets, while another process holds the lock", async () => {
-    const store = new SecretStore(path, fileSecretKey({ path: key }), {
-      document: { lockTimeoutMs: 20 },
-    });
+  it("never stalls the thread, and says busy (not a stale ready) while another process holds the lock", async () => {
+    const store = open();
     store.put(always("STORED", "stored-sentinel"));
+    expect(store.status().state).toBe("ready");
     const child = startChild({ kind: "hold", lock: join(dir, CREDENTIAL_LOCK_FILE_NAME) });
+    const busy = { state: "locked", reason: "busy", unavailable: ["session-env"] };
     try {
       await child.next();
+      const started = performance.now();
       expect(() => store.environment("s", "p")).toThrow("busy");
       expect(store.list()).toEqual([]);
-      expect(store.status().state).toBe("ready");
-      // Momentary: never remembered as a lock.
-      const fresh = new SecretStore(path, fileSecretKey({ path: key }), {
-        document: { lockTimeoutMs: 20 },
-      });
-      expect(fresh.status()).toMatchObject({ state: "locked", reason: "store-unreadable" });
+      expect(store.status()).toEqual(busy);
+      expect(store.snapshot()).toEqual({ secrets: [], credentials: busy });
+      expect(store.available("STORED", "s", "p")).toBe(false);
+      expect(store.problem()).toContain("busy");
+      expect(() => store.reset()).toThrow("busy");
+      // None of those waited for the other process.
+      expect(performance.now() - started).toBeLessThan(500);
+      // Momentary: never remembered as a lock, even on a store's first read.
+      const fresh = open();
+      expect(fresh.status()).toEqual(busy);
       expect(fresh.hasValues()).toBe(false);
     } finally {
       child.process.kill("SIGKILL");
       await child.exited;
     }
+    expect(store.snapshot().credentials.state).toBe("ready");
     expect(store.environment("s", "p")).toEqual({ STORED: "stored-sentinel" });
+  });
+
+  it("refuses, and moves nothing, when a reset finds another process holding the lock", async () => {
+    const store = open();
+    store.put(always("STORED", "stored-sentinel"));
+    const before = digest();
+    rmSync(key);
+    expect(store.status()).toMatchObject({ state: "locked", reason: "missing" });
+    const child = startChild({ kind: "hold", lock: join(dir, CREDENTIAL_LOCK_FILE_NAME) });
+    try {
+      await child.next();
+      expect(() => store.reset()).toThrow("busy");
+    } finally {
+      child.process.kill("SIGKILL");
+      await child.exited;
+    }
+    expect(digest()).toBe(before);
+    expect(store.reset().status.state).toBe("empty");
+  });
+
+  it("keeps the lock file's problem distinct: no reset over a good store, and the fix named", () => {
+    const store = open();
+    store.put(always("STORED", "stored-sentinel"));
+    const before = digest();
+    const lock = join(dir, CREDENTIAL_LOCK_FILE_NAME);
+    new CredentialLock(lock).close();
+    rmSync(lock);
+    symlinkSync(join(dir, "elsewhere"), lock);
+    const blocked = open();
+    expect(blocked.status()).toEqual({
+      state: "locked",
+      reason: "lock-unusable",
+      unavailable: ["session-env"],
+    });
+    expect(blocked.problem()).toContain(lock);
+    expect(() => blocked.reset()).toThrow("Fix the lock file");
+    expect(digest()).toBe(before);
+    rmSync(lock);
+    expect(blocked.unlock().state).toBe("ready");
   });
 });

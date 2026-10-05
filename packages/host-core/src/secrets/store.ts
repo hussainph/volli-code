@@ -10,8 +10,9 @@ import {
   CREDENTIALS_EMPTY,
   CREDENTIALS_READY,
   credentialStatusFor,
-  credentialsUnavailable,
-  SEALED_CREDENTIAL_KINDS,
+  credentialsBusy,
+  CredentialLockUnusableError,
+  credentialsResettable,
   SealedStoreNewerError,
   type CredentialStatus,
   type SealedStoreArchive,
@@ -194,12 +195,11 @@ export interface SecretStoreOptions {
   readonly document?: SealedDocumentOptions;
 }
 
-/** Answered while another process held the lock past the wait: unavailable for now. */
-const BUSY: CredentialStatus = {
-  state: "locked",
-  reason: "store-unreadable",
-  unavailable: SEALED_CREDENTIAL_KINDS,
-};
+/** What a listing surface shows: one read's records and the status they were read under. */
+export interface SecretSnapshot {
+  readonly secrets: SecretMetadata[];
+  readonly credentials: CredentialStatus;
+}
 
 /**
  * Main-process-only credential owner. Scope is explicit person intent supplied
@@ -276,12 +276,25 @@ export class SecretStore {
 
   /** Omit the filter to manage all scopes; a project filter includes global secrets. */
   list(projectId?: string): SecretMetadata[] {
-    return [...this.#fresh(), ...this.#sessions]
-      .filter(
-        (item) =>
-          projectId === undefined || item.scope === "always" || item.projectId === projectId,
-      )
-      .map(metadata);
+    return this.snapshot(projectId).secrets;
+  }
+
+  /**
+   * The listing and the status it was read under, from one read, so they
+   * never disagree: while another process holds the lock, the stored
+   * secrets are missing and the status says `busy`, never a stale `ready`.
+   */
+  snapshot(projectId?: string): SecretSnapshot {
+    const { records, status } = this.#read();
+    return {
+      secrets: [...records, ...this.#sessions]
+        .filter(
+          (item) =>
+            projectId === undefined || item.scope === "always" || item.projectId === projectId,
+        )
+        .map(metadata),
+      credentials: status,
+    };
   }
 
   revoke(id: string): void {
@@ -303,7 +316,7 @@ export class SecretStore {
 
   /** Availability is metadata-only and never updates last use. */
   available(name: string, sessionId: string, projectId: string): boolean {
-    return this.#select(this.#fresh(), sessionId, projectId).has(name);
+    return this.#select(this.#read().records, sessionId, projectId).has(name);
   }
 
   #select(
@@ -330,9 +343,10 @@ export class SecretStore {
    * Nearest scope wins: session > project > always. Only injected values
    * count as used. Reads what is stored now, under the lock, and records last
    * use in the same commit, so a revocation anywhere is honoured by the next
-   * command. Locked stored credentials inject nothing; another process
-   * holding the lock past the wait throws rather than run the command
-   * without a value it was given.
+   * command. Locked stored credentials inject nothing. It never waits: another
+   * process holding the lock at that instant is {@link CredentialLockBusyError}
+   * at once, rather than a stalled thread or a command run without a value it
+   * was given.
    */
   environment(sessionId: string, projectId: string): Record<string, string> {
     const at = Date.now();
@@ -453,21 +467,25 @@ export class SecretStore {
   /**
    * Where stored credentials stand now, reading them again under the lock
    * unless they are already known to be unavailable. Metadata only: no
-   * value, key byte or path.
+   * value, key byte or path. Another process holding the lock at that
+   * instant is `locked` (`busy`) for this answer alone.
    */
   status(): CredentialStatus {
-    this.#fresh();
-    return this.#status ?? BUSY;
+    return this.#read().status;
   }
 
   /**
-   * The refusal sentence behind a `locked` or `refused` key, for an
-   * operator's log: it names the fix and may name the key file's path, never
-   * a key byte or a secret. `null` otherwise, a corrupt store included.
+   * The sentence behind a status that is not `ready` or `empty`, for an
+   * operator's log: a key or lock-file refusal names the fix and may name the
+   * file's path, never a key byte or a secret; a busy lock says so. `null`
+   * otherwise, a corrupt store included.
    */
   problem(): string | null {
-    this.status();
-    return isSecretKeyUnavailable(this.#failure) ? this.#failure.message : null;
+    if (this.status().reason === "busy") return new CredentialLockBusyError().message;
+    const failure = this.#failure;
+    return isSecretKeyUnavailable(failure) || failure instanceof CredentialLockUnusableError
+      ? failure.message
+      : null;
   }
 
   /**
@@ -494,18 +512,26 @@ export class SecretStore {
    */
   reset(now: Date = new Date()): SecretStoreReset {
     const status = this.status();
-    if (status.state === "refused") {
-      throw new Error(
-        "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
-      );
-    }
-    if (!credentialsUnavailable(status)) {
+    if (!credentialsResettable(status)) {
+      if (status.state === "refused") {
+        throw new Error(
+          "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+        );
+      }
+      if (status.reason === "busy") throw new CredentialLockBusyError();
+      if (status.reason === "lock-unusable") {
+        throw new Error(
+          "Saved secrets are unused because their lock file cannot be used. Fix the lock " +
+            "file; a reset cannot, and the secrets may be fine.",
+        );
+      }
       throw new Error("Saved secrets are not locked, so there is nothing to reset.");
     }
     let archived: SealedStoreArchive | null;
     try {
       archived = this.#document.lock.withSync(() => archiveSealedStore(this.#document.path, now));
-    } catch {
+    } catch (error) {
+      if (error instanceof CredentialLockBusyError) throw error;
       // Never a path or a filesystem error's text.
       // eslint-disable-next-line preserve-caught-error
       throw new Error("Could not set the saved secrets aside.");
@@ -522,18 +548,26 @@ export class SecretStore {
 
   /** Settles the status the first time stored values matter (redaction). */
   #settle(): void {
-    if (this.#status === null) this.#fresh();
+    if (this.#status === null) this.#read();
   }
 
-  /** Stored records for a read, fresh from disk: none while they are unavailable. */
-  #fresh(): SecretRecord[] {
-    if (this.#failure !== null) return [];
+  /**
+   * Stored records for a read, fresh from disk, with the status they were
+   * read under: none while they are unavailable. A busy lock is `busy` for
+   * this read alone, never remembered; anything else that stops the open is
+   * remembered until unlock.
+   */
+  #read(): { records: SecretRecord[]; status: CredentialStatus } {
+    if (this.#failure !== null) return { records: [], status: this.#status! };
     try {
-      return this.#adopt(this.#document.read());
+      const records = this.#adopt(this.#document.read());
+      return { records, status: this.#status! };
     } catch (error) {
-      // A busy lock is momentary, never remembered.
-      if (!(error instanceof CredentialLockBusyError)) this.#fail(error);
-      return [];
+      if (error instanceof CredentialLockBusyError) {
+        return { records: [], status: credentialsBusy() };
+      }
+      this.#fail(error);
+      return { records: [], status: this.#status! };
     }
   }
 

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
 import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
 import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
-import { randomUUID } from "node:crypto";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { SecretStore } from "@volli/host-core/secrets";
 
@@ -1857,7 +1858,8 @@ describe("Pi native adapter attach", () => {
 
 function secrets() {
   return new SecretService(
-    new SecretStore(join(process.cwd(), `.secret-adapter-${randomUUID()}.enc`), {
+    // Its own directory: the store's credential lock (VC-642) sits beside it.
+    new SecretStore(join(mkdtempSync(join(tmpdir(), "volli-secret-adapter-")), "secrets.enc"), {
       isEncryptionAvailable: () => false,
       encryptString: () => {
         throw new Error("unused");
@@ -1912,7 +1914,7 @@ describe("Pi credential waiting and lifetime", () => {
         new AbortController().signal,
       );
     const waiting = request();
-    const list = service.list();
+    const list = await service.list();
     if (!list.ok) throw new Error("missing list");
     const metadata = list.requests[0]!;
     expect(sink.observations).toContainEqual(
@@ -1936,7 +1938,7 @@ describe("Pi credential waiting and lifetime", () => {
     const entry = service.store.list().find((item) => item.name === "TOKEN")!;
     service.store.revoke(entry.id);
     const withdrawn = request();
-    const next = service.list();
+    const next = await service.list();
     if (!next.ok) throw new Error("missing list");
     await binding.withdrawInteraction!(next.requests[0]!.id);
     expect(await withdrawn).toBe("still missing");

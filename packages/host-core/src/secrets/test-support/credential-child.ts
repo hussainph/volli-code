@@ -124,20 +124,25 @@ switch (command.kind) {
   }
   case "secret-put": {
     const store = secrets(command.path, command.key, command.crashAt);
-    for (const input of command.inputs) store.put(input);
+    for (const input of command.inputs) await retryWhileBusy(() => store.put(input), 10_000);
     say({ status: store.status().state });
     break;
   }
   case "secret-revoke": {
     const store = secrets(command.path, command.key);
     const found = store.list().find((item) => item.name === command.name);
-    if (found !== undefined) store.revoke(found.id);
+    if (found !== undefined) await retryWhileBusy(() => store.revoke(found.id), 10_000);
     say({ revoked: found !== undefined });
     break;
   }
   case "secret-env": {
     const store = secrets(command.path, command.key);
-    say({ env: store.environment(command.sessionId, command.projectId) });
+    say({
+      env: await retryWhileBusy(
+        () => store.environment(command.sessionId, command.projectId),
+        10_000,
+      ),
+    });
     break;
   }
 }
