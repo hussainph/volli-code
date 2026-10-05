@@ -67,7 +67,6 @@ export {
   updateProjectSkillModes,
   updateProjectThemeOverride,
 } from "../db/projects-repo";
-export { beginDatabaseRecovery, recoveryPendingPath } from "../db/recovery-pending";
 export { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
 export { hasSecret, readSecret, writeSecret } from "../db/secrets-repo";
 export { readSessionProvenance } from "../db/session-provenance-repo";
