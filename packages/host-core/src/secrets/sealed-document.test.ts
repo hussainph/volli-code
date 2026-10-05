@@ -109,7 +109,7 @@ describe("SealedDocument", () => {
   it("refuses a seal that fails or makes nothing, with a generic sentence", () => {
     const toy = codec();
     const document = new SealedDocument(path, { ...toy, seal: () => Buffer.alloc(0) }, lock);
-    expect(() => document.update(() => ["a"])).toThrow("Could not seal saved credentials.");
+    expect(() => document.update(() => ["a"])).toThrow("Could not persist encrypted secrets.");
     const throwing = new SealedDocument(
       path,
       {
@@ -120,7 +120,7 @@ describe("SealedDocument", () => {
       },
       lock,
     );
-    expect(() => throwing.update(() => ["a"])).toThrow(/^Could not seal saved credentials\.$/);
+    expect(() => throwing.update(() => ["a"])).toThrow(/^Could not persist encrypted secrets\.$/);
   });
 
   it("refuses to publish over a file changed outside the lock, and reads again after", () => {
@@ -143,7 +143,7 @@ describe("SealedDocument", () => {
         if (at === "renamed") throw new Error(`fault at ${dir}`);
       },
     });
-    expect(() => document.update(() => ["a"])).toThrow(/^Could not save credentials\.$/);
+    expect(() => document.update(() => ["a"])).toThrow(/^Could not persist encrypted secrets\.$/);
     expect(readFileSync(path, "utf8")).toBe('sealed:["a"]');
     expect(new SealedDocument(path, codec(), lock).read()).toEqual(["a"]);
   });

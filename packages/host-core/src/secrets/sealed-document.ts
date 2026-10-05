@@ -77,6 +77,23 @@ export class SealedStoreCorruptError extends Error {
   }
 }
 
+/** The one sentence for a seal or publish that failed for any other reason. */
+const PERSIST_FAILURE = "Could not persist encrypted secrets.";
+
+/**
+ * Whether `error`, from a read or an update, means the sealed file cannot be
+ * opened here (credentials `locked`, `refused` or `corrupt`), as opposed to a
+ * busy lock or a change that failed.
+ */
+export function isSealedOpenFailure(error: unknown): boolean {
+  return (
+    isSecretKeyUnavailable(error) ||
+    error instanceof SealedStoreUnreadableError ||
+    error instanceof SealedStoreNewerError ||
+    error instanceof SealedStoreCorruptError
+  );
+}
+
 /** Errors that already say what happened without disclosing anything. */
 const PASS_THROUGH = [
   SealedStoreUnreadableError,
@@ -127,7 +144,7 @@ export class SealedDocument<T> {
         sealed = this.#codec.seal(next, expected);
         if (!Buffer.isBuffer(sealed) || sealed.length === 0) throw new Error();
       } catch (error) {
-        throw sanitize(error, () => new Error("Could not seal saved credentials."));
+        throw sanitize(error, () => new Error(PERSIST_FAILURE));
       }
       // Forget the cache first: if publishing fails after its rename, the next
       // read must look at the disk rather than trust either version.
@@ -136,7 +153,7 @@ export class SealedDocument<T> {
       try {
         ({ synced } = publishSealedFile(this.path, sealed, { expected, ...this.#options }));
       } catch (error) {
-        throw sanitize(error, () => new Error("Could not save credentials."));
+        throw sanitize(error, () => new Error(PERSIST_FAILURE));
       }
       this.#bytes = sealed;
       return { document: next, written: true, synced };

@@ -11,9 +11,9 @@
  * and applies only its own scoped change (`sealed-document.ts`).
  *
  * MECHANISM. The lock is SQLite's own file lock on a stable, empty sibling
- * `host-credentials.lock`: `BEGIN EXCLUSIVE` on a connection that never writes
- * and is released by `ROLLBACK`, so the file stays zero bytes and no journal
- * is ever made. It is the mechanism `db/open-lock.ts` and hostd's instance
+ * `host-credentials.lock`: `BEGIN EXCLUSIVE` on a connection that never writes,
+ * keeps its journal in memory and is released by `ROLLBACK`, so the file stays
+ * zero bytes and no `-journal` sibling is ever made, even by a crash. It is the mechanism `db/open-lock.ts` and hostd's instance
  * lock already use, so it adds no native dependency to either host. On Linux
  * and macOS SQLite's unix VFS takes POSIX `fcntl` record locks, which:
  *
@@ -87,6 +87,8 @@ export class CredentialLockUnavailableError extends SealedStoreUnreadableError {
 
 interface Holder {
   database: Database.Database | null;
+  /** Whether {@link database} keeps its rollback journal in memory yet. */
+  configured: boolean;
   /** Held, or reserved by an asynchronous acquirer, in this process. */
   held: boolean;
   readonly waiters: Array<() => void>;
@@ -118,7 +120,7 @@ export class CredentialLock {
     if (holder.held) throw new CredentialLockBusyError();
     const database = open(this.path, holder);
     database.pragma(`busy_timeout = ${Math.max(0, Math.floor(timeoutMs))}`);
-    begin(database);
+    begin(holder, database);
     holder.held = true;
     try {
       return fn();
@@ -141,7 +143,7 @@ export class CredentialLock {
       database.pragma("busy_timeout = 0");
       for (let attempt = 0; ; attempt += 1) {
         try {
-          begin(database);
+          begin(holder, database);
           break;
         } catch (error) {
           const wait = Math.min(
@@ -169,12 +171,13 @@ export class CredentialLock {
     if (holder === undefined || holder.held) return;
     holder.database?.close();
     holder.database = null;
+    holder.configured = false;
   }
 
   #holder(): Holder {
     let holder = holders.get(this.path);
     if (holder === undefined) {
-      holder = { database: null, held: false, waiters: [] };
+      holder = { database: null, configured: false, held: false, waiters: [] };
       holders.set(this.path, holder);
     }
     return holder;
@@ -217,12 +220,20 @@ function release(holder: Holder): void {
     // Closing the connection is what drops the kernel lock for certain.
     holder.database!.close();
     holder.database = null;
+    holder.configured = false;
   }
   vacate(holder);
 }
 
-function begin(database: Database.Database): void {
+function begin(holder: Holder, database: Database.Database): void {
   try {
+    // An in-memory journal: holding the lock never makes a `-journal` file a
+    // crash could leave behind, and a read-only directory can still lock.
+    // Setting it reads the file, so it waits on another holder like BEGIN.
+    if (!holder.configured) {
+      database.pragma("journal_mode = MEMORY");
+      holder.configured = true;
+    }
     database.exec("BEGIN EXCLUSIVE");
   } catch (error) {
     if ((error as { code?: unknown }).code === "SQLITE_BUSY") throw new CredentialLockBusyError();

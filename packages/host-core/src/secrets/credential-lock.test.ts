@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -195,6 +196,29 @@ describe("credential lock across processes", () => {
     expect(await lock.with(() => "mine", 5_000)).toBe("mine");
     expect(Date.now() - started).toBeGreaterThan(50);
     expect(await child.next()).toEqual({ released: true });
+  });
+
+  it("leaves no journal beside the lock while held, and locks in a read-only directory", async () => {
+    const lock = lockAt();
+    lock.withSync(() => 0);
+    const child = startChild({ kind: "hold", lock: lock.path });
+    try {
+      await child.next();
+      expect(readdirSync(dir)).toEqual([CREDENTIAL_LOCK_FILE_NAME]);
+    } finally {
+      child.process.kill("SIGKILL");
+      await child.exited;
+    }
+    expect(readdirSync(dir)).toEqual([CREDENTIAL_LOCK_FILE_NAME]);
+    if (process.getuid!() === 0) return;
+    chmodSync(dir, 0o500);
+    try {
+      // A fresh connection, configured while the directory is read-only.
+      lock.close();
+      expect(lock.withSync(() => 1)).toBe(1);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 
   it("waits synchronously, bounded, for a short hold in another process", async () => {

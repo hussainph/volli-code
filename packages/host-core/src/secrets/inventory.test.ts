@@ -438,7 +438,7 @@ describe("SealedInventory", () => {
     };
     const other = open({ keyring: rotating });
     expect(other.get("web-search", WEB)?.value).toBe("v");
-    expect(() => other.put("web-search", WEB, "w")).toThrow("Could not seal saved credentials.");
+    expect(() => other.put("web-search", WEB, "w")).toThrow("Could not persist encrypted secrets.");
     expect(other.status().state).toBe("ready");
     expect(digest()).toBe(before);
   });

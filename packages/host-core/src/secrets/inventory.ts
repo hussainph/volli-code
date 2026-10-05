@@ -52,13 +52,12 @@ import {
   credentialStatusFor,
   credentialsUnavailable,
   SealedStoreNewerError,
-  SealedStoreUnreadableError,
   type CredentialStatus,
 } from "./credential-state";
 import { envelopeHeader, openEnvelope, sealEnvelope } from "./sealed-envelope";
 import {
+  isSealedOpenFailure,
   SealedDocument,
-  SealedStoreCorruptError,
   type SealedCodec,
   type SealedDocumentOptions,
 } from "./sealed-document";
@@ -285,8 +284,9 @@ export class SealedInventory {
   /** Applies `change` to the current records under the lock; `null` from it writes nothing. */
   #change(change: (current: Inventory) => CredentialRecord[] | null): void {
     if (this.#failure !== null) throw this.#failure;
+    let written: boolean;
     try {
-      this.#document.update((current) => {
+      ({ written } = this.#document.update((current) => {
         const inventory = current ?? EMPTY;
         const records = change(inventory);
         if (records === null) return null;
@@ -295,13 +295,13 @@ export class SealedInventory {
           generation: inventory.generation + 1,
           records,
         };
-      });
-      this.#status = CREDENTIALS_READY;
+      }));
     } catch (error) {
-      if (!isOpenFailure(error)) throw error;
+      if (!isSealedOpenFailure(error)) throw error;
       this.#fail(error);
       throw error;
     }
+    if (written) this.#status = CREDENTIALS_READY;
   }
 
   #fail(error: unknown): void {
@@ -311,16 +311,6 @@ export class SealedInventory {
 }
 
 const EMPTY: Inventory = { inventory: "", generation: 0, records: [] };
-
-/** Failures that say the inventory cannot be opened, as opposed to a refused change. */
-function isOpenFailure(error: unknown): boolean {
-  return (
-    isSecretKeyUnavailable(error) ||
-    error instanceof SealedStoreUnreadableError ||
-    error instanceof SealedStoreNewerError ||
-    error instanceof SealedStoreCorruptError
-  );
-}
 
 function expect(previous: CredentialRecord | undefined, options: ChangeOptions): void {
   if (options.expectRevision === undefined) return;
