@@ -9,6 +9,9 @@ import { createDesktopDecisions } from "./decision/desktop";
 import { McpSettingsService } from "./mcp/settings";
 import { McpOAuthBroker } from "./mcp/oauth";
 import { WebAccessSettings } from "./web/settings";
+import { existsSync } from "node:fs";
+import { CredentialLock } from "./secrets/credential-lock";
+import { fileCredentialKeyring } from "./secrets/file-key";
 
 const { ownedModelAccess } = vi.hoisted(() => ({ ownedModelAccess: vi.fn() }));
 vi.mock("@volli/agent-runtime", async (importOriginal) => ({
@@ -109,6 +112,34 @@ describe("live host runtime services", () => {
     expect(createDesktopDecisions).toHaveBeenCalledWith(
       expect.objectContaining({ models: supplied.models, catalogReady: supplied.catalogReady }),
     );
+  });
+
+  it("seals Web Access keys beside the database with the host's keyring (VC-643)", async () => {
+    const { db, dbPath } = open();
+    const results: unknown[] = [];
+    const dir = dbPath.replace(/[^/]+$/, "");
+    const services = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      modelAccess,
+      webKeySealing: {
+        keyring: fileCredentialKeyring({ path: `${dir}session-secrets.key` }),
+        mayUnlockUnattended: () => false,
+        onResult: (result) => results.push(result),
+      },
+    });
+    const web = services.webAccess;
+    expect(web.saveKey("exa", "exa-runtime-services-key").sealing).toBe("sealed");
+    expect(existsSync(`${dir}host-credentials.enc`)).toBe(true);
+    expect(await web.reconcileSealing()).toMatchObject({ sealing: "sealed", written: false });
+    expect(results).toHaveLength(2);
+    // No keyring: legacy mode, honestly pending.
+    const bare = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      modelAccess,
+      webKeySealing: { keyring: null },
+    }).webAccess;
+    expect(await bare.reconcileSealing()).toEqual({ sealing: "pending", reason: "no-keyring" });
+    new CredentialLock(`${dir}host-credentials.lock`).close();
   });
 
   it("routes MCP sign-in pages through the host's client capability", async () => {

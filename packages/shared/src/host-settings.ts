@@ -27,8 +27,27 @@ export type KeyedWebAccessProvider = "brave" | "exa";
  */
 export type WebAccessKeyState = "absent" | "present";
 
+/**
+ * Whether the saved keys' sealed copy is current (VC-643, step E of their move
+ * into the sealed credential store). Never a claim that the keys are
+ * encrypted: until the read switch (VC-644) they rest in the profile database
+ * in the clear, which stays the one source of truth, and the sealed copy is a
+ * mirror of it.
+ *
+ * - `sealed`: a sealed copy of exactly the saved keys was written and read
+ *   back.
+ * - `pending`: the keys are saved; their sealed copy is not current yet (the
+ *   keychain is locked, another Volli process held the credential lock, or
+ *   sealing failed). It is rebuilt from the saved keys on the next save or
+ *   launch.
+ * - `none`: no key is saved and no sealed copy holds one.
+ */
+export type WebKeySealing = "sealed" | "pending" | "none";
+
 /** The whole of what Settings is told about Web Access. */
 export interface WebAccessSettingsView {
+  /** Whether the saved keys' sealed copy is current; see {@link WebKeySealing}. */
+  sealing: WebKeySealing;
   provider: WebAccessProvider;
   /** The normalized instance URL a person configured, or null. Never a secret. */
   searxngUrl: string | null;

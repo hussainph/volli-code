@@ -575,11 +575,12 @@ describe("createHostCore composition", () => {
       NonNullable<Parameters<typeof createHostCore>[1]["modelAccess"]>
     >;
     const supplyModels = vi.fn(() => modelAccess);
+    const webKeySealing = { keyring: null, mayUnlockUnattended: vi.fn(() => false) };
     const venue = vi.fn(() => ({ id: "cloud-host", kind: "remote" as const }));
     const core = live(
       compose(
         { log: { error: vi.fn() } },
-        { ...headlessOptions(dataDir()), modelAccess: supplyModels, venue },
+        { ...headlessOptions(dataDir()), modelAccess: supplyModels, venue, webKeySealing },
       ),
     );
     expect(supplyModels).not.toHaveBeenCalled();
@@ -592,6 +593,7 @@ describe("createHostCore composition", () => {
     expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]).toStrictEqual({
       dbPath: core.dbPath,
       modelAccess,
+      webKeySealing,
       venue: { id: "cloud-host", kind: "remote" },
     });
   });

@@ -208,6 +208,11 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
       exit: exited.resolve,
     },
     hostCore,
+    webSealing: {
+      stop: vi.fn(() => {
+        calls.push("web-sealing.stop");
+      }),
+    },
     console: { error: vi.fn() },
   };
   // Boot order as in index.ts: the gates start as no-ops, prepareHostQuit and
@@ -259,7 +264,7 @@ describe("index.ts quit wiring", () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(await quit.exited).toBe(0);
     expect(quit.hostCore.stop).toHaveBeenCalledOnce();
-    expect(quit.calls.at(-1)).toBe("host.stop");
+    expect(quit.calls.slice(-2)).toEqual(["web-sealing.stop", "host.stop"]);
   });
 
   it("a refused quit still runs all four gates in order and never stops the host", async () => {
@@ -275,6 +280,7 @@ describe("index.ts quit wiring", () => {
     expect(quitAlreadyRefused(event)).toBe(true);
     await new Promise((resolve) => setImmediate(resolve));
     expect(quit.hostCore.stop).not.toHaveBeenCalled();
+    expect(quit.calls).not.toContain("web-sealing.stop");
   });
 
   it("prepareHostQuit reads each gate at quit time, not when it was created", () => {
