@@ -6,7 +6,7 @@ import type { ConnectivityPort, PiModelAccess } from "@volli/agent-runtime";
 import type { SessionExecutionVenue } from "@volli/shared";
 import { openVolliDb } from "./db";
 import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime";
-import type { WorktreeDeps } from "./worktree";
+import type { WorktreePorts } from "./worktree";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
@@ -109,7 +109,7 @@ export interface LiveHostCore extends HostLifecycleOwner, HostSessionServices {
   readonly kind: "live";
   readonly database: { ok: true; db: Database.Database };
   readonly worktrees: WorktreeRuntime;
-  readonly worktreeDeps: WorktreeDeps;
+  readonly worktreeDeps: WorktreePorts;
   readonly runtimeServices: HostRuntimeServices;
   readonly maintenance: HostMaintenance;
   readonly client: ClientCapabilityPort;

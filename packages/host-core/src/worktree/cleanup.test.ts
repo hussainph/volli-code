@@ -27,7 +27,7 @@ import {
 } from "./deletion-lease";
 import { resetRepositoryTurnsForTest, withRepositoryWorktreeTurn } from "./repository-turn";
 import { scriptedGit } from "./scripted-git";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
@@ -225,7 +225,7 @@ function fixture(
     return "";
   });
 
-  const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" };
+  const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" };
   return { projectPath, home, container, paths, stale, deps, removed, pruned, calls };
 }
 
@@ -294,7 +294,7 @@ describe("cleanupOrphans", () => {
     let runSnapshot: unknown = null;
     // Read the durable run the instant before the mutation lands.
     const original = f.deps.git;
-    const deps: WorktreeDeps = {
+    const deps: WorktreePorts = {
       ...f.deps,
       git: (args, cwd) => {
         if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") {
@@ -338,7 +338,7 @@ describe("cleanupOrphans", () => {
     const [first, second] = f.paths as [string, string];
     // The second path picks up an edit between the scan and the confirm.
     const dirtied = new Set([second]);
-    const deps: WorktreeDeps = {
+    const deps: WorktreePorts = {
       ...f.deps,
       git: (args, cwd) => {
         if (verb(args)[0] === "status" && dirtied.has(cwd)) return " M src/app.ts\n";
@@ -437,7 +437,7 @@ describe("cleanupOrphans", () => {
     it("asks what is live, then removes, with no durable write in between", async () => {
       const f = fixture();
       const timeline: string[] = [];
-      const deps: WorktreeDeps = {
+      const deps: WorktreePorts = {
         ...f.deps,
         git: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") timeline.push("removed");
@@ -477,7 +477,7 @@ describe("cleanupOrphans", () => {
     it("lists the stale records, then prunes, with no durable write in between", async () => {
       const f = fixture();
       const timeline: string[] = [];
-      const deps: WorktreeDeps = {
+      const deps: WorktreePorts = {
         ...f.deps,
         git: (args, cwd) => {
           const verbs = verb(args);
@@ -559,7 +559,7 @@ describe("cleanupOrphans", () => {
       // as the prune.
       const f = fixture();
       let extraRecord = false;
-      const deps: WorktreeDeps = {
+      const deps: WorktreePorts = {
         ...f.deps,
         git: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "list" && extraRecord) {
@@ -1055,7 +1055,7 @@ describe("cleanupOrphans", () => {
       const container = f.container;
       // Confirmed one record; the repo now reports a second one as well, so a
       // repo-wide prune would take something nobody confirmed.
-      const deps: WorktreeDeps = {
+      const deps: WorktreePorts = {
         ...f.deps,
         git: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "list") {

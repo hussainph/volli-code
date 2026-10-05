@@ -98,7 +98,7 @@ vi.mock("../../../../packages/host-core/src/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
-import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, desktopPtyPorts, registerTerminalIpcHandlers } from "./pty";
 import { PtyManager, type ParkConfig, type ProcessInspector } from "@volli/host-core/pty";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
@@ -2548,7 +2548,7 @@ describe("warm park", () => {
   beforeEach(() => {
     parts = makeInspector();
     parkManager = new PtyManager({
-      host: desktopPtyHost(),
+      host: desktopPtyPorts(),
       db: testDb.db,
       dbError: "",
       sessionEngine: fixtureSessionEngine,
@@ -2726,7 +2726,7 @@ describe("warm park", () => {
 
     it("refuses even a manual park when parking is disabled", async () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -2942,7 +2942,7 @@ describe("warm park", () => {
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -3049,7 +3049,7 @@ describe("warm park", () => {
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
       const manager2 = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -3082,7 +3082,7 @@ describe("warm park", () => {
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,

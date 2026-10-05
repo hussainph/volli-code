@@ -16,7 +16,7 @@
 import { parseBlobUrl } from "@volli/shared";
 import { readBlob } from "./blob-store";
 
-export interface BlobProtocolDeps {
+export interface BlobProtocolPorts {
   blobsRoot: string;
   /**
    * The media type recorded for this hash, or `undefined` when no `blobs` row
@@ -57,7 +57,7 @@ const BASE_HEADERS: Readonly<Record<string, string>> = {
  * answers rather than throws — a throw here would take down the scheme for
  * every later request, not just the bad one.
  */
-export function blobProtocolResponse(deps: BlobProtocolDeps, url: string): Response {
+export function blobProtocolResponse(deps: BlobProtocolPorts, url: string): Response {
   const hash = parseBlobUrl(url);
   if (hash === null) {
     return new Response("Not a blob URL", { status: 400, headers: BASE_HEADERS });

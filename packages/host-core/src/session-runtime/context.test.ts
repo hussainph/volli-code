@@ -3,7 +3,7 @@ import type { SessionEngine } from "@volli/session-engine";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
-import { desktopMcpDispatch } from "../mcp/dispatch-policy";
+import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createRuntimeContextResolver } from "./context";
 import type { SessionToolSurfacePorts } from "./sessions";
 
@@ -26,7 +26,7 @@ function fixture() {
     db: db.db,
     sessionEngine: { getSession, listEvents, getOrRecordSessionInput } as unknown as SessionEngine,
     venue: { id: "test-host", kind: "remote" },
-    mcpDispatch: desktopMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
+    mcpDispatch: hostMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
     waitForBirth,
     toolSurface: () => surface as unknown as SessionToolSurfacePorts,
   });

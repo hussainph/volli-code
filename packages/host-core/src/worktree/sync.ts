@@ -54,7 +54,7 @@ import type { DiffStat } from "@volli/shared";
 import { resolveComparisonRefAsync } from "./comparison-ref";
 import { parseNumstat, total } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
-import { resolveWorktreeTarget, type WorktreeReadDeps, type WorktreeReadFailure } from "./read";
+import { resolveWorktreeTarget, type WorktreeReadPorts, type WorktreeReadFailure } from "./read";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface SyncInput {
@@ -380,7 +380,7 @@ export async function syncWithBase(
  * but deleted") are the same three however the answer is going to be used.
  */
 export async function previewTicketWorktree(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
   mode: SyncMode,
 ): Promise<WorktreeSyncPreviewRead> {
@@ -410,7 +410,7 @@ export async function previewTicketWorktree(
 }
 
 export async function syncTicketWorktree(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
   mode: SyncMode,
 ): Promise<WorktreeSyncRead> {

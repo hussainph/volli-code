@@ -68,7 +68,7 @@ explicit list of re-exports: a name is public because a client (desktop,
 | `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                           | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                     |
 | `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                       | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))              |
 | `@volli/host-core/automations`     | `automations/`, `automation-services.ts`                                                                                                                                                         | The Automation service and its types                                                                                                         |
-| `@volli/host-core/agents`          | `agent-*.ts`, `agent-dispatch/`, `watches.ts`, `harness-*.ts`                                                                                                                                    | The agent socket, its verb door, the CLI shim and app profile lock, harness registry and installs                                            |
+| `@volli/host-core/agents`          | `agent-*.ts`, `agent-dispatch/`, `watches.ts`, `harness-*.ts`, `host-profile.ts`                                                                                                                 | The agent socket, its verb door, the CLI shim and app profile lock, harness registry and installs                                            |
 | `@volli/host-core/maintenance`     | `backup/`, `process/`, `maintenance-services.ts`, `database-recovery.ts`, `retention-runtime.ts`, `orphan-scan.ts`, `quiet-windows.ts`, `login-*.ts`, `host-shutdown.ts`, `shutdown-deadline.ts` | Backup documents, database recovery, process reaping, retention, quiet windows, login PATH, the shutdown deadline                            |
 | `@volli/host-core/testing`         | `testing/`, `db/test-helpers.ts`, `session-control/test-support.ts`, `backup/test-fixture.ts`, `secrets/test-support/`                                                                           | Test fixtures, a standalone Session ledger and test engine. **Tests only**                                                                   |
 
@@ -100,6 +100,36 @@ compatibility driver.
 - A script run by plain `node` imports its one Node-loadable file by path
   (`db/session-storage-digest.ts`, `db/session-event-provenance.ts`), since an
   entry's extensionless re-exports need a bundler's resolver.
+
+### Naming
+
+One convention for what a module asks for and what it is (VC-632):
+
+- **`…Port`** is one capability host-core asks for, which a host or another
+  module implements (`PowerPort`, `TrashPort`, `SecretKeyPort`).
+  **`…Ports`** is the set of them a constructor takes (`HostCorePorts`,
+  `PtyManagerPorts`, `WorktreePorts`). `Deps` and `Dependencies` are retired
+  for `Ports`.
+- **`…Options`** is policy and configuration: values, and hooks with a
+  default (`HostCoreOptions`, `PtyManagerOptions`).
+- **`…Host`** is a host-core service that owns live resources and serves them
+  (`BackgroundShellHost`, `McpSessionHost`, `PiRuntimeHost`,
+  `ScheduledResumeHost`). It is never what something asks of its host; that is
+  a `Ports`.
+- **`…Backend`** is one engine behind an interface that has more than one
+  (`BrowserBackend`, its agent-facing slice `AgentBrowserBackend`,
+  `CredentialKeyBackend`).
+- **No `Desktop` in host-core names.** host-core runs under desktop and
+  `hostd` alike. A host-specific adapter is named in its host (desktop's
+  `desktopPtyPorts`, hostd's `headlessPorts`); host-core's own constructors
+  are `create…`/`createHost…`, and per-host policy is `Host…`
+  (`HostMcpDispatch`, `HostCodeMode`, `HostDecisions`).
+- **No file named after another package.** The single-instance profile lock,
+  runtime paths and CLI shim are `host-profile.ts`, not `agent-runtime.ts`
+  beside `@volli/agent-runtime`.
+- **Door** keeps its glossary meaning (`CONTEXT.md`): one entrance a caller
+  reaches host behavior through (an IPC handler, a socket verb, an agent
+  tool), never the behavior itself.
 
 ### Lifecycle and maintenance
 
@@ -436,11 +466,11 @@ restore, and where Pi's `auth.json` lives for `hostd` are in
 ### Terminals
 
 `PtyManager` (`src/pty/manager.ts`) supervises every live PTY. It is built by
-the host with a `PtyHost` (the event bus, the worktree bundle, and the
+the host with a `PtyManagerPorts` (the event bus, the worktree bundle, and the
 harness-file writer whose module is still desktop's) plus
 the runtime pieces the host composes: the agent runtime environment, spawn
 ledger and concurrency reader. Desktop builds it in `registerTerminalIpcHandlers`
-with `desktopPtyHost()`; `hostd` will build it with its own. A degraded
+with `desktopPtyPorts()`; `hostd` will build it with its own. A degraded
 database still yields a supervisor whose `create` answers with the open error.
 
 **The stream contract.** M2's terminal ticket (VC-568) exposes this over the

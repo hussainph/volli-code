@@ -30,7 +30,7 @@ import { resolve } from "node:path";
 import type { WorktreeBranchListing } from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
-import { err, ok, type StatMtimeMs, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type StatMtimeMs, type WorktreePorts, type WorktreeResult } from "./types";
 
 export const statMtimeMs: StatMtimeMs = (path) => {
   try {
@@ -57,7 +57,7 @@ function lines(output: string): string[] {
  * reason as `status.ts`, on the same injected runner.
  */
 export async function listBranches(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   projectId: string,
 ): Promise<WorktreeResult<WorktreeBranchListing>> {
   const git = deps.gitAsync;

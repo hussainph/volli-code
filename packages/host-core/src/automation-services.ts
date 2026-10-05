@@ -41,11 +41,11 @@ import { createAutomationEngine } from "./automations/engine";
 import {
   createAutomationService,
   type AutomationService,
-  type AutomationServiceDeps,
+  type AutomationServicePorts,
 } from "./automations/service";
 import {
   createAutomationRunner,
-  type AutomationRunnerDeps,
+  type AutomationRunnerPorts,
   type AutomationRunner,
 } from "./automations/run";
 import { createAutomationScheduler, type AutomationScheduler } from "./automations/scheduler";
@@ -69,7 +69,7 @@ export interface HostAutomationsInput {
   /** Where a failed recovery or scheduler start is reported; neither is surfaced. */
   readonly log: Pick<Console, "error">;
   /** Present only when a model host booted; the service checks runtime pins with it. */
-  readonly inspectModelAccess?: AutomationServiceDeps["inspectModelAccess"];
+  readonly inspectModelAccess?: AutomationServicePorts["inspectModelAccess"];
 }
 
 /**
@@ -77,7 +77,7 @@ export interface HostAutomationsInput {
  * ledger reads, the engine and the start notice are this module's own.
  */
 export type AutomationSessionPorts = Omit<
-  AutomationRunnerDeps,
+  AutomationRunnerPorts,
   | "engine"
   | "findAutomation"
   | "findRun"

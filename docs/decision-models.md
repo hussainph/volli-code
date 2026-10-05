@@ -57,7 +57,7 @@ Main stamps `acceptedAt` with its own clock on every cloud write.
 One port, `DecisionPort.decide(call)` (`@volli/shared`'s `decision-model.ts`),
 implemented by `createDecisionService` in `@volli/agent-runtime` and composed
 over the profile's settings and Pi's model collection in
-`packages/host-core/src/decision/desktop.ts`.
+`packages/host-core/src/decision/host-decisions.ts`.
 
 ```ts
 const value = await decisions.port.decide({

@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
+import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./host-profile";
 
 let cleanup: (() => Promise<void>) | undefined;
 

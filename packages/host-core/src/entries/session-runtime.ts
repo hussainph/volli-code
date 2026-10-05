@@ -5,7 +5,7 @@
  * here when a client needs it; host-core's own files import the module
  * itself, never this entry. See the cluster map in the package README.
  */
-export type { HostDecisions } from "../decision/desktop";
+export type { HostDecisions } from "../decision/host-decisions";
 export { ModelAccessSignInService, type SignInOwner } from "../model-access/sign-in-service";
 export { PiSessionOrphanService } from "../pi-session-orphans";
 export { removeTicketToolOutput } from "../pi-tool-output";
@@ -66,7 +66,7 @@ export { createFileTranscriptArtifactStore } from "../session-runtime/transcript
 export { createAgentShellPort } from "../shell/agent-port";
 export {
   BackgroundShellHost,
-  type BackgroundShellHostDependencies,
+  type BackgroundShellHostPorts,
   type BackgroundShellNotice,
   type BackgroundShellOwner,
 } from "../shell/background-shell-host";

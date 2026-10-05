@@ -152,7 +152,7 @@ export interface BackgroundShellStartInput {
   notifyOn?: ShellNotifyPattern;
 }
 
-export interface BackgroundShellHostDependencies {
+export interface BackgroundShellHostPorts {
   /** The renderer's feed: a whole snapshot on every change of state. */
   publishState(state: BackgroundShellState): void;
   /** The renderer's feed: a shell the host forgot. */
@@ -307,7 +307,7 @@ export class BackgroundShellHost {
   private readonly ledger: SpawnLedgerPort;
   private readonly exitNoticeGraceMs: number;
 
-  constructor(private readonly deps: BackgroundShellHostDependencies) {
+  constructor(private readonly deps: BackgroundShellHostPorts) {
     this.ledger = deps.ledger ?? NO_SPAWN_LEDGER;
     this.createId = deps.createId ?? randomUUID;
     this.now = deps.now ?? Date.now;

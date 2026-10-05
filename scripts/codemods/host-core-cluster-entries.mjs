@@ -116,7 +116,7 @@ export const CLUSTERS = {
   },
   agents: {
     doc: "what agents reach: the socket, its verb table, the tool door, watches, harnesses and the CLI install",
-    files: ["agent-*.ts", "agent-dispatch/**", "watches.ts", "harness-*.ts"],
+    files: ["agent-*.ts", "agent-dispatch/**", "watches.ts", "harness-*.ts", "host-profile.ts"],
   },
   maintenance: {
     doc: "keeping a host healthy: backup, recovery, process reaping, retention, quiet windows, login PATH and shutdown",

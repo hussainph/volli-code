@@ -53,7 +53,7 @@ async function withStartLease<T>(directory: string, work: () => Promise<T>): Pro
   }
 }
 
-export function createDesktopSessionLocationResolver(
+export function createSessionLocationResolver(
   db: Database.Database,
   ports: { events: HostEventBus },
   options: { dataDir: string; venue?: SessionExecutionVenue },

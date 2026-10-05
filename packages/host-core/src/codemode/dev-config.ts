@@ -3,7 +3,7 @@
  *
  * The product setting — one switch, a built-in mode per model, Advanced
  * per-model pins — is the {@link CodeModePolicy} stored in app state and edited
- * in Settings → Models. {@link desktopCodeMode} reads it when a Session is born
+ * in Settings → Models. {@link hostCodeMode} reads it when a Session is born
  * and answers two questions for the surface resolver: is `codemode` offered,
  * and what routes does the new Session freeze. A Session keeps what it was
  * born with; changing the setting reaches only Sessions born after it.
@@ -132,7 +132,7 @@ export interface CodeModeModel {
   modelId: string;
 }
 
-export interface DesktopCodeMode {
+export interface HostCodeMode {
   /**
    * What Code Mode gives a Session born on `model` with `mcpTools`: whether
    * its surface names `codemode`, in which mode, with or without the prompt
@@ -167,7 +167,7 @@ const UNAVAILABLE: CodeModeBirth = Object.freeze({
   largeServers: new Set<string>(),
 });
 
-export function desktopCodeMode(options: {
+export function hostCodeMode(options: {
   env: Readonly<Record<string, string | undefined>>;
   packaged: boolean;
   log: (message: string) => void;
@@ -175,7 +175,7 @@ export function desktopCodeMode(options: {
   policy: () => CodeModePolicy;
   /** Whether this launch located a sandbox to run programs in. */
   sandboxAvailable: boolean;
-}): DesktopCodeMode {
+}): HostCodeMode {
   const read = readCodeModeDevConfig(options.env, { packaged: options.packaged });
   if (read.kind === "invalid") options.log(read.reason);
   const config = read.kind === "on" ? read.config : undefined;

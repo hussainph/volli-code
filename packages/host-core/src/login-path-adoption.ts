@@ -168,7 +168,7 @@ export function interactivePathLogLine(outcome: InteractivePathOutcome): string 
   }
 }
 
-export interface LoginPathBootstrapDeps {
+export interface LoginPathBootstrapPorts {
   binDir: string;
   readCurrentPath(): string | undefined;
   writePath(path: string): void;
@@ -221,7 +221,7 @@ export interface LoginPathBootstrap {
  * first window. The first post-load callback and every Pi execution env share
  * the one memoized apply promise.
  */
-export function createLoginPathBootstrap(deps: LoginPathBootstrapDeps): LoginPathBootstrap {
+export function createLoginPathBootstrap(deps: LoginPathBootstrapPorts): LoginPathBootstrap {
   let probeAttempt: Promise<string | null>;
   try {
     probeAttempt = Promise.resolve(deps.resolveLoginPath()).catch(() => null);

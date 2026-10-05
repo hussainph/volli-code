@@ -19,7 +19,7 @@ import {
   BrowserTabRegistry,
   type BrowserTabChrome,
   type BrowserTabRecord,
-  type BrowserTabRegistryDependencies,
+  type BrowserTabRegistryPorts,
 } from "@volli/host-core/browser";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
@@ -31,7 +31,7 @@ import { debuggerTransport, loadWaiter } from "./webcontents-cdp";
  * inert views/sessions/windows, while production supplies the bundled Electron
  * objects; no Browser Tab policy depends on ambient Electron singletons.
  */
-export interface BrowserTabHostDependencies extends BrowserTabRegistryDependencies {
+export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView;
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;

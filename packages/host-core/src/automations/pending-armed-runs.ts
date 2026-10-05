@@ -39,7 +39,7 @@ export type PendingArmedRunSettlement =
       reason: "gone" | "left-column" | "disarmed" | "switched-off";
     };
 
-export interface PendingArmedRunCoordinatorDeps {
+export interface PendingArmedRunCoordinatorPorts {
   now(): number;
   nextId(): string;
   listPending(): PendingArmedRun[];
@@ -99,7 +99,7 @@ const INTERRUPTED_ATTEMPT_ERROR =
   "The armed automation Run stopped before confirming whether it started.";
 
 export function createPendingArmedRunCoordinator(
-  deps: PendingArmedRunCoordinatorDeps,
+  deps: PendingArmedRunCoordinatorPorts,
 ): PendingArmedRunCoordinator {
   const timers = new Map<string, unknown>();
   const inFlight = new Set<Promise<void>>();

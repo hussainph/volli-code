@@ -22,7 +22,7 @@ import {
   loginShellPath,
   probeLoginShellPath,
   resetLoginShellPathCache,
-  type LoginShellProbeDeps,
+  type LoginShellProbePorts,
 } from "./login-shell-path";
 
 /**
@@ -79,7 +79,7 @@ export async function detectInstalledHarnesses(pathValue: string): Promise<Harne
  * an empty host, and nothing may treat it as one — an install whose PATH failed
  * to resolve once still has every harness it had a minute ago.
  */
-export async function detectHarnesses(deps?: LoginShellProbeDeps): Promise<HarnessId[] | null> {
+export async function detectHarnesses(deps?: LoginShellProbePorts): Promise<HarnessId[] | null> {
   const pathValue = deps
     ? await probeLoginShellPath(DETECTION_PROBE, deps)
     : await loginShellPath();

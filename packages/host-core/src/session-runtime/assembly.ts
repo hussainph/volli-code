@@ -28,9 +28,9 @@ import { prepareTurnAttachments } from "../turn-attachments";
 import type { AgentToolDoor } from "../agent-tool-door";
 import { McpSessionHost, serversForFrozenMcpTools } from "../mcp/session-host";
 import type { McpSettingsService } from "../mcp/settings";
-import type { DesktopMcpDispatch } from "../mcp/dispatch-policy";
-import type { DesktopCodeMode } from "../codemode/dev-config";
-import type { HostDecisions } from "../decision/desktop";
+import type { HostMcpDispatch } from "../mcp/dispatch-policy";
+import type { HostCodeMode } from "../codemode/dev-config";
+import type { HostDecisions } from "../decision/host-decisions";
 import type { WebAccessSettings } from "../web/settings";
 import { webPortsFor } from "../web/ports";
 import type { SecretService } from "../secrets/service";
@@ -44,7 +44,7 @@ import type { SessionToolSurfacePorts } from "./sessions";
 import { readCompactionPolicy } from "./model-access-preferences";
 import { createPiRuntimeHost, type PiAdapterOptions } from "./pi-adapter";
 import {
-  createDesktopSessionRuntime,
+  createHostSessionRuntime,
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,
 } from "./index";
@@ -63,8 +63,8 @@ export interface RuntimeAssemblyOptions {
   decisions: HostDecisions | null;
   webAccess: WebAccessSettings | null;
   mcpSettings: McpSettingsService | null;
-  mcpDispatch: DesktopMcpDispatch;
-  codeMode: DesktopCodeMode;
+  mcpDispatch: HostMcpDispatch;
+  codeMode: HostCodeMode;
   codeModeSandbox?: CodeModeSandboxAssets;
   observability: ObservabilitySink | null;
   delegation: TicketSessionDelegationStore | null;
@@ -122,7 +122,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     binDir,
     venue,
     modelAccess: piModelAccess,
-    decisions: desktopDecisions,
+    decisions: hostDecisions,
     webAccess,
     mcpSettings,
     mcpDispatch,
@@ -164,7 +164,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           resolveMcp: (projectId) =>
             mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
           resolveClassify: (projectId) =>
-            desktopDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
+            hostDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
@@ -303,11 +303,11 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // The Session's decision port (VC-478), bound to the Session and its
           // project at attach. Membership is the frozen record's; this only
           // answers it. Absent when the database never opened.
-          ...(desktopDecisions === null
+          ...(hostDecisions === null
             ? {}
             : {
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
-                  desktopDecisions.classifyPort(scope),
+                  hostDecisions.classifyPort(scope),
               }),
           resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
             secrets.port(
@@ -414,7 +414,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
-      ? createDesktopSessionRuntime({
+      ? createHostSessionRuntime({
           venue,
           db: dbHandle.db,
           events: options.hostPorts.events,

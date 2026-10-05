@@ -73,8 +73,8 @@ import {
   userCliLinkPath,
 } from "@volli/host-core/agents";
 import {
-  desktopMcpDispatch,
-  desktopCodeMode,
+  hostMcpDispatch,
+  hostCodeMode,
   codeModeSandboxAssets,
   AgentObservability,
   describeWebSealing,
@@ -964,7 +964,7 @@ const appStartup = app.whenReady().then(async () => {
   // How MCP calls are dispatched and bounded (VC-454): the developer-only
   // parallel-read opt-in, read once from an unpackaged build's environment
   // (no setting, no UI), and one per-server bound every Session shares.
-  const mcpDispatch = desktopMcpDispatch({
+  const mcpDispatch = hostMcpDispatch({
     env: process.env,
     packaged: !isDev,
     log: (message) => console.warn(`[volli] ${message}`),
@@ -983,7 +983,7 @@ const appStartup = app.whenReady().then(async () => {
     resourcesPath: () => process.resourcesPath,
     log: (message) => console.warn(`[volli] ${message}`),
   });
-  const codeMode = desktopCodeMode({
+  const codeMode = hostCodeMode({
     env: process.env,
     packaged: !isDev,
     log: (message) => console.warn(`[volli] ${message}`),

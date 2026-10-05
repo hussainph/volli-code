@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { piOwnedModelAccess, type PiModelAccess } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
-import { createDesktopDecisions } from "./decision/desktop";
+import { createHostDecisions } from "./decision/host-decisions";
 import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
 import { McpOAuthBroker } from "./mcp/oauth";
 import { McpSettingsService } from "./mcp/settings";
@@ -51,7 +51,7 @@ export function createHostRuntimeServices(
 ) {
   const modelAccess = options.modelAccess ?? piOwnedModelAccess();
   const venue = options.venue ?? { id: "local", kind: "local" };
-  const decisions = createDesktopDecisions({
+  const decisions = createHostDecisions({
     db,
     models: modelAccess.models,
     catalogReady: modelAccess.catalogReady,

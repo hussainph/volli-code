@@ -6,7 +6,7 @@
  * itself, never this entry. See the cluster map in the package README.
  */
 export { createAgentCommandService } from "../agent-commands";
-export { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "../agent-runtime";
+export { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "../host-profile";
 export { createHostAgentCommands, createHostAgentSocket } from "../agent-services";
 export {
   createAgentSocketLifecycle,

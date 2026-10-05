@@ -21,7 +21,7 @@ import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { scriptedGit } from "./worktree/scripted-git";
 import { inspectProjectFolder, relinkProject } from "./project-relink";
-import type { FolderProbe, ProjectRelinkDeps } from "./project-relink";
+import type { FolderProbe, ProjectRelinkPorts } from "./project-relink";
 
 let ctx: TestDb;
 
@@ -39,7 +39,7 @@ function present(folder: string): FolderProbe {
  * nothing is accidentally read as the same directory — and whose git and
  * directory moves always succeed.
  */
-function deps(overrides: Partial<ProjectRelinkDeps> = {}): ProjectRelinkDeps {
+function deps(overrides: Partial<ProjectRelinkPorts> = {}): ProjectRelinkPorts {
   return {
     db: ctx.db,
     probeFolder: async (path) => present(`dev:${path}`),

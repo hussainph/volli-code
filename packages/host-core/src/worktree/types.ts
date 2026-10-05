@@ -39,7 +39,7 @@ export type { WorktreePhase } from "@volli/shared";
  * materialize step reads from (issue #77 PR 2) — tests/scripted harnesses point
  * it at a temp dir; functions that never touch attachments ignore it.
  */
-export interface WorktreeDeps {
+export interface WorktreePorts {
   db: Database.Database;
   git: RunGit;
   /**

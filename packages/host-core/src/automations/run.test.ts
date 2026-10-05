@@ -18,7 +18,7 @@ import type {
 import { createAutomationEngine } from "./engine";
 import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
-import type { AutomationRunnerDeps } from "./run";
+import type { AutomationRunnerPorts } from "./run";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
@@ -90,7 +90,7 @@ interface Harness {
   attachReceipt: CommandReceipt | null;
 }
 
-function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
+function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
   ctx = openTestDb();
   const project = testProject();
   insertProject(ctx.db, project);

@@ -59,7 +59,7 @@ export interface BrowserPicturePersistence {
   remove(id: string): void;
 }
 
-export interface BrowserPictureStoreDependencies {
+export interface BrowserPictureStorePorts {
   createId: () => string;
   now: () => number;
   /** Absent means nothing outlives the live set — every test and a build with no disk. */
@@ -99,7 +99,7 @@ export class BrowserPictureStore {
   private readonly persistLimit: number;
   private readonly persistMaxAgeMs: number;
 
-  constructor(private readonly deps: BrowserPictureStoreDependencies) {
+  constructor(private readonly deps: BrowserPictureStorePorts) {
     this.liveLimit = deps.liveLimit ?? BROWSER_PICTURE_LIVE_LIMIT;
     this.persistLimit = deps.persistLimit ?? BROWSER_PICTURE_PERSIST_LIMIT;
     this.persistMaxAgeMs = deps.persistMaxAgeMs ?? BROWSER_PICTURE_PERSIST_MAX_AGE_MS;

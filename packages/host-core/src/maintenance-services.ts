@@ -27,7 +27,7 @@ import {
   type AutoReapWatch,
   type AutoReapWatchOptions,
 } from "./process/auto-reap-watch";
-import { OrphanProcessService, type OrphanProcessDeps } from "./process/orphan-processes";
+import { OrphanProcessService, type OrphanProcessPorts } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
 import { listWorktreeRefs, listWorktreeHoldersForSessions } from "./db/tickets-repo";
 
@@ -136,7 +136,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
   };
 }
 
-type ProcessReaders = Pick<OrphanProcessDeps, "ledger" | "liveSessionIds" | "openTerminalCwds">;
+type ProcessReaders = Pick<OrphanProcessPorts, "ledger" | "liveSessionIds" | "openTerminalCwds">;
 
 function createOrphanProcessService(
   db: Database.Database,

@@ -19,7 +19,7 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import type { HostClientEventSink, HostEventMap, HostEventTopic } from "../ports";
 import { syncProjectRoots } from "../project-roots";
 import { worktreeDeps } from "../worktree-runtime";
-import { PtyManager, type PtyHost } from "./manager";
+import { PtyManager, type PtyManagerPorts } from "./manager";
 import { parkConfigFromEnv } from "./park";
 
 /** A client connection: what it was sent, and a disconnect the test pulls. */
@@ -98,7 +98,7 @@ let testDb: TestDb;
 let root: string;
 let dataDir: string;
 let manager: PtyManager;
-let host: PtyHost;
+let host: PtyManagerPorts;
 let ledger: ReturnType<typeof makeLedger>;
 
 beforeEach(async () => {

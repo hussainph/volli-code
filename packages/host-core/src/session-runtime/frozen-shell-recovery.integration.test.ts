@@ -15,7 +15,7 @@ import {
 import { insertProject } from "../db/projects-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { createPiNativeAdapter, type DesktopShellPort } from "./pi-adapter";
+import { createPiNativeAdapter, type AttachmentShellPort } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 let db: TestDb;
@@ -64,25 +64,25 @@ function fixture(replies: ScriptedReply[]) {
     };
     // New host/port per launch: no live binding or shell capability is reused.
     const port = {
-      start: vi.fn<DesktopShellPort["start"]>(async () => ({
+      start: vi.fn<AttachmentShellPort["start"]>(async () => ({
         shell,
         pid: 4242,
         output: "server started\n",
         shells: [shell],
       })),
-      output: vi.fn<DesktopShellPort["output"]>(async () => ({
+      output: vi.fn<AttachmentShellPort["output"]>(async () => ({
         shell,
         output: "rebound output\n",
         truncated: false,
         tailBytes: 32,
         shells: [shell],
       })),
-      kill: vi.fn<DesktopShellPort["kill"]>(async () => ({
+      kill: vi.fn<AttachmentShellPort["kill"]>(async () => ({
         shell: { ...shell, state: "exited", signal: "SIGTERM", exitedAt: clock++ },
         shells: [],
       })),
       dispose: vi.fn(),
-    } satisfies DesktopShellPort;
+    } satisfies AttachmentShellPort;
     const resolveShellPort = vi.fn(() => port);
     const adapter = createPiNativeAdapter({
       sessionDataDir,

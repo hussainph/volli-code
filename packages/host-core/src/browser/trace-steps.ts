@@ -29,7 +29,7 @@ import type {
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
-import type { AgentBrowserHost, AgentBrowserPort } from "./agent-port";
+import type { AgentBrowserBackend, AgentBrowserPort } from "./agent-port";
 import type { BrowserTraceStepInput } from "./trace-store";
 
 type NavigateInput = Parameters<RuntimeBrowserPort["navigate"]>[0];
@@ -38,7 +38,7 @@ type ActInput = Parameters<RuntimeBrowserPort["act"]>[0];
 /** What a step says about the call itself; the wrapper adds who, and how it ended. */
 type StepFacts = Omit<BrowserTraceStepInput, "sessionId" | "outcome" | "rule">;
 
-type Recorder = NonNullable<AgentBrowserHost["recordTraceStep"]>;
+type Recorder = NonNullable<AgentBrowserBackend["recordTraceStep"]>;
 
 const WITHDRAWN = "The call was withdrawn before it finished.";
 const FAILED = "The browser could not complete this action.";
@@ -88,7 +88,7 @@ async function report<I extends { signal: AbortSignal }, O>(
 }
 
 function navigate(
-  host: Pick<AgentBrowserHost, "recordTraceStep" | "list">,
+  host: Pick<AgentBrowserBackend, "recordTraceStep" | "list">,
   scope: { projectId: string },
   sessionId: string,
   run: RuntimeBrowserPort["navigate"],
@@ -117,7 +117,7 @@ function navigate(
 }
 
 function act(
-  host: Pick<AgentBrowserHost, "recordTraceStep">,
+  host: Pick<AgentBrowserBackend, "recordTraceStep">,
   sessionId: string,
   run: RuntimeBrowserPort["act"],
 ): RuntimeBrowserPort["act"] {
@@ -133,7 +133,7 @@ function act(
  * own words, bounded by the store), and the picture only if the call took one.
  */
 function read<I extends { tabId: string; signal: AbortSignal }, O extends RuntimeBrowserPage>(
-  host: Pick<AgentBrowserHost, "recordTraceStep">,
+  host: Pick<AgentBrowserBackend, "recordTraceStep">,
   sessionId: string,
   action: Extract<BrowserTraceAction, "read" | "find" | "screenshot" | "console">,
   run: (input: I) => Promise<O>,
@@ -159,7 +159,7 @@ function read<I extends { tabId: string; signal: AbortSignal }, O extends Runtim
     }));
 }
 
-type Host = Pick<AgentBrowserHost, "recordTraceStep">;
+type Host = Pick<AgentBrowserBackend, "recordTraceStep">;
 const NOTHING_SAID = { target: null, pictureId: null, generation: null };
 
 export const traced = {

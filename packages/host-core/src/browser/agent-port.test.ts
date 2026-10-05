@@ -2,7 +2,7 @@ import { BrowserRefusal } from "@volli/agent-runtime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { BrowserTabHolder, BrowserTabState } from "@volli/shared";
-import { createAgentBrowserPort, type AgentBrowserHost } from "./agent-port";
+import { createAgentBrowserPort, type AgentBrowserBackend } from "./agent-port";
 import { BrowserAgentCoordinator } from "./agent-coordinator";
 import { BrowserSessionTabLimitError, type BrowserSessionHolder } from "./backend";
 import type { CdpTransport, TabCursorDriver } from "./cdp-controller";
@@ -81,7 +81,7 @@ function fakeHost(
     console?: Record<string, { level: "warn" | "error"; text: string }[]>;
   } = {},
 ): {
-  host: AgentBrowserHost;
+  host: AgentBrowserBackend;
   tabs: Map<string, BrowserTabState>;
   opened: OpenedRecord[];
   navigated: { tabId: string; url: string }[];
@@ -1439,11 +1439,11 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
   function tracing(
     tabs: BrowserTabState[],
     options: { declineCapture?: boolean } = {},
-    override: Partial<AgentBrowserHost> = {},
+    override: Partial<AgentBrowserBackend> = {},
   ) {
     const fake = fakeHost(tabs, options);
     const steps: BrowserTraceStepInput[] = [];
-    const host: AgentBrowserHost = {
+    const host: AgentBrowserBackend = {
       ...fake.host,
       ...override,
       recordTraceStep: (step) => steps.push(step),
