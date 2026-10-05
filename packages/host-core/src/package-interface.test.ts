@@ -35,7 +35,7 @@ function importsOf(source: string, packageName: string): string[] {
   return IMPORT_CONTEXTS.flatMap((context) => {
     const pattern = new RegExp(`${context}(["'])(${escaped}(?:\\/[^"']*)?)\\1`, "g");
     return [...source.matchAll(pattern)].map((match) => match[2]!);
-  }).sort();
+  }).toSorted();
 }
 
 describe("host-core's package interface", () => {
@@ -60,7 +60,7 @@ describe("host-core's package interface", () => {
         `${name}/secrets`,
         `${name}/secrets`,
         `${name}/side-effect`,
-      ].sort(),
+      ].toSorted(),
     );
   });
 
