@@ -651,7 +651,6 @@ export default defineConfig(({ mode }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
-        "**/src/main/chromium-features.ts",
         "**/src/main/update-ipc.ts",
         // The host deadline is still covered by desktop's quit/socket integration tests.
         "**/packages/host-core/src/shutdown-deadline.ts",

@@ -1,6 +1,17 @@
 # VC-635: database smoke close stalls
 
-Investigation in draft PR [#748](https://github.com/hussainph/volli-code/pull/748).
+Evidence and CI validation in PR [#748](https://github.com/hussainph/volli-code/pull/748).
+
+**Remediation is CI scheduling, not product shutdown:** run this smoke alone
+within its shard, after the concurrent pool drains. No smoke is dropped or
+quarantined; the same three fresh profiles, database assertions, retries,
+20-second close grace and actual-child-exit requirements still gate. There are
+no net production changes: both observer telemetry and DIPS/privacy protection,
+all persistence and shutdown barriers remain at baseline. This addresses the
+runner-contended test regime, not an upstream guarantee of bounded native quit.
+Eight consecutive final-head shard observations are tracked in the PR/ticket,
+including artifact-level PASS/attempt counts and graceful child exits.
+
 The ticket's baseline was approximately 11/23 first-attempt failures (48%) on
 unrelated PR branches. Local baseline was 18/18 passes, including concurrent runs.
 
@@ -79,17 +90,12 @@ experimental/origin-trial controlled. Thus a fresh app boot with no observer
 policy starts an unnecessary durable write that native shutdown must wait for.
 Closing the store cannot leapfrog its initialization on the same sequenced runner.
 
-The current partial mitigation disables `DeclarativePerformanceObserver` before any partition exists,
-merging rather than replacing existing `disable-features`. It applies equally to
-packaged/development apps and smokes. Volli has no integration with this
-experimental HTTP performance-reporting feature. Third-party pages in its browser
-lose this optional telemetry, not ordinary browsing or JavaScript
-`PerformanceObserver`. **DIPS/bounce-tracking protection remains enabled.**
-Application SQLite, cookies/cache and other Chromium persistence keep their sync
-settings and shutdown barriers. The product quit coordinator/socket fallback are
-unchanged; no native watchdog, grace increase or forced-cleanup success is used.
-This avoids the identified unnecessary initialization, not every possible native
-exit stall or the underlying filesystem condition.
+A rejected product candidate disabled `DeclarativePerformanceObserver` before
+partition creation, merging rather than replacing existing `disable-features`.
+It removed that store but exposed the same shutdown wait in DIPS initialization
+(see below). It was therefore **reverted**: do not solve runner contention by
+progressively disabling browser capabilities, particularly privacy protection.
+The final candidate leaves product feature switches and quit behavior untouched.
 
 Pinned ownership sources:
 - [Observer store and task traits](https://github.com/chromium/chromium/blob/152.0.7977.54/content/browser/declarative_performance_observer/declarative_performance_observer_store.cc)
@@ -104,9 +110,9 @@ Temporary product instrumentation is removed. Smoke-only breadcrumbs/native
 samples are retained only on failure, under the existing CI artifact directory;
 local tracing is opt-in via `VOLLI_NEWER_DB_TRACE=1`. Diagnostic I/O is
 best-effort and cannot prevent the original native exit or reject successful
-cleanup; failure-injection tests cover both. The built smoke verifies the
-feature switch and absence of the observer DB/journal at launch and after clean
-exit, in all three profiles.
+cleanup; failure-injection tests cover both. Expensive privileged stackshots
+were temporary diagnostics and are removed. Retained smoke-only sampling does
+not alter close deadlines, success criteria or product code.
 
 Initial candidate `67802aa7a`, [run 37249244261](https://github.com/hussainph/volli-code/actions/runs/37249244261),
 passed the full CI gate and newer-database on its first attempt (three graceful
@@ -117,9 +123,10 @@ code-zero closes, no shard-2 FLAKY results). Local build, desktop typecheck,
 newer-database journey with final smoke-only tracing also passed (3/3 closes).
 The candidate is **not sufficient**. Final-head CI run 37249888674 on
 `331a5a547` failed its first workflow attempt; its diagnostic rerun is job-green
-only because of a retry (`FLAKY`). The clean pass streak is **0/8**. The first
-workflow attempt's second smoke attempt had three graceful exits but failed a
-compatible-page screenshot timeout, a separate uncorrected failure.
+only because of a retry (`FLAKY`). These runs do not count toward final
+validation. The first workflow attempt's second smoke attempt had three graceful
+exits but failed a compatible-page screenshot timeout. The screenshot and all
+other assertions remain gating; scheduling also removes its local pool peers.
 
 ## Remaining writer: Bounce Tracking Mitigation (DIPS)
 
@@ -153,10 +160,27 @@ again the only open browser-profile databases; its fresh-profile retry passes.
 Chromium's BTM runner is `BEST_EFFORT`, `PREFER_BACKGROUND`, default
 `SKIP_ON_SHUTDOWN`. An already-running SKIP task still blocks shutdown. On macOS
 this background thread type maps to `QOS_CLASS_BACKGROUND`. Low-priority I/O,
-App Nap and loaded-VM scheduling remain hypotheses, not captured causes. New
-failure-only CI stackshots are intended to distinguish those explanations.
-Disabling DIPS globally would remove a browser privacy feature and is **not
-applied**. App SQLite durability, native shutdown and the grace stay unchanged.
+App Nap and loaded-VM scheduling remain hypotheses, not captured causes.
+Run 37251480378 (`c771f3293`) initially passed twice, then attempt 3 failed
+incompatible PID 5446 after native-exit returned at +200ms. Its retry had a
+slow successful incompatible close and then failed the compatible screenshot.
+PID-scoped stackshots confirm a 3-vCPU/7-GB VM and main at the same ThreadPool
+barrier. Two background workers are priority **4**, reported **runnable for
+7.107s/7.108s before the first sample**, with no execution during the 2.07s
+capture (one in BTM's `access`, another in `mkdir`). This establishes prolonged
+non-execution of runnable low-priority work, not merely a JS close timeout.
+Concurrent `sample` can suspend threads while collecting stacks, so stackshot
+suspension notes are **not** evidence of App Nap. Exact kernel/VM scheduling
+policy and the earlier fsync delay remain unresolved.
+Neither App Nap flags nor global I/O sysctl changes are used. Disabling DIPS
+would remove a browser privacy feature and is **not applied**.
+
+The scheduling change runs this short-lived, fresh-profile test only after its
+shard's other smoke children finish. Unlike pre-seeding Chromium DBs, delaying
+quit, ignoring screenshot errors or extending timeouts, this keeps the first
+initialization and every failure condition under test. It reduces local
+contention; other CI jobs and OS load can still exist. Product SQLite durability,
+Chromium features, native shutdown and the grace stay unchanged.
 
 Pinned sources:
 - [BTM service and task traits](https://github.com/chromium/chromium/blob/152.0.7977.54/content/browser/btm/btm_service_impl.cc)
@@ -164,7 +188,17 @@ Pinned sources:
 - [macOS thread-type mapping](https://github.com/chromium/chromium/blob/152.0.7977.54/base/threading/platform_thread_apple.mm)
 - [Running SKIP tasks block shutdown](https://github.com/chromium/chromium/blob/152.0.7977.54/base/task/thread_pool/task_tracker.cc)
 
-Candidate CI artifacts also show **all 17 gating smokes that call
+## Verification and related journeys
+
+Final scheduling candidate local checks:
+- `vp check` and `git diff --check`: pass.
+- `node --test apps/desktop/scripts/run-smokes.test.mjs apps/desktop/e2e/lib/smoke-kit.test.mjs apps/desktop/e2e/lib/shutdown-trace.test.mjs`: 45/45 pass, including schedule membership/coverage and diagnostic I/O failure injection.
+- `vp run --filter @volli/desktop typecheck`: pass (all four TypeScript configs).
+- `vp test run src/main/quit-gate.test.ts src/main/agent-socket-quit.test.ts --maxWorkers "$VOLLI_CONCURRENCY_HINT"` from desktop: 29/29 pass.
+- `vp run --filter @volli/desktop build`: pass (existing chunk-size warnings).
+- Built newer-database with opt-in tracing: 8/8 checks, 3/3 graceful exits; recovery: 11/11 checks, 7/7 graceful exits. Browser features are at baseline.
+
+Earlier candidate CI artifacts show **all 17 gating smokes that call
 `closeAppBounded` passed on their first attempt**, including database recovery,
 browser recovery/trace, the eight Automation journeys, provisional chat,
 settings search, split view, ticket-open IPC and contrast. The helper's 27 tests

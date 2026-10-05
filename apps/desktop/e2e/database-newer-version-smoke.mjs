@@ -126,7 +126,6 @@ async function openApp(config, label) {
     tracePath: traceShutdown
       ? join(scratch, `${label.replaceAll(" launch", "")}-shutdown.jsonl`)
       : null,
-    userDataDir: config.userDataDir,
   };
   run.child.once("exit", (code, signal) =>
     traceClose(run.tracePath, "child-exit", { code, signal }),
@@ -148,13 +147,6 @@ async function openApp(config, label) {
   page.setDefaultTimeout(8000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
-  const disabledFeatures = await bounded(`${label}: browser feature policy`, () =>
-    app.evaluate(({ app: electronApp }) =>
-      electronApp.commandLine.getSwitchValue("disable-features"),
-    ),
-  );
-  assert.ok(disabledFeatures.split(",").includes("DeclarativePerformanceObserver"));
-  await assertNoObserverStore(config.userDataDir);
   await bounded(`${label}: failure trace`, () => installShutdownTrace(app, run.tracePath));
   return run;
 }
@@ -180,16 +172,7 @@ async function closeRun(run) {
     ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
     "cleanup required a forced signal",
   );
-  await assertNoObserverStore(run.userDataDir);
   runs.delete(run);
-}
-
-async function assertNoObserverStore(userDataDir) {
-  const names = await fs.readdir(userDataDir);
-  assert.ok(
-    !names.some((name) => name.startsWith("declarative_performance_observer.db")),
-    "unused observer must not create its shutdown-blocking SQLite store",
-  );
 }
 
 async function bootstrap(run) {
