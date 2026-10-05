@@ -123,6 +123,7 @@ async function fixture() {
     database: { ok: true, db: {} },
     sessionEngine: engine,
     sessionWakeBus: { subscribe: vi.fn() },
+    detachedWork: { track: vi.fn() },
   } as unknown as LiveHostCore;
   const pi = {
     inspectModelAccess: vi.fn(async () => ({
@@ -349,7 +350,9 @@ describe("lifted Session facade and recovered agent staging", () => {
     const agents = f.facade.agents({
       host: f.host,
       delegation: f.delegation,
-      automations: { runner: null } as unknown as ReturnType<typeof createRuntimeAutomations>,
+      automations: { kind: "live", execution: { kind: "idle" } } as unknown as ReturnType<
+        typeof createRuntimeAutomations
+      >,
       mcpSettings: null,
       events: f.events,
       log: console,
@@ -358,7 +361,7 @@ describe("lifted Session facade and recovered agent staging", () => {
       f.facade.agents({
         host: f.host,
         delegation: f.delegation,
-        automations: { runner: null } as never,
+        automations: { kind: "live", execution: { kind: "idle" } } as never,
         mcpSettings: null,
         events: f.events,
         log: console,
@@ -470,7 +473,7 @@ function stage(f: Awaited<ReturnType<typeof fixture>>, overrides = {}) {
   return f.facade.agents({
     host: f.host,
     delegation: f.delegation,
-    automations: { runner: null } as never,
+    automations: { kind: "live", execution: { kind: "idle" } } as never,
     mcpSettings: null,
     events: f.events,
     log: console,
@@ -637,6 +640,14 @@ describe("facade captured ports and capability degradations", () => {
 });
 
 describe("agent staging ports", () => {
+  it("does not invent Automations for a degraded module", async () => {
+    const f = await fixture();
+    const agents = stage(f, { automations: { kind: "degraded" } as never });
+    agents.toolDoor(f.ready);
+    const tool = f.agentServices.createToolDoor.mock.lastCall![1];
+    expect(tool.automations!()).toBeNull();
+  });
+
   it("binds lazy collaborators, filters wakes and reports rearm failures", async () => {
     const f = await fixture();
     const delegated = {
@@ -648,7 +659,10 @@ describe("agent staging ports", () => {
     vi.mocked(createDelegations).mockReturnValue(delegated as never);
     const runner = { run: vi.fn(async () => "run") };
     const log = { error: vi.fn() };
-    const agents = stage(f, { automations: { runner } as never, log });
+    const agents = stage(f, {
+      automations: { kind: "live", execution: { kind: "ready", runner } } as never,
+      log,
+    });
     agents.toolDoor(f.ready);
     const tool = f.agentServices.createToolDoor.mock.lastCall![1];
     tool.projects();
@@ -718,7 +732,7 @@ describe("agent staging ports", () => {
       const agents = alternateFacade.facade.agents({
         host,
         delegation: missing === "delegation" ? null : f.delegation,
-        automations: { runner: null } as never,
+        automations: { kind: "live", execution: { kind: "idle" } } as never,
         mcpSettings: null,
         events: f.events,
         log: console,

@@ -95,7 +95,8 @@ import { repackLegacyTranscriptArtifacts } from "@volli/host-core/session-runtim
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
-import { DatabaseRecovery } from "@volli/host-core/database-recovery";
+import { createDatabaseRecovery } from "@volli/host-core/maintenance-services";
+import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
 import { ModelAccessSignInService } from "@volli/host-core/model-access/sign-in-service";
 import { createHostFileServices } from "@volli/host-core/file-services";
@@ -761,7 +762,7 @@ const appStartup = app.whenReady().then(async () => {
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
-    recovery: new DatabaseRecovery({ dbPath, userData: app.getPath("userData") }),
+    recovery: createDatabaseRecovery({ dbPath, dataDir: app.getPath("userData") }),
     degraded: !dbHandle.ok,
     // A database from a newer Volli gets its own recovery screen (VC-602).
     fault:
@@ -1293,7 +1294,11 @@ const appStartup = app.whenReady().then(async () => {
               : async (input) => {
                   const attached = await rpcSessions.attach(input);
                   if (attached.state === "ready") {
-                    await runtimeAutomations.runner?.resumeDeliveryForSession(input.sessionId);
+                    if (runtimeAutomations.kind === "live") {
+                      const execution = runtimeAutomations.execution;
+                      if (execution.kind === "ready")
+                        await execution.runner.resumeDeliveryForSession(input.sessionId);
+                    }
                   }
                   return attached;
                 },
@@ -1397,13 +1402,16 @@ const appStartup = app.whenReady().then(async () => {
   let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let abortRepack = noQuitAction;
+  let hostClosing = false;
   const prepareHostQuit = (event: { preventDefault(): void }) => {
     // Preserve the former listener order, including the two unconditional
     // stops on a refused attempt. Only the quit trigger is registered.
-    runtimeAutomations.stop();
-    unsavedQuit(event);
-    terminalQuit(event);
-    abortRepack();
+    prepareDesktopQuit(event, {
+      stopAutomations: runtimeAutomations.stop,
+      unsavedQuit,
+      terminalQuit,
+      abortRepack,
+    });
   };
   const runtimeLifecycle = createSessionRuntimeLifecycle({
     host: hostCore,
@@ -1415,6 +1423,7 @@ const appStartup = app.whenReady().then(async () => {
     delegationsFor: runtimeSessionAgents.recoveryDelegationsFor,
     services: () => preparedSessionFacade,
     stopProducers: () => {
+      hostClosing = true;
       runtimeAutomations.stop();
       runtimeSessionAgents.stop();
     },
@@ -1432,24 +1441,24 @@ const appStartup = app.whenReady().then(async () => {
   });
   observeScheduledResume = runtimeLifecycle.observeScheduledResume;
   relayShellNotice = runtimeLifecycle.relayShellNotice;
-  let readyRuntimeServices!: Awaited<ReturnType<typeof runtimeLifecycle.ready>>;
-  await hostCore.start({
-    start: async () => {
-      readyRuntimeServices = await runtimeLifecycle.ready();
-      sessionRpc = createSessionRpc(readyRuntimeServices);
-      runtimeSessionAgents.toolDoor(readyRuntimeServices);
+  const desktopRuntime = createDesktopHostRuntime({
+    host: hostCore,
+    lifecycle: runtimeLifecycle,
+    bindReady: (ready) => {
+      sessionRpc = createSessionRpc(ready);
+      runtimeSessionAgents.toolDoor(ready);
     },
     stopProducers: () => {
+      hostClosing = true;
       runtimeAutomations.stop();
       runtimeSessionAgents.stop();
-    },
-    close: async () => {
       ptyManagerRef?.stopParkSweep();
-      await runtimeLifecycle.close();
-      await backgroundShells.close();
     },
+    closeShells: () => backgroundShells.close(),
     closeSocket: shutdownAgentSocket,
+    settleProducers: () => runtimeAutomations.settled(),
   });
+  const readyRuntimeServices = await desktopRuntime.start();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
   // so leaves an unlinked Blob whenever a draft is thrown away. Housekeeping, so
@@ -1622,7 +1631,9 @@ const appStartup = app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     ...recoveredSessionClientPorts(readyRuntimeServices),
     listOpenNativeBindings,
-    ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
+    ...(liveHost === undefined
+      ? {}
+      : { detachedWork: liveHost.detachedWork, maintenance: liveHost.maintenance }),
     busyWorktreeSites,
     releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
@@ -1630,7 +1641,12 @@ const appStartup = app.whenReady().then(async () => {
     interruptTicketSessions: interruptTicketSessionsAnnounced,
     // Renderer moves now reach main's one durable armed-column arrival owner,
     // carrying an Option-drag choice when that gesture supplied one.
-    onDeliberateMove: (notice) => runtimeAutomations.pendingArmedRuns?.noteDeliberateMove(notice),
+    onDeliberateMove: (notice) => {
+      if (runtimeAutomations.kind === "live") {
+        const execution = runtimeAutomations.execution;
+        if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
+      }
+    },
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -1685,12 +1701,14 @@ const appStartup = app.whenReady().then(async () => {
   );
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
   runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
+  const automationExecution =
+    runtimeAutomations.kind === "live" ? runtimeAutomations.execution : { kind: "idle" as const };
   registerAutomationIpcHandlers(dbHandle, {
-    service: runtimeAutomations.service,
-    runner: runtimeAutomations.runner,
-    ...(runtimeAutomations.pendingArmedRuns === null
+    service: runtimeAutomations.kind === "live" ? runtimeAutomations.service : null,
+    runner: automationExecution.kind === "ready" ? automationExecution.runner : null,
+    ...(automationExecution.kind === "idle"
       ? {}
-      : { pendingArmedRuns: runtimeAutomations.pendingArmedRuns }),
+      : { pendingArmedRuns: automationExecution.pendingArmedRuns }),
   });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
@@ -1855,7 +1873,7 @@ const appStartup = app.whenReady().then(async () => {
     agentRuntime,
     concurrencyEnvReader,
     {
-      ...(liveHost === undefined ? {} : { manager: liveHost.ptyManager }),
+      ...(liveHost?.terminals.kind === "available" ? { manager: liveHost.terminals.manager } : {}),
       registerQuitGate: false,
     },
   );
@@ -2008,7 +2026,8 @@ const appStartup = app.whenReady().then(async () => {
     // batches with a pause between them. Every individual failure is kept for
     // the next launch, with its legacy bytes untouched.
     const repackDelay = setTimeout(() => {
-      void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
+      if (hostClosing) return;
+      const repack = repackLegacyTranscriptArtifacts(transcriptArtifacts, {
         batchSize: 25,
         signal: transcriptRepackAbort.signal,
         shouldBackOff: async () => {
@@ -2033,6 +2052,7 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[transcript-repack] scan failed:", errorMessage(error));
         });
+      liveHost?.detachedWork.track(repack);
     }, 5_000);
     repackDelay.unref();
 
@@ -2072,7 +2092,8 @@ const appStartup = app.whenReady().then(async () => {
       // run is stamped, so an already-removed folder is recorded as removed
       // rather than described as work nobody attempted (review C3). Read-only,
       // and never fatal to a launch.
-      void reconcileInterruptedCleanups({
+      if (hostClosing) return;
+      const reconcile = reconcileInterruptedCleanups({
         worktree: liveHost.worktreeDeps,
         engine: orphanCleanupEngine(db),
       })
@@ -2087,7 +2108,8 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] cleanup history unreadable:", errorMessage(error));
         });
-      startOrphanScan(liveHost.worktreeDeps, { busyWorktreeSites })
+      liveHost.detachedWork.track(reconcile);
+      const scan = startOrphanScan(liveHost.worktreeDeps, { busyWorktreeSites })
         .then((report) => {
           console.log(
             `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
@@ -2096,6 +2118,7 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] scan failed:", errorMessage(error));
         });
+      liveHost.detachedWork.track(scan);
     });
 
     // Retention merge-watch (CONCEPT #16, issue #76): the background 60s poll of
@@ -2528,8 +2551,13 @@ const appStartup = app.whenReady().then(async () => {
             // An explicit `volli ticket move` is the other Deliberate-move door.
             // It reaches the same one main-owned pending arrival as renderer IPC;
             // no renderer has to exist for the timer to fire.
-            onDeliberateMove: (notice) =>
-              runtimeAutomations.pendingArmedRuns?.noteDeliberateMove(notice),
+            onDeliberateMove: (notice) => {
+              if (runtimeAutomations.kind === "live") {
+                const execution = runtimeAutomations.execution;
+                if (execution.kind !== "idle")
+                  execution.pendingArmedRuns.noteDeliberateMove(notice);
+              }
+            },
             // The `env` block `volli identify` prints (VC-94): the PATH main
             // adopted, its latest non-interactive provenance, the measured tools
             // resolved against it (and which of them this workspace implies),

@@ -175,8 +175,11 @@ exports. Tests move with them except the Automation IPC and harness-runtime
 integration tests, which still compose desktop modules.
 
 `createHostAutomations` owns one engine/service and its runner, armed arrivals
-and scheduler, starting at recovered readiness in the original order. The
-`session-runtime/automations` adapter supplies the recovered Session ports.
+and scheduler, starting at recovered readiness in the original order. Execution
+is an explicit idle/unavailable/ready variant; a ready runner is never nullable.
+After stopping timer producers, `settled()` joins recovery, attempts and Run boots
+before SQLite closes. The `session-runtime/automations` adapter supplies the
+recovered Session ports.
 `createHostAgentCommands` builds the socket verb door; `session-runtime/agents`
 owns the lazy tool door and watches and releases their subscriptions at stop.
 There is no staged factory bag on the host. Both modules use the same event and
@@ -204,11 +207,11 @@ are unchanged. Warm park was already moved by VC-560 into `src/pty/park.ts`;
 its desktop quit/confirm door remains in `main/pty/ipc.ts`.
 
 The live host owns `maintenance` (one spawn ledger, orphan-process service,
-retention and automatic reap), `secretStore`, lazy `ptyManager` and
-`worktreeDeps`. A degraded host carries its classified failure, not nullable
+retention and automatic reap), `secretStore`, lazy `terminals.manager` when a
+terminal port exists (otherwise an explicit unavailable variant), and `worktreeDeps`. A degraded host carries its classified failure, not nullable
 live services. Recovery remains available independently for that variant.
 Desktop still starts maintenance after first paint and triggers retention on
-focus; hostd starts it at readiness. The retention watch is shared per database
+focus; hostd readiness enablement lands separately. The retention watch is shared per database
 with IPC, retaining dismissal state and read-only behavior without reclaim seams.
 
 `host.stop` disarms producers/maintenance, joins runtime and socket drains

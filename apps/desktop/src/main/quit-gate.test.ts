@@ -18,6 +18,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
+import { prepareDesktopQuit } from "./host-runtime";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -559,12 +560,22 @@ describe("one host quit trigger", () => {
       shutdownNativeSessions: shutdown,
       shutdownAgentSocket: shutdown,
       reportFailure: vi.fn(),
-      prepareQuit: (event) => {
-        calls.push("automations.stop", "draft.gate");
-        refuseQuit(event);
-        if (!quitAlreadyRefused(event)) calls.push("terminal.kill");
-        calls.push("repack.abort");
-      },
+      prepareQuit: (event) =>
+        prepareDesktopQuit(event, {
+          stopAutomations: () => {
+            calls.push("automations.stop");
+          },
+          unsavedQuit: (attempt) => {
+            calls.push("draft.gate");
+            refuseQuit(attempt);
+          },
+          terminalQuit: (attempt) => {
+            if (!quitAlreadyRefused(attempt)) calls.push("terminal.kill");
+          },
+          abortRepack: () => {
+            calls.push("repack.abort");
+          },
+        }),
     });
     trigger({ preventDefault: vi.fn() });
     await new Promise<void>((resolve) => setImmediate(resolve));

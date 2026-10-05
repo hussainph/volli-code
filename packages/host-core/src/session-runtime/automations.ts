@@ -28,10 +28,9 @@ import {
   createHostAutomations,
   type AutomationSessionPorts,
   type HostAutomations,
+  type HostAutomationExecution,
 } from "../automation-services";
 import type { AutomationService } from "../automations/service";
-import type { AutomationRunner } from "../automations/run";
-import type { PendingArmedRunCoordinator } from "../automations/pending-armed-runs";
 import type { PiRuntimeHost } from "./pi-adapter";
 import type { Sessions } from "./sessions";
 import type { AutoTitler } from "./auto-title";
@@ -52,15 +51,21 @@ export interface RuntimeAutomationsInput {
   log: Pick<Console, "error">;
 }
 
-export interface RuntimeAutomations {
-  /** Automation CRUD; null only on a host whose database did not open. */
-  readonly service: AutomationService | null;
-  readonly runner: AutomationRunner | null;
-  readonly pendingArmedRuns: PendingArmedRunCoordinator | null;
+interface RuntimeAutomationLifecycle {
   /** Called with the lifecycle's recovered services, at the host's former boot point. */
   start(ready: RecoveredSessionServices<ReadyAutomationSessions>): void;
   stop(): void;
+  settled(): Promise<void>;
 }
+export type RuntimeAutomations = RuntimeAutomationLifecycle &
+  (
+    | { readonly kind: "degraded" }
+    | {
+        readonly kind: "live";
+        readonly service: AutomationService;
+        readonly execution: HostAutomationExecution;
+      }
+  );
 
 export function createRuntimeAutomations(input: RuntimeAutomationsInput): RuntimeAutomations {
   const { host, piRuntimeHost } = input;
@@ -76,12 +81,10 @@ export function createRuntimeAutomations(input: RuntimeAutomationsInput): Runtim
   });
   const directories = { dataDir: host.dataDir, homeDir: input.homeDir };
   return {
+    kind: "live",
     service: automations.service,
-    get runner() {
-      return automations.runner;
-    },
-    get pendingArmedRuns() {
-      return automations.pendingArmedRuns;
+    get execution() {
+      return automations.execution;
     },
     start(ready) {
       automations.start(() =>
@@ -89,6 +92,7 @@ export function createRuntimeAutomations(input: RuntimeAutomationsInput): Runtim
       );
     },
     stop: () => automations.stop(),
+    settled: () => automations.settled(),
   };
 }
 
@@ -96,9 +100,7 @@ export function createRuntimeAutomations(input: RuntimeAutomationsInput): Runtim
 function degradedRuntimeAutomations(): RuntimeAutomations {
   let settled = false;
   return {
-    service: null,
-    runner: null,
-    pendingArmedRuns: null,
+    kind: "degraded",
     start(ready) {
       if (settled) return;
       readRecoveredSessionServices(ready);
@@ -107,6 +109,7 @@ function degradedRuntimeAutomations(): RuntimeAutomations {
     stop() {
       settled = true;
     },
+    settled: async () => {},
   };
 }
 

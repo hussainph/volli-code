@@ -313,8 +313,10 @@ describe("createHostCore", () => {
         { ...headlessOptions(root), secretKey: codec, terminal },
       ),
     );
-    const manager = core.ptyManager;
-    expect(core.ptyManager).toBe(manager);
+    const terminals = core.terminals;
+    if (terminals.kind !== "available") throw new Error("Expected terminal capability.");
+    const manager = terminals.manager;
+    expect(core.terminals).toEqual({ kind: "available", manager });
     expect(terminal).toHaveBeenCalledOnce();
     core.secretStore.put({ name: "TOKEN", value: "fixture", scope: "always" });
     expect(core.secretStore.list()).toHaveLength(1);
@@ -325,7 +327,7 @@ describe("createHostCore", () => {
       ),
     );
     expect(adopted.secretStore).toBe(core.secretStore);
-    expect(() => adopted.ptyManager).toThrow("no terminal port");
+    expect(adopted.terminals).toEqual({ kind: "unavailable" });
     const unavailable = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
     expect(() =>
       unavailable.secretStore.put({ name: "TOKEN", value: "fixture", scope: "always" }),
@@ -636,6 +638,36 @@ describe("createHostCore lifecycle", () => {
     expect(core.detachedWork.pending).toBe(0);
     expect(log.error).not.toHaveBeenCalled();
     for (const step of Object.values(runtime)) expect(step).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejecting request drain still joins the host's detached writers", async () => {
+    const log = { error: vi.fn() };
+    const core = live(compose({ log }, headlessOptions(dataDir())));
+    const trim = Promise.withResolvers<void>();
+    core.detachedWork.track(
+      trim.promise.then(() => {
+        expect(core.database.db.open).toBe(true);
+        calls.push("trim settled");
+      }),
+    );
+    await core.start(
+      recordingRuntime({
+        drainRequests: async () => {
+          throw new Error("transport failed");
+        },
+      }),
+    );
+    const stopping = core.stop("quit");
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    expect(core.database.db.open).toBe(true);
+    expect(calls).not.toContain("close database");
+    trim.resolve();
+    expect(await stopping).toEqual({ reason: "quit", clean: false });
+    expect(calls.indexOf("trim settled")).toBeLessThan(calls.indexOf("close database"));
+    expect(log.error).toHaveBeenCalledWith(
+      "[volli] host shutdown failed at drain-detached:",
+      expect.any(Error),
+    );
   });
 
   it("adopts only the first runtime, and a runtime without socket or request drains", async () => {

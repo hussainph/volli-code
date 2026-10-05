@@ -75,7 +75,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
         if (payload.kind !== "turn.started" || created.watching(wake.event.sessionId)) return;
         const entry = store.subagentDelegation(wake.event.sessionId);
         if (entry === null) return;
-        void created
+        const work = created
           .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
           .catch((error: unknown) => {
             options.log.error(
@@ -83,6 +83,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
               errorMessage(error),
             );
           });
+        liveHost?.detachedWork.track(work);
       });
     }
     return delegations;
@@ -91,15 +92,16 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   const watchesFor = (): Watches | null => {
     if (watches !== null) return watches;
     if (
+      liveHost === undefined ||
       sessionWakeBus === null ||
       sessionRuntime === null ||
-      sessionEngine === null ||
-      sessionDb === null
+      sessionEngine === null
     ) {
       return null;
     }
-    const db = sessionDb;
+    const db = liveHost.database.db;
     watches = createHostAgentWatches({
+      detachedWork: liveHost.detachedWork,
       subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
       runtime: sessionRuntime,
       sessionEngine,
@@ -124,13 +126,16 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
               projects: () => listProjects(sessionDb),
               sessions: () => sessions,
               delegation: sessionDelegation,
-              automations: () =>
-                runtimeAutomations.runner === null
+              automations: () => {
+                if (runtimeAutomations.kind === "degraded") return null;
+                const execution = runtimeAutomations.execution;
+                return execution.kind !== "ready"
                   ? null
                   : {
                       list: (projectId) => listAutomationsForProject(sessionDb, projectId),
-                      run: (input) => runtimeAutomations.runner!.run(input),
-                    },
+                      run: (input) => execution.runner.run(input),
+                    };
+              },
               authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
               watches: watchesFor,
               supervise: () =>

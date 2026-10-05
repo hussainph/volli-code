@@ -47,8 +47,16 @@ const repo = resolve(import.meta.dirname, "../../..");
 const cliBundle = join(repo, "packages/cli/dist/volli.cjs");
 const roots: string[] = [];
 const hosts: RunningHostd[] = [];
-beforeAll(() =>
-  execFileSync("pnpm", ["--filter", "@volli/cli", "build"], { cwd: repo, stdio: "pipe" }),
+// Building the fixture is not a Session/quit deadline. Keep the compiler
+// bounded, but allow shared-machine contention before timing runtime proofs.
+beforeAll(
+  () =>
+    execFileSync("pnpm", ["--filter", "@volli/cli", "build"], {
+      cwd: repo,
+      stdio: "pipe",
+      timeout: 60_000,
+    }),
+  65_000,
 );
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.stop("test done");

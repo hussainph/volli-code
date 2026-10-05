@@ -226,11 +226,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (database.ok && sessionEngine !== null) {
       setImmediate(() => {
         if (closing) return;
-        void catchUpSessionResumptions(database.db, sessionEngine, {
+        const work = catchUpSessionResumptions(database.db, sessionEngine, {
           publish: (change) => ports.events.publish("data-changed", change),
           report: (error) =>
             ports.log.error("[volli] failed to catch up Session resumptions:", errorMessage(error)),
         });
+        liveHost?.detachedWork.track(work);
       });
     }
     if (resume !== null) {

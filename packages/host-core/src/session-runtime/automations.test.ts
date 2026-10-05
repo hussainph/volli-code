@@ -71,11 +71,8 @@ function fixture(options: { db?: boolean; piRuntime?: boolean } = {}) {
   let sessionPorts: AutomationSessionPorts | null | undefined;
   const module = {
     service,
-    get runner() {
-      return armed ? runner : null;
-    },
-    get pendingArmedRuns() {
-      return armed ? pending : null;
+    get execution() {
+      return armed ? { kind: "ready", runner, pendingArmedRuns: pending } : { kind: "idle" };
     },
     // The module's own guard is covered beside it; this one reads every call.
     start: vi.fn((read: () => AutomationSessionPorts | null) => {
@@ -83,6 +80,7 @@ function fixture(options: { db?: boolean; piRuntime?: boolean } = {}) {
       armed = true;
     }),
     stop: vi.fn(),
+    settled: vi.fn(async () => {}),
   };
   vi.mocked(createHostAutomations).mockReturnValue(module as unknown as HostAutomations);
   const runtime = {
@@ -168,9 +166,10 @@ describe("live runtime automations", () => {
     const f = fixture();
     expect(createHostAutomations).toHaveBeenCalledOnce();
     expect(moduleInput()).toMatchObject({ db, events: f.events, log: f.log });
+    expect(f.owner.kind).toBe("live");
+    if (f.owner.kind !== "live") throw new Error("Expected live Automations.");
     expect(f.owner.service).toBe(f.service);
-    expect(f.owner.runner).toBeNull();
-    expect(f.owner.pendingArmedRuns).toBeNull();
+    expect(f.owner.execution).toEqual({ kind: "idle" });
     expect(f.module.start).not.toHaveBeenCalled();
   });
 
@@ -193,7 +192,7 @@ describe("live runtime automations", () => {
     await lifecycle.close();
     expect(() => f.owner.start(ready)).toThrow("closing");
     expect(f.sessionPorts()).toBeUndefined();
-    expect(f.owner.runner).toBeNull();
+    expect(f.owner.kind === "live" && f.owner.execution.kind).toBe("idle");
   });
 
   it("arms the module with the recovered Session side and keeps its getters live", () => {
@@ -201,8 +200,11 @@ describe("live runtime automations", () => {
     f.owner.start(f.ready());
     expect(f.module.start).toHaveBeenCalledOnce();
     expect(f.ports().sessions).toBe(f.services.sessions);
-    expect(f.owner.runner).toBe(f.runner);
-    expect(f.owner.pendingArmedRuns).toBe(f.pending);
+    expect(f.owner.kind === "live" && f.owner.execution).toEqual({
+      kind: "ready",
+      runner: f.runner,
+      pendingArmedRuns: f.pending,
+    });
     f.owner.stop();
     expect(f.module.stop).toHaveBeenCalledOnce();
   });
@@ -325,14 +327,23 @@ describe("live runtime automations", () => {
   });
 });
 
+it("joins the live Automation module before the host closes its database", async () => {
+  const f = fixture();
+  const settled = Promise.withResolvers<void>();
+  f.module.settled.mockReturnValueOnce(settled.promise);
+  const drain = f.owner.settled();
+  expect(f.module.settled).toHaveBeenCalledOnce();
+  settled.resolve();
+  await drain;
+});
+
 describe("degraded runtime automations", () => {
   it("composes no module and offers no service, runner or pending Runs", () => {
     const f = fixture({ db: false });
     expect(createHostAutomations).not.toHaveBeenCalled();
     f.owner.start(f.ready({ sessions: null, runtime: null }));
-    expect(f.owner.service).toBeNull();
-    expect(f.owner.runner).toBeNull();
-    expect(f.owner.pendingArmedRuns).toBeNull();
+    expect(f.owner.kind).toBe("degraded");
+    expect(Object.keys(f.owner).toSorted()).toEqual(["kind", "settled", "start", "stop"]);
   });
 
   it("still refuses a forged proof, then settles once like the live owner", async () => {
@@ -349,6 +360,7 @@ describe("degraded runtime automations", () => {
     const f = fixture({ db: false });
     const ready = f.ready();
     f.owner.stop();
+    await f.owner.settled();
     await lifecycle.close();
     expect(() => f.owner.start(ready)).not.toThrow();
   });

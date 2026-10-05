@@ -84,10 +84,12 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
     recover: vi.fn(async () => {
       order.push("runner.recover");
     }),
+    settled: vi.fn(async () => {}),
   };
   const pending = {
     start: vi.fn(() => order.push("pending.start")),
     stop: vi.fn(() => order.push("pending.stop")),
+    settled: vi.fn(async () => {}),
   };
   const scheduler = {
     start: vi.fn(async () => {
@@ -95,6 +97,7 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
     }),
     refresh: vi.fn(async () => {}),
     stop: vi.fn(() => order.push("scheduler.stop")),
+    settled: vi.fn(async () => {}),
   };
   vi.mocked(createAutomationEngine).mockReturnValue(engine as never);
   vi.mocked(createAutomationService).mockReturnValue(service as never);
@@ -164,8 +167,7 @@ describe("construction", () => {
     expect(f.automations.service).toBe(f.service);
     expect(f.serviceDeps().engine).toBe(f.engine);
     expect(f.serviceDeps()).not.toHaveProperty("inspectModelAccess");
-    expect(f.automations.runner).toBeNull();
-    expect(f.automations.pendingArmedRuns).toBeNull();
+    expect(f.automations.execution).toEqual({ kind: "idle" });
     expect(createAutomationRunner).not.toHaveBeenCalled();
     expect(createPendingArmedRunCoordinator).not.toHaveBeenCalled();
     expect(createAutomationScheduler).not.toHaveBeenCalled();
@@ -227,8 +229,11 @@ describe("start and stop", () => {
       "createScheduler",
       "scheduler.start",
     ]);
-    expect(f.automations.runner).toBe(f.runner);
-    expect(f.automations.pendingArmedRuns).toBe(f.pending);
+    expect(f.automations.execution).toEqual({
+      kind: "ready",
+      runner: f.runner,
+      pendingArmedRuns: f.pending,
+    });
     expect(f.runnerDeps()).toMatchObject({ ...f.sessionPorts, engine: f.engine });
     expect(f.scheduler.refresh).not.toHaveBeenCalled();
     f.serviceDeps().onAutomationsChanged!();
@@ -241,8 +246,7 @@ describe("start and stop", () => {
     const f = fixture();
     f.automations.start(() => null);
     expect(f.order).toEqual(["createPending", "pending.start"]);
-    expect(f.automations.runner).toBeNull();
-    expect(f.automations.pendingArmedRuns).toBe(f.pending);
+    expect(f.automations.execution).toEqual({ kind: "unavailable", pendingArmedRuns: f.pending });
     f.serviceDeps().onAutomationsChanged!();
     expect(f.scheduler.refresh).not.toHaveBeenCalled();
     await expect(
@@ -278,7 +282,7 @@ describe("start and stop", () => {
     early.automations.start(read);
     expect(read).not.toHaveBeenCalled();
     expect(early.order).toEqual([]);
-    expect(early.automations.pendingArmedRuns).toBeNull();
+    expect(early.automations.execution).toEqual({ kind: "idle" });
   });
 
   it("logs a failed recovery or scheduler start instead of surfacing either", async () => {
@@ -292,6 +296,51 @@ describe("start and stop", () => {
         "[volli] automation scheduler could not start: cursor unreadable",
       );
     });
+  });
+});
+
+describe("writer drain", () => {
+  it("joins recovery and timer attempts before the runner's final boot snapshot", async () => {
+    const f = fixture();
+    const recovery = Promise.withResolvers<void>();
+    const armed = Promise.withResolvers<void>();
+    const scheduled = Promise.withResolvers<void>();
+    const boot = Promise.withResolvers<void>();
+    f.runner.recover.mockReturnValueOnce(recovery.promise);
+    f.pending.settled.mockReturnValueOnce(armed.promise);
+    f.scheduler.settled.mockReturnValueOnce(scheduled.promise);
+    f.runner.settled.mockReturnValueOnce(boot.promise);
+    f.automations.start(() => f.sessionPorts);
+    f.automations.stop();
+    let drained = false;
+    const drain = f.automations.settled().then(() => {
+      drained = true;
+    });
+    recovery.resolve();
+    armed.resolve();
+    await Promise.resolve();
+    expect(f.runner.settled).not.toHaveBeenCalled();
+    expect(drained).toBe(false);
+    scheduled.resolve();
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+    expect(f.runner.settled).toHaveBeenCalledOnce();
+    expect(drained).toBe(false);
+    boot.resolve();
+    await drain;
+    expect(drained).toBe(true);
+  });
+
+  it("settles unstarted and runtime-unavailable variants without inventing a runner", async () => {
+    const idle = fixture();
+    idle.automations.stop();
+    await idle.automations.settled();
+    expect(idle.runner.settled).not.toHaveBeenCalled();
+    const unavailable = fixture();
+    unavailable.automations.start(() => null);
+    unavailable.automations.stop();
+    await unavailable.automations.settled();
+    expect(unavailable.pending.settled).toHaveBeenCalledOnce();
+    expect(unavailable.runner.settled).not.toHaveBeenCalled();
   });
 });
 

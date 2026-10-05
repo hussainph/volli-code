@@ -187,8 +187,10 @@ export function registerAcceptedQuitCoordinator(options: {
   options.lifecycle.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
     event.preventDefault();
-    options.prepareQuit?.(event);
-    if (shutdownInFlight) return;
+    if (shutdownInFlight) {
+      options.prepareQuit?.(event);
+      return;
+    }
     // This coordinator may register before the synchronous destructive-work
     // gates so it can cover startup. Hold the quit now, then let every listener
     // for this event record its verdict before interpreting it as accepted.
@@ -210,5 +212,9 @@ export function registerAcceptedQuitCoordinator(options: {
         reportFailure: options.reportFailure,
       }).then(exitAfterCheckpoint, exitAfterCheckpoint);
     });
+    // Queue the checkpoint before calling the former synchronous listeners:
+    // even a throwing dialog/producer cannot strand a prevented quit. Their
+    // refusal still lands synchronously before this microtask interprets it.
+    options.prepareQuit?.(event);
   });
 }

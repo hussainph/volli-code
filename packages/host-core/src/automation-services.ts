@@ -88,13 +88,20 @@ export type AutomationSessionPorts = Omit<
   | "onRunStarted"
 >;
 
+export type HostAutomationExecution =
+  | { readonly kind: "idle" }
+  | { readonly kind: "unavailable"; readonly pendingArmedRuns: PendingArmedRunCoordinator }
+  | {
+      readonly kind: "ready";
+      readonly runner: AutomationRunner;
+      readonly pendingArmedRuns: PendingArmedRunCoordinator;
+    };
+
 export interface HostAutomations {
   /** CRUD over the ledger, live from construction. */
   readonly service: AutomationService;
-  /** The runner armed by {@link start}; null before it or without a Session runtime. */
-  readonly runner: AutomationRunner | null;
-  /** The pending armed Runs armed by {@link start}; null before it. */
-  readonly pendingArmedRuns: PendingArmedRunCoordinator | null;
+  /** A ready runner is never nullable; pre-ready/unavailable are explicit variants. */
+  readonly execution: HostAutomationExecution;
   /**
    * Arms the module once, at the host's ready point. `sessionPorts` is read
    * only when this call is the one that starts, so a caller may validate its
@@ -105,6 +112,8 @@ export interface HostAutomations {
   start(sessionPorts: () => AutomationSessionPorts | null): void;
   /** Disarms the pending armed Runs and the scheduler; refuses any later start. */
   stop(): void;
+  /** Joins recovery, timer attempts and Run boots after stop, before SQLite closes. */
+  settled(): Promise<void>;
 }
 
 export function createHostAutomations(input: HostAutomationsInput): HostAutomations {
@@ -119,6 +128,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
   let scheduler: AutomationScheduler | null = null;
   let started = false;
   let stopped = false;
+  let execution: HostAutomationExecution = { kind: "idle" };
+  let recovery = Promise.resolve();
 
   const service = createAutomationService({
     engine,
@@ -272,11 +283,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
 
   return {
     service,
-    get runner() {
-      return runner;
-    },
-    get pendingArmedRuns() {
-      return pending;
+    get execution() {
+      return execution;
     },
     start(sessionPorts) {
       if (started || stopped) return;
@@ -286,8 +294,12 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       runner = armedRunner;
       pending = createPendingArmedRuns();
       pending.start();
+      execution =
+        armedRunner === null
+          ? { kind: "unavailable", pendingArmedRuns: pending }
+          : { kind: "ready", runner: armedRunner, pendingArmedRuns: pending };
       if (armedRunner === null) return;
-      void armedRunner
+      recovery = armedRunner
         .recover()
         .catch((error: unknown) =>
           log.error(`[volli] automation recovery failed: ${errorMessage(error)}`),
@@ -303,6 +315,15 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       stopped = true;
       pending?.stop();
       scheduler?.stop();
+    },
+    async settled() {
+      // Recovery can enqueue Run boots; timer attempts can do so too. Join
+      // their producers first, then the runner's final in-flight snapshot.
+      try {
+        await Promise.all([recovery, pending?.settled(), scheduler?.settled()]);
+      } finally {
+        await runner?.settled();
+      }
     },
   };
 }

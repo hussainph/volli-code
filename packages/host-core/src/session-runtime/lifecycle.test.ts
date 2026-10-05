@@ -110,6 +110,7 @@ function fixture() {
     sessionEngine: engine,
     hostNoticeOutbox: {},
     sessionWakeBus: { subscribe: vi.fn() },
+    detachedWork: { track: vi.fn() },
   } as unknown as LiveHostCore;
   const ports = {
     power: { on: vi.fn(), removeListener: vi.fn() },

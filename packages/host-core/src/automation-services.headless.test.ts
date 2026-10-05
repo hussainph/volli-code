@@ -49,14 +49,16 @@ it("keeps CRUD and the unattended schedule alive without a window or attention a
     readSessionActivity: vi.fn(),
   };
   automations.start(() => ports);
-  const runner = automations.runner!;
+  const execution = automations.execution;
+  if (execution.kind !== "ready") throw new Error("Automations did not start.");
+  const runner = execution.runner;
   const run = vi.spyOn(runner, "runForProject").mockResolvedValue({
     ok: false,
     code: "RUN_FAILED",
     error: "No executor attached",
   });
   try {
-    expect(automations.pendingArmedRuns!.list()).toEqual([]);
+    expect(execution.pendingArmedRuns.list()).toEqual([]);
     const due = nextScheduleOccurrence({ schedule, staggerKey: created.automation.id, after: now });
     await vi.advanceTimersByTimeAsync(due - now);
     await vi.waitFor(() =>
@@ -71,5 +73,6 @@ it("keeps CRUD and the unattended schedule alive without a window or attention a
     expect(log.error).not.toHaveBeenCalled();
   } finally {
     automations.stop();
+    await automations.settled();
   }
 });

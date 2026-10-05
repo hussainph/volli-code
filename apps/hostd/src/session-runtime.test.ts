@@ -125,10 +125,11 @@ function fixture() {
   };
   seam.lifecycle.mockReturnValue(lifecycle);
   const automations = {
+    kind: "live",
     start: vi.fn(),
     stop: vi.fn(),
-    runner: {},
-    pendingArmedRuns: { noteDeliberateMove: vi.fn() },
+    settled: vi.fn(async () => {}),
+    execution: { kind: "ready", runner: {}, pendingArmedRuns: { noteDeliberateMove: vi.fn() } },
   };
   seam.automations.mockReturnValue(automations);
   seam.recovered.mockReturnValue({ sessions: {}, runtime });
@@ -243,7 +244,7 @@ describe("headless runtime ownership", () => {
       venue: f.input.options.venue,
     });
     ready.onDeliberateMove({} as never);
-    expect(f.automations.pendingArmedRuns.noteDeliberateMove).toHaveBeenCalled();
+    expect(f.automations.execution.pendingArmedRuns.noteDeliberateMove).toHaveBeenCalled();
     const caller = {} as never;
     const request = {} as never;
     await input.callVerb(caller, request, new AbortController().signal, undefined);
@@ -277,7 +278,9 @@ describe("headless runtime ownership", () => {
     // A shell that failed to stop fails the drain rather than vanishing.
     seam.shells.close.mockRejectedValueOnce(new Error("shell survived"));
     await expect(drain.rpc().close()).rejects.toThrow("shell survived");
-    expect(owner.close).toBe(f.lifecycle.close);
+    await owner.close();
+    expect(f.lifecycle.close).toHaveBeenCalledOnce();
+    expect(f.automations.settled).toHaveBeenCalledOnce();
   });
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {
     const f = fixture();
@@ -335,10 +338,18 @@ describe("headless runtime ownership", () => {
     });
     expect(seam.assembly.mock.lastCall![0].codeModeSandbox).toEqual({ wasmPath: "/wasm" });
     expect(seam.automations.mock.lastCall![0].homeDir).toMatch(/.+/);
-    f.automations.runner = null as never;
-    f.automations.pendingArmedRuns = null as never;
+    f.automations.execution = { kind: "idle" } as never;
     const ready = await owner.ready();
     expect(ready.automationsAvailable).toBe(false);
+    ready.onDeliberateMove({} as never);
+    f.automations.kind = "degraded";
+    expect((await owner.ready()).automationsAvailable).toBe(false);
+    ready.onDeliberateMove({} as never);
+    f.automations.kind = "live";
+    f.automations.execution = {
+      kind: "unavailable",
+      pendingArmedRuns: { noteDeliberateMove: vi.fn() },
+    } as never;
     ready.onDeliberateMove({} as never);
     f.assembly.sessionRuntime = null as never;
     expect(owner.openNativeBindings()).toEqual([]);

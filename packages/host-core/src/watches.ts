@@ -104,6 +104,7 @@ import { readSessionAnswer } from "@volli/session-engine";
 
 import type { SubscribeSessionWake } from "@volli/host-core/session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
+import type { DetachedWorkPort } from "./detached-work";
 import {
   cutAtCodePoint,
   deliverHostNotice,
@@ -117,6 +118,8 @@ export const WATCH_COALESCE_MS = 1_500;
 export const WATCH_ANSWER_NOTICE_LIMIT = 4_000;
 
 export interface WatchesPorts {
+  /** A timer's in-flight delivery must finish before the host closes SQLite. */
+  detachedWork?: DetachedWorkPort;
   subscribeSessionWake: SubscribeSessionWake;
   subscribeTicketWake: (listener: (wake: TicketWake) => void) => () => void;
   runtime: Pick<SessionRuntime, "command" | "subscribe" | "projection">;
@@ -284,9 +287,10 @@ export function createWatches(ports: WatchesPorts): Watches {
     if (watcher.timer !== undefined) return;
     watcher.timer = setTimer(() => {
       watcher.timer = undefined;
-      void flush(watcher).catch((error: unknown) => {
+      const work = flush(watcher).catch((error: unknown) => {
         report(`watch notice for ${shortSessionId(watcher.sessionId)} failed: ${errorText(error)}`);
       });
+      ports.detachedWork?.track(work);
     }, coalesceMs);
   }
 

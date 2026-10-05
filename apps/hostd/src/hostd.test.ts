@@ -869,7 +869,6 @@ it("rejects new requests while stopping and after stop, and reports failed runti
     { source: "host-core" },
   );
   expect(faults.order).toEqual([
-    "maintenance.start",
     "maintenance.stop",
     "runtime.close",
     "runtime.closed",
@@ -886,13 +885,12 @@ it("reports a missing automation runner without hiding the ready Session runtime
 });
 
 describe("the host lifecycle hostd composes (VC-627)", () => {
-  it("starts maintenance only once serving, and stops it before anything drains", async () => {
+  it("keeps maintenance enablement separate, and stops its owner before anything drains", async () => {
     const host = await boot();
     expect(host.status().state).toBe("serving");
-    expect(faults.order).toEqual(["maintenance.start"]);
+    expect(faults.order).toEqual([]);
     expect(await host.stop("SIGTERM")).toBe(true);
     expect(faults.order).toEqual([
-      "maintenance.start",
       "maintenance.stop",
       "runtime.close",
       "runtime.closed",

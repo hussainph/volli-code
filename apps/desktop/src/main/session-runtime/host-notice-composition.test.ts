@@ -47,6 +47,7 @@ import {
 import { SecretStore } from "@volli/host-core/secrets";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { keychainSecretCodec } from "../secrets/codec";
+import { createDesktopHostRuntime } from "../host-runtime";
 
 const dirs: string[] = [];
 const hosts: HostCore[] = [];
@@ -170,21 +171,22 @@ function composeDesktopEdge(
       quit = () => host.stop("quit");
     },
   });
-  const start = () =>
-    host.start({
-      start: async () => {
-        const ready = await lifecycle.ready();
-        sessionRpc = bindRpc(ready);
-      },
-      stopProducers: stopAutomations,
-      close: async () => {
-        await lifecycle.close();
-        calls.push("shells.close");
-      },
-      closeSocket: async () => {
-        calls.push("socket.close");
-      },
-    });
+  const desktop = createDesktopHostRuntime({
+    host,
+    lifecycle,
+    bindReady: (ready) => {
+      sessionRpc = bindRpc(ready);
+    },
+    stopProducers: stopAutomations,
+    closeShells: async () => {
+      calls.push("shells.close");
+    },
+    closeSocket: async () => {
+      calls.push("socket.close");
+    },
+    settleProducers: async () => {},
+  });
+  const start = desktop.start;
   return {
     calls,
     recovery,

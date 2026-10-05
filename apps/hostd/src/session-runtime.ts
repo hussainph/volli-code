@@ -237,7 +237,13 @@ export function createHeadlessSessionRuntime(input: {
     },
   };
   return {
-    close: lifecycle.close,
+    close: async () => {
+      try {
+        await lifecycle.close();
+      } finally {
+        await automations.settled();
+      }
+    },
     /** The scheduler and armed Runs: the host lifecycle's synchronous first step. */
     stopProducers: () => {
       automations.stop();
@@ -275,9 +281,13 @@ export function createHeadlessSessionRuntime(input: {
         venue: options.venue,
         verifySessionToken: tokens.verify,
         busyWorktreeSites,
-        automationsAvailable: automations.runner !== null,
-        onDeliberateMove: (notice: TicketMovedNotice) =>
-          automations.pendingArmedRuns?.noteDeliberateMove(notice),
+        automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
+        onDeliberateMove: (notice: TicketMovedNotice) => {
+          if (automations.kind === "live") {
+            const execution = automations.execution;
+            if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
+          }
+        },
       };
     },
   };

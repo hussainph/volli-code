@@ -110,7 +110,9 @@ export interface LiveHostCore extends HostLifecycleOwner, HostSessionServices {
   readonly fileServices: HostFileServices;
   readonly detachedWork: DetachedWorkTracker;
   readonly secretStore: SecretStore;
-  readonly ptyManager: PtyManager;
+  readonly terminals:
+    | { readonly kind: "unavailable" }
+    | { readonly kind: "available"; readonly manager: PtyManager };
 }
 export type HostCore = LiveHostCore | DegradedHostCore;
 
@@ -190,16 +192,19 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     maintenance,
     detachedWork,
     secretStore,
-    get ptyManager() {
-      if (options.terminal === undefined) throw new Error("This host has no terminal port.");
-      return (ptyManager ??= new PtyManager({
-        ...options.terminal(),
-        db,
-        dbError: "",
-        sessionEngine: sessionServices.sessionEngine,
-        blobsRootPath: blobsRoot(options.dataDir),
-        spawnLedger: maintenance.spawnLedger,
-      }));
+    get terminals() {
+      if (options.terminal === undefined) return { kind: "unavailable" as const };
+      return {
+        kind: "available" as const,
+        manager: (ptyManager ??= new PtyManager({
+          ...options.terminal(),
+          db,
+          dbError: "",
+          sessionEngine: sessionServices.sessionEngine,
+          blobsRootPath: blobsRoot(options.dataDir),
+          spawnLedger: maintenance.spawnLedger,
+        })),
+      };
     },
     fileServices: createHostFileServices(ports),
     get runtimeServices() {
@@ -248,9 +253,12 @@ function lifecycleOwner(
       return await runtime?.closeSocket?.();
     },
     drainDetached: async () => {
-      const drained = await runtime?.drainRequests?.();
-      await services.drainDetached?.();
-      return drained;
+      try {
+        return await runtime?.drainRequests?.();
+      } finally {
+        // A transport refusal must not skip the host's own writer joins.
+        await services.drainDetached?.();
+      }
     },
     stopActivity: () => services.stopActivity?.(),
     closeDatabase: () => services.closeDatabase?.(),

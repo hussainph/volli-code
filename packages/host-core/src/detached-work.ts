@@ -66,7 +66,13 @@ export function createDetachedWorkTracker(
         },
         (error: unknown) => {
           inFlight.delete(observed);
-          reportFailure(error);
+          try {
+            reportFailure(error);
+          } catch (reportError) {
+            // The observed promise must not reject before a later drain has
+            // attached its handler (or leak an unhandled rejection at all).
+            console.error("[volli] detached work failure reporter failed:", reportError);
+          }
         },
       );
       inFlight.add(observed);
@@ -78,7 +84,7 @@ export function createDetachedWorkTracker(
       // Re-read the set after every round: work that settles may enrol more
       // (or another caller may), and the drain is over only when it is empty.
       while (inFlight.size > 0) {
-        // allSettled, so a throwing `reportFailure` cannot fail the drain.
+        // Every enrolled handle is observed and never rejects.
         await Promise.allSettled(inFlight);
       }
     },
