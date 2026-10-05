@@ -52,6 +52,8 @@ export interface BootRecoveryOptions {
   engine: BootRecoveryEngine;
   /** Only this host's bindings are owned by its restart. Defaults to desktop. */
   venue?: SessionExecutionVenue;
+  /** Host-specific upgrade ownership; never broadens ordinary runtime authority. */
+  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
   /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   projectIds: readonly string[];
@@ -82,7 +84,8 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
   let closed = 0;
   const venue = options.venue ?? { id: "local", kind: "local" };
   const owns = (attachment: BootRecoveryAttachment) =>
-    attachment.venue.id === venue.id && attachment.venue.kind === venue.kind;
+    (attachment.venue.id === venue.id && attachment.venue.kind === venue.kind) ||
+    (options.ownsLegacyVenue?.(attachment.venue) ?? false);
   // Shutdown is not a failure: once the host is closing, only the attachment
   // already in flight may finish, and a reconcile unblocked by that close is a
   // stop, not a lost sidecar — no durable fact is recorded from it.

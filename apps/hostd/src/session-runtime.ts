@@ -42,6 +42,7 @@ import { agentSitesWithin, releaseAgentSites } from "@volli/host-core/worktree/a
 import type { BusyWorktreeSites, BusyWorktreeSite } from "@volli/host-core/worktree/activity";
 import type { AgentSiteRuntime } from "@volli/host-core/worktree/agent-sites";
 import type { HeadlessSecrets } from "./secrets";
+import { ownsLegacyHostdVenue } from "./venue";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -208,6 +209,7 @@ export function createHeadlessSessionRuntime(input: {
   });
   const lifecycle = createSessionRuntimeLifecycle({
     venue: options.venue,
+    ownsLegacyVenue: ownsLegacyHostdVenue,
     host,
     ports,
     runtime: assembly.sessionRuntime,

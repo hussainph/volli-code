@@ -65,6 +65,7 @@ import { acquireInstanceLock } from "./instance-lock";
 import type { HostdLogger } from "./log";
 import { openOperators } from "./operators";
 import { headlessPorts } from "./ports";
+import { hostdVenue } from "./venue";
 import { logCredentials, openHeadlessSecrets, type HeadlessSecrets } from "./secrets";
 import {
   writeStatus,
@@ -258,7 +259,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           env: options.env,
           version: options.version,
           socketPath,
-          options: runtimeOptions,
+          // An address locates this host; only its persisted identity names
+          // ownership. Override packaged/source runtime path metadata alike.
+          options: { ...runtimeOptions, venue: hostdVenue(host.database.db) },
         });
         const sessionPorts = await sessionRuntime.ready();
         capabilities = {
@@ -329,8 +332,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         // The one sealed store this host opened at boot, never a second handle.
         secretStore: secrets.store,
         modelAccess: () => headlessModelAccess(options.env, runtimeOptions),
-        // This host's venue as it stands; the stable identity lands separately.
-        venue: () => runtimeOptions.venue,
+        venue: hostdVenue,
         // Read on every scan, and only after readiness (maintenance starts
         // there). Fail closed rather than call every recorded process an orphan.
         processReaders: {

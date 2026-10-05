@@ -98,8 +98,9 @@ In order; each refusal is logged as one JSON line and exits **78**
    the typed `databaseFailure`. That includes a database from a newer Volli
    (VC-602), which is left byte-identical.
 7. **Session recovery**, before commands or `serving`: the shared assembly,
-   facade and lifecycle reconcile this socket's remote venue, recover
-   delegations and notices, then start Automations. Other hosts' and desktop's
+   facade and lifecycle reconcile this host's persisted remote venue (plus
+   legacy socket-path venues in this data directory), recover delegations and
+   notices, then start Automations. Other UUID hosts/workers and desktop's
    attachments are not closed by this host. A failed runtime startup settles
    waiting requests with `APP_UNREACHABLE`, drains what opened and exits 1.
 
@@ -259,6 +260,24 @@ believing it only when its pid is alive and its socket accepts a connection:
 | 3    | `not-serving` | Stopped, starting, stopping, crashed, or socket unreachable. |
 
 The host protocol (VC-564) carries the same facts to remote clients.
+
+## Stable execution venue
+
+Session ownership and recovery use the persisted `host_identity.host_id`, not
+`--socket` (VC-627). Moving the socket therefore keeps this host's earlier
+attachments recoverable. Desktop's `local`/`local` venue is unchanged. On
+upgrade, boot recovery also owns legacy `remote` venues whose ids are resolved
+socket paths, even after a socket move: the instance lock guarantees one hostd
+per data directory. Recovery appends normal interruption/close facts without
+rewriting the attachments' original provenance. Other UUID hosts/workers are
+never adopted.
+
+A restored backup mints a new host identity, because host identity is excluded
+from backup bundles. **Known limitation:** open UUID-venue attachments from the
+source host are not recovered. Existing bundles do not distinguish the source
+host id from worker/other-host UUIDs; supporting restore recovery requires
+explicit prior-host metadata rather than claiming every foreign UUID. That
+backup-format/recovery change is deferred; no migration is added here.
 
 ## Shutdown
 
