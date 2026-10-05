@@ -5,6 +5,7 @@
  * Construction captures ports; none of these services is opened at boot until
  * its factory is called.
  */
+import type { SessionExecutionVenue } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
@@ -31,7 +32,10 @@ export function createHostRuntimeServices(
 ) {
   return {
     createModelAccess: () => (db === null ? null : piOwnedModelAccess()),
-    createDecisions: (modelAccess: PiModelAccess | null) =>
+    createDecisions: (
+      modelAccess: PiModelAccess | null,
+      venue: SessionExecutionVenue = { id: "local", kind: "local" },
+    ) =>
       db !== null && modelAccess !== null
         ? createDesktopDecisions({
             db,
@@ -47,7 +51,7 @@ export function createHostRuntimeServices(
                 occurredAt: Date.now(),
                 provenance: {
                   source: { kind: "system", id: "decision-service", detail: { purpose } },
-                  venue: { id: "local", kind: "local" },
+                  venue,
                 },
                 attachmentId: null,
                 turnId: null,

@@ -12,11 +12,13 @@ import { getProjectById } from "../db/projects-repo";
 import { loadSkills } from "../skills";
 import {
   createRuntimeSessionFacade,
+  recoveredRuntimeSessionServices,
+  recoveredSessionAutomationPorts,
   recoveredSessionClientPorts,
   recoveredSessionCommandPorts,
   type RuntimeSessionFacade,
 } from "./facade";
-import { createRuntimeSessionAgents } from "./agents";
+import type { RuntimeSessionAgents } from "./agents";
 import type { RecoveredSessionServices } from "./lifecycle";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAutomations } from "./automations";
@@ -119,26 +121,33 @@ describe("lifted Session facade and recovered agent staging", () => {
       Parameters<typeof recoveredSessionCommandPorts>[0]
     >();
     expectTypeOf<RuntimeSessionFacade>().not.toExtend<
-      Parameters<ReturnType<typeof createRuntimeSessionAgents>["toolDoor"]>[0]
+      Parameters<RuntimeSessionAgents["toolDoor"]>[0]
     >();
   });
 
   it("is inert, shares the supplied runtime/engine, and records injected venue without new writers", async () => {
     const f = fixture();
+    expect(f.facade).not.toHaveProperty("sessions");
+    expect(f.facade).not.toHaveProperty("sessionEngine");
+    expect(f.facade).not.toHaveProperty("runtime");
     expect(f.engine.getSession).not.toHaveBeenCalled();
     expect(f.engine.listEvents).not.toHaveBeenCalled();
     expect(f.runtime.command).not.toHaveBeenCalled();
     expect(createSessions).toHaveBeenCalledWith(
       expect.objectContaining({ runtime: f.runtime, grants: f.delegation }),
     );
-    expect(f.facade.sessionEngine).toBe(f.host.sessionEngine);
+    expect(recoveredRuntimeSessionServices(f.ready).sessionEngine).toBe(f.host.sessionEngine);
     const client = recoveredSessionClientPorts(f.ready);
     expect(client.sessionEngine).toBe(f.host.sessionEngine);
     expect(client.sessionRuntime).toBe(f.assembly.sessionRuntime);
-    expect(client.summarizePeek).toBe(f.facade.peekSummarizer!.summarize);
+    expect(client.summarizePeek).toBe(
+      recoveredRuntimeSessionServices(f.ready).peekSummarizer!.summarize,
+    );
     client.autoTitle!({} as Parameters<NonNullable<typeof client.autoTitle>>[0]);
     expect(f.titler.refine).toHaveBeenCalledOnce();
-    await f.facade.sessionSkills!.record("s", [{ name: "a", text: "body" }]);
+    await recoveredRuntimeSessionServices(f.ready).sessionSkills!.record("s", [
+      { name: "a", text: "body" },
+    ]);
     expect(f.engine.getOrRecordSessionInput).toHaveBeenCalledWith(
       expect.objectContaining({
         provenance: {
@@ -184,12 +193,14 @@ describe("lifted Session facade and recovered agent staging", () => {
         },
       ],
     });
-    await expect(f.facade.sessionSkills!.resolve("p", ["a"])).rejects.toThrow(
-      'The skill "a" was not found',
-    );
+    await expect(
+      recoveredRuntimeSessionServices(f.ready).sessionSkills!.resolve("p", ["a"]),
+    ).rejects.toThrow('The skill "a" was not found');
     const ports = recoveredSessionCommandPorts(f.ready);
     expect(ports.sessionEngine).toBe(f.host.sessionEngine);
-    expect(ports.submitSessionMessage).toBe(f.facade.submitKickoffMessage);
+    expect(ports.submitSessionMessage).toBe(
+      recoveredRuntimeSessionServices(f.ready).submitKickoffMessage,
+    );
     await ports.submitSessionMessage!({
       sessionId: "s",
       commandId: "operation:command",
@@ -250,6 +261,7 @@ describe("lifted Session facade and recovered agent staging", () => {
   it("exposes only recovery before ready; tools and lazy watches need the matching proof", async () => {
     const f = fixture();
     const delegated = {
+      delegate: vi.fn(),
       recover: vi.fn(async () => ({ answered: 0, reported: 0, skipped: 0 })),
       liveChildren: vi.fn(() => ["child"]),
       watching: vi.fn(() => false),
@@ -258,9 +270,8 @@ describe("lifted Session facade and recovered agent staging", () => {
     vi.mocked(createDelegations).mockReturnValue(
       delegated as unknown as ReturnType<typeof createDelegations>,
     );
-    const agents = createRuntimeSessionAgents({
+    const agents = f.facade.agents({
       host: f.host,
-      facade: f.facade,
       delegation: f.delegation,
       automations: { runner: null } as unknown as ReturnType<typeof createRuntimeAutomations>,
       mcpSettings: null,
@@ -294,7 +305,9 @@ describe("lifted Session facade and recovered agent staging", () => {
       afterSequence: 12,
     });
     const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![0];
-    expect(toolPorts.submitSessionMessage).toBe(f.facade.submitKickoffMessage);
+    expect(toolPorts.submitSessionMessage).toBe(
+      recoveredRuntimeSessionServices(f.ready).submitKickoffMessage,
+    );
     expect(toolPorts.sessions()).toBe(f.sessions);
     expect(toolPorts.delegate!()).toBe(delegated);
     expect(toolPorts.supervise!()).toEqual({
@@ -308,6 +321,25 @@ describe("lifted Session facade and recovered agent staging", () => {
     expect(f.agentServices.createWatches.mock.calls[0]![0].pendingSubagents!("s")).toEqual([
       "child",
     ]);
+  });
+
+  it("does not expose services through an unrecognized facade and preserves close revocation for automations", async () => {
+    const f = fixture();
+    await f.facade.waitForBirth("s");
+    expect(() =>
+      recoveredRuntimeSessionServices({ services: {} } as unknown as typeof f.ready),
+    ).toThrow("different runtime");
+    let closing = false;
+    const ready = {
+      get services() {
+        if (closing) throw new Error("closing");
+        return f.facade;
+      },
+    } as unknown as typeof f.ready;
+    const automation = recoveredSessionAutomationPorts(ready);
+    expect(automation.services.sessions).toBe(f.sessions);
+    closing = true;
+    expect(() => automation.services).toThrow("closing");
   });
 
   it("keeps degraded composition inert and refuses CLI Session ports without an engine", () => {
@@ -326,11 +358,24 @@ describe("lifted Session facade and recovered agent staging", () => {
       decisions: null,
       delegation: null,
     });
-    expect(facade.sessions).toBeNull();
-    expect(facade.sessionSkills).toBeNull();
-    expect(facade.autoTitler).toBeNull();
-    expect(facade.peekSummarizer).toBeNull();
-    expect(facade.submitKickoffMessage).toBeUndefined();
+    expect(
+      recoveredRuntimeSessionServices({ services: facade } as unknown as typeof f.ready).sessions,
+    ).toBeNull();
+    expect(
+      recoveredRuntimeSessionServices({ services: facade } as unknown as typeof f.ready)
+        .sessionSkills,
+    ).toBeNull();
+    expect(
+      recoveredRuntimeSessionServices({ services: facade } as unknown as typeof f.ready).autoTitler,
+    ).toBeNull();
+    expect(
+      recoveredRuntimeSessionServices({ services: facade } as unknown as typeof f.ready)
+        .peekSummarizer,
+    ).toBeNull();
+    expect(
+      recoveredRuntimeSessionServices({ services: facade } as unknown as typeof f.ready)
+        .submitKickoffMessage,
+    ).toBeUndefined();
     const ready = { services: facade } as unknown as typeof f.ready;
     expect(() => recoveredSessionCommandPorts(ready)).toThrow("engine is unavailable");
     const client = recoveredSessionClientPorts(ready);
