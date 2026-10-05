@@ -5,17 +5,16 @@
  *   node apps/desktop/e2e/database-recovery-smoke.mjs
  *
  * All profiles, HOME/worktrees, SQLite fixtures and screenshots stay under a
- * fresh ignored <workspace>/.tmp/recovery-* directory. The actual 750ms restart
+ * fresh recovery-* directory in the CI report root or ignored <workspace>/.tmp. The actual 750ms restart
  * timer runs, but its relaunch/quit pair is intercepted in Electron main so it
  * cannot spawn a detached process. Cleanup restores the original quit method;
  * a separately tracked fresh launch proves the restored profile boots healthy.
  * Manually run (display required); not part of vp test. Never builds artifacts.
  */
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 
@@ -26,19 +25,26 @@ import {
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
-  descendantProcesses,
   launch,
   waitUntil,
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
+
+import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
+import { screenshotWithTrace } from "./lib/screenshot-trace.mjs";
 
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const NO_CLEAN = "No local backup checks clean. Nothing was restored.";
 const MANUAL = "Your database and safety copies are preserved for manual recovery.";
 const MARKER_KEY = "database-recovery-smoke";
 const MARKER_VALUE = "last-clean-saved-marker";
-const execFileAsync = promisify(execFile);
-const traceShutdown = process.env.VOLLI_RECOVERY_TRACE === "1";
+// Cheap CI breadcrumbs are kept only on failure. Native sampling is intrusive
+// and stays opt-in, including during unchanged-head validation.
+const sampleNative = process.env.VOLLI_RECOVERY_SAMPLE === "1";
+const traceShutdown =
+  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) ||
+  process.env.VOLLI_RECOVERY_TRACE === "1" ||
+  sampleNative;
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -94,7 +100,19 @@ async function fixture(name) {
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, child: app.process(), label, stdout: "", stderr: "", page: null };
+  const run = {
+    app,
+    child: app.process(),
+    label,
+    stdout: "",
+    stderr: "",
+    page: null,
+    debuggerWaitTraced: false,
+    tracePath: traceShutdown ? join(scratch, `${label.replaceAll(" ", "-")}-shutdown.jsonl`) : null,
+  };
+  run.child.once("exit", (code, signal) =>
+    traceClose(run.tracePath, "child-exit", { code, signal }),
+  );
   runs.add(run);
   // Bounded log retention; neither seed nor app gets any real credentials.
   run.child.stdout?.on("data", (chunk) => {
@@ -102,28 +120,12 @@ async function openApp(config, label) {
   });
   run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
+    if (!run.debuggerWaitTraced && run.stderr.includes("Waiting for the debugger to disconnect")) {
+      run.debuggerWaitTraced = true;
+      traceClose(run.tracePath, "debugger-disconnect-wait");
+    }
   });
-  if (traceShutdown) {
-    await bounded(`${label}: install shutdown trace`, () =>
-      app.evaluate(({ app: electronApp }) => {
-        const trace = (stage) =>
-          console.log(
-            "[recovery shutdown]",
-            Date.now(),
-            stage,
-            electronApp.isReady(),
-            process.getActiveResourcesInfo(),
-          );
-        electronApp.prependListener("before-quit", () => trace("before-quit"));
-        electronApp.on("will-quit", () => trace("will-quit"));
-        const exit = electronApp.exit;
-        electronApp.exit = function (...args) {
-          trace(`app.exit(${args.join(",")})`);
-          return exit.apply(this, args);
-        };
-      }),
-    );
-  }
+  await installShutdownTrace(app, run.tracePath);
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
   );
@@ -137,76 +139,6 @@ async function openApp(config, label) {
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
   return run;
-}
-
-async function sampleShutdownProcesses(run, metrics) {
-  const prefix = join(scratch, `${run.label.replaceAll(" ", "-")}-shutdown`);
-  let helpers = [];
-  try {
-    const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
-      timeout: 2000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    helpers = descendantProcesses(stdout, run.child.pid);
-  } catch (error) {
-    console.error(`shutdown process discovery: ${error.message}`);
-  }
-  const types = new Map(metrics.map(({ pid, type }) => [pid, type]));
-  const processes = [{ pid: run.child.pid, command: "tracked Electron main" }, ...helpers];
-  for (const entry of processes) entry.type = types.get(entry.pid) ?? "unknown";
-  await bounded(
-    "shutdown process evidence",
-    () => fs.writeFile(`${prefix}-processes.json`, `${JSON.stringify(processes, null, 2)}\n`),
-    2000,
-  ).catch((error) => console.error(`shutdown process evidence: ${error.message}`));
-  // Capture the GPU/Viz peer and renderer/utility helpers alongside main. Never
-  // select helpers globally by name: another Session's/live app is not ours.
-  await Promise.all(
-    processes.map(async ({ pid }) => {
-      try {
-        await execFileAsync(
-          "/usr/bin/sample",
-          [String(pid), "2", "-file", `${prefix}-${pid}.sample.txt`],
-          {
-            timeout: 7000,
-          },
-        );
-      } catch (error) {
-        console.error(`shutdown sample pid ${pid}: ${error.message}`);
-      }
-    }),
-  );
-}
-
-// Called only under VOLLI_RECOVERY_TRACE: no extra timers, process enumeration,
-// native sampling or round trips when tracing is unset.
-async function startShutdownTrace(run) {
-  // macOS may name GPU and Utility processes simply "Electron Helper". Record
-  // Electron's PID/type mapping while main still answers, before quit begins.
-  const metrics = await bounded("shutdown helper types", () =>
-    run.app.evaluate(({ app }) => app.getAppMetrics().map(({ pid, type }) => ({ pid, type }))),
-  ).catch((error) => {
-    console.error(`shutdown helper types: ${error.message}`);
-    return [];
-  });
-  const startedAt = Date.now();
-  let sample = Promise.resolve();
-  const timer =
-    process.platform === "darwin"
-      ? setTimeout(() => {
-          if (run.child.exitCode !== null || run.child.signalCode !== null) return;
-          sample = sampleShutdownProcesses(run, metrics).catch((error) =>
-            console.error(`shutdown samples: ${error.message}`),
-          );
-        }, 10000)
-      : undefined;
-  return async () => {
-    clearTimeout(timer);
-    await sample;
-    console.log(
-      `SHUTDOWN TRACE: ${run.label}: ${Date.now() - startedAt}ms\n${run.stdout}\n${run.stderr}`,
-    );
-  };
 }
 
 async function closeRun(run) {
@@ -223,12 +155,18 @@ async function closeRun(run) {
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
-  const finishTrace = traceShutdown ? await startShutdownTrace(run) : null;
+  traceClose(run.tracePath, "quit-requested");
+  const finishSampling = sampleStalledClose(run.child, sampleNative ? run.tracePath : null);
   let exit;
   try {
     exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+    traceClose(run.tracePath, "close-result", exit);
   } finally {
-    if (finishTrace) await finishTrace();
+    await finishSampling();
+    if (run.tracePath && (!exit || exit.exit.code !== 0 || exit.closeFailures.length > 0))
+      console.error(
+        `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
+      );
   }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   // Retain failed runs so the outer handler prints their stdout/stderr.
@@ -325,7 +263,12 @@ async function expectFault(run) {
 }
 
 async function screenshot(run, name) {
-  await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
+  await screenshotWithTrace(
+    run,
+    { path: join(scratch, `${name}.png`), timeout: 5000 },
+    traceShutdown ? join(scratch, `${run.label.replaceAll(" ", "-")}-screenshot.jsonl`) : null,
+    { sample: sampleNative },
+  );
 }
 
 // Match the real incident: the SQLite header/schema are intact, but an index
@@ -852,8 +795,9 @@ try {
   );
   for (const path of [join(APP_DIR, "dist-electron/main.cjs"), join(APP_DIR, "dist/index.html")])
     await fs.access(path);
-  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
-  scratch = await fs.mkdtemp(join(REPO, ".tmp", "recovery-"));
+  const evidenceRoot = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".tmp");
+  await fs.mkdir(evidenceRoot, { recursive: true });
+  scratch = await fs.mkdtemp(join(evidenceRoot, "recovery-"));
   console.log(`Evidence: ${scratch}`);
   await recoveryScenario();
   await malformedHeaderScenario();
@@ -885,7 +829,7 @@ try {
     );
     // Keep screenshots/summary for PR evidence, but remove isolated profiles and
     // shadow Electron bundles after success. Failures retain fixtures to debug.
-    if (code === 0)
+    if (code === 0) {
       for (const name of [
         "restore",
         "malformed-header",
@@ -894,6 +838,9 @@ try {
         "interrupted-switch",
       ])
         await fs.rm(join(scratch, name), { recursive: true, force: true });
+      for (const name of await fs.readdir(scratch))
+        if (name.includes("-shutdown.jsonl")) await fs.rm(join(scratch, name), { force: true });
+    }
   }
 }
 console.log(

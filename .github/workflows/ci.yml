@@ -197,6 +197,7 @@ jobs:
           apps/desktop/e2e/lib/focus-ring-probe.test.mjs
           apps/desktop/e2e/lib/smoke-kit.test.mjs
           apps/desktop/e2e/lib/shutdown-trace.test.mjs
+          apps/desktop/e2e/lib/screenshot-trace.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -686,6 +687,8 @@ jobs:
       - name: Run core e2e and verify quiet native windows
         env:
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+          # VC-638 diagnostic head only; remove before unchanged-head validation.
+          VOLLI_RECOVERY_SAMPLE: "1"
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier core --jobs 4
 
       - name: Upload core smoke attempts and native-window evidence
