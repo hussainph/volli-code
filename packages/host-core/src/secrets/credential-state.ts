@@ -44,17 +44,24 @@ import { closeSync, fsyncSync, linkSync, openSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { isSecretKeyUnavailable, type SecretKeyRefusal } from "../ports/secret-key";
+import type { CredentialFamily } from "./credential-families";
 
 export type CredentialState = "ready" | "empty" | "locked" | "refused" | "corrupt";
 
-/** The kinds of credential a host keeps sealed under its key. */
-export type CredentialKind = "session-env";
+/**
+ * The kinds of credential a host keeps sealed under its key: the typed
+ * inventory's families (`credential-families.ts`). The legacy Session store
+ * gates `session-env` alone.
+ */
+export type CredentialKind = CredentialFamily;
 
 /**
- * Why credentials are `locked` or `refused`: the key's refusal, or
- * `store-unreadable` when the sealed file itself cannot be opened for reading.
+ * Why credentials are `locked` or `refused`: the key's refusal,
+ * `store-unreadable` when the sealed file itself cannot be opened for reading,
+ * or `newer-format` when it opened and a newer Volli wrote it (VC-642): this
+ * build leaves it alone rather than rewrite a schema it does not know.
  */
-export type CredentialReason = SecretKeyRefusal | "store-unreadable";
+export type CredentialReason = SecretKeyRefusal | "store-unreadable" | "newer-format";
 
 export interface CredentialStatus {
   readonly state: CredentialState;
@@ -94,19 +101,36 @@ export class SealedStoreUnreadableError extends Error {
   }
 }
 
-/** The status a failure to open sealed credentials leaves. */
-export function credentialStatusFor(error: unknown): CredentialStatus {
+/** Thrown when a sealed store opened and a newer Volli's schema is inside. */
+export class SealedStoreNewerError extends Error {
+  constructor() {
+    super("Saved credentials were written by a newer Volli. Update Volli to use them.");
+    this.name = "SealedStoreNewerError";
+  }
+}
+
+/**
+ * The status a failure to open sealed credentials leaves. `kinds` are the
+ * ones that store gates; the legacy Session store's by default.
+ */
+export function credentialStatusFor(
+  error: unknown,
+  kinds: readonly CredentialKind[] = SEALED_CREDENTIAL_KINDS,
+): CredentialStatus {
   if (isSecretKeyUnavailable(error)) {
     return {
       state: UNSAFE.has(error.reason) ? "refused" : "locked",
       reason: error.reason,
-      unavailable: SEALED_CREDENTIAL_KINDS,
+      unavailable: kinds,
     };
   }
   if (error instanceof SealedStoreUnreadableError) {
-    return { state: "locked", reason: "store-unreadable", unavailable: SEALED_CREDENTIAL_KINDS };
+    return { state: "locked", reason: "store-unreadable", unavailable: kinds };
   }
-  return { state: "corrupt", reason: null, unavailable: SEALED_CREDENTIAL_KINDS };
+  if (error instanceof SealedStoreNewerError) {
+    return { state: "locked", reason: "newer-format", unavailable: kinds };
+  }
+  return { state: "corrupt", reason: null, unavailable: kinds };
 }
 
 /** Whether a status leaves stored credentials unusable until unlock or reset. */

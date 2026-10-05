@@ -1,6 +1,10 @@
 # One sealed host credential store
 
-**Status:** owner-approved design, VC-631 / VC-539, 2026-10-04.
+**Status:** owner-approved design, VC-631 / VC-539, 2026-10-04. Lost-key
+degradation shipped in VC-641; the typed module, lock and key-id format in
+VC-642 ([what exists](../secrets.md#the-typed-credential-module-vc-642)). The
+§6 lock is SQLite's `fcntl` file lock on `host-credentials.lock`, the
+mechanism `db/open-lock.ts` already ships on both hosts.
 This PR changes documentation only: no migration, credential access or deletion.
 The owner's decisions are recorded at the end. **Lost-key degradation comes
 first:** fix hostd's current boot refusal using the existing store/key port,

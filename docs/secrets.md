@@ -104,6 +104,76 @@ remains the no-keychain choice. The research document named in the ticket is
 not present on the base commit (`f960412c`); the VC-470 store comments document
 the earlier prompt problem.
 
+## The typed credential module (VC-642)
+
+`@volli/host-core/secrets` holds the one module every application credential
+family moves onto ([design](plans/sealed-credential-store.md) §3, §6, §7).
+No family is sealed in it yet: each moves in with its own ticket and
+compatibility gate (web keys VC-643/644, MCP and persistent Session imports
+VC-645, Pi VC-646, rotation VC-649).
+
+- **The lock** (`credential-lock.ts`). `host-credentials.lock` beside the
+  database: an empty 0600 file that desktop, hostd and `volli-hostd
+  credentials` lock before every read-for-use and every change. It is SQLite's
+  own file lock (`BEGIN EXCLUSIVE` on a connection that never writes, released
+  by `ROLLBACK`), the mechanism the database open lock and hostd's instance
+  lock already use, so it needs no new native module. On Linux and macOS that
+  is a POSIX `fcntl` lock: the kernel drops it when its process dies (a crash
+  never leaves a stale lock, and none is stolen by age or PID), it locks the
+  inode (two spellings of one data directory meet at one lock), and a child
+  process never inherits it. Waits are bounded: a synchronous critical
+  section waits up to 2 s and refuses at once when its own process holds the
+  lock; an asynchronous holder queues in order and polls, up to 10 s. Busy is
+  "unavailable for now", never "empty". It is advisory: an older build that
+  does not take it, or a hostile program running as the same user, is not
+  stopped, so stop older processes before upgrading.
+- **The durable file contract** (`durable-file.ts`, `sealed-document.ts`).
+  Under the lock, every read reloads the file and opens it with the key its
+  header names, so another process's revocation, and a key removed or
+  replaced mid-run, are seen by the next read rather than the next launch.
+  A change applies to what was just reloaded, never to a cached copy, so two
+  processes' changes both survive. A write checks that the active file is
+  still the bytes it opened (never sealing over a file it did not
+  authenticate), writes a unique `O_EXCL` 0600 temporary, fsyncs it, renames
+  it over the active name and fsyncs the directory. A crash leaves the old
+  file or the new one, never a mixture; a crashed writer's temporary is swept
+  by the next write. A directory that cannot be synced is reported; for the
+  typed inventory it is an "indeterminate" error, read again before retrying.
+- **Key ids and the envelope** (`credential-key-id.ts`, `sealed-envelope.ts`,
+  port `ports/credential-keyring.ts`). `host-credentials.enc` is
+  `VHC1 | backend | key id (16) | nonce (12) | tag (16) | ciphertext`,
+  AES-256-GCM with the header as associated data. The key id is 128 bits of a
+  labelled SHA-256 of the key, labelled differently from `VSF1`'s 64-bit id.
+  A keyring resolves exactly the id a header names and refuses an id two
+  keys claim; an unknown id is `locked`, never empty. A save never seals over
+  a file under another key: changing keys is rotation, an explicit operation.
+  The headless keyring (`fileCredentialKeyring`) reads the same key file as
+  `fileSecretKey`; a keychain keyring arrives with the first desktop family.
+- **The typed inventory** (`inventory.ts`, `credential-families.ts`). The
+  plaintext is a schema version, a UUID, a commit generation and typed
+  records, each with a UUID, a family, a fixed-field selector, a value, a
+  revision and a timestamp. A caller can commit against a revision, so a
+  sign-out or a new sign-in beats a refresh that finishes late. It keeps
+  VC-641's states; a newer schema is `locked` (`newer-format`) and never
+  rewritten.
+
+| Family | Selector | Value | Read by |
+|---|---|---|---|
+| `session-env` | scope (`project` or `always`), name, project | string | Session injection only |
+| `web-search` | provider | string | `WebAccessSettings` |
+| `mcp` | server id, endpoint | the whole MCP record (values, OAuth grant, registration) | MCP connection |
+| `pi-provider` | provider | Pi's tagged `Credential`, provider fields kept | Pi's `CredentialStore` adapter |
+| `host-private` | purpose | string | M2 pairing |
+| `device-verifier` | host, workspace, device | string | device authentication |
+| `worker-verifier` | host, workspace, worker | string | worker authentication |
+
+Not families, by owner decision: VC-623's operator verifier (its integrity
+is a root-owned file a service-writable store cannot give) and a user's own
+Pi `auth.json`. No provider custody: every key is generated and kept on the
+host. The new files are excluded from backups (`host-credentials.enc*`,
+`host-credentials.lock`), and structured file reads refuse
+`host-credentials.*` and `session-secrets.key*` beside the older stores.
+
 ## Headless hosts
 
 A host with no OS keychain (`apps/hostd`, VC-562) passes the **file-key

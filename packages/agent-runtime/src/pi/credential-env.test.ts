@@ -55,6 +55,11 @@ it("recognizes all credential-store shapes and preserves ordinary environment me
     "/work/credentials/key",
     "/home/mcp-auth.json",
     "/work/session-secrets.enc.123.tmp",
+    "/data/session-secrets.key",
+    "/data/host-credentials.enc",
+    "/data/host-credentials.enc.123.abcdef012345.tmp",
+    "/data/host-credentials.enc.locked-20261005T000000Z-abcd1234",
+    "/data/host-credentials.lock",
   ])
     expect(credentialPath(path)).toBe(true);
   for (const path of ["/work/readme", "/work/.environment", "/work/code.ts"])
