@@ -28,10 +28,10 @@ export const sessionStartVerb: AgentVerbHandler = async (context, request) => {
     return failure("APP_UNREACHABLE", "The Session runtime is unavailable.");
   const { model, tier, reasoning, title, message } = request.args;
   if (
-    (title !== undefined && typeof title !== "string") ||
-    (message !== undefined && typeof message !== "string")
+    (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
+    (message !== undefined && (typeof message !== "string" || message.trim().length === 0))
   )
-    return failure("INVALID_REQUEST", "Title and message must be strings.");
+    return failure("INVALID_REQUEST", "Title and message must be nonempty strings.");
   if (model !== undefined && tier !== undefined)
     return failure("INVALID_REQUEST", "Model and tier are alternatives.");
   let choice: StartSessionModelChoice | undefined;

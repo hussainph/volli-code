@@ -7,7 +7,6 @@ import {
   type PromptResource,
   type SessionEvent,
   type SessionInput,
-  type SessionToolId,
   type SessionExecutionVenue,
 } from "@volli/shared";
 import type { PiRuntimeContext } from "./pi-adapter";
@@ -75,11 +74,11 @@ function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | un
   return undefined;
 }
 
-function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
+function toolSurfaceInput(input: SessionInput): Extract<SessionInput, { kind: "tool-surface" }> {
   if (input.kind !== "tool-surface") {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
   }
-  return input.tools;
+  return input;
 }
 
 export function createRuntimeContextResolver(options: {
@@ -108,9 +107,8 @@ export function createRuntimeContextResolver(options: {
     // allowlist (VC-454): a tool taken off it stops overlapping.
     let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
     let mcpManagementNames = recordedMcpManagementNames(events);
-    const codeModeSurface = recordedCodeMode(events);
+    let codeModeSurface = recordedCodeMode(events);
     if (toolSurface === null) {
-      mcpManagementNames = "server";
       // Legacy backfill: the first attach under VC-164 freezes whatever
       // this Session can honestly bind now. Every later attach reads
       // the record and Settings can no longer recompose membership.
@@ -119,8 +117,8 @@ export function createRuntimeContextResolver(options: {
       // no new grant here. Applying today's role default would be a hot
       // privilege edit to an existing Session; the fail-closed empty
       // list leaves only the Role bundle it could honestly have held.
-      mcpTools = mcpDispatch.forNewSession(options.toolSurface()!.resolveMcp?.(project.id) ?? []);
-      toolSurface = toolSurfaceTools(
+      // Today's MCP selection is not a grant to an existing Session.
+      const frozen = toolSurfaceInput(
         await sessionEngine.getOrRecordSessionInput({
           sessionId,
           input: {
@@ -132,13 +130,16 @@ export function createRuntimeContextResolver(options: {
               .resolve(attaching.role, [])
               .filter((tool) => tool !== "codemode"),
             mcpManagementNames: "server",
-            ...(mcpTools.length === 0 ? {} : { mcpTools }),
           },
           provenance,
         }),
       );
-      // The legacy attach freezes the current MCP selection once, just like
-      // the role bundle, and subsequent attaches reuse that durable record.
+      // A competing first attach may have won the kind-keyed write. Bind only
+      // that durable winner, never the values this attach proposed.
+      toolSurface = frozen.tools;
+      mcpTools = mcpDispatch.forAttach(frozen.mcpTools ?? []);
+      mcpManagementNames = frozen.mcpManagementNames;
+      codeModeSurface = frozen.codeMode;
     }
     const shared = {
       projectId: project.id,

@@ -1,5 +1,5 @@
 /** Lifted automation ports; recovery itself is covered in lifecycle.test.ts. */
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import {
   skillResourcePart,
@@ -12,13 +12,45 @@ import { getProjectById } from "../db/projects-repo";
 import { loadPromptTemplates } from "../prompt-templates";
 import { loadSkills } from "../skills";
 import { createRuntimeAutomations, type ReadyAutomationSessions } from "./automations";
-import type { RecoveredSessionServices } from "./lifecycle";
+import {
+  createSessionRuntimeLifecycle,
+  mapRecoveredSessionServices,
+  type RecoveredSessionServices,
+} from "./lifecycle";
 import type { PiRuntimeHost } from "./pi-adapter";
 
 vi.mock("../db/projects-repo", () => ({ getProjectById: vi.fn() }));
 vi.mock("../prompt-templates", () => ({ loadPromptTemplates: vi.fn() }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
-afterEach(() => vi.resetAllMocks());
+let lifecycle: ReturnType<typeof createSessionRuntimeLifecycle<null>>;
+let recovered: RecoveredSessionServices<null>;
+beforeEach(async () => {
+  lifecycle = createSessionRuntimeLifecycle({
+    host: {
+      database: { ok: false },
+      sessionEngine: null,
+      hostNoticeOutbox: null,
+      sessionWakeBus: null,
+      maintenance: { shutdownNativeSessions: async () => {} },
+    } as unknown as HostCore,
+    ports: { power: { removeListener() {} }, log: { error() {} } } as unknown as Parameters<
+      typeof createSessionRuntimeLifecycle
+    >[0]["ports"],
+    runtime: null,
+    rpc: () => null,
+    observability: null,
+    delegation: null,
+    delegationsFor: () => null,
+    services: () => null,
+    installQuitHold() {},
+    stopProducers() {},
+  });
+  recovered = await lifecycle.ready();
+});
+afterEach(async () => {
+  await lifecycle.close();
+  vi.resetAllMocks();
+});
 type Automations = HostCore["automations"];
 
 function fixture(db = true, piRuntime = true) {
@@ -56,12 +88,12 @@ function fixture(db = true, piRuntime = true) {
     homeDir: "/home",
     log,
   });
-  // A localized proof fake isolates these port tests from lifecycle boot/drain;
-  // the real lifecycle tests pin that raw consumers cannot bypass recovery.
+  // Real issued/revocable proof, with a port-only view over the degraded owner.
   const ready = (over: Partial<ReadyAutomationSessions> = {}) =>
-    ({
-      services: { ...services, ...over },
-    }) as unknown as RecoveredSessionServices<ReadyAutomationSessions>;
+    mapRecoveredSessionServices(
+      recovered,
+      () => ({ ...services, ...over }) as unknown as ReadyAutomationSessions,
+    );
   const deps = () => make.createRunner.mock.calls[0]![0];
   return {
     owner,
@@ -112,6 +144,18 @@ const working = {
 } as unknown as SessionProjection;
 
 describe("runtime automation assembly", () => {
+  it("rejects forged, copied and revoked recovery proofs before arming a runner", async () => {
+    const f = fixture();
+    const ready = f.ready();
+    expect(() => f.owner.start({ services: ready.services } as typeof ready)).toThrow(
+      "no recovery proof",
+    );
+    expect(() => f.owner.start({ ...ready })).toThrow("no recovery proof");
+    await lifecycle.close();
+    expect(() => f.owner.start(ready)).toThrow("closing");
+    expect(f.make.createRunner).not.toHaveBeenCalled();
+  });
+
   it("builds CRUD early, arms the same runner later, and keeps the pending runner getter live", async () => {
     const f = fixture();
     expect(f.make.createEngine).toHaveBeenCalledOnce();

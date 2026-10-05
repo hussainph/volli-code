@@ -31,7 +31,11 @@ import { readModelAccessDefaults } from "./model-access-preferences";
 import { createSessions, StructuredSessionsError, type SessionSkillPorts } from "./sessions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAssembly } from "./assembly";
-import { readRecoveredSessionServices, type RecoveredSessionServices } from "./lifecycle";
+import {
+  mapRecoveredSessionServices,
+  readRecoveredSessionServices,
+  type RecoveredSessionServices,
+} from "./lifecycle";
 import {
   createRuntimeSessionAgents,
   type RuntimeSessionAgentOptions,
@@ -375,12 +379,7 @@ export function recoveredRuntimeSessionServices(
 export function recoveredSessionAutomationPorts(
   ready: RecoveredSessionServices<RuntimeSessionFacade>,
 ) {
-  return {
-    ...ready,
-    get services() {
-      return recoveredRuntimeSessionServices(ready);
-    },
-  };
+  return mapRecoveredSessionServices(ready, () => recoveredRuntimeSessionServices(ready));
 }
 
 /** Renderer listing/peek/stop hooks, supplied only from recovered services. */
