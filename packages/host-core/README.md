@@ -122,7 +122,10 @@ The third desktop-only slice adds `session-runtime/facade` and
 one caller-id kickoff submit, and private delegation recovery staging. Public
 tool/watch doors, CLI Session ports, renderer listing/peek/stop hooks and the
 Session RPC edge now require recovered services. The proof refuses late
-consumer construction after close; fresh shell notices wait for recovery too.
+consumer construction and runtime tool-door acquisition after close; already
+constructed CLI/socket drain behavior is unchanged. Fresh shell notices start or
+join recovery before delivery and are dropped quietly if closing wins. Quit
+cancellation is a typed outcome, not a startup/notice failure.
 The boot sweep stops at async boundaries during shutdown, preserving unswept
 bindings for the next launch rather than interpreting cancellation as lost
 sidecars. Automation assembly joins the protected 100% coverage gate.

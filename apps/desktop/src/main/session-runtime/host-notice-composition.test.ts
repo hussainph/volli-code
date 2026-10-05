@@ -15,6 +15,9 @@ describe("desktop runtime edge wiring", () => {
     expect(source).toMatch(
       /createSessionRuntimeLifecycle\(\{\s*host: hostCore,\s*ports: hostPorts,\s*runtime: sessionRuntime,\s*rpc: \(\) => sessionRpc,\s*observability: agentObservability,/,
     );
+    expect(source).toMatch(
+      /const readyRuntimeServices = await runtimeLifecycle\.ready\(\);\s*sessionRpc = createSessionRpc\(readyRuntimeServices\);/,
+    );
   });
 
   it("wires secret-safe fragment preview alongside ordinary shell output redaction", () => {

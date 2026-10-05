@@ -1,5 +1,7 @@
 /** Composition ports, not a second engine or a second set of Session rules. */
 import { describe, expect, expectTypeOf, it, vi, afterEach } from "vite-plus/test";
+import { EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
+import { readModelAccessDefaults } from "./model-access-preferences";
 import type { HostCore } from "../index";
 import type { createRuntimeAssembly } from "./assembly";
 import { createSessions, type Sessions } from "./sessions";
@@ -28,7 +30,8 @@ vi.mock("../session-control/peek-summary", () => ({ createPeekSummarizer: vi.fn(
 vi.mock("./delegate-session", () => ({ createDelegations: vi.fn() }));
 vi.mock("../db/projects-repo", () => ({ getProjectById: vi.fn() }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
-afterEach(() => vi.clearAllMocks());
+vi.mock("./model-access-preferences", () => ({ readModelAccessDefaults: vi.fn() }));
+afterEach(() => vi.resetAllMocks());
 
 function fixture() {
   const sessions = { create: vi.fn() } as unknown as Sessions;
@@ -38,7 +41,7 @@ function fixture() {
   vi.mocked(createPeekSummarizer).mockReturnValue({ summarize: vi.fn(async () => null) });
   const engine = {
     getSession: vi.fn(),
-    listEvents: vi.fn(async () => []),
+    listEvents: vi.fn<NonNullable<HostCore["sessionEngine"]>["listEvents"]>().mockResolvedValue([]),
     getOrRecordSessionInput: vi.fn(async () => ({})),
     observe: vi.fn(async () => {}),
     submit: vi.fn(async () => ({ receipt: { status: "completed" } })),
@@ -62,14 +65,23 @@ function fixture() {
     sessionWakeBus: { subscribe: vi.fn() },
     agentServices,
   } as unknown as HostCore;
+  const pi = {
+    inspectModelAccess: vi.fn(async () => ({
+      observedAt: 0,
+      models: [] as { providerId: string; modelId: string; acceptsImageInput: boolean }[],
+      providers: [],
+    })),
+  };
   const assembly = {
     sessionRuntime: runtime,
     sessionToolSurface: {},
-    piRuntimeHost: {},
+    piRuntimeHost: pi,
     transcriptArtifacts: { read: vi.fn(async () => "artifact") },
   } as unknown as ReturnType<typeof createRuntimeAssembly>;
   const events = { publish: vi.fn() };
-  const delegation = {} as TicketSessionDelegationStore;
+  const delegation = {
+    subagentDelegation: vi.fn<TicketSessionDelegationStore["subagentDelegation"]>(),
+  } as unknown as TicketSessionDelegationStore;
   const facade = createRuntimeSessionFacade({
     host,
     assembly,
@@ -94,6 +106,7 @@ function fixture() {
     door,
     watch,
     titler,
+    pi,
   };
 }
 
@@ -194,11 +207,53 @@ describe("lifted Session facade and recovered agent staging", () => {
     });
   });
 
+  it("pins project/default visual policy and reads birth intent without executor rehydration", async () => {
+    const f = fixture();
+    const model = { providerId: "p", modelId: "m", reasoningLevel: "high" as const };
+    const ports = vi.mocked(createSessions).mock.calls[0]![0];
+    vi.mocked(getProjectById).mockReturnValueOnce({ sessionModel: model } as never);
+    await expect(ports.readDefaultModel!("visual", "project")).resolves.toEqual(model);
+    expect(f.pi.inspectModelAccess).not.toHaveBeenCalled();
+    vi.mocked(readModelAccessDefaults).mockReturnValue({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: model,
+    });
+    f.pi.inspectModelAccess.mockResolvedValueOnce({
+      observedAt: 0,
+      models: [{ providerId: "p", modelId: "m", acceptsImageInput: true }],
+      providers: [],
+    });
+    await expect(ports.readDefaultModel!("visual", null)).resolves.toEqual(model);
+    await expect(ports.readDefaultModel!("visual", null)).resolves.toBeNull();
+    expect(getProjectById).toHaveBeenCalledOnce();
+    const intent = { kind: "model.select", selection: model, tier: "deep" };
+    f.runtime.projection.mockResolvedValue({
+      projection: { modelSelection: model, modelTier: "deep", commands: [{ id: "birth", intent }] },
+    });
+    await expect(ports.readModelAnchor!("s")).resolves.toEqual({ selection: model, tier: "deep" });
+    await expect(ports.readBirthModel!("s", "birth")).resolves.toEqual({
+      selection: model,
+      tier: "deep",
+    });
+    f.engine.listEvents.mockResolvedValue([
+      { payload: { kind: "command.recorded", command: { id: "birth", intent } } },
+    ] as never);
+    f.runtime.projection.mockClear();
+    await expect(ports.readBirthModelFromLedger!("s", "birth")).resolves.toEqual({
+      selection: model,
+      tier: "deep",
+    });
+    await expect(ports.readBirthModelFromLedger!("s", "missing")).resolves.toBeNull();
+    expect(f.runtime.projection).not.toHaveBeenCalled();
+  });
+
   it("exposes only recovery before ready; tools and lazy watches need the matching proof", async () => {
     const f = fixture();
     const delegated = {
       recover: vi.fn(async () => ({ answered: 0, reported: 0, skipped: 0 })),
       liveChildren: vi.fn(() => ["child"]),
+      watching: vi.fn(() => false),
+      rearm: vi.fn(async () => {}),
     };
     vi.mocked(createDelegations).mockReturnValue(
       delegated as unknown as ReturnType<typeof createDelegations>,
@@ -224,8 +279,29 @@ describe("lifted Session facade and recovered agent staging", () => {
     expect(agents.toolDoor(f.ready)).toBe(f.door);
     expect(agents.toolDoor(f.ready)).toBe(f.door);
     expect(f.agentServices.createToolDoor).toHaveBeenCalledOnce();
+    const listener = vi.mocked(f.host.sessionWakeBus!.subscribe).mock.calls[0]![0];
+    const entry = { childSessionId: "child" } as never;
+    vi.mocked(f.delegation.subagentDelegation).mockReturnValueOnce(entry);
+    listener({
+      event: {
+        sessionId: "child",
+        sequence: 12,
+        payload: { kind: "turn.started", turnId: "turn" },
+      },
+    } as never);
+    expect(delegated.rearm).toHaveBeenCalledExactlyOnceWith(entry, {
+      turnId: "turn",
+      afterSequence: 12,
+    });
     const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![0];
     expect(toolPorts.submitSessionMessage).toBe(f.facade.submitKickoffMessage);
+    expect(toolPorts.sessions()).toBe(f.sessions);
+    expect(toolPorts.delegate!()).toBe(delegated);
+    expect(toolPorts.supervise!()).toEqual({
+      sessionEngine: f.host.sessionEngine,
+      runtime: f.assembly.sessionRuntime,
+    });
+    expect(toolPorts.mcp!()).toBeNull();
     expect(toolPorts.watches!()).toBe(f.watch);
     expect(toolPorts.watches!()).toBe(f.watch);
     expect(f.agentServices.createWatches).toHaveBeenCalledOnce();

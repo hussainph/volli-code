@@ -13,7 +13,7 @@ import * as resumptions from "./session-resumptions";
 import * as schedules from "../db/scheduled-resume-repo";
 import type { SessionProjection } from "@volli/shared";
 import { shutdownNativeSessions } from "../host-shutdown";
-import { createSessionRuntimeLifecycle } from "./lifecycle";
+import { createSessionRuntimeLifecycle, SessionRuntimeClosingError } from "./lifecycle";
 
 vi.mock("../db/projects-repo", () => ({ listProjects: () => [{ id: "project" }] }));
 vi.mock("../db/scheduled-resume-repo", () => ({
@@ -133,7 +133,7 @@ function fixture() {
     host,
     ports,
     runtime,
-    rpc,
+    rpc: () => rpc,
     observability,
     delegation,
     delegationsFor: () => {
@@ -265,6 +265,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await drain;
     expect(f.services).not.toHaveBeenCalled();
     expect(f.calls).not.toContain("resume.start");
+    expect(f.options.ports.log.error).not.toHaveBeenCalled();
+    await expect(boot).rejects.toBeInstanceOf(SessionRuntimeClosingError);
   });
 
   it("forwards engine/runtime, events, attention and shell ports, then releases wake/clock listeners", async () => {
@@ -440,7 +442,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     expect(relay).toHaveBeenCalledOnce();
   });
 
-  it("reports a queued notice whose recovery is interrupted, without an unhandled rejection", async () => {
+  it("drops a queued notice when close interrupts recovery, without an error or unhandled rejection", async () => {
     const f = fixture();
     const gate = deferred();
     vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async () => {
@@ -452,10 +454,22 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     const drain = owner.close();
     gate.resolve();
     await drain;
+    expect(f.options.ports.log.error).not.toHaveBeenCalled();
+  });
+
+  it("reports a genuinely failed readiness to a queued notice", async () => {
+    const f = fixture();
+    f.services.mockImplementationOnce(() => {
+      throw new Error("service construction failed");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    owner.relayShellNotice({} as Parameters<typeof owner.relayShellNotice>[0]);
+    await expect(owner.ready()).rejects.toThrow("service construction failed");
     expect(f.options.ports.log.error).toHaveBeenCalledWith(
       "[volli] failed to ready a shell notice:",
-      "The Session runtime closed during recovery.",
+      "service construction failed",
     );
+    await owner.close();
   });
 
   it("closing an unstarted owner prevents any later recovery", async () => {

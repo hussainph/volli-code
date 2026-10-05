@@ -74,6 +74,8 @@ export function createRuntimeSessionFacade(options: {
                 `The project's skills could not be read: ${read.error}`,
               );
             }
+            // Disk I/O yielded: a concurrent Settings write may disable a
+            // skill. Re-read policy now, never validate against the stale row.
             const currentProject = getProjectById(sessionDb, projectId);
             if (!currentProject) {
               throw new StructuredSessionsError(
@@ -103,6 +105,7 @@ export function createRuntimeSessionFacade(options: {
               globalSkillsDir: globalSkillsDir(homeDir),
             });
             if (!read.ok) return null;
+            // The discoverable index has the same post-I/O policy race.
             const currentProject = getProjectById(sessionDb, projectId);
             if (!currentProject) return null;
             return skillsIndexResource(
@@ -132,6 +135,9 @@ export function createRuntimeSessionFacade(options: {
     sessionDelegation !== null
       ? createSessions({
           runtime: sessionRuntime,
+          // Explicit/parent choices are resolved by the facade first. A new
+          // project's Session then uses its pin before the global tier ladder.
+          // null project means a parent's global-fallback path: no project pin.
           readDefaultModel: async (tier, projectId) => {
             const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
             const pinned = project?.sessionModel ?? null;
@@ -158,6 +164,7 @@ export function createRuntimeSessionFacade(options: {
               ...(intent.auto === undefined ? {} : { auto: intent.auto }),
             };
           },
+          // Read birth intent without projection() rehydrating an executor.
           readBirthModelFromLedger: async (sessionId, commandId) => {
             const ledgerEvents = await sessionEngine.listEvents({ sessionId });
             const recorded = ledgerEvents.find(
@@ -187,6 +194,7 @@ export function createRuntimeSessionFacade(options: {
                   port: desktopDecisions.port,
                 }),
               }),
+          // A Session's first start, not each idempotent attach/start call.
           recordSessionStarted: ({ ticketId, sessionId, actor, origin }) => {
             recordSessionStartedOnce(sessionDb, {
               ticketId,
@@ -210,12 +218,15 @@ export function createRuntimeSessionFacade(options: {
               model: projection.modelSelection,
             };
           },
+          // Per refinement: Sessions outlive the Settings write that retunes it.
           readModelDefaults: () => readModelAccessDefaults(sessionDb),
           readTicket: (ticketId) => getTicketBrief(sessionDb, ticketId) ?? null,
           inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
           recordUsage: async (sessionId, usage) => {
             await sessionEngine.observe({
+              // Durable id shape is frozen. Each model call is a new bill,
+              // not Session-scoped replay that would dedupe the second usage.
               id: `usage:auto-title:${randomUUID()}`,
               kind: "usage.recorded",
               sessionId,
@@ -246,10 +257,13 @@ export function createRuntimeSessionFacade(options: {
             if (submitted.receipt?.status !== "completed") {
               throw new Error("Session retitle was not completed");
             }
+            // Direct Engine submission bypasses runtime publication; this
+            // makes the label visible without waiting for an unrelated read.
             events.publish("session-retitled", { sessionId, title });
           },
         })
       : null;
+  // One owner/cache for every client. Only an explicit peek runs a model call.
   const peekSummarizer =
     sessionEngine !== null && sessionDb !== null && piRuntimeHost !== null
       ? createPeekSummarizer({
@@ -258,6 +272,7 @@ export function createRuntimeSessionFacade(options: {
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
           recordUsage: async (sessionId, usage) => {
             await sessionEngine.observe({
+              // Frozen durable id shape; separate utility calls must not dedupe.
               id: `usage:peek-summary:${randomUUID()}`,
               kind: "usage.recorded",
               sessionId,

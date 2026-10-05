@@ -132,6 +132,7 @@ import { registerSecretIpc } from "./secrets/ipc";
 import { createConnectivityPort } from "@volli/host-core/session-runtime/connectivity";
 import {
   createSessionRuntimeLifecycle,
+  SessionRuntimeClosingError,
   type RecoveredSessionServices,
 } from "@volli/host-core/session-runtime/lifecycle";
 import { createRuntimeSessionAgents } from "@volli/host-core/session-runtime/agents";
@@ -1201,6 +1202,8 @@ const appStartup = app.whenReady().then(async () => {
     requestSecret: true,
     beforeExecution: () => loginPathBootstrap.apply(),
     concurrencyEnvFor: sessionConcurrencyEnvFor,
+    // Inert assembly captures this cycle; no verb runs before the facade and
+    // lifecycle below exist. Every acquisition must still pass ready().
     callVerb: async (caller, request, signal, budgetAsk) => {
       const door = runtimeSessionAgents.toolDoor(await runtimeLifecycle.ready());
       if (door === null) throw new Error("This launch has no Volli verb handlers.");
@@ -2836,6 +2839,7 @@ const appStartup = app.whenReady().then(async () => {
   });
 });
 void appStartup.catch((error: unknown) => {
+  if (error instanceof SessionRuntimeClosingError) return;
   console.error("[volli] failed to finish app startup:", errorMessage(error));
 });
 
