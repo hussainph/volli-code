@@ -61,10 +61,10 @@ Each milestone ends in a demo the owner runs. Parent ticket: VC-539; it lists th
 | M2 | One host protocol | The desktop attaches to a `hostd` (local on loopback, or the Hetzner box over Tailscale) and feels identical. Quit the app or close the lid and turns continue. **First lid-closed dogfood.** |
 | M3 | Workers and venues | One board on the box; tickets run on the box and the laptop at once; a ticket moves mid-flight. |
 | M4 | Workspace mobility | Stop paying for the box, click "Move to This Mac", done. |
-| M5 | Mobile | Answer an agent's question from a phone while the laptop is closed. |
+| M5 | Mobile (0.4.0) | Answer an agent's question from a phone while the laptop is closed. |
 | M6 | Volli Cloud | Sign in on a new laptop, see your boards, "Run in cloud", no configuration. (Private repo.) |
 
-Order: M0 → M1 → M2 → M3. M4's table classification starts after M1 and runs beside M2. M5 starts once M2's board and session areas land.
+Order: M0 → M1 → M2 → M3. M4's table classification starts after M1 and runs beside M2. M5 ships in 0.4.0, after 0.3.0 (owner ruling, 2026-10-04). During M2, a throwaway phone page served by `hostd` (VC-637) keeps the host protocol client-agnostic.
 
 ## Glossary (to be added to CONTEXT.md)
 

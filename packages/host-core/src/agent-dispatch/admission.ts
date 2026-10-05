@@ -64,6 +64,14 @@
  *
  * This resolution never decides what the verb ACTS on; the verb's own
  * resolution does that. It decides only whether the caller is admitted at all.
+ *
+ * ## The person's verbs (VC-623)
+ *
+ * A verb whose registry actor is `user` (`project.add`) is judged by the door's
+ * actor alone: a hostd-issued operator token, and nothing else. Every other
+ * caller is refused without a policy being read. An operator running an
+ * ordinary coordination verb is judged like any other caller, as the `user`
+ * policy actor — the same actor the app's own writes are.
  */
 
 import {
@@ -83,6 +91,7 @@ import type {
 
 import { failure } from "./context";
 import type { EnvSessionIdentity } from "./context";
+import { presentedOperatorToken } from "./resolution";
 import type { DoorActor } from "./resolution";
 
 /**
@@ -105,7 +114,40 @@ export type ReadAuthorityPolicy = (projectId: string) => AuthorityPolicy;
  * which exists in both, can no longer arrive over this door at all.
  */
 function actorKind(actor: DoorActor): AuthorityActorKind {
-  return actor.kind === "session" ? "session" : "unauthenticated";
+  switch (actor.kind) {
+    case "session":
+      return "session";
+    // The person at a headless host's shell (VC-623) is the person the app's
+    // writes come from, so a project's `user` policy governs them.
+    case "operator":
+      return "user";
+    case "unauthenticated":
+      return "unauthenticated";
+  }
+}
+
+/**
+ * Why a caller may not run a `user` verb, or `null` when it may (VC-623).
+ *
+ * The person's verbs are judged by the door's actor ALONE. No policy list is
+ * read, so no project can widen one to a Session and none can narrow it away
+ * from the person — the verb exists because a fresh host has no board to hold
+ * a policy yet. That is the whole of "no Session can register a project".
+ */
+function personOnlyRefusal(request: AgentRequest, actor: DoorActor): AgentResponse | null {
+  if (actor.kind === "operator") return null;
+  if (actor.kind === "session") {
+    return failure(
+      "FORBIDDEN_ACTOR",
+      `${request.cmd} is the person's verb, and this caller is a Volli Session. No Session may run it, whatever a project's policy grants.`,
+      "Ask the person: they add a project in the Volli app, or on a headless host with an operator token at its shell.",
+    );
+  }
+  return failure(
+    "FORBIDDEN_ACTOR",
+    `${request.cmd} is the person's verb, and this caller presented no operator token this host accepts.`,
+    "On a headless host, run `sudo volli-hostd operator-token --for <your login>` once, then retry as that login. In the desktop app, add the project from the app instead.",
+  );
 }
 
 /** The project the caller is acting FROM — the cheap rungs only. */
@@ -172,6 +214,7 @@ export function coordinationRefusal(
   // Read tier: any caller, no policy consulted. A verb with no registry entry
   // cannot reach here — the socket refuses an unknown command before dispatch.
   const entry = verbEntry(request.cmd);
+  if (entry?.actor === "user") return personOnlyRefusal(request, actor);
   if (entry?.actor !== "session") return null;
 
   const kind = actorKind(actor);
@@ -188,6 +231,15 @@ export function coordinationRefusal(
     governing.size === 0 ? [DEFAULT_AUTHORITY_POLICY] : [...governing].map(readPolicy);
   if (policies.every((policy) => coordinationVerbAllowed(policy, kind, request.cmd))) return null;
 
+  if (kind === "unauthenticated" && presentedOperatorToken(request) !== null) {
+    // Only reachable with an operator token and no Session evidence, so every
+    // request VC-163 judged still gets the sentence below unchanged.
+    return failure(
+      "FORBIDDEN_ACTOR",
+      `${request.cmd} is a coordination-tier verb, and the operator token this caller sent is not one this host accepts, so it may read but not write.`,
+      "The token may have been revoked or reissued, or this host issues none (the desktop app never does). On a headless host, run `sudo volli-hostd operator-token --for <your login>` and retry.",
+    );
+  }
   if (kind === "unauthenticated") {
     return failure(
       "FORBIDDEN_ACTOR",

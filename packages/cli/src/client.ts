@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { dirname } from "node:path";
 
 import { AGENT_ERROR_CODES, makeAgentError } from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
@@ -46,6 +47,150 @@ export function agentRequestEnv(
     ...(ticket === undefined ? {} : { ticket }),
     ...overrides,
   };
+}
+
+/**
+ * What reading the operator's token file found: the token, a reason not to
+ * use it, or nothing there.
+ */
+export type OperatorTokenFileRead =
+  | { readonly token: string }
+  | { readonly warning: string }
+  | null;
+
+/**
+ * The operator token this invocation sends, if any (VC-623).
+ *
+ * The precedence rule is the whole of this function, and its first line is the
+ * one that matters: **beside any Session evidence, none — and the file is never
+ * read.** A Session's `volli` keeps sending exactly what it sent before this
+ * existed, so the agent path does not change, and a Session that can somehow
+ * see a person's token still cannot present it beside its own identity. The
+ * door enforces the same rule from its side; this keeps the CLI from asking.
+ *
+ * Otherwise `VOLLI_OPERATOR_TOKEN`, then the operator's own 0600 file. Empty
+ * values are absent, as everywhere in the request environment.
+ */
+export async function operatorTokenFor(
+  env: Readonly<Record<string, string | undefined>>,
+  readTokenFile: () => Promise<OperatorTokenFileRead>,
+  socketFault: () => Promise<string | null>,
+): Promise<{ token?: string; warning?: string }> {
+  if (env["VOLLI_SESSION_TOKEN"] !== undefined || env["VOLLI_SESSION"] !== undefined) return {};
+  const exported = env["VOLLI_OPERATOR_TOKEN"]?.trim();
+  const read = exported ? { token: exported } : await readTokenFile();
+  if (read === null) return {};
+  if (!("token" in read)) return { warning: read.warning };
+  // A token is a bearer secret, so it goes only to a socket nobody but root
+  // or this user could have put at that name (see `untrustedSocketPath`).
+  const fault = await socketFault();
+  return fault === null
+    ? { token: read.token }
+    : { warning: `volli: not sending the operator token: ${fault}.\n` };
+}
+
+/** The file-system calls {@link untrustedSocketPath} makes; tests script them. */
+export interface SocketPathFileSystem {
+  realpath(path: string): Promise<string>;
+  /** Never follows a symlink: the entry itself is what is judged. */
+  lstat(path: string): Promise<{
+    uid: number;
+    mode: number;
+    isSocket(): boolean;
+    isDirectory(): boolean;
+  }>;
+  /** The invoking user's uid, or `null` where the platform has none. */
+  uid(): number | null;
+}
+
+/** `path`, then each directory above it, ending at the root. */
+function componentsOf(path: string): string[] {
+  const components = [path];
+  for (let current = path; dirname(current) !== current; current = dirname(current)) {
+    components.push(dirname(current));
+  }
+  return components;
+}
+
+/**
+ * Why `socketPath` might not be the host it claims to be, or `null`.
+ *
+ * The CLI cannot authenticate the listener, so it judges the NAME (VC-623).
+ * Every entry along the path as typed AND along the real path it resolves to
+ * is `lstat`ed — never followed — and must belong to root or this user, so a
+ * symlink anywhere on the way is judged as the entry it is, by who could
+ * repoint it. A directory must also be one neither group nor others can write,
+ * unless it is sticky (`/tmp`), where nobody can rename or replace another's
+ * entry. The real path must end in a socket. Under the packaged unit that is
+ * `/run/volli-hostd.sock`, bound by systemd as root in root's `/run`.
+ *
+ * What this refuses is anything the host's service account could change
+ * between this check and the connect: every Session runs as that account, and
+ * a socket it could swap — or a symlink it owns, even in a sticky `/tmp` —
+ * would let it put an impostor in place to collect the token.
+ */
+export async function untrustedSocketPath(
+  socketPath: string,
+  fs: SocketPathFileSystem,
+): Promise<string | null> {
+  const self = fs.uid();
+  const trusted = (uid: number): boolean => uid === 0 || uid === self;
+  try {
+    const real = await fs.realpath(socketPath);
+    if (!(await fs.lstat(real)).isSocket()) return `${socketPath} is not a socket`;
+    for (const component of [...componentsOf(socketPath), ...componentsOf(real)]) {
+      const entry = await fs.lstat(component);
+      if (!trusted(entry.uid)) {
+        return `${component} belongs to uid ${entry.uid}, who could replace ${socketPath}`;
+      }
+      if (entry.isDirectory() && (entry.mode & 0o022) !== 0 && (entry.mode & 0o1000) === 0) {
+        return `${component} can be written by its group or other users, who could replace ${socketPath}`;
+      }
+    }
+  } catch {
+    return `${socketPath} could not be resolved`;
+  }
+  return null;
+}
+
+/** The file-system calls {@link readOperatorTokenFile} makes; tests script them. */
+export interface OperatorTokenFileSystem {
+  lstat(path: string): Promise<{ isFile(): boolean; mode: number; uid: number }>;
+  readFile(path: string): Promise<string>;
+  /** The invoking user's uid, or `null` where the platform has none. */
+  uid(): number | null;
+}
+
+/**
+ * Reads the operator token file, refusing it the way ssh refuses a private
+ * key: a file other users can read, that another user owns, or that is not a
+ * regular file is not used, and the warning names the fix. A missing or empty
+ * file is simply no token.
+ */
+export async function readOperatorTokenFile(
+  path: string,
+  fs: OperatorTokenFileSystem,
+): Promise<OperatorTokenFileRead> {
+  let stat;
+  try {
+    stat = await fs.lstat(path);
+  } catch {
+    return null;
+  }
+  const uid = fs.uid();
+  if (!stat.isFile() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077) !== 0) {
+    return {
+      warning: `volli: not using ${path}: it must be a regular file you own that only you can read (chmod 600 ${path}).\n`,
+    };
+  }
+  let text;
+  try {
+    text = await fs.readFile(path);
+  } catch {
+    return null;
+  }
+  const token = text.trim();
+  return token.length === 0 ? null : { token };
 }
 
 export class AgentClientError extends Error {

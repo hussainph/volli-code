@@ -17,6 +17,18 @@ const MAX_CONNECTIONS = 64;
 export interface AgentSocketOptions {
   socketPath: string;
   requestTimeoutMs?: number;
+  /**
+   * A listening socket the service manager already bound (systemd socket
+   * activation, VC-623), to serve instead of binding `socketPath`.
+   *
+   * The point is WHO owns the pathname: systemd creates it, as root, in a
+   * directory only root can write, so nothing running as the host's own
+   * account — which is every Session — can rename it away and put an
+   * impostor in its place to collect an operator's token. Its mode and group
+   * are the unit's to set; nothing here chmods, unlinks or replaces it.
+   * `socketPath` is then only the name this host reports.
+   */
+  listenFd?: number;
   execute(request: AgentRequest): Promise<AgentResponse>;
 }
 
@@ -140,7 +152,7 @@ function parseRequest(line: string): AgentRequest | AgentResponse {
   }
   const env = parsed["ctx"]["env"];
   if (
-    [env["session"], env["ticket"], env["socket"]].some(
+    [env["session"], env["ticket"], env["socket"], env["operatorToken"]].some(
       (value) => value !== undefined && typeof value !== "string",
     )
   ) {
@@ -362,11 +374,11 @@ function closeListeningServer(server: Server): Promise<void> {
   });
 }
 
-function listen(server: Server, socketPath: string): Promise<void> {
+function listen(server: Server, target: string | { fd: number }): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
-    server.listen(socketPath, () => {
+    server.listen(target, () => {
       server.off("error", onError);
       resolve();
     });
@@ -379,6 +391,13 @@ export async function startAgentSocket(
   claim: (server: AgentSocketServer) => void = () => undefined,
   setSocketMode: SetSocketMode = chmod,
 ): Promise<AgentSocketServer> {
+  if (options.listenFd !== undefined) {
+    const activated = agentServer(options);
+    await listen(activated.server, { fd: options.listenFd });
+    const server = agentSocketHandle(activated);
+    claim(server);
+    return server;
+  }
   let liveServer = agentServer(options);
   // Belt-and-braces against the create-then-chmod race: `listen()` creates the
   // socket file with umask-default perms, and another local process could open

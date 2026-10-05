@@ -59,9 +59,17 @@ export type VerbAccessMode = "cli" | "tool" | "hostApi";
 
 /**
  * What the caller must be: `any` caller, an authenticated `session` actor
- * (VC-44's tokens), or a `role` that holds the verb in its bundle.
+ * (VC-44's tokens), a `role` that holds the verb in its bundle, or the `user`
+ * — the person, proven at the door.
+ *
+ * `user` (VC-623) is the one requirement no Session can meet and no project
+ * policy can widen to one. Today the only proof a socket accepts for it is a
+ * hostd-issued operator token, so on desktop, which issues none, a `user` verb
+ * answers every caller with a refusal: the app is that person's door there.
+ * Its tier is coordination — a visible write on the socket — but the admission
+ * gate judges it by the door's actor alone, never by a policy list.
  */
-export type VerbActor = "any" | "session" | "role";
+export type VerbActor = "any" | "session" | "role" | "user";
 
 /**
  * Where the verb's one handler binding lives: `main` answers over the agent
@@ -361,6 +369,12 @@ export interface VerbEntry {
   readonly retired?: string;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
+  /**
+   * What usage and refusals call that leading positional, when `id` would
+   * mislead (`project add <path>`). It still arrives as `args.id`: this names
+   * it for a reader, and changes nothing on the wire.
+   */
+  readonly positionalLabel?: string;
   /**
    * What that leading `<id>` NAMES, when it names something a per-project
    * authority policy has to be resolved from (VC-163).
@@ -1199,6 +1213,55 @@ export const VERB_REGISTRY = [
     summary: "List all registered projects.",
     example: "volli project list",
     options: [],
+  },
+  {
+    // The operator's bootstrap write on a headless host (VC-623): a fresh
+    // `volli-hostd` has an empty board and no window to add a folder from.
+    //
+    // `user` actor: the person, proven by a hostd-issued operator token. No
+    // Session may register a project, whatever a policy says — a folder on the
+    // board is a folder the host's Sessions will be pointed at, and choosing
+    // that is the person's act. Unlisted, so `volli help` and the managed skill
+    // an agent reads never offer a verb no agent can run; the operator's
+    // reference is `apps/hostd/README.md`.
+    key: "project.add",
+    accessModes: ["cli"],
+    actor: "user",
+    handler: { site: "main", id: "project.add" },
+    listed: false,
+    group: "Write",
+    summary: "Register a folder on this host as a project (operator only).",
+    example: "volli project add /srv/code/acme --name Acme",
+    notes: [
+      "Needs an operator token: run `sudo volli-hostd operator-token --for <login>` on the host.",
+      "Validates exactly as the app's Add Project does: an existing directory, a ticket prefix no other project holds.",
+      "A folder already registered answers with that project rather than a second one.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "project",
+          operation: "create",
+          summary: "Create one Project row tracking the folder, with its detected base branch.",
+        },
+      ],
+      humanVisible: ["The project appears in the rail and `volli project list`."],
+      nonEffects: [
+        "Nothing in the folder is read, written, committed or checked out; git is asked only which branch is the base.",
+        "No Ticket, worktree or Session is created.",
+      ],
+    },
+    positionalId: "required",
+    positionalLabel: "path",
+    options: [
+      {
+        name: "--name",
+        kind: "value",
+        placeholder: "<name>",
+        help: "Display name; the ticket prefix derives from it (default: the folder's name).",
+      },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
   },
   {
     key: "label.list",
@@ -3140,8 +3203,8 @@ export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as
  * one.
  *
  * - **read** — Agent CLI, any caller. Composability and zero context cost.
- * - **coordination** — Agent CLI, authenticated session actor. Visible,
- *   attributable, reversible writes.
+ * - **coordination** — Agent CLI, an authenticated session actor or the
+ *   person (`user`). Visible, attributable writes.
  * - **control** — `tool` access only, gated on a Role that holds the verb, and
  *   absent from the agent socket.
  * - **null** — no access mode at all. An app-only verb is on no agent surface,
@@ -3157,6 +3220,9 @@ export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbT
     if (entry.actor === "role") {
       throw new Error("A control-tier verb cannot carry a cli access mode");
     }
+    // `session` and `user` are both coordination: a visible, attributable
+    // write on the socket. Who may run a `user` verb is the admission gate's
+    // question, and it never reads a policy list for one.
     return entry.actor === "any" ? "read" : "coordination";
   }
   if (entry.actor !== "role" || entry.accessModes.length !== 1 || entry.accessModes[0] !== "tool") {

@@ -19,7 +19,7 @@
  *   lib/volli.cjs       the volli CLI bundle
  *   lib/probe-natives.cjs  loads and exercises every native module
  *   lib/node_modules/   `pnpm deploy --prod` of @volli/hostd: the externals only
- *   share/systemd/volli-hostd.service, share/launchd/com.volli.hostd.plist
+ *   share/systemd/volli-hostd.{service,socket}, share/launchd/com.volli.hostd.plist
  *   MANIFEST.json, README.md, LICENSE
  */
 import { execFileSync } from "node:child_process";
@@ -138,10 +138,9 @@ writeFileSync(join(stage, "bin", "volli"), launcher("volli.cjs"), { mode: 0o755 
 // 4. Service templates and documents.
 mkdirSync(join(stage, "share", "systemd"), { recursive: true });
 mkdirSync(join(stage, "share", "launchd"), { recursive: true });
-copyFileSync(
-  join(APP, "packaging", "volli-hostd.service"),
-  join(stage, "share", "systemd", "volli-hostd.service"),
-);
+for (const unit of ["volli-hostd.service", "volli-hostd.socket"]) {
+  copyFileSync(join(APP, "packaging", unit), join(stage, "share", "systemd", unit));
+}
 copyFileSync(
   join(APP, "packaging", "com.volli.hostd.plist"),
   join(stage, "share", "launchd", "com.volli.hostd.plist"),

@@ -1,34 +1,33 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import {
   constants,
   copyFileSync,
-  linkSync,
   lstatSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSafetyCopy } from "@volli/shared";
-import { assertDatabaseHeader, openVolliDb } from "@volli/host-core/db";
+import {
+  DatabaseFileBusyError,
+  DatabaseSwapFinalizeError,
+  DatabaseSwapRollbackError,
+  hasPendingDatabaseRecovery,
+  openVolliDb,
+  recoveryPendingPath,
+  swapInStagedProfile,
+} from "@volli/host-core/db/database-file";
+import type { DatabaseFileFaults } from "@volli/host-core/db/database-file";
 import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
 import {
   DatabaseFromNewerVersionError,
   checkSchemaCompatibility,
 } from "@volli/host-core/db/schema-compatibility";
 import { migrationBackupCandidatePattern } from "@volli/host-core/db/backup-retention";
-import { acquireDatabaseOpenLock } from "@volli/host-core/db/open-lock";
-import {
-  beginDatabaseRecovery,
-  finishDatabaseRecovery,
-  hasPendingDatabaseRecovery,
-  recoveryPendingPath,
-  syncRecoveryPath,
-} from "@volli/host-core/db/recovery-pending";
 
 export class RecoveryFailure extends Error {}
 
@@ -97,6 +96,8 @@ function integrity(path: string): DatabaseSafetyCopy["integrity"] {
 export interface DatabaseRecoveryOptions {
   dbPath: string;
   userData: string;
+  /** Crash tests only: stop the database-file swap at a named step. */
+  faults?: DatabaseFileFaults;
 }
 
 /** No renderer-provided paths: all candidates come from one exact-name directory allowlist. */
@@ -147,33 +148,10 @@ export class DatabaseRecovery {
   restore(): string {
     const selected = this.list().find((backup) => backup.integrity === "clean");
     if (selected === undefined) throw new Error(NO_CLEAN_BACKUP);
-    let openLock: Database.Database;
-    try {
-      openLock = acquireDatabaseOpenLock(this.options.dbPath);
-    } catch (error) {
-      if ((error as { code?: string }).code === "SQLITE_BUSY")
-        throw new RecoveryFailure(
-          "The database is being opened by another Volli instance. Close other Volli instances before restoring.",
-        );
-      throw error;
-    }
-    try {
-      return this.restoreCopy(selected);
-    } finally {
-      openLock.close();
-    }
-  }
-
-  private restoreCopy(selected: DatabaseSafetyCopy): string {
     const { dbPath, userData } = this.options;
     const name = basename(dbPath);
     const stageDirectory = mkdtempSync(join(userData, `${name}.restore-`));
     const stagedPath = join(stageDirectory, name);
-    let savedDirectory: string | undefined;
-    const moved: string[] = [];
-    let installed = false;
-    let verified = false;
-    let damaged: Database.Database | undefined;
     try {
       // Upgrade in isolation: the ordinary migration runner may overwrite/prune
       // safety copies, so it must never run beside the user's original backups.
@@ -188,85 +166,27 @@ export class DatabaseRecovery {
       } finally {
         staged.close();
       }
-
-      // Preserve BEFORE checkpoint too: even a failed checkpoint can have
-      // modified pages. Both raw evidence and the post-checkpoint bundle survive.
-      savedDirectory = mkdtempSync(join(userData, `${name}.damaged-`));
-      const rawDirectory = join(savedDirectory, "before-checkpoint");
-      mkdirSync(rawDirectory);
-      const suffixes = ["", "-wal", "-shm", "-journal"];
-      for (const suffix of suffixes) {
-        const source = `${dbPath}${suffix}`;
-        if (!existsSync(source)) continue;
-        regularFile(source);
-        const saved = join(rawDirectory, `${name}${suffix}`);
-        copyFileSync(source, saved, constants.COPYFILE_EXCL);
-        syncRecoveryPath(saved);
-      }
-      syncRecoveryPath(rawDirectory);
-      syncRecoveryPath(savedDirectory);
-      // Durable intent precedes ANY displacement. An interruption/failed rollback
-      // now fails boot closed instead of silently creating an empty profile.
-      beginDatabaseRecovery(dbPath, basename(savedDirectory));
-      // A checkpoint alone does not exclude idle connections. Acquire and HOLD
-      // SQLite's exclusive file ownership through preservation and publication.
-      // If corruption prevents ownership, refuse rather than detach a live writer.
-      if (existsSync(dbPath)) {
-        // Failed SQLite ownership acquisition can delete malformed WAL/SHM on
-        // close. A non-SQLite header must fail before creating that connection.
-        assertDatabaseHeader(dbPath);
-        damaged = new Database(dbPath, { fileMustExist: true });
-        damaged.pragma("busy_timeout = 5000");
-        damaged.pragma("locking_mode = EXCLUSIVE");
-        try {
-          damaged.exec("BEGIN EXCLUSIVE; COMMIT");
-        } catch (error) {
-          if ((error as { code?: string }).code === "SQLITE_BUSY")
-            throw new RecoveryFailure(
-              "The database is in use. Close other Volli instances before restoring.",
-            );
-          throw error;
-        }
-      }
-      if (damaged !== undefined) this.checkpoint(damaged);
-      for (const suffix of suffixes) {
-        const source = `${dbPath}${suffix}`;
-        if (!existsSync(source)) continue;
-        regularFile(source);
-        renameSync(source, join(savedDirectory, `${name}${suffix}`));
-        moved.push(suffix);
-      }
-      // Persist the post-checkpoint bundle's new names before publication too.
-      syncRecoveryPath(savedDirectory);
-      syncRecoveryPath(userData);
-      // Exclusive atomic publication, with no partially copied live database.
-      linkSync(stagedPath, dbPath);
-      installed = true;
-      // Re-open the installed file, not just the staging copy. It is already at
-      // the current schema, so this cannot prune the original migration copies.
-      const restored = openVolliDb(dbPath, { allowPendingRecovery: true });
-      try {
-        if (!checksClean(restored))
-          throw new Error("The restored database failed its integrity check.");
-        this.checkpoint(restored);
-      } finally {
-        restored.close();
-      }
-      // Release the old inode before allowing other app instances to boot.
-      damaged?.close();
-      damaged = undefined;
-      syncRecoveryPath(dbPath);
-      syncRecoveryPath(savedDirectory);
-      syncRecoveryPath(userData);
-      verified = true;
-      finishDatabaseRecovery(dbPath);
+      // The fenced swap: open lock, durable intent, raw evidence, exclusive
+      // ownership, atomic publication, and a re-check of the installed file.
+      const savedDirectory = join(userData, `${name}.damaged-${randomUUID().slice(0, 8)}`);
+      swapInStagedProfile({
+        dbPath,
+        stagedPath,
+        asideDirectory: savedDirectory,
+        replacing: "damaged",
+        faults: this.options.faults,
+      });
       console.info("[database recovery] restored", {
         backup: selected.name,
         preserved: savedDirectory,
       });
       return selected.name;
     } catch (error) {
-      if (verified) {
+      if (error instanceof DatabaseFileBusyError && error.phase === "opening")
+        throw new RecoveryFailure(
+          "The database is being opened by another Volli instance. Close other Volli instances before restoring.",
+        );
+      if (error instanceof DatabaseSwapFinalizeError) {
         // The replacement is already durable. A marker cleanup failure must not
         // undo it after the boot guard may have been removed.
         console.error("[database recovery] finalization failed", error);
@@ -274,36 +194,26 @@ export class DatabaseRecovery {
           "The backup was restored and checked, but recovery could not be finalized. Your original files and safety copies are preserved for manual recovery.",
         );
       }
-      if (savedDirectory !== undefined) {
-        try {
-          // Keep a failed installed copy as evidence as well; never overwrite a
-          // database while putting the original bundle back.
-          if (installed) {
-            for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-              if (existsSync(`${dbPath}${suffix}`))
-                renameSync(`${dbPath}${suffix}`, join(savedDirectory, `failed-restore${suffix}`));
-            }
-          }
-          // Hard links are exclusive and do not allocate another DB-sized file:
-          // a full disk cannot force a second full-data copy just to roll back.
-          for (const suffix of moved)
-            linkSync(join(savedDirectory, `${name}${suffix}`), `${dbPath}${suffix}`);
-        } catch (rollbackError) {
-          console.error("[database recovery] rollback failed", {
-            savedDirectory,
-            error: rollbackError,
-          });
-          throw new RecoveryFailure(
-            "Restore failed. The original database files are preserved for manual recovery, but could not be put back. Volli remains unavailable.",
-          );
-        }
+      if (error instanceof DatabaseSwapRollbackError) {
+        console.error("[database recovery] rollback failed", {
+          savedDirectory: error.asideDirectory,
+          error: error.cause,
+        });
+        throw new RecoveryFailure(
+          "Restore failed. The original database files are preserved for manual recovery, but could not be put back. Volli remains unavailable.",
+        );
       }
       console.error("[database recovery] failed", error);
+      const reason =
+        error instanceof DatabaseFileBusyError
+          ? " The database is in use. Close other Volli instances before restoring."
+          : error instanceof RecoveryFailure
+            ? ` ${error.message}`
+            : "";
       throw new RecoveryFailure(
-        `Restore failed. Your original database and safety copies are preserved for manual recovery.${error instanceof RecoveryFailure ? ` ${error.message}` : ""}`,
+        `Restore failed. Your original database and safety copies are preserved for manual recovery.${reason}`,
       );
     } finally {
-      damaged?.close();
       try {
         rmSync(stageDirectory, { recursive: true, force: true });
       } catch (error) {
