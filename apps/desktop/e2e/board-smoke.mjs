@@ -763,6 +763,12 @@ async function main() {
         // even though the real destination slots already animated. Read ONLY
         // Todo's slots, in one snapshot, and wait for their actual animations
         // to finish rather than betting another sleep on teardown/commit.
+        // The old 1s combined deadline included deferred rAF release, React's
+        // commit, and the 200ms FLIP. Under CI load the original incident had
+        // both real slots and both start markers, but animations still running.
+        // Use the same bounded readiness budget as drag teardown, and include
+        // inner sortable transitions so a still-moving card cannot pass.
+        const settleStart = Date.now();
         let slotState = null;
         const slotted = await waitUntil(
           "multi-drag destination-slot transition to settle",
@@ -782,11 +788,22 @@ async function main() {
                     return {
                       id,
                       started: slot?.getAttribute("data-board-slot-animated") === "true",
+                      exists: slot !== undefined,
+                      animations: slot?.getAnimations({ subtree: true }).map((animation) => ({
+                        state: animation.playState,
+                        pending: animation.pending,
+                        currentTime: animation.currentTime,
+                        endTime: animation.effect?.getComputedTiming().endTime,
+                      })),
                       settled:
                         slot !== undefined &&
                         slot
-                          .getAnimations()
-                          .every((animation) => ["finished", "idle"].includes(animation.playState)),
+                          .getAnimations({ subtree: true })
+                          .every(
+                            (animation) =>
+                              !animation.pending &&
+                              ["finished", "idle"].includes(animation.playState),
+                          ),
                     };
                   }),
                 };
@@ -799,10 +816,11 @@ async function main() {
               slotState.slots.every((slot) => slot.settled)
             );
           },
-          { timeout: 1_000, interval: 50 },
+          { timeout: 10_000, interval: 50 },
         )
           .then(() => true)
           .catch(() => false);
+        const settleReadyMs = Date.now() - settleStart;
 
         const todoAfterDrop = await columnCardIds(page, "Todo");
         const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
@@ -848,7 +866,7 @@ async function main() {
           JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
         return {
           ok,
-          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)} slots=${JSON.stringify(slotState)}`,
+          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} settleReadyMs=${settleReadyMs} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)} slots=${JSON.stringify(slotState)}`,
         };
       },
     );
@@ -1023,24 +1041,57 @@ async function main() {
           .locator('[role="img"][aria-label^="Priority:"]')
           .getAttribute("aria-label");
 
+        // Check 11 just dismissed a submenu and its root. Radix retains them
+        // through exit animation; never reopen against those outgoing portals.
+        await page.waitForFunction(
+          () =>
+            document.querySelector(
+              '[data-slot="context-menu-content"], [data-slot="context-menu-sub-content"]',
+            ) === null,
+          null,
+          { timeout: 10_000 },
+        );
         await cardById(page, "VC-12").click({ button: "right" });
-        await sleep(300);
-        await page.getByRole("menuitem", { name: "Priority", exact: true }).hover();
-        await page.getByRole("menuitem", { name: "High", exact: true }).click();
-        await sleep(400);
+        const rootMenu = page.locator('[data-slot="context-menu-content"][data-state="open"]');
+        // Click explicitly opens the submenu. A one-shot hover can miss its
+        // pointer-enter during portal/positioning readiness and never open High.
+        // Check 11 independently retains the hover and submenu-icon proof.
+        await rootMenu.getByRole("menuitem", { name: "Priority", exact: true }).click();
+        await page
+          .locator('[data-slot="context-menu-sub-content"][data-state="open"]')
+          .getByRole("menuitem", { name: "High", exact: true })
+          .click();
 
-        const afterMutation = await cardById(page, "VC-12")
-          .getByRole("img", { name: "Priority: High", exact: true })
-          .count();
+        // Read the actual projection, not a single count after a guessed sleep.
+        // The real Board's pre-IPC commit is pinned by board-priority-projection
+        // .test.tsx; this bound is renderer readiness, not a UX latency allowance.
+        const mutationStart = Date.now();
+        const highIndicator = () =>
+          cardById(page, "VC-12").getByRole("img", { name: "Priority: High", exact: true });
+        let afterMutation = 0;
+        await waitUntil(
+          "VC-12's optimistic High indicator",
+          async () => {
+            afterMutation = await highIndicator().count();
+            return afterMutation === 1;
+          },
+          { timeout: 10_000, interval: 50 },
+        ).catch(() => {});
+        const mutationReadyMs = Date.now() - mutationStart;
 
+        // Independent persistence proof still runs even if readiness failed.
         await page.reload();
         await page.waitForLoadState("domcontentloaded");
-        await sleep(1500);
         await goToBoard(page);
-
-        const afterReload = await cardById(page, "VC-12")
-          .getByRole("img", { name: "Priority: High", exact: true })
-          .count();
+        let afterReload = 0;
+        await waitUntil(
+          "VC-12's persisted High indicator",
+          async () => {
+            afterReload = await highIndicator().count();
+            return afterReload === 1;
+          },
+          { timeout: 10_000, interval: 50 },
+        ).catch(() => {});
         const ok =
           before !== null &&
           before !== "Priority: High" &&
@@ -1048,7 +1099,7 @@ async function main() {
           afterReload === 1;
         return {
           ok,
-          detail: `before=${JSON.stringify(before)} highAfterMutation=${afterMutation} highAfterReload=${afterReload}`,
+          detail: `before=${JSON.stringify(before)} highAfterMutation=${afterMutation} highAfterReload=${afterReload} mutationReadyMs=${mutationReadyMs}`,
         };
       },
     );
