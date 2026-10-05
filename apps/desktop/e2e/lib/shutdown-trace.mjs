@@ -28,8 +28,15 @@ export function sampleStalledClose(child, path) {
               ...descendantProcesses(stdout, child.pid),
             ];
             await fs.writeFile(`${path}.processes.json`, `${JSON.stringify(processes, null, 2)}\n`);
-            await Promise.all(
-              processes.map(async ({ pid }) => {
+            await Promise.all([
+              execFileAsync("/usr/sbin/lsof", ["-nP", "-p", String(child.pid)], {
+                timeout: 5000,
+                maxBuffer: 2 * 1024 * 1024,
+              }).then(
+                ({ stdout: openFiles }) => fs.writeFile(`${path}.open-files.txt`, openFiles),
+                (error) => traceClose(path, "open-files-failed", { error: error.message }),
+              ),
+              ...processes.map(async ({ pid }) => {
                 try {
                   await execFileAsync(
                     "/usr/bin/sample",
@@ -42,7 +49,7 @@ export function sampleStalledClose(child, path) {
                   traceClose(path, "sample-failed", { sampledPid: pid, error: error.message });
                 }
               }),
-            );
+            ]);
           })().catch((error) => traceClose(path, "sampling-failed", { error: error.message }));
         }, 10000)
       : undefined;
