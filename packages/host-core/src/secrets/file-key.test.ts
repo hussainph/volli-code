@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  CREDENTIAL_LOCK_FILE_NAME,
   fileSecretKey,
   inspectSecretKeyFile,
   isSecretKeyUnavailable,
@@ -201,7 +202,9 @@ describe("the file key round trip", () => {
     expect(key.bytes.toString("utf8")).toMatch(/^[A-Za-z0-9+/]{43}=\n$/);
     expect(Buffer.from(key.bytes.toString("utf8").trim(), "base64")).toHaveLength(32);
     // No temporary key sibling survives the create.
-    expect(readdirSync(dataDir).toSorted()).toEqual([SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME]);
+    expect(readdirSync(dataDir).toSorted()).toEqual(
+      [CREDENTIAL_LOCK_FILE_NAME, SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME].toSorted(),
+    );
 
     const { mode, bytes: sealed } = readWithMode(storePath);
     expect(mode).toBe(0o600);
@@ -259,7 +262,9 @@ describe("the file key round trip", () => {
     saveTwo(relaunch());
     faults.link = null;
     expect(keyLine()).toBe(winner);
-    expect(readdirSync(dataDir).toSorted()).toEqual([SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME]);
+    expect(readdirSync(dataDir).toSorted()).toEqual(
+      [CREDENTIAL_LOCK_FILE_NAME, SECRET_STORE_FILE_NAME, SECRET_KEY_FILE_NAME].toSorted(),
+    );
     expect(relaunch().list()).toHaveLength(2);
   });
 
@@ -431,7 +436,7 @@ describe("a missing, different or foreign key", () => {
         reason: null,
         unavailable: ["session-env"],
       });
-      expect(() => opening(store)).toThrow(new Error("Could not decrypt secret storage."));
+      expect(() => opening(store)).toThrow(/^Could not decrypt secret storage\.$/);
       expect(readFileSync(storePath).equals(bytes)).toBe(true);
     }
   });

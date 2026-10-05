@@ -33,7 +33,9 @@ commands in the requesting Session without reattachment.
 **Settings → Configure → Secrets** lists names, scope, and last use, with
 write-only replacement and revocation. Availability checks do not mark use; only
 subprocess injection updates last use. Revocation stops *future spawns* from
-receiving that scope's value. A running process already has its environment;
+receiving that scope's value, in every process sharing the profile (desktop,
+hostd, `volli-hostd credentials`): each injection reads the sealed file again
+under the credential lock (VC-642). A running process already has its environment;
 stop its background shell to retire that copy. Historical values remain in the
 launch's redaction set after replacement/revocation so old output stays scrubbed.
 
@@ -59,7 +61,7 @@ status** the first time it is asked (`secrets/credential-state.ts`):
 |---|---|---|---|
 | `ready` | the sealed file opened | used | allowed |
 | `empty` | no sealed file yet, or after a reset | none | allowed |
-| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable | not used | refused |
+| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable; credential lock unavailable; written by a newer Volli (`newer-format`) | not used | refused |
 | `refused` | key file unsafe: group/other access (including 0044, which denies its owner), another owner (told from its metadata when the open itself is denied), not a regular file; relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
 | `corrupt` | the key opened and the file does not authenticate or parse | not used | refused |
 
@@ -73,6 +75,15 @@ missing secret can still be answered with **Session** storage. What a locked
 store holds was never decrypted this launch, so no process can have it, and the
 redaction boundary stays whole. The status is remembered: a locked keychain is
 asked once per unlock, not by every read.
+
+A key lost while the host runs is noticed by the next read, not the next
+launch (VC-642): every read of the sealed file happens under the credential
+lock, and the headless key file is read again first. A removed key locks
+stored secrets (`missing`), a replaced one too (`wrong-key`); the file stays
+byte-identical, values already seen stay in the redaction set, and putting the
+key back and unlocking opens them again. A keychain is not asked again while
+the launch runs, since asking may prompt. A sealed file whose `version` is
+newer than this build's is `locked` (`newer-format`) and left alone.
 
 Only material sealed under this key is gated: today, persistent Session
 secrets. Model sign-ins (Pi `auth.json`), web search keys and MCP credentials
@@ -108,9 +119,13 @@ the earlier prompt problem.
 
 `@volli/host-core/secrets` holds the one module every application credential
 family moves onto ([design](plans/sealed-credential-store.md) §3, §6, §7).
-No family is sealed in it yet: each moves in with its own ticket and
-compatibility gate (web keys VC-643/644, MCP and persistent Session imports
-VC-645, Pi VC-646, rotation VC-649).
+No family is sealed in its typed inventory yet: each moves in with its own
+ticket and compatibility gate (web keys VC-643/644, MCP and persistent Session
+imports VC-645, Pi VC-646, rotation VC-649). Persistent Session secrets already
+run on its lock and durable file engine, in their own file and format: the same
+`session-secrets.enc`, envelope (`VSF1`/`VSC1`) and `{ version: 1, secrets }`
+payload, so the release before this one opens, uses and writes everything this
+one writes (`n1-compatibility.test.ts`, against main's exact code).
 
 - **The lock** (`credential-lock.ts`). `host-credentials.lock` beside the
   database: an empty 0600 file that desktop, hostd and `volli-hostd
@@ -190,8 +205,10 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   temporary file, fsynced, then hard-linked into place. You may write one
   yourself (`(umask 077 && openssl rand -base64 32 > key)`: under the usual
   umask 022, `openssl ... > key` creates it readable by everyone before any
-  `chmod` runs). Nothing reads
-  the file until stored secrets exist, and it is read once per process.
+  `chmod` runs). Nothing needs
+  the file until stored secrets exist; after that it is read again, under the
+  credential lock, before each use of the store, so a key removed or replaced
+  mid-run locks stored secrets at once.
 - **Refusals, each naming its fix.** Like ssh with a private key, Volli refuses
   a key file that grants group or other users any access (`chmod 600 <path>`)
   or belongs to another user (`chown`). It also refuses a path that is not a
@@ -359,5 +376,15 @@ sanitized failures. `file-key.test.ts` beside them runs the headless adapter
 through the real store in CI's Linux host lane. It covers the round trip,
 permission and owner refusals, a missing, different or keychain-sealed key,
 and the create race. `apps/desktop/src/main/secrets/codec.test.ts` opens
-keychain ciphertext captured before the port existed. UI tests exercise uncontrolled passwords,
+keychain ciphertext captured before the port existed. VC-642 adds real
+multi-process tests with child `node` processes (`store-processes.test.ts`,
+`credential-lock.test.ts`, `inventory.test.ts`): concurrent saves and
+last-use commits merge with none lost, a revocation in one process is not
+injected by the next command in another, a writer killed at each write step
+leaves the old file or the new one, the lock is released by a killed holder
+and not kept by its children, and a key removed or replaced mid-run locks
+stored secrets at the next read. `n1-compatibility.test.ts` and
+`codec.test.ts` run main's exact store, codec and key adapter (pinned by git
+blob id) against this build's files in both directions. They run on macOS
+locally and in CI's Linux host lane. UI tests exercise uncontrolled passwords,
 immediate clearing, trusted titles, labelled prose, and dedicated IPC only.

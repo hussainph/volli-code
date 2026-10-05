@@ -188,7 +188,9 @@ describe("person-only secret request service", () => {
       ok: true,
       credentials: { state: "empty", reason: null, unavailable: [] },
     });
-    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
+    expect(readdirSync(dir).filter((name) => name !== "host-credentials.lock")).toEqual([
+      expect.stringMatching(/^session-secrets\.enc\.locked-/),
+    ]);
     expect(service.environment("s")).toEqual({ [input.name]: sentinel });
   });
   it("warns when a reset could not be synced to disk, and still reports it done", () => {

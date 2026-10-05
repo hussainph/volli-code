@@ -108,6 +108,10 @@ export default defineConfig({
         "src/secrets/credential-families.ts",
         "src/secrets/sealed-envelope.ts",
         "src/secrets/inventory.ts",
+        // The Session-secrets store, now on the module above (VC-642): every
+        // branch decides whether a revoked secret is injected, a value is
+        // scrubbed, or a locked store is sealed over.
+        "src/secrets/store.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a

@@ -9,8 +9,9 @@ import { spawn } from "node:child_process";
 
 import { CredentialLock } from "../credential-lock";
 import type { PublishStep } from "../durable-file";
-import { fileCredentialKeyring } from "../file-key";
+import { fileCredentialKeyring, fileSecretKey } from "../file-key";
 import { SealedInventory } from "../inventory";
+import { SecretStore, type SecretInput } from "../store";
 
 type Command =
   /** Takes the lock, says `held`, holds it `ms` (forever when absent), then exits. */
@@ -37,7 +38,13 @@ type Command =
       selector: Record<string, string>;
       value: string;
       at: PublishStep;
-    };
+    }
+  /** Session secrets: saves each input, one locked commit per input; dies at `crashAt`. */
+  | { kind: "secret-put"; path: string; key: string; inputs: SecretInput[]; crashAt?: PublishStep }
+  /** Session secrets: revokes the stored secret with this name. */
+  | { kind: "secret-revoke"; path: string; key: string; name: string }
+  /** Session secrets: what a command started now would be given. */
+  | { kind: "secret-env"; path: string; key: string; sessionId: string; projectId: string };
 
 function say(line: unknown): void {
   process.stdout.write(`${JSON.stringify(line)}\n`);
@@ -50,6 +57,16 @@ function inventory(path: string, key: string, step?: (at: PublishStep) => void):
     path,
     keyring: fileCredentialKeyring({ path: key }),
     ...(step === undefined ? {} : { document: { step } }),
+  });
+}
+
+function secrets(path: string, key: string, crashAt?: PublishStep): SecretStore {
+  return new SecretStore(path, fileSecretKey({ path: key }), {
+    document: {
+      step: (at) => {
+        if (at === crashAt) process.kill(process.pid, "SIGKILL");
+      },
+    },
   });
 }
 
@@ -93,6 +110,24 @@ switch (command.kind) {
     });
     store.put(command.family as never, command.selector, command.value);
     say({ survived: true });
+    break;
+  }
+  case "secret-put": {
+    const store = secrets(command.path, command.key, command.crashAt);
+    for (const input of command.inputs) store.put(input);
+    say({ status: store.status().state });
+    break;
+  }
+  case "secret-revoke": {
+    const store = secrets(command.path, command.key);
+    const found = store.list().find((item) => item.name === command.name);
+    if (found !== undefined) store.revoke(found.id);
+    say({ revoked: found !== undefined });
+    break;
+  }
+  case "secret-env": {
+    const store = secrets(command.path, command.key);
+    say({ env: store.environment(command.sessionId, command.projectId) });
     break;
   }
 }

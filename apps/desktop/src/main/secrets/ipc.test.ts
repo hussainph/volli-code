@@ -171,11 +171,14 @@ describe("dedicated credential IPC", () => {
       senderFrame: {},
     });
     expect(foreign).toMatchObject({ ok: false });
-    expect(readdirSync(dir)).toEqual(["session-secrets.enc"]);
+    expect(readdirSync(dir)).toEqual(["host-credentials.lock", "session-secrets.enc"]);
     expect(invoke("volli:secrets-reset")).toEqual({
       ok: true,
       credentials: { state: "empty", reason: null, unavailable: [] },
     });
-    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
+    expect(readdirSync(dir)).toEqual([
+      "host-credentials.lock",
+      expect.stringMatching(/^session-secrets\.enc\.locked-/),
+    ]);
   });
 });
