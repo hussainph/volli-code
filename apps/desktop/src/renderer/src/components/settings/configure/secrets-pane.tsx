@@ -57,8 +57,12 @@ export function SecretsPane({ project }: { project: Project }) {
     >
       {credentials !== null && LOCKED_LINE[credentials.state] !== undefined ? (
         <LockedCredentials
-          line={LOCKED_LINE[credentials.state]!}
-          resettable={credentials.state !== "refused"}
+          line={REASON_LINE[credentials.reason ?? ""] ?? LOCKED_LINE[credentials.state]!}
+          resettable={
+            credentials.state !== "refused" &&
+            credentials.reason !== "busy" &&
+            credentials.reason !== "lock-unusable"
+          }
           onChanged={refresh}
         />
       ) : null}
@@ -82,13 +86,23 @@ const LOCKED_LINE: Partial<Record<CredentialStatus["state"], string>> = {
   corrupt: "Saved secrets can't be read.",
 };
 
+/**
+ * Reasons that are not the store's own problem (VC-642): another Volli process
+ * holding the lock for a moment, or a lock file to fix. Neither offers Reset:
+ * the saved secrets may be perfectly good.
+ */
+const REASON_LINE: Partial<Record<string, string>> = {
+  busy: "Saved secrets are busy in another Volli process.",
+  "lock-unusable": "Saved secrets can't be used: their lock file needs fixing.",
+};
+
 function LockedCredentials({
   line,
   resettable,
   onChanged,
 }: {
   line: string;
-  /** A refused key configuration is fixed, never reset (VC-641). */
+  /** A refused key configuration or a lock problem is fixed, never reset (VC-641, VC-642). */
   resettable: boolean;
   onChanged: () => void;
 }) {
