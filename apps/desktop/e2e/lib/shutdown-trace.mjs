@@ -7,13 +7,39 @@ const execFileAsync = promisify(execFile);
 
 /** Parent breadcrumbs remain available even when main's native thread blocks. */
 export function traceClose(path, stage, details = {}) {
+  if (!path) return;
   appendFileSync(
     path,
     `${JSON.stringify({ at: Date.now(), pid: process.pid, stage, ...details })}\n`,
   );
 }
 
+/** Smoke-side only: no tracing code ships in the application's quit path. */
+export async function installShutdownTrace(app, path) {
+  if (!path) return;
+  await app.evaluate(({ app: electronApp }, tracePath) => {
+    const nodeFs = process.getBuiltinModule("node:fs");
+    const trace = (stage) =>
+      nodeFs.appendFileSync(
+        tracePath,
+        `${JSON.stringify({ at: Date.now(), pid: process.pid, stage })}\n`,
+      );
+    for (const event of ["before-quit", "will-quit", "quit"])
+      electronApp.on(event, () => trace(event));
+    process.on("exit", () => trace("process-exit"));
+    const exit = electronApp.exit;
+    electronApp.exit = function (...args) {
+      // The accepted coordinator enters exit only after its bounded drain.
+      trace("native-exit-started-after-drain");
+      const result = exit.apply(this, args);
+      trace("native-exit-returned");
+      return result;
+    };
+  }, path);
+}
+
 export function sampleStalledClose(child, path) {
+  if (!path) return async () => {};
   let sampling = Promise.resolve();
   const timer =
     process.platform === "darwin"

@@ -39,12 +39,14 @@ import {
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
-import { sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
+import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
 
 const NEWER_TITLE = "This database was created by a newer version of Volli";
 const DAMAGED_TITLE = "Volli couldn't load its data";
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const MIN_READER_KEY = "volli:min-reader-version";
+const traceShutdown =
+  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) || process.env.VOLLI_NEWER_DB_TRACE === "1";
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -108,7 +110,6 @@ async function fixture(name) {
       VOLLI_SKIP_CLOSE_CONFIRM: "1",
       VOLLI_SMOKE_BROWSER_HOST: "0",
       VOLLI_BROWSER_PROBE: "0",
-      VOLLI_SHUTDOWN_TRACE_FILE: join(scratch, `${name}-shutdown.jsonl`),
     },
   };
 }
@@ -122,7 +123,10 @@ async function openApp(config, label) {
     stdout: "",
     stderr: "",
     page: null,
-    tracePath: config.extraEnv.VOLLI_SHUTDOWN_TRACE_FILE,
+    tracePath: traceShutdown
+      ? join(scratch, `${label.replaceAll(" launch", "")}-shutdown.jsonl`)
+      : null,
+    userDataDir: config.userDataDir,
   };
   run.child.once("exit", (code, signal) =>
     traceClose(run.tracePath, "child-exit", { code, signal }),
@@ -144,6 +148,14 @@ async function openApp(config, label) {
   page.setDefaultTimeout(8000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
+  const disabledFeatures = await bounded(`${label}: browser feature policy`, () =>
+    app.evaluate(({ app: electronApp }) =>
+      electronApp.commandLine.getSwitchValue("disable-features"),
+    ),
+  );
+  assert.ok(disabledFeatures.split(",").includes("DeclarativePerformanceObserver"));
+  await assertNoObserverStore(config.userDataDir);
+  await bounded(`${label}: failure trace`, () => installShutdownTrace(app, run.tracePath));
   return run;
 }
 
@@ -157,7 +169,8 @@ async function closeRun(run) {
     traceClose(run.tracePath, "close-result", exit);
   } finally {
     await finishSampling();
-    console.log(`SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8")}`);
+    if (run.tracePath && (!exit || exit.exit.code !== 0 || exit.closeFailures.length > 0))
+      console.error(`SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8")}`);
   }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
@@ -165,7 +178,16 @@ async function closeRun(run) {
     ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
     "cleanup required a forced signal",
   );
+  await assertNoObserverStore(run.userDataDir);
   runs.delete(run);
+}
+
+async function assertNoObserverStore(userDataDir) {
+  const names = await fs.readdir(userDataDir);
+  assert.ok(
+    !names.some((name) => name.startsWith("declarative_performance_observer.db")),
+    "unused observer must not create its shutdown-blocking SQLite store",
+  );
 }
 
 async function bootstrap(run) {
@@ -452,9 +474,12 @@ try {
       join(scratch, "result.json"),
       `${JSON.stringify({ ok: code === 0, checks, failures }, null, 2)}\n`,
     );
-    if (code === 0)
+    if (code === 0) {
       for (const name of ["seed", "incompatible", "compatible"])
         await fs.rm(join(scratch, name), { recursive: true, force: true });
+      for (const name of await fs.readdir(scratch))
+        if (name.includes("-shutdown.jsonl")) await fs.rm(join(scratch, name), { force: true });
+    }
   }
 }
 console.log(`${code === 0 ? "ALL CHECKS PASSED" : "FAILED"}: ${checks.length} completed checks`);
