@@ -256,6 +256,15 @@ believing it only when its pid is alive and its socket accepts a connection:
 
 The host protocol (VC-564) carries the same facts to remote clients.
 
+## Stable execution venue
+
+Session ownership and recovery use the persisted `host_identity.host_id`, not
+`--socket` (VC-627). Moving the socket therefore keeps this host's earlier
+attachments recoverable. Desktop's `local`/`local` venue is unchanged. No
+migration rewrites older socket-path attachment facts; those retain their
+original provenance. A restored backup mints a new host identity, because host
+identity is excluded from backup bundles.
+
 ## Shutdown
 
 `SIGTERM` or `SIGINT`:
