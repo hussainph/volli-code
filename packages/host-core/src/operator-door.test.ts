@@ -76,6 +76,7 @@ function scenario(options: { verifier?: boolean } = {}) {
   const audit: OperatorWriteRecord[] = [];
   let ids = 0;
   const service = createAgentCommandService({
+    busyWorktreeSites: async () => [],
     db: ctx.db,
     sessionEngine: createTestSessionEngine(ctx.db),
     appVersion: "1.2.3",

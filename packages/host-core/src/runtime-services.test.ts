@@ -97,6 +97,26 @@ describe("staged host runtime services", () => {
     });
   });
 
+  it("records the host-supplied decision venue", async () => {
+    testDb = openTestDb();
+    const observe = vi.fn(async () => undefined);
+    const services = createHostRuntimeServices(
+      testDb.db,
+      { observe } as unknown as SessionEngine,
+      ports,
+      options(),
+    );
+    services.createDecisions(modelAccess, { id: "cloud-host", kind: "remote" });
+    await vi
+      .mocked(createDesktopDecisions)
+      .mock.calls[0]![0].recordUsage("s", {} as SessionUsage, "agent.classify");
+    expect(observe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provenance: expect.objectContaining({ venue: { id: "cloud-host", kind: "remote" } }),
+      }),
+    );
+  });
+
   it("keeps the decision metering no-op when no engine is available", async () => {
     testDb = openTestDb();
     const services = createHostRuntimeServices(testDb.db, null, ports, options());

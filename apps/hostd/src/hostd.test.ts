@@ -36,6 +36,7 @@ import { readStatus, statusFilePath, type HostdState } from "./status";
 const faults = vi.hoisted(() => ({
   failStatusOn: null as string | null,
   socketCloseFails: false,
+  busySites: null as ((target: string) => Promise<readonly unknown[]>) | null,
   /** When set, every command waits on it before it runs. */
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
@@ -67,6 +68,7 @@ vi.mock("@volli/host-core", async (importOriginal) => {
     createHostCore: (...args: Parameters<typeof actual.createHostCore>) => {
       const host = actual.createHostCore(...args);
       const createCommands: typeof host.agentServices.createCommands = (options) => {
+        faults.busySites = options.busyWorktreeSites;
         const commands = host.agentServices.createCommands(options);
         return {
           execute: async (request) => {
@@ -225,6 +227,7 @@ describe("booting against an empty data directory", () => {
     const host = await boot({}, log);
     const dataDir = join(root, "data");
     const socketPath = join(dataDir, "volli.sock");
+    expect(await faults.busySites!(root)).toEqual([]);
 
     expect(statSync(dataDir).mode & 0o777).toBe(0o700);
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);

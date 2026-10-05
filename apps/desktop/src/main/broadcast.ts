@@ -189,20 +189,6 @@ export function broadcastSessionActivity(notice: SessionActivityNotice): void {
 }
 
 /**
- * Announce a retitle main made on its own behalf (VC-81 auto-titling).
- *
- * Every other retitle is a renderer action that moves its own labels
- * optimistically as it goes. This one has no renderer behind it — the CLI door
- * has no window at all — and `session.retitle` reaches the ledger WITHOUT the
- * runtime publish, so no live subscriber is told. Without this the model's
- * title is durably correct and invisible until an unrelated refresh, which is
- * the whole feature failing to appear.
- */
-export function broadcastSessionRetitled(sessionId: string, title: string): void {
-  windowEventBus.publish("session-retitled", { sessionId, title });
-}
-
-/**
  * Projects main's whole pending armed-column list into every renderer.
  *
  * A whole snapshot rather than an add/remove delta means two windows can never

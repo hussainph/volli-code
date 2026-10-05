@@ -333,6 +333,7 @@ describe("agent socket", () => {
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
+      busyWorktreeSites: async () => [],
       db: ctx.db,
       sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "1.2.3",

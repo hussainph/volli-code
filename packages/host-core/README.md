@@ -124,9 +124,22 @@ still owns the accepted-quit gate, deadline and app exit. Recorded port-call tes
 replace its former source-text ordering checks; frozen original-main fixtures
 cover all 336 verified tool-surface combinations, including refusals.
 
-Facade/agent-command construction and the remaining circular staging are still
-desktop-owned pending the final lift slice. Those consumers will join the same
-ready interface, not create another engine. Hostd does not run Sessions yet.
+The third desktop-only slice adds `session-runtime/facade` and
+`session-runtime/agents`: inert skills/model/Sessions/titler/peek construction,
+one caller-id kickoff submit, and private delegation recovery staging. Public
+tool/watch doors, CLI Session ports, renderer listing/peek/stop hooks and the
+Session RPC edge now require recovered services. The proof refuses late
+consumer construction and runtime tool-door acquisition after close; already
+constructed CLI/socket drain behavior is unchanged. Fresh shell notices start or
+join recovery before delivery and are dropped quietly if closing wins. Quit
+cancellation is a typed outcome, not a startup/notice failure.
+The boot sweep stops at async boundaries during shutdown, preserving unswept
+bindings for the next launch rather than interpreting cancellation as lost
+sidecars. Automation assembly joins the protected 100% coverage gate.
+
+Runtime-context/brief resolution and the remaining pre-execution staging are
+still desktop-owned; they need one bounded lift before hostd can compose the
+whole runtime without copying it. Hostd does not run Sessions yet.
 
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot
