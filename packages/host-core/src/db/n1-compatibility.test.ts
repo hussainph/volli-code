@@ -46,6 +46,7 @@ import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 import { createTicketCommand } from "../ticket-commands";
 import { openVolliDb } from "./database-file";
+import { checkMigrationHistory, describeMigrationHistory } from "./migration-history";
 import { MIGRATIONS, SCHEMA_HEAD } from "./migrations";
 import { insertProject } from "./projects-repo";
 import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "./schema-compatibility";
@@ -247,6 +248,9 @@ function assertHeadReads(path: string): void {
     expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_HEAD);
     expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
     expect(db.pragma("foreign_key_check")).toEqual([]);
+    // N-1 never touches the applied-migration history (VC-633), so what it
+    // left must still agree with this build's lock.
+    expect(describeMigrationHistory(checkMigrationHistory(db, SCHEMA_HEAD))).toMatch(/^consistent/);
   } finally {
     db.close();
   }

@@ -51,6 +51,11 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { verifyMigrationBackup } from "./backup-integrity";
 import { BACKUP_RETENTION_LOG_PREFIX } from "./backup-retention";
+import {
+  checkMigrationHistory,
+  describeMigrationHistory,
+  MIGRATION_HISTORY_LOG_PREFIX,
+} from "./migration-history";
 import { migrate, SCHEMA_HEAD } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
 import {
@@ -285,6 +290,25 @@ function preflight(
 }
 
 /**
+ * Compares the file's applied-migration history with this build's lock
+ * (VC-633) and logs one named line when another lineage migrated it. Never
+ * refuses and never throws: a diverged file still opens (see
+ * `migration-history.ts` for why), and a history that cannot be read is
+ * reported the same way rather than failing the boot.
+ */
+function warnOnDivergedHistory(db: Database.Database): void {
+  let summary: string;
+  try {
+    const report = checkMigrationHistory(db, SCHEMA_HEAD);
+    if (report.consistent) return;
+    summary = describeMigrationHistory(report);
+  } catch (error) {
+    summary = `could not be read: ${String(error)}`;
+  }
+  console.warn(`${MIGRATION_HISTORY_LOG_PREFIX}: ${summary}`);
+}
+
+/**
  * Opens (creating if absent) the Volli SQLite database at `dbPath`, applies
  * the pragmas migration 001 assumes — WAL journaling, foreign keys ON, a
  * busy timeout so a brief writer/reader overlap blocks instead of erroring,
@@ -393,6 +417,7 @@ export function openVolliDb(
         );
       }
       const migrated = migrate(db, dbPath);
+      warnOnDivergedHistory(db);
       // Post-migration, so it sees the final schema. A bounded ANALYZE
       // (`analysis_limit` keeps each table's scan proportional — SQLite's own
       // recommendation for routine maintenance) keeps a migration from leaving

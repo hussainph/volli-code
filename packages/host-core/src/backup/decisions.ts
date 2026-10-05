@@ -361,6 +361,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "One row, re-established at restore from the metering boundary in the data document; a fresh migration would claim complete coverage.",
   },
+  {
+    table: "migration_history",
+    decision: "rebuild",
+    reason:
+      "Which migrations THIS file ran, with their fingerprints (VC-633). A restore builds a new file by migrating it, and those migrations write its history; the source file's lineage says nothing about the new one.",
+  },
   // ---- Excluded ------------------------------------------------------------
   {
     table: "worktree_cleanup_commands",

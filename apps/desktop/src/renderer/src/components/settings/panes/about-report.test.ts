@@ -16,6 +16,7 @@ function support(overrides: Partial<SupportInfo> = {}): SupportInfo {
     platform: "darwin",
     arch: "arm64",
     schemaVersion: 34,
+    migrationHistory: "consistent",
     ...overrides,
   };
 }
@@ -82,13 +83,14 @@ describe("buildAboutReport — support metadata", () => {
   it("starts with when it was taken and what took it", () => {
     const lines = report().split("\n");
 
-    expect(lines.slice(0, 6)).toEqual([
+    expect(lines.slice(0, 7)).toEqual([
       "Volli report",
       `Generated at: ${GENERATED_AT}`,
       "App version: 0.2.0-canary.4",
       "Release channel: canary",
       "OS: darwin arm64",
       "Database schema: 34",
+      "Migration history: consistent",
     ]);
   });
 
@@ -132,7 +134,14 @@ describe("buildAboutReport — support metadata", () => {
 
     const text = report({ support: watched });
 
-    expect(read.toSorted()).toEqual(["appVersion", "arch", "channel", "platform", "schemaVersion"]);
+    expect(read.toSorted()).toEqual([
+      "appVersion",
+      "arch",
+      "channel",
+      "migrationHistory",
+      "platform",
+      "schemaVersion",
+    ]);
     expect(text).not.toContain("sentinel-credential-do-not-export");
     expect(text).not.toContain("apiKey");
     expect(text.toLowerCase()).not.toContain("api_key");

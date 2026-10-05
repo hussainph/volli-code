@@ -493,6 +493,56 @@ volumes), hostd cannot create the key atomically and says so with
 `(umask 077 && openssl rand -base64 32 > key)`; creation only runs when the
 file is absent. See `docs/secrets.md`, "Headless hosts".
 
+## Upgrading and rolling back
+
+**A box rolls back to its safety copy, not to the old binary.** (VC-633)
+
+An upgrade is the new archive plus a restart. On the first open the new
+build migrates the database, and before the migration commits it publishes
+a verified copy of the database as it was: `<data-dir>/volli.db.backup-v<N>`,
+where `N` is the schema the old build left. Retention keeps that copy.
+
+- **Free space first.** A migration needs about twice the database free on the
+  data directory's volume: a safety copy, then the rewrite (compaction is a
+  full VACUUM). The host checks this with `statfs` before writing anything.
+  When there isn't room, it stays up in `refusing`, every verb answers
+  `DB_UNAVAILABLE`, and the log line says how much it needs, how much is free
+  and that nothing was changed. Free the space and restart.
+- **Why not just reinstall the old archive.** If the new build's migrations
+  raised the database's floor (`raisesMinReader`), the old build refuses the
+  file as "from a newer version of Volli" and leaves it untouched. If they
+  didn't, the old build runs against a schema it doesn't know. That's allowed,
+  and CI's N-1 lanes test it, but anything the newer build derives is stale
+  until you upgrade again. Either way, only the safety copy is exactly the
+  database the old build last wrote.
+- **What a rollback loses.** Everything written since the upgrade: tickets,
+  comments, Sessions and their history. If you need any of it, make a backup
+  bundle with the new build before you roll back.
+
+To roll back (systemd layout above; `N` from the file name):
+
+```sh
+sudo systemctl stop volli-hostd volli-hostd.socket
+cd /var/lib/volli-hostd
+# Set the migrated database aside. Never delete it; it is the only copy of what
+# was written since the upgrade.
+stamp=$(date +%Y%m%d-%H%M%S)
+for f in volli.db volli.db-wal volli.db-shm; do
+  [ -e "$f" ] && sudo -u volli mv "$f" "$f.rolled-back-$stamp"
+done
+# Copy the safety copy, don't move it: it stays the rollback point.
+sudo -u volli cp volli.db.backup-vN volli.db
+sudo -u volli sqlite3 volli.db 'PRAGMA integrity_check; PRAGMA user_version;'  # ok, N
+# Reinstall the previous archive over /opt/volli-hostd (as in the install above),
+# then start it.
+sudo systemctl start volli-hostd.socket volli-hostd
+sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
+```
+
+Credential files (`host-credentials.*`, the secret key) are not in the
+database and stay where they are. The old build reads its keys from the
+database it was given.
+
 ## Running under launchd (macOS)
 
 `packaging/com.volli.hostd.plist` is a user agent template: replace

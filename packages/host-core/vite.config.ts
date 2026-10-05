@@ -96,6 +96,11 @@ export default defineConfig({
         // The downgrade guard (VC-602): a branch read wrong either opens a
         // database this build cannot use or locks a person out of their own.
         "src/db/schema-compatibility.ts",
+        // The applied-migration history and the free-space preflight before a
+        // migration's safety copy (VC-633): every branch is a decision made
+        // once, at an upgrade nobody watches, about a file nobody can redo.
+        "src/db/migration-history.ts",
+        "src/db/disk-preflight.ts",
         // The headless secret key (VC-559), beside its port under src/ports:
         // every branch is a refusal that stands between a person's credentials
         // and another user, a lost key or a silent re-key, and none of it shows
