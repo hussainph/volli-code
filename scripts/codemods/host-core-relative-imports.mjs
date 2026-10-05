@@ -40,7 +40,7 @@ function resolveSelf(specifier) {
     const suffix = pattern.slice(star + 1);
     if (key.startsWith(prefix) && key.endsWith(suffix) && key.length >= pattern.length - 1) {
       const middle = key.slice(prefix.length, key.length - suffix.length);
-      return resolve(PKG, exportTarget(entry).replace("*", middle));
+      return resolve(PKG, exportTarget(entry).replaceAll("*", middle));
     }
   }
   throw new Error(`${specifier} is not exported by ${NAME}`);
