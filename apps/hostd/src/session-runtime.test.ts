@@ -258,7 +258,6 @@ describe("headless runtime ownership", () => {
     const request = {} as never;
     await input.callVerb(caller, request, new AbortController().signal, undefined);
     expect(f.agents.toolDoor).toHaveBeenCalledWith(f.proof);
-    expect(owner.openNativeBindings()).toEqual([]);
     const drain = seam.lifecycle.mock.lastCall![0];
     expect(drain.services()).toBe(f.facade);
     drain.stopProducers();
@@ -360,8 +359,6 @@ describe("headless runtime ownership", () => {
       pendingArmedRuns: { noteDeliberateMove: vi.fn() },
     } as never;
     ready.onDeliberateMove({} as never);
-    f.assembly.sessionRuntime = null as never;
-    expect(owner.openNativeBindings()).toEqual([]);
   });
   it("resolves the host's model access from the service account's own environment", () => {
     seam.modelAccess.mockReturnValue({ models: "owned" });

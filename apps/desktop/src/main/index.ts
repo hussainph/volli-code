@@ -369,7 +369,6 @@ if (ownsAppProfile) {
 // anything else from the local filesystem.
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
 
-function noScheduledResumeObserver(): void {}
 function noQuitAction(): void {}
 
 function noOpenNativeBindings(): readonly OpenNativeBinding[] {
@@ -716,10 +715,9 @@ const appStartup = app.whenReady().then(async () => {
   // The host's persistence comes out of host-core (VC-553): this file only
   // states the policy. Packaged builds log a transaction-ownership violation;
   // dev and tests throw (VC-551) — chosen from `app.isPackaged`, never NODE_ENV.
-  // The runtime and notification registry are installed below. Session
-  // construction only captures these adapters; it never calls them at boot.
-  let listOpenNativeBindings = noOpenNativeBindings;
-  let observeScheduledResume: HostCorePorts["observeScheduledResume"] = noScheduledResumeObserver;
+  // The notification registry is installed below. Session construction only
+  // captures these adapters; it never calls them at boot. The runtime's open
+  // bindings and scheduled resume are host-core's own wiring (VC-632).
   // The Electron adapters for host-core's ports (VC-554). Code still composed
   // below reads power, connectivity and the client through them too.
   const hostPorts: HostCorePorts = {
@@ -733,8 +731,6 @@ const appStartup = app.whenReady().then(async () => {
     connectivity: createConnectivityPort({ net, powerMonitor }),
     client: createElectronClientCapabilities(),
     trash: { trashItem: (path) => shell.trashItem(path) },
-    listOpenNativeBindings: () => listOpenNativeBindings(),
-    observeScheduledResume: (projection) => observeScheduledResume(projection),
   };
   let ptyManagerRef: PtyManager | undefined;
   // Capture-only wrapper: successful keychain use is observed by all host-owned secrets.
@@ -1222,7 +1218,7 @@ const appStartup = app.whenReady().then(async () => {
     piSessionsDirectory,
     transcriptArtifacts,
   } = assembledRuntime;
-  listOpenNativeBindings =
+  const listOpenNativeBindings =
     sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   const runtimeAutomations = createRuntimeAutomations({
@@ -1464,7 +1460,6 @@ const appStartup = app.whenReady().then(async () => {
           console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
       }),
   });
-  observeScheduledResume = runtimeLifecycle.observeScheduledResume;
   relayShellNotice = runtimeLifecycle.relayShellNotice;
   const desktopRuntime = createDesktopHostRuntime({
     host: hostCore,

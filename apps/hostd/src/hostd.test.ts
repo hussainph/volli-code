@@ -77,10 +77,6 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   return {
     ...actual,
     createHostCore: (...args: Parameters<typeof actual.createHostCore>) => {
-      // Early host-edge reads have no owner yet; no mutable executor backend
-      // is being supplied through these notification ports.
-      args[0].listOpenNativeBindings();
-      args[0].observeScheduledResume?.({} as never);
       faults.hostOptions = args[1];
       const host = actual.createHostCore(...args);
       faults.host = host;

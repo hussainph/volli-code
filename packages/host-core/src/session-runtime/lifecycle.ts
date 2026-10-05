@@ -10,6 +10,7 @@ import type { HostedSessionRuntime } from "@volli/session-engine";
 import { errorMessage, type SessionProjection, type SessionExecutionVenue } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
+import { wireSessionRuntime } from "../session-services";
 import { listProjects } from "../db/projects-repo";
 import { listScheduledResumeSessionIds } from "../db/scheduled-resume-repo";
 import {
@@ -263,12 +264,15 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     boot ??= recover();
     return boot;
   }
+  const observeScheduledResume = (projection: SessionProjection): void => {
+    if (!closing) resume?.observe(projection);
+  };
+  // The host's Session services fold every projection through here from now on.
+  if (sessionEngine !== null) wireSessionRuntime(sessionEngine, { observeScheduledResume });
   return {
     ready,
     close,
-    observeScheduledResume: (projection) => {
-      if (!closing) resume?.observe(projection);
-    },
+    observeScheduledResume,
     relayShellNotice: (notice) => {
       if (closing || relay === null) return;
       // A fresh external notice cannot read the ledger while boot recovery is

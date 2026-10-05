@@ -273,8 +273,6 @@ export function createHeadlessSessionRuntime(input: {
     /** Sessions holding a live attachment token, read on every orphan scan. */
     liveSessionIds: () => tokens.liveSessionIds(),
     reclaim,
-    openNativeBindings: () => assembly.sessionRuntime?.openNativeBindings() ?? [],
-    observeScheduledResume: lifecycle.observeScheduledResume,
     async ready() {
       const ready = await lifecycle.ready();
       const { sessions, runtime } = recoveredRuntimeSessionServices(ready);

@@ -155,8 +155,6 @@ function sessionPorts(): HostCorePorts {
       waitUntilOnline: () => Promise.resolve(),
       onResume: () => () => undefined,
     },
-    listOpenNativeBindings: () => [],
-    observeScheduledResume: vi.fn(),
   };
 }
 

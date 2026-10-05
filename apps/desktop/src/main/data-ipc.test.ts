@@ -282,6 +282,9 @@ import {
 } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
+
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
 
@@ -2627,6 +2630,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const pushed = new Map<string, SessionListingRow>();
     const watch = watchSessionActivity(sessionEngine, {
+      listOpenNativeBindings: noOpenBindings,
       publish: ({ row }) => pushed.set(rowId(row), row),
       // The expression `index.ts` passes, unchanged.
       provenanceOf: (born) => readSessionProvenance(ctx.db, born),

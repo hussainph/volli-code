@@ -14,6 +14,9 @@ import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { watchSessionActivity } from "../session-control/activity-watch";
 import { catchUpSessionResumptions, observeSessionResumptions } from "./session-resumptions";
 
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
+
 let ctx: TestDb;
 afterEach(() => ctx.cleanup());
 const provenance = {
@@ -210,6 +213,7 @@ describe("Session resumption catch-up", () => {
     const watch = watchSessionActivity(
       { ...f.engine, getSession: async () => projection },
       {
+        listOpenNativeBindings: noOpenBindings,
         publish: publishRow,
         observe: (current) => {
           observeSessionResumptions(ctx.db, current, { publish: vi.fn(), report });

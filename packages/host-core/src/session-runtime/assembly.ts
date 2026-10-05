@@ -49,6 +49,7 @@ import {
   sessionTranscriptsRoot,
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
+import { wireSessionRuntime } from "../session-services";
 
 export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
@@ -425,6 +426,11 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
+  if (sessionEngine !== null && sessionRuntime !== null) {
+    wireSessionRuntime(sessionEngine, {
+      openNativeBindings: () => sessionRuntime.openNativeBindings(),
+    });
+  }
   return {
     sessionToolSurface,
     piRuntimeHost,
