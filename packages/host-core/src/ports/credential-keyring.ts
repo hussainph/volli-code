@@ -14,11 +14,12 @@
  * not proof of anything, and never an epoch. An id the keyring does not hold
  * is "unavailable", never "empty".
  *
- * Today one backend exists: `file`, the headless key file
- * (`fileCredentialKeyring` in `@volli/host-core/secrets`). A keychain-wrapped
- * keyring for desktop is added when the first desktop family moves in; its
- * header byte is reserved now so its envelopes are told apart rather than
- * mistaken for corrupt ones.
+ * Two backends exist: `file`, the headless key file (`fileCredentialKeyring`
+ * in `@volli/host-core/secrets`), and `keychain`, desktop's random key wrapped
+ * by the OS keychain (`keychainCredentialKeyring`, VC-643), which arrived with
+ * the first desktop family, the web search keys' sealed mirror. Each has its
+ * own header byte, so one's envelopes are told apart from the other's rather
+ * than mistaken for corrupt ones.
  */
 /** Where a keyring keeps its keys. Each has a byte in the envelope header. */
 export type CredentialKeyBackend = "file" | "keychain";

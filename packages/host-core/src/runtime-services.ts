@@ -22,7 +22,22 @@ import {
   EXA_SEARCH_KEY_SECRET,
   WebCredentialStore,
 } from "./web/credential";
+import { WebCredentialMirror, type WebMirrorResult } from "./web/credential-mirror";
 import { WebAccessSettings } from "./web/settings";
+import type { CredentialKeyring } from "./ports/credential-keyring";
+import { CREDENTIAL_INVENTORY_FILE_NAME, SealedInventory } from "./secrets/inventory";
+
+/** What the web keys' sealed mirror (VC-643, step E) is sealed with, and who hears how it went. */
+export interface WebKeySealingOptions {
+  /**
+   * The host's key backend for the typed inventory: desktop's keychain
+   * keyring. Absent or `null`: nothing is sealed and the keys stay in legacy
+   * mode, reported as sealing pending.
+   */
+  keyring?: CredentialKeyring | null;
+  /** Each reconciliation's outcome: counts and reason codes, never a value. */
+  onResult?: (result: WebMirrorResult) => void;
+}
 
 export function createHostRuntimeServices(
   db: Database.Database | null,
@@ -78,7 +93,7 @@ export function createHostRuntimeServices(
             });
       return { credentials, settings };
     },
-    createWebAccess: () =>
+    createWebAccess: (sealing: WebKeySealingOptions = {}) =>
       db === null
         ? null
         : new WebAccessSettings({
@@ -87,6 +102,18 @@ export function createHostRuntimeServices(
               brave: new WebCredentialStore({ db, secretName: BRAVE_SEARCH_KEY_SECRET }),
               exa: new WebCredentialStore({ db, secretName: EXA_SEARCH_KEY_SECRET }),
             },
+            mirror: new WebCredentialMirror({
+              db,
+              inventory:
+                sealing.keyring == null
+                  ? null
+                  : new SealedInventory({
+                      path: join(dirname(options.dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
+                      keyring: sealing.keyring,
+                      families: ["web-search"],
+                    }),
+              ...(sealing.onResult === undefined ? {} : { onResult: sealing.onResult }),
+            }),
           }),
     createSignIn: (input: ConstructorParameters<typeof ModelAccessSignInService>[0]) =>
       new ModelAccessSignInService(input),

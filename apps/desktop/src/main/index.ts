@@ -107,7 +107,12 @@ import {
   type RuntimeAssemblyOptions,
 } from "@volli/host-core/session-runtime/assembly";
 import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
-import { SecretStore } from "@volli/host-core/secrets";
+import {
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  keychainCredentialKeyring,
+  SecretStore,
+} from "@volli/host-core/secrets";
+import { describeWebSealing } from "@volli/host-core/web/credential-mirror";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { retiresSessionSecrets } from "@volli/host-core/secrets/lifetime";
@@ -933,7 +938,19 @@ const appStartup = app.whenReady().then(async () => {
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
-  const webAccess = hostCore.runtimeServices.createWebAccess();
+  // Web search keys, step E (VC-643): the database stays their one source of
+  // truth, and a sealed mirror of them is kept in the typed inventory under a
+  // keychain-wrapped key. Nothing asks the keychain until there is a key to
+  // seal or a sealed file to open. Reconciled after first paint (below) and
+  // after every save or clear; never awaited, never a reason to fail a boot.
+  // Logged as counts and reason codes only.
+  const webAccess = hostCore.runtimeServices.createWebAccess({
+    keyring: keychainCredentialKeyring({
+      path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+      keychain: safeStorage,
+    }),
+    onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
+  });
   /** The cursor overlay is a desktop-only port, constructed beside the window. */
   let cursorOverlayRef: CursorOverlay | null = null;
   // Agent observability (VC-119): the opt-in export switch, and the sink the
@@ -1982,6 +1999,10 @@ const appStartup = app.whenReady().then(async () => {
     void loginPathBootstrap.applyInteractive().catch((error) => {
       console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
     });
+    // Web search keys' sealed mirror (VC-643): rebuilt from the database on
+    // every launch, deletes included, after first paint because opening it
+    // may ask the keychain. Never rejects; the outcome is logged above.
+    void webAccess?.reconcileSealing();
   });
 
   // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching

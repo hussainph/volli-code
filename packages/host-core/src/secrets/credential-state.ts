@@ -23,9 +23,11 @@
  * `locked`, `refused` and `corrupt` leave the sealed file byte-identical: no
  * plaintext, no default key, and no fresh key sealed over what exists. Only
  * this scope's material is gated: today that is the persistent Session
- * secrets (`session-env`). Model sign-ins, web search keys and MCP
- * credentials do not live under this key yet and are unaffected; the typed
- * store (VC-631) adds kinds here as each one moves in.
+ * secrets (`session-env`). Model sign-ins and MCP credentials do not live
+ * under this key yet and are unaffected; web search keys have only a sealed
+ * mirror (VC-643), so a locked inventory leaves that mirror pending while the
+ * keys keep working from the database. The typed store (VC-631) adds kinds
+ * here as each one moves in.
  *
  * Two explicit ways out, both person or local-admin intent, never an agent
  * verb: **unlock** (put the key back, unlock the keychain, fix the mode, then

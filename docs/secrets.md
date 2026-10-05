@@ -91,9 +91,11 @@ the launch runs, since asking may prompt. A sealed file whose `version` is
 newer than this build's is `locked` (`newer-format`) and left alone.
 
 Only material sealed under this key is gated: today, persistent Session
-secrets. Model sign-ins (Pi `auth.json`), web search keys and MCP credentials
-are not under this key yet and keep working; the typed store (VC-631) adds
-their kinds as each one moves in.
+secrets. Model sign-ins (Pi `auth.json`) and MCP credentials are not under
+this key yet and keep working. Web search keys have only a sealed *mirror*
+([step E](#web-search-keys-step-e-vc-643)): a locked or corrupt inventory
+leaves the mirror pending, and the keys keep working from the database. The
+typed store (VC-631) adds the other kinds as each one moves in.
 
 Two ways out, both a person's or local admin's intent, never an agent verb:
 
@@ -126,9 +128,11 @@ the earlier prompt problem.
 
 `@volli/host-core/secrets` holds the one module every application credential
 family moves onto ([design](plans/sealed-credential-store.md) §3, §6, §7).
-No family is sealed in its typed inventory yet: each moves in with its own
+No family is canonical in its typed inventory yet: each moves in with its own
 ticket and compatibility gate (web keys VC-643/644, MCP and persistent Session
-imports VC-645, Pi VC-646, rotation VC-649). Persistent Session secrets already
+imports VC-645, Pi VC-646, rotation VC-649). The web search keys are mirrored
+there now ([step E](#web-search-keys-step-e-vc-643)), with the database still
+their source. Persistent Session secrets already
 run on its lock and durable file engine, in their own file and format: the same
 `session-secrets.enc`, envelope (`VSF1`/`VSC1`) and `{ version: 1, secrets }`
 payload, so the release before this one opens, uses and writes everything this
@@ -181,7 +185,13 @@ one writes (`n1-compatibility.test.ts`, against main's exact code).
   keys claim; an unknown id is `locked`, never empty. A save never seals over
   a file under another key: changing keys is rotation, an explicit operation.
   The headless keyring (`fileCredentialKeyring`) reads the same key file as
-  `fileSecretKey`; a keychain keyring arrives with the first desktop family.
+  `fileSecretKey`. Desktop's keyring (`keychainCredentialKeyring`, VC-643)
+  keeps a random data key wrapped by the keychain (`safeStorage`) in
+  `host-credentials.key` (`VHK1 | wrapped key`), because the `VHC1` envelope
+  has no room for one. It asks the keychain only to open a sealed file or to
+  seal the first one, once per launch, and fails closed (`locked`) on an
+  unavailable keychain, Linux `basic_text`, a refused unwrap or a missing
+  wrapped file; it never makes a new key while a sealed file exists.
 - **The typed inventory** (`inventory.ts`, `credential-families.ts`). The
   plaintext is a schema version, a UUID, a commit generation and typed
   records, each with a UUID, a family, a fixed-field selector, a value, a
@@ -207,8 +217,49 @@ Not families, by owner decision: VC-623's operator verifier (its integrity
 is a root-owned file a service-writable store cannot give) and a user's own
 Pi `auth.json`. No provider custody: every key is generated and kept on the
 host. The new files are excluded from backups (`host-credentials.enc*`,
-`host-credentials.lock`), and structured file reads refuse
+`host-credentials.key*`, `host-credentials.lock`), and structured file reads refuse
 `host-credentials.*` and `session-secrets.key*` beside the older stores.
+
+## Web search keys: step E (VC-643)
+
+The Brave and Exa keys are the first family in the typed inventory, as a
+**mirror** ([plan](plans/sealed-credential-store.md) §4, "E"). The `secrets`
+table in `volli.db` stays their one source of truth, in the clear: every read
+(Settings, Session attach) still comes from it, and nothing ever reads the
+mirror back. The read switch is VC-644.
+
+- **Migration 059**, additive, floor unchanged (`raisesMinReader` off).
+  `web_credential_source` holds a random lineage id and a revision that three
+  triggers on `secrets` advance on every insert, update and delete, clears
+  included, whichever build wrote. `web_credential_mirror` holds the receipt of
+  the last verified mirror (lineage, revision, inventory id, generation). No
+  timestamps decide anything, and no value, length or hash of a key is kept.
+  Both tables are status, excluded from bundles and rebuilt on open.
+- **Reconcile, never merge** (`web/credential-mirror.ts`). Under the credential
+  lock, one short SQLite read takes every web key row and the revision; the
+  inventory's `web-search` records become exactly those rows (a cleared key is
+  dropped), with a receipt naming the source state; the file is fsynced, read
+  back, opened and compared before the receipt row is written. Contents are
+  compared, not only the revision, so a raw database copy that reaches the
+  same revision with other keys still reseals. With no keys and no sealed file
+  nothing is written and no key is made.
+- **When it runs.** After first paint on every desktop launch (deletes
+  included), and after every save or clear, which commit to SQLite first. One
+  synchronous attempt at the lock; a busy lock is retried asynchronously, so
+  Electron's main thread never waits on another process.
+- **Honest outcomes.** The Settings view carries `sealing`: `sealed` (a copy of
+  exactly the saved keys was written and read back), `pending` ("saved;
+  sealing pending": the keychain is locked, the lock was busy, a write or sync
+  failed, or this host has no keyring) or `none`. A pending save is a save. The
+  log says `held in the profile database (legacy mode, not encrypted)` with a
+  reason code; nothing claims the keys are encrypted, and no value is logged.
+- **Older builds.** The release before this one opens a 059 database (floor
+  58), and saves, clears, attaches, bundles and restores exactly as before;
+  the triggers count its writes, and the next launch of this build reconciles
+  them. A restored bundle never carries keys or step-E state: the restored
+  database is a new lineage with no keys, so reconciliation empties the
+  mirror and nothing stale is merged back. `web/n1-compatibility.test.ts` runs
+  main's exact code (pinned by git blob id) for all of this.
 
 Two windows stay open by decision ([plan](plans/sealed-credential-store.md) §6):
 a revocation committed between reading a command's environment and starting
@@ -298,8 +349,10 @@ machine, keep the key outside it.
 ### Across machines and adapters
 
 Credentials never travel in a backup, under any adapter. The bundle excludes
-`session-secrets.enc*`, `session-secrets.key*`, `mcp-credentials.json*` and
-the `secrets` and `legacy_safe_storage_secrets` tables (`backup/decisions.ts`),
+`session-secrets.enc*`, `session-secrets.key*`, `mcp-credentials.json*`, the
+typed inventory and its key (`host-credentials.enc*`, `host-credentials.key*`)
+and the `secrets`, `legacy_safe_storage_secrets`, `web_credential_source` and
+`web_credential_mirror` tables (`backup/decisions.ts`),
 and Pi's `auth.json` lives outside the profile. A bundle made on a Mac therefore
 restores onto a headless host, or the other way around, exactly as it restores
 onto the machine that made it. Nothing undecryptable is written, and the
@@ -312,7 +365,9 @@ show.
 
 Migration safety copies are different from bundles. Each `volli.db.backup-v<N>`
 is a whole copy of the database, so it carries the `secrets` table and the web
-search keys in it as plain text. Moving those keys out of `volli.db` is VC-631.
+search keys in it as plain text. Step E (VC-643) adds a sealed copy but keeps
+the source in the database, so every copy made before the contract step still
+holds them; moving them out of `volli.db` is VC-644 and its contract step.
 
 Copying a data directory by hand is different. A keychain-sealed
 `session-secrets.enc` carried onto a headless host is refused as sealed by the

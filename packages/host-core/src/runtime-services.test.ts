@@ -6,6 +6,9 @@ import { openTestDb, type TestDb } from "./db/test-helpers";
 import { clientCapabilities } from "./ports";
 import { createHostRuntimeServices } from "./runtime-services";
 import { createDesktopDecisions } from "./decision/desktop";
+import { existsSync } from "node:fs";
+import { CredentialLock } from "./secrets/credential-lock";
+import { fileCredentialKeyring } from "./secrets/file-key";
 
 const { ownedModelAccess } = vi.hoisted(() => ({ ownedModelAccess: vi.fn() }));
 vi.mock("@volli/agent-runtime", async (importOriginal) => ({
@@ -57,6 +60,25 @@ describe("staged host runtime services", () => {
     expect(mcp.settings).not.toBeNull();
     expect(mcp.credentials.path).toBe(testDb.dbPath.replace(/[^/]+$/, "mcp-credentials.json"));
     expect(services.createWebAccess()).not.toBeNull();
+  });
+
+  it("seals Web Access keys beside the database with the host's keyring (VC-643)", async () => {
+    testDb = openTestDb();
+    const services = createHostRuntimeServices(testDb.db, null, ports, options());
+    const results: unknown[] = [];
+    const dir = testDb.dbPath.replace(/[^/]+$/, "");
+    const web = services.createWebAccess({
+      keyring: fileCredentialKeyring({ path: `${dir}session-secrets.key` }),
+      onResult: (result) => results.push(result),
+    })!;
+    expect(web.saveKey("exa", "exa-runtime-services-key").sealing).toBe("sealed");
+    expect(existsSync(`${dir}host-credentials.enc`)).toBe(true);
+    expect(await web.reconcileSealing()).toMatchObject({ sealing: "sealed", written: false });
+    expect(results).toHaveLength(2);
+    // No keyring: legacy mode, honestly pending.
+    const bare = services.createWebAccess({ keyring: null })!;
+    expect(await bare.reconcileSealing()).toEqual({ sealing: "pending", reason: "no-keyring" });
+    new CredentialLock(`${dir}host-credentials.lock`).close();
   });
 
   it("bills decision usage through the host's one Session engine", async () => {

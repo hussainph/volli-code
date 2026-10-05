@@ -22,6 +22,14 @@
  * key. See migration 023 and `legacy-safe-storage.ts` for what became of the
  * keys stored the old way.
  *
+ * **Where it is going (VC-631).** The owner has since approved moving every
+ * host-held credential into one sealed store. Step E (VC-643) keeps this table
+ * the source of truth and adds a sealed mirror of it (`credential-mirror.ts`),
+ * resealed after each save and clear and reconciled on every launch, under a
+ * keychain-wrapped key that is asked for once per launch, never per attach.
+ * Reads stay here until the read switch (VC-644). So, today, the key is still
+ * in the clear in this table: nothing may claim it is encrypted.
+ *
  * **Nothing here appears in a message.** A refusal names the situation and never
  * the secret, and never how long the key is — either would be a fact about the
  * key that a log, a toast or a ledger would then hold.
