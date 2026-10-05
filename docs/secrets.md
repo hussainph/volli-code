@@ -121,12 +121,23 @@ VC-645, Pi VC-646, rotation VC-649).
   is a POSIX `fcntl` lock: the kernel drops it when its process dies (a crash
   never leaves a stale lock, and none is stolen by age or PID), it locks the
   inode (two spellings of one data directory meet at one lock), and a child
-  process never inherits it. Waits are bounded: a synchronous critical
-  section waits up to 2 s and refuses at once when its own process holds the
-  lock; an asynchronous holder queues in order and polls, up to 10 s. Busy is
-  "unavailable for now", never "empty". It is advisory: an older build that
-  does not take it, or a hostile program running as the same user, is not
-  stopped, so stop older processes before upgrading.
+  process never inherits it. **Nothing ever waits for it synchronously**: a
+  synchronous critical section (Electron's main thread runs them) tries once
+  and refuses at once while another process holds it. A caller that can wait
+  retries asynchronously between attempts (`retryWhileBusy`), never holding
+  the lock across an await; an asynchronous holder queues in order and polls,
+  up to 10 s. A busy read is `locked` with reason `busy` for that answer alone,
+  never remembered, never "empty" and never a stale `ready`, and listing and
+  status come from one read so they cannot disagree. Every acquisition checks
+  that the inode it locked is still the file at the path and moves to the new
+  one if the lock file was unlinked and recreated, so processes do not stay
+  split across two lock files. A lock file that is a symlink, not a regular
+  file or another user's is `locked` (`lock-unusable`), with a sentence naming
+  it and the fix (move it aside); it is never a reason to reset the
+  credentials it guards. One of ours that holds junk is emptied in place. The
+  lock is advisory: an older build that does not take it, or a hostile
+  program running as the same user, is not stopped, so stop older processes
+  before upgrading.
 - **The durable file contract** (`durable-file.ts`, `sealed-document.ts`).
   Under the lock, every read reloads the file and opens it with the key its
   header names, so another process's revocation, and a key removed or
@@ -152,8 +163,11 @@ VC-645, Pi VC-646, rotation VC-649).
 - **The typed inventory** (`inventory.ts`, `credential-families.ts`). The
   plaintext is a schema version, a UUID, a commit generation and typed
   records, each with a UUID, a family, a fixed-field selector, a value, a
-  revision and a timestamp. A caller can commit against a revision, so a
-  sign-out or a new sign-in beats a refresh that finishes late. It keeps
+  revision (the generation of the commit that last wrote it) and a timestamp.
+  A record removed and saved again gets a new UUID and a later revision, so
+  neither ever repeats, and a caller commits against the record it read
+  (`expect: { id, revision }`): a sign-out, or a sign-out then a new sign-in,
+  beats a refresh that finishes late. It keeps
   VC-641's states; a newer schema is `locked` (`newer-format`) and never
   rewritten.
 
@@ -173,6 +187,13 @@ Pi `auth.json`. No provider custody: every key is generated and kept on the
 host. The new files are excluded from backups (`host-credentials.enc*`,
 `host-credentials.lock`), and structured file reads refuse
 `host-credentials.*` and `session-secrets.key*` beside the older stores.
+
+Two windows stay open by decision ([plan](plans/sealed-credential-store.md) §6):
+a revocation committed between reading a command's environment and starting
+the command still reaches that one command (the next one is clean), and
+restoring an older `session-secrets.enc` sealed under the same key brings
+revoked Session secrets back, because the legacy payload has no generation or
+tombstone. A later family (VC-644 or after) adds a generation check.
 
 ## Headless hosts
 

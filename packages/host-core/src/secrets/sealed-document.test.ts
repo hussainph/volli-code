@@ -149,7 +149,7 @@ describe("SealedDocument", () => {
   });
 
   it("fails a read while this process already holds the lock", () => {
-    const document = new SealedDocument(path, codec(), lock, { lockTimeoutMs: 10 });
+    const document = new SealedDocument(path, codec(), lock);
     lock.withSync(() => {
       expect(() => document.read()).toThrow(CredentialLockBusyError);
       expect(() => document.update(() => ["a"])).toThrow(CredentialLockBusyError);

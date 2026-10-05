@@ -420,6 +420,20 @@ package it for both hosts, and prove its semantics before implementation ships.
   observed value before it can appear in tool output. If inventory is locked,
   block new secret-injecting/unredactable execution; the board still works.
 
+Two windows are accepted, not closed (VC-642 review, owner-accepted):
+
+- **Read-to-spawn.** A command's environment is read under the lock and then
+  the process starts. A revocation committed between the two still reaches
+  that one command; the next one reads again and is clean. Closing it would
+  mean holding the global lock across process start. This is the in-flight
+  authorized request above.
+- **Replaying an old legacy file.** The legacy `session-secrets.enc` payload
+  (`{ version: 1, secrets }`) has no generation or tombstone, so restoring an
+  older copy sealed under the same key (a hostile same-uid writer, or a hand
+  restore) brings revoked secrets back on the next read. Main behaves the
+  same. The typed inventory's generation is the answer for families that move
+  there; VC-644 or a later family adds a generation check against rollback.
+
 Only locking-aware builds may share the store. Stop older processes before
 upgrading/cutting over; advisory locks cannot constrain a binary that ignores
 them or a malicious same-uid writer. All participants resolve one canonical

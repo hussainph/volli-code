@@ -35,34 +35,53 @@
  * malicious process running as the same user, ignores it. Stop older
  * processes before an upgrade (§6).
  *
- * WAITING. {@link CredentialLock.withSync} waits a bounded time in SQLite's
- * busy handler, for critical sections that never await: the JS thread is not
- * needed to release a lock another process holds, and this process never holds
- * it across a tick while such a section runs, because one that finds it held
- * here refuses at once rather than wait on itself. {@link CredentialLock.with}
- * is the asynchronous form, for work that must await: a process-wide FIFO
- * queue, then a polled, non-blocking attempt, both bounded by one deadline.
- * Neither waits forever; a timeout is {@link CredentialLockBusyError}.
+ * NEVER A SYNCHRONOUS WAIT. {@link CredentialLock.withSync} tries once,
+ * without SQLite's busy handler, and refuses at once with
+ * {@link CredentialLockBusyError} when another process (or this one) holds
+ * the lock: it runs on Electron's main thread, which must never stall on
+ * another process. A caller that can wait retries asynchronously, between
+ * attempts, never holding the lock across an await
+ * (`retryWhileBusy`). {@link CredentialLock.with} is the asynchronous holder,
+ * for work that must await while holding: a process-wide FIFO queue, then
+ * polled non-blocking attempts, bounded by one deadline.
+ *
+ * ONE LOCK FILE. Each acquisition checks that the inode it locked is still the
+ * one at the path (`dev`, `ino`), and starts again on the new one if the file
+ * was unlinked and recreated, so processes cannot stay split across two
+ * inodes. A lock file that is a symlink, not a regular file or another user's
+ * is {@link CredentialLockUnusableError}: credentials `locked`
+ * (`lock-unusable`), with a sentence naming the file and the fix, and never a
+ * reason to reset the store it guards. One of ours that is merely not empty
+ * (it should always be) is emptied in place, which keeps its inode.
  */
-import { closeSync, constants, lstatSync, openSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  ftruncateSync,
+  lstatSync,
+  openSync,
+  statSync,
+  type Stats,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import Database from "better-sqlite3";
 
-import { SealedStoreUnreadableError } from "./credential-state";
+import { CredentialLockUnusableError } from "./credential-state";
+
+export { CredentialLockUnusableError } from "./credential-state";
 
 /** The lock file's name, beside the sealed files it guards. */
 export const CREDENTIAL_LOCK_FILE_NAME = "host-credentials.lock";
 
-/** A synchronous critical section's longest wait for another process. */
-export const CREDENTIAL_LOCK_SYNC_TIMEOUT_MS = 2_000;
 /** An asynchronous holder's longest wait, queue included. */
 export const CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS = 10_000;
 
 /** Between non-blocking attempts while another process holds the lock. */
 const POLL_MS = [5, 10, 25, 50, 100];
 
-/** Another holder kept the lock past the wait. Nothing was read or changed. */
+/** Another holder has the lock now. Nothing was read or changed. */
 export class CredentialLockBusyError extends Error {
   readonly code = "credential-lock-busy";
   constructor() {
@@ -71,24 +90,10 @@ export class CredentialLockBusyError extends Error {
   }
 }
 
-/**
- * The lock file could not be made or opened. Never carries a path or a
- * cause. Saved credentials cannot be read safely, so it is an unreadable
- * store: credentials `locked` (`store-unreadable`).
- */
-export class CredentialLockUnavailableError extends SealedStoreUnreadableError {
-  readonly code = "credential-lock-unavailable";
-  constructor() {
-    super();
-    this.message = "Could not take the lock on saved credentials.";
-    this.name = "CredentialLockUnavailableError";
-  }
-}
-
 interface Holder {
   database: Database.Database | null;
-  /** Whether {@link database} keeps its rollback journal in memory yet. */
-  configured: boolean;
+  /** The inode {@link database} opened, checked against the path on every acquisition. */
+  identity: { dev: number; ino: number } | null;
   /** Held, or reserved by an asynchronous acquirer, in this process. */
   held: boolean;
   readonly waiters: Array<() => void>;
@@ -102,6 +107,26 @@ export function credentialLockFor(file: string): CredentialLock {
   return new CredentialLock(join(dirname(file), CREDENTIAL_LOCK_FILE_NAME));
 }
 
+/**
+ * Runs `attempt`, which takes the lock synchronously and so may throw
+ * {@link CredentialLockBusyError}, again after short asynchronous pauses until
+ * it stops being busy or `timeoutMs` passes. The thread is free between
+ * attempts and the lock is never held across one. The last busy refusal
+ * reaches the caller.
+ */
+export async function retryWhileBusy<T>(attempt: () => T, timeoutMs: number): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (let tries = 0; ; tries += 1) {
+    try {
+      return attempt();
+    } catch (error) {
+      const wait = Math.min(POLL_MS[Math.min(tries, POLL_MS.length - 1)]!, deadline - Date.now());
+      if (!(error instanceof CredentialLockBusyError) || wait <= 0) throw error;
+      await new Promise((settle) => setTimeout(settle, wait));
+    }
+  }
+}
+
 export class CredentialLock {
   readonly path: string;
 
@@ -110,17 +135,14 @@ export class CredentialLock {
   }
 
   /**
-   * Runs `fn` holding the lock. `fn` must not await: the lock is released
-   * when it returns. Refuses at once when this process already holds the lock,
-   * as a nested call or an asynchronous holder, since waiting would block the
-   * thread that has to release it.
+   * Runs `fn` holding the lock, or refuses at once with
+   * {@link CredentialLockBusyError}: it never waits. `fn` must not await; the
+   * lock is released when it returns.
    */
-  withSync<T>(fn: () => T, timeoutMs: number = CREDENTIAL_LOCK_SYNC_TIMEOUT_MS): T {
+  withSync<T>(fn: () => T): T {
     const holder = this.#holder();
     if (holder.held) throw new CredentialLockBusyError();
-    const database = open(this.path, holder);
-    database.pragma(`busy_timeout = ${Math.max(0, Math.floor(timeoutMs))}`);
-    begin(holder, database);
+    acquire(this.path, holder);
     holder.held = true;
     try {
       return fn();
@@ -129,7 +151,7 @@ export class CredentialLock {
     }
   }
 
-  /** Runs `fn`, which may await, holding the lock. Waits in turn, bounded. */
+  /** Runs `fn`, which may await, holding the lock. Waits in turn, asynchronously, bounded. */
   async with<T>(
     fn: () => Promise<T> | T,
     timeoutMs: number = CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS,
@@ -139,21 +161,7 @@ export class CredentialLock {
     // Reserved in this process from here: a synchronous caller refuses.
     await turn(holder, deadline);
     try {
-      const database = open(this.path, holder);
-      database.pragma("busy_timeout = 0");
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          begin(holder, database);
-          break;
-        } catch (error) {
-          const wait = Math.min(
-            POLL_MS[Math.min(attempt, POLL_MS.length - 1)]!,
-            deadline - Date.now(),
-          );
-          if (!(error instanceof CredentialLockBusyError) || wait <= 0) throw error;
-          await new Promise((settle) => setTimeout(settle, wait));
-        }
-      }
+      await retryWhileBusy(() => acquire(this.path, holder), Math.max(0, deadline - Date.now()));
     } catch (error) {
       vacate(holder);
       throw error;
@@ -169,15 +177,13 @@ export class CredentialLock {
   close(): void {
     const holder = holders.get(this.path);
     if (holder === undefined || holder.held) return;
-    holder.database?.close();
-    holder.database = null;
-    holder.configured = false;
+    disconnect(holder);
   }
 
   #holder(): Holder {
     let holder = holders.get(this.path);
     if (holder === undefined) {
-      holder = { database: null, configured: false, held: false, waiters: [] };
+      holder = { database: null, identity: null, held: false, waiters: [] };
       holders.set(this.path, holder);
     }
     return holder;
@@ -218,44 +224,94 @@ function release(holder: Holder): void {
     holder.database!.exec("ROLLBACK");
   } catch {
     // Closing the connection is what drops the kernel lock for certain.
-    holder.database!.close();
-    holder.database = null;
-    holder.configured = false;
+    disconnect(holder);
   }
   vacate(holder);
 }
 
-function begin(holder: Holder, database: Database.Database): void {
-  try {
-    // An in-memory journal: holding the lock never makes a `-journal` file a
-    // crash could leave behind, and a read-only directory can still lock.
-    // Setting it reads the file, so it waits on another holder like BEGIN.
-    if (!holder.configured) {
-      database.pragma("journal_mode = MEMORY");
-      holder.configured = true;
+function disconnect(holder: Holder): void {
+  holder.database?.close();
+  holder.database = null;
+  holder.identity = null;
+}
+
+/**
+ * One non-blocking attempt at the kernel lock. Locks the inode, then checks
+ * it is still the one at the path; when the file was replaced, lets that one
+ * go and tries the current file, once.
+ */
+function acquire(path: string, holder: Holder): void {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const database = connect(path, holder);
+    begin(path, database);
+    let current: Stats;
+    try {
+      current = statSync(path);
+    } catch {
+      current = { dev: -1, ino: -1 } as Stats;
     }
+    if (current.dev === holder.identity!.dev && current.ino === holder.identity!.ino) return;
+    database.exec("ROLLBACK");
+    disconnect(holder);
+  }
+  // The file keeps changing under us: treat it as held.
+  throw new CredentialLockBusyError();
+}
+
+function begin(path: string, database: Database.Database): void {
+  try {
     database.exec("BEGIN EXCLUSIVE");
   } catch (error) {
-    if ((error as { code?: unknown }).code === "SQLITE_BUSY") throw new CredentialLockBusyError();
-    // eslint-disable-next-line preserve-caught-error -- never a path or a SQLite message
-    throw new CredentialLockUnavailableError();
+    throw sqliteFailure(path, error);
   }
 }
 
-/** This process's connection to the lock file, made (0600, never through a symlink) once. */
-function open(path: string, holder: Holder): Database.Database {
+function sqliteFailure(path: string, error: unknown): Error {
+  const code = (error as { code?: unknown }).code;
+  if (code === "SQLITE_BUSY") return new CredentialLockBusyError();
+  return unusable(path, `could not be locked (${String(code)})`);
+}
+
+/**
+ * This process's connection to the lock file: made (0600, never through a
+ * symlink) when absent, checked to be this user's regular file, and set to
+ * keep its rollback journal in memory, so holding the lock never makes a
+ * `-journal` file a crash could leave behind, and a read-only directory can
+ * still lock. Setting that reads the file, so it is busy like BEGIN.
+ */
+function connect(path: string, holder: Holder): Database.Database {
   if (holder.database !== null) return holder.database;
-  try {
-    create(path);
-    holder.database = new Database(path, { fileMustExist: true });
-    return holder.database;
-  } catch {
-    throw new CredentialLockUnavailableError();
+  for (let attempt = 0; ; attempt += 1) {
+    const before = inspect(path);
+    let database: Database.Database;
+    try {
+      // `timeout: 0`: SQLite's busy handler would otherwise wait (better-sqlite3
+      // defaults to five seconds), blocking the thread.
+      database = new Database(path, { fileMustExist: true, timeout: 0 });
+    } catch (error) {
+      throw unusable(path, `could not be opened (${String((error as { code?: unknown }).code)})`);
+    }
+    const after = inspect(path);
+    try {
+      if (before.ino !== after.ino || before.dev !== after.dev) throw new CredentialLockBusyError();
+      database.pragma("journal_mode = MEMORY");
+    } catch (error) {
+      database.close();
+      if ((error as { code?: unknown }).code === "SQLITE_NOTADB" && attempt === 0) {
+        // Ours, and not empty as a lock file always is: empty it in place.
+        empty(path, after);
+        continue;
+      }
+      throw error instanceof CredentialLockBusyError ? error : sqliteFailure(path, error);
+    }
+    holder.database = database;
+    holder.identity = { dev: after.dev, ino: after.ino };
+    return database;
   }
 }
 
-/** Creates the empty lock file, or checks the one that is there is a regular file. */
-function create(path: string): void {
+/** The lock file's metadata, creating it when absent; refuses one that is not ours to use. */
+function inspect(path: string): Stats {
   try {
     // O_EXCL never opens an existing file, so this cannot drop a lock held here.
     closeSync(
@@ -267,7 +323,45 @@ function create(path: string): void {
     );
   } catch (error) {
     // There already, made by another process or an earlier launch: the same lock.
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    if (!lstatSync(path).isFile()) throw new Error("not a regular file", { cause: error });
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") throw unusable(path, `could not be created (${code})`);
   }
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    throw unusable(path, `could not be read (${(error as NodeJS.ErrnoException).code})`);
+  }
+  if (!stat.isFile()) throw unusable(path, "is not a regular file");
+  const uid = process.getuid!();
+  if (stat.uid !== uid) {
+    throw unusable(path, `belongs to uid ${stat.uid}, not to the user Volli runs as (uid ${uid})`);
+  }
+  return stat;
+}
+
+/**
+ * Empties our own lock file without replacing it: the same inode, so no
+ * process is split from another. No lock on it can be held while it is not a
+ * lock file, so the descriptor opened here drops nothing.
+ */
+function empty(path: string, expected: Stats): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (stat.ino !== expected.ino || stat.dev !== expected.dev) throw new Error("replaced");
+    ftruncateSync(fd, 0);
+  } catch {
+    throw unusable(path, "is not a lock file and could not be emptied");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function unusable(path: string, problem: string): CredentialLockUnusableError {
+  return new CredentialLockUnusableError(
+    `The credential lock file ${path} ${problem}, so saved credentials are not used. ` +
+      "Move it aside; Volli makes a new one. Saved credentials are untouched: do not reset them.",
+  );
 }

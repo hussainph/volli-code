@@ -11,11 +11,13 @@
  * The plaintext is `{ schema, inventory, generation, records }`: the schema
  * version this build writes ({@link INVENTORY_SCHEMA}), a UUID naming this
  * inventory, a generation that grows by one per commit, and the records. Each
- * record has a UUID, its family and selector, its value, a revision that grows
- * by one per replacement, and when it last changed. A revision lets a caller
- * that read a record, went away to refresh it, and came back commit only if
- * nobody replaced or removed it meanwhile (`expectRevision`): a sign-out or a
- * new sign-in beats a late refresh.
+ * record has a UUID, its family and selector, its value, its revision (the
+ * generation of the commit that last wrote it), and when it last changed. A
+ * record that is removed and saved again gets a new UUID and a later
+ * revision, so neither ever repeats. A caller that read a record, went away to
+ * refresh it, and came back commits only if that same record is still there,
+ * unchanged (`expect: { id, revision }`): a sign-out, or a sign-out and a new
+ * sign-in, beats a late refresh.
  *
  * It keeps the lost-key rules of VC-641 (`credential-state.ts`): a key that is
  * missing, wrong, unsafe or held by another backend leaves the file
@@ -49,8 +51,10 @@ import {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
   CREDENTIALS_READY,
+  credentialsBusy,
+  CredentialLockUnusableError,
+  credentialsResettable,
   credentialStatusFor,
-  credentialsUnavailable,
   SealedStoreNewerError,
   type CredentialStatus,
 } from "./credential-state";
@@ -96,12 +100,19 @@ export class CredentialRevisionConflictError extends Error {
   }
 }
 
+/** Which record a change was based on: its identity and the commit that last wrote it. */
+export interface CredentialRecordRef {
+  readonly id: string;
+  readonly revision: number;
+}
+
 export interface ChangeOptions {
   /**
-   * Commit only if the record is still at this revision; `null` means only
-   * if there is none. Omitted: replace whatever is there.
+   * Commit only if this same record (id and revision) is still the one at the
+   * selector; `null` means only if there is none. Omitted: replace whatever
+   * is there.
    */
-  readonly expectRevision?: number | null;
+  readonly expect?: CredentialRecordRef | null;
 }
 
 export interface SealedInventoryOptions {
@@ -143,19 +154,40 @@ export class SealedInventory {
     );
   }
 
-  /** Where the inventory stands, settling it now if nothing has asked. Metadata only. */
+  /**
+   * Where the inventory stands now, read again under the lock. Metadata
+   * only. Another process holding the lock at that instant is `locked`
+   * (`busy`) for this answer alone.
+   */
   status(): CredentialStatus {
-    this.#read();
-    // Unsettled only when the lock was busy on the first ask: unavailable for now.
-    return (
-      this.#status ?? { state: "locked", reason: "store-unreadable", unavailable: this.#families }
-    );
+    return this.#read().status;
   }
 
-  /** The refusal sentence behind a `locked` or `refused` key, for an operator's log. */
+  /** One family's records and the status they were read under: one read, never two that disagree. */
+  snapshot(family: CredentialFamily): {
+    records: CredentialRecordMetadata[];
+    status: CredentialStatus;
+  } {
+    const { inventory, status } = this.#read();
+    return {
+      records: (inventory?.records ?? [])
+        .filter((record) => record.family === family)
+        .map(({ value: _value, ...metadata }) => metadata),
+      status,
+    };
+  }
+
+  /**
+   * The sentence behind a status that is not `ready` or `empty`, for an
+   * operator's log: a key or lock-file refusal (which may name the file), or
+   * the busy lock. `null` otherwise, a corrupt store included.
+   */
   problem(): string | null {
-    this.status();
-    return isSecretKeyUnavailable(this.#failure) ? this.#failure.message : null;
+    if (this.status().reason === "busy") return new CredentialLockBusyError().message;
+    const failure = this.#failure;
+    return isSecretKeyUnavailable(failure) || failure instanceof CredentialLockUnusableError
+      ? failure.message
+      : null;
   }
 
   /** Tries a locked, refused or corrupt inventory again. */
@@ -172,10 +204,17 @@ export class SealedInventory {
    */
   reset(now: Date = new Date()): SealedInventoryReset {
     const status = this.status();
-    if (status.state === "refused") {
-      throw new Error("Saved credentials are refused because the key configuration is unsafe.");
-    }
-    if (!credentialsUnavailable(status)) {
+    if (!credentialsResettable(status)) {
+      if (status.state === "refused") {
+        throw new Error("Saved credentials are refused because the key configuration is unsafe.");
+      }
+      if (status.reason === "busy") throw new CredentialLockBusyError();
+      if (status.reason === "lock-unusable") {
+        throw new Error(
+          "Saved credentials are unused because their lock file cannot be used. Fix the lock " +
+            "file; a reset cannot, and the credentials may be fine.",
+        );
+      }
       throw new Error("Saved credentials are not locked, so there is nothing to reset.");
     }
     const archived = this.#document.lock.withSync(() => {
@@ -196,9 +235,7 @@ export class SealedInventory {
 
   /** The family's records, without values. Fresh; empty while unavailable. */
   list(family: CredentialFamily): CredentialRecordMetadata[] {
-    return (this.#read()?.records ?? [])
-      .filter((record) => record.family === family)
-      .map(({ value: _value, ...metadata }) => metadata);
+    return this.snapshot(family).records;
   }
 
   /**
@@ -209,13 +246,13 @@ export class SealedInventory {
   get(family: CredentialFamily, selector: CredentialSelector): CredentialRecord | null {
     const slot = selectorKey(family, selector);
     return (
-      this.#read()?.records.find(
+      this.#read().inventory?.records.find(
         (record) => selectorKey(record.family, record.selector) === slot,
       ) ?? null
     );
   }
 
-  /** Saves `value` at the selector, keeping its id and bumping its revision. */
+  /** Saves `value` at the selector, keeping its id; its revision becomes this commit's generation. */
   put(
     family: CredentialFamily,
     selector: CredentialSelector,
@@ -227,7 +264,7 @@ export class SealedInventory {
     }
     const slot = selectorKey(family, selector);
     let saved: CredentialRecord | undefined;
-    this.#change((current) => {
+    this.#change((current, generation) => {
       const previous = current.records.find(
         (record) => selectorKey(record.family, record.selector) === slot,
       );
@@ -237,7 +274,7 @@ export class SealedInventory {
         family,
         selector: { ...selector },
         value,
-        revision: (previous?.revision ?? 0) + 1,
+        revision: generation,
         updatedAt: this.#now(),
       };
       return current.records.filter((record) => record !== previous).concat(saved);
@@ -266,29 +303,37 @@ export class SealedInventory {
     return removed;
   }
 
-  /** The inventory, fresh, or `null` while unavailable (a busy lock included). */
-  #read(): Inventory | null {
-    if (this.#failure !== null) return null;
+  /**
+   * The inventory, fresh, with the status it was read under; `null` while
+   * unavailable. A busy lock answers `busy` for this read only; anything else
+   * that stops the open is remembered until unlock.
+   */
+  #read(): { inventory: Inventory | null; status: CredentialStatus } {
+    if (this.#failure !== null) return { inventory: null, status: this.#status! };
     try {
       const inventory = this.#document.read();
       this.#status = inventory === null ? CREDENTIALS_EMPTY : CREDENTIALS_READY;
-      return inventory ?? EMPTY;
+      return { inventory: inventory ?? EMPTY, status: this.#status };
     } catch (error) {
-      // A busy lock is momentary: unavailable for this read, not a status.
-      if (error instanceof CredentialLockBusyError) return null;
+      if (error instanceof CredentialLockBusyError) {
+        return { inventory: null, status: credentialsBusy(this.#families) };
+      }
       this.#fail(error);
-      return null;
+      return { inventory: null, status: this.#status! };
     }
   }
 
-  /** Applies `change` to the current records under the lock; `null` from it writes nothing. */
-  #change(change: (current: Inventory) => CredentialRecord[] | null): void {
+  /**
+   * Applies `change` to the current records under the lock, giving it the
+   * generation this commit will have; `null` from it writes nothing.
+   */
+  #change(change: (current: Inventory, generation: number) => CredentialRecord[] | null): void {
     if (this.#failure !== null) throw this.#failure;
     let written: boolean;
     try {
       ({ written } = this.#document.update((current) => {
         const inventory = current ?? EMPTY;
-        const records = change(inventory);
+        const records = change(inventory, inventory.generation + 1);
         if (records === null) return null;
         return {
           inventory: current?.inventory ?? randomUUID(),
@@ -313,10 +358,15 @@ export class SealedInventory {
 const EMPTY: Inventory = { inventory: "", generation: 0, records: [] };
 
 function expect(previous: CredentialRecord | undefined, options: ChangeOptions): void {
-  if (options.expectRevision === undefined) return;
-  if ((previous?.revision ?? null) !== options.expectRevision) {
-    throw new CredentialRevisionConflictError();
-  }
+  const expected = options.expect;
+  if (expected === undefined) return;
+  const same =
+    expected === null
+      ? previous === undefined
+      : previous !== undefined &&
+        previous.id === expected.id &&
+        previous.revision === expected.revision;
+  if (!same) throw new CredentialRevisionConflictError();
 }
 
 /** The inventory's codec over a keyring: `VHC1` envelope, strict JSON plaintext. */
@@ -380,6 +430,7 @@ function parseInventory(text: string): Inventory {
       !validValue(family, value) ||
       !Number.isSafeInteger(revision) ||
       (revision as number) < 1 ||
+      (revision as number) > (generation as number) ||
       typeof updatedAt !== "number" ||
       !Number.isFinite(updatedAt) ||
       updatedAt < 0 ||
