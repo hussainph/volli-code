@@ -18,6 +18,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +43,9 @@ const faults = vi.hoisted(() => ({
   link: null as ((from: string, to: string) => void) | null,
   read: null as (() => number) | null,
   openDirectory: null as (() => number) | null,
+  /** Answers EACCES for the key file's open, as for a key another user owns. */
+  denyKey: null as string | null,
+  statFails: false,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -51,10 +55,18 @@ vi.mock("node:fs", async (importOriginal) => {
     linkSync: (from: string, to: string) => (faults.link ?? actual.linkSync)(from, to),
     readSync: (...args: Parameters<typeof actual.readSync>) =>
       faults.read === null ? actual.readSync(...args) : faults.read(),
-    openSync: (...args: Parameters<typeof actual.openSync>) =>
-      faults.openDirectory !== null && args[1] === "r"
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (faults.denyKey !== null && args[0] === faults.denyKey) {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+      return faults.openDirectory !== null && args[1] === "r"
         ? faults.openDirectory()
-        : actual.openSync(...args),
+        : actual.openSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      if (faults.statFails) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return actual.statSync(...args);
+    },
   };
 });
 
@@ -81,6 +93,8 @@ afterEach(() => {
   faults.link = null;
   faults.read = null;
   faults.openDirectory = null;
+  faults.denyKey = null;
+  faults.statFails = false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   chmodSync(dataDir, 0o700);
@@ -604,8 +618,9 @@ describe("a lost or damaged key never bricks the store (VC-641)", () => {
     rmSync(keyPath);
     const store = relaunch();
     expect(store.status().reason).toBe("missing");
-    const { archive, status } = store.reset(new Date("2026-10-05T01:02:03.456Z"));
+    const { archive, status, synced } = store.reset(new Date("2026-10-05T01:02:03.456Z"));
     expect(status).toEqual({ state: "empty", reason: null, unavailable: [] });
+    expect(synced).toBe(true);
     expect(archive).toMatch(/^session-secrets\.enc\.locked-20261005T010203Z-[0-9a-f]{8}$/);
     expect(readFileSync(join(dataDir, archive!)).equals(sealed)).toBe(true);
     expect(existsSync(storePath)).toBe(false);
@@ -628,12 +643,56 @@ describe("a lost or damaged key never bricks the store (VC-641)", () => {
     expect(relaunch().status().state).toBe("ready");
   });
 
-  it("keeps refusing an unsafe key after a reset: the fix is the file's mode", () => {
+  it("will not reset an unsafe key's store: the fix is the file's mode", () => {
     saveTwo(relaunch());
+    const sealed = readFileSync(storePath);
     chmodSync(keyPath, 0o644);
     const store = relaunch();
-    const { status } = store.reset();
-    expect(status).toMatchObject({ state: "refused", reason: "too-open" });
-    expectRefused(() => saveTwo(store), "too-open", /chmod 600/);
+    expect(() => store.reset()).toThrow(
+      "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+    );
+    expect(readFileSync(storePath).equals(sealed)).toBe(true);
+    chmodSync(keyPath, 0o600);
+    expect(store.unlock().state).toBe("ready");
+  });
+
+  it("calls a 0600 key another user owns refused, not lost, without reading it", () => {
+    saveTwo(relaunch());
+    const owner = statSync(keyPath).uid;
+    // The service user cannot open another user's 0600 file: EACCES, then
+    // the file's metadata says why.
+    faults.denyKey = keyPath;
+    vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
+    const store = relaunch();
+    expect(store.status()).toEqual({
+      state: "refused",
+      reason: "wrong-owner",
+      unavailable: ["session-env"],
+    });
+    expect(store.problem()).toBe(
+      `The secret key file ${keyPath} belongs to uid ${owner}, not to the user Volli runs as (uid ${owner + 1}), so Volli will not use it. Run: chown ${owner + 1} ${keyPath}`,
+    );
+  });
+
+  it("calls a key path it cannot open for another reason unreadable", () => {
+    saveTwo(relaunch());
+    rmSync(keyPath);
+    symlinkSync(keyPath, keyPath);
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
+  });
+
+  it("keeps a denied key it cannot even stat unreadable", () => {
+    saveTwo(relaunch());
+    faults.denyKey = keyPath;
+    faults.statFails = true;
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
+  });
+
+  it.skipIf(ROOT)("calls a key that denies its owner but grants others too open", () => {
+    saveTwo(relaunch());
+    chmodSync(keyPath, 0o044);
+    expect(relaunch().status()).toMatchObject({ state: "refused", reason: "too-open" });
+    chmodSync(keyPath, 0o000);
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
   });
 });

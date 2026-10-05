@@ -46,7 +46,9 @@ per launch, lazily when stored secrets exist**. Subsequent writes use the cached
 key. No keychain access at empty-profile startup or for Session-only values.
 There is no plaintext fallback, including Electron's Linux `basic_text` backend.
 An unavailable keychain or corrupt store fails closed and is never overwritten.
-The file and its temporary siblings are excluded from Volli backups.
+The file and its temporary siblings are excluded from Volli backups. A headless
+host seals the same file with a key file instead; see
+[Headless hosts](#headless-hosts).
 
 ### Locked credentials (VC-641)
 
@@ -57,12 +59,14 @@ status** the first time it is asked (`secrets/credential-state.ts`):
 |---|---|---|---|
 | `ready` | the sealed file opened | used | allowed |
 | `empty` | no sealed file yet, or after a reset | none | allowed |
-| `locked` | key missing, wrong, malformed or unreadable; keychain locked, denied or unavailable; store sealed by the other adapter; sealed file unreadable | not used | refused |
-| `refused` | key file unsafe: group/other access, another owner, not a regular file, relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
+| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable | not used | refused |
+| `refused` | key file unsafe: group/other access (including 0044, which denies its owner), another owner (told from its metadata when the open itself is denied), not a regular file; relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
 | `corrupt` | the key opened and the file does not authenticate or parse | not used | refused |
 
-Only `ready` and `empty` are usable; the other three leave the sealed file
-byte-identical and make no key. Reads fail soft: listing, availability,
+The key is checked before the store is looked for, so a malformed or unsafe
+key reports `locked` or `refused` even with nothing sealed yet: saves would be
+refused either way. Only `ready` and `empty` are usable; the other three leave
+the sealed file byte-identical and make no key. Reads fail soft: listing, availability,
 injection and redaction carry on with the Session-scoped values in memory, so
 Sessions, the board and everything else keep working, and a request for a
 missing secret can still be answered with **Session** storage. What a locked
@@ -80,15 +84,18 @@ Two ways out, both a person's or local admin's intent, never an agent verb:
 - **Unlock**: put the key back, unlock the keychain or fix the mode, then try
   again (desktop: **Try again** in Settings → Configure → Secrets; hostd:
   restart).
-- **Reset**: the sealed file is moved aside to
-  `session-secrets.enc.locked-<time>-<random>` beside it, never deleted, and the
-  store starts empty for the secrets to be entered again (desktop: **Reset…**,
-  confirmed; hostd: `volli-hostd credentials reset --yes`, with hostd
-  stopped). The archive is excluded from backups by the same
-  `session-secrets.enc*` rule and stays until a person deletes it; moving it
-  back undoes the reset. A reset does not make an unsafe key usable. A headless
-host seals the same file with a key file instead; see
-[Headless hosts](#headless-hosts).
+- **Reset** (`locked` or `corrupt` only): the sealed file is moved aside to
+  `session-secrets.enc.locked-<time>-<random>` beside it, and the store starts
+  empty for the secrets to be entered again (desktop: **Reset…**, confirmed;
+  hostd: `volli-hostd credentials reset --yes`, with hostd stopped). The move
+  is not atomic. What it guarantees: it never overwrites (the new name is a
+  hard link that fails rather than replace), never deletes, and syncs the
+  directory before it removes the old name, so a crash leaves the bytes under
+  one name or both. A directory that cannot be synced is reported, not hidden.
+  The archive is excluded from backups by the same `session-secrets.enc*` rule
+  and stays until a person deletes it; moving it back undoes the reset. A
+  `refused` key configuration is not reset: fix it, since the store it refuses
+  may be perfectly good.
 
 This selects ticket option **(b)**: encrypted storage with a launch-cached
 keychain key. Signed release builds should normally avoid prompts; unsigned/dev
@@ -150,9 +157,9 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
 - **The envelope.** `VSF1 | key id | iv | tag | ciphertext`, AES-256-GCM with
   the header as associated data. The key id is a truncated, labelled SHA-256
   of the key. It tells a wrong key apart from a corrupt file and reveals
-  nothing usable about the key. A `VSC1` (keychain) store is refused as sealed
-  by another adapter. The keychain adapter answers a `VSF1` store with its
-  usual "Could not decrypt secret storage."
+  nothing usable about the key. Each adapter refuses the other's envelope as
+  sealed by another adapter: credentials `locked` (`other-adapter`), the file
+  untouched.
 
 The operator token (VC-623) is not a Session secret and is not kept here: the
 host stores only its verifier, in a root-owned file outside the data

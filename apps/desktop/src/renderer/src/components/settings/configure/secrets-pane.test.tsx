@@ -166,6 +166,8 @@ describe("Configure Secrets", () => {
     await render();
     const status = host.querySelector('[data-slot="secret-credentials-status"]');
     expect(status?.textContent).toContain(line);
+    // A refused key configuration is fixed, never reset.
+    expect(status?.textContent?.includes("Reset…")).toBe(state !== "refused");
     expect(host.textContent).toContain("No saved credentials");
   });
 

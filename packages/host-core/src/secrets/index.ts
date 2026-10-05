@@ -22,6 +22,7 @@ export {
   type CredentialReason,
   type CredentialState,
   type CredentialStatus,
+  type SealedStoreArchive,
 } from "./credential-state";
 export {
   fileSecretKey,

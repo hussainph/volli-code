@@ -66,13 +66,16 @@ In order; each refusal is logged as one JSON line and exits **78**
    `serving without saved credentials` carries the adapter's own sentence
    naming the fix, and stored secrets are neither used nor sealed over:
 
-   | Condition                                                                                                        | `credentials.state`                    |
-   | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-   | No sealed store                                                                                                  | `empty`                                |
-   | Sealed store opens                                                                                               | `ready`                                |
-   | Key missing, a different key, not one key line, unreadable; store sealed by the keychain or unreadable           | `locked`                               |
-   | Key file with group or other access, owned by another user, not a regular file; relative `VOLLI_SECRET_KEY_FILE` | `refused` (unsafe: never read for use) |
-   | The key opens and the store does not authenticate                                                                | `corrupt`                              |
+   | Condition                                                                                                                                                                          | `credentials.state`                    |
+   | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+   | No sealed store, and a usable or absent key                                                                                                                                        | `empty`                                |
+   | Sealed store opens                                                                                                                                                                 | `ready`                                |
+   | Key missing, a different key, not one key line, unreadable by its owner (e.g. 0000); store sealed by the keychain or unreadable                                                    | `locked`                               |
+   | Key file with group or other access (including 0044), owned by another user (told from its metadata when the open is denied), not a regular file; relative `VOLLI_SECRET_KEY_FILE` | `refused` (unsafe: never read for use) |
+   | The key opens and the store does not authenticate                                                                                                                                  | `corrupt`                              |
+
+   The key is checked first, so a malformed or unsafe key reports `locked` or
+   `refused` even before anything is sealed.
 
    Put the key back or fix it, then restart. Or give the stored secrets up:
    [Credentials](#credentials).
@@ -385,9 +388,9 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
 
 ### Credentials
 
-When saved secrets are `locked`, `refused` or `corrupt` and will not come back
-(the key is gone for good), set them aside and start over, with hostd stopped
-and the unit's `VOLLI_SECRET_KEY_FILE` in the environment:
+When saved secrets are `locked` or `corrupt` and will not come back (the key
+is gone for good), set them aside and start over, with hostd stopped and the
+unit's `VOLLI_SECRET_KEY_FILE` in the environment:
 
 ```sh
 sudo systemctl stop volli-hostd
@@ -398,13 +401,22 @@ sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
 sudo systemctl start volli-hostd
 ```
 
-It takes the instance lock (so it refuses while hostd runs), does nothing when
-secrets open or there are none, and moves `session-secrets.enc` to
-`session-secrets.enc.locked-<time>-<random>` beside it. Nothing is deleted: the
-archive is excluded from backups and stays until you delete it, and moving it
-back undoes the reset. The next save seals under the key file that is there, or
-a new one. A reset does not make an unsafe key usable: fix its mode or owner.
-It is never a socket verb.
+It refuses a data directory boot would refuse (another user's, or writable by
+every user), and takes the instance lock, so it refuses while hostd runs. The
+lock file it may leave, `hostd.lock`, is the one hostd itself creates and
+keeps; it holds nothing. It does nothing when secrets open or there are none,
+and refuses, even with `--yes`, while the key configuration is `refused`: a
+reset cannot fix a relative `VOLLI_SECRET_KEY_FILE` or an unsafe key file, and
+an environment typo must not move a store the right key opens.
+
+Otherwise it moves `session-secrets.enc` to
+`session-secrets.enc.locked-<time>-<random>` beside it. The move is not atomic;
+it never overwrites, never deletes, and syncs the directory before removing the
+old name, so a crash leaves the store under one name or both. If the directory
+cannot be synced it says so. The archive is excluded from backups and stays
+until you delete it. The printed, shell-quoted `mv` undoes the reset (with
+hostd stopped, before anything is saved again). The next save seals under the
+key file that is there, or a new one. It is never a socket verb.
 
 ### The secret key
 

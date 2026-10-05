@@ -29,10 +29,11 @@
  *
  * Two explicit ways out, both person or local-admin intent, never an agent
  * verb: **unlock** (put the key back, unlock the keychain, fix the mode, then
- * try again or restart) and **reset**, which moves the sealed file aside with
- * {@link archiveSealedStore} and starts an empty store. The archive is kept,
- * beside the store and excluded from backups by the store's own `*` rule,
- * until a person deletes it.
+ * try again or restart) and, for `locked` or `corrupt` only, **reset**, which
+ * moves the sealed file aside with {@link archiveSealedStore} and starts an
+ * empty store. A `refused` key configuration is fixed, not reset: the store
+ * it refuses may be perfectly good. The archive is kept, beside the store and
+ * excluded from backups by the store's own `*` rule, until a person deletes it.
  *
  * A status carries no secret, no key byte and no path: it is safe to write to
  * a status file or hand to a client. The refusal's own sentence, which names
@@ -113,36 +114,61 @@ export function credentialsUnavailable(status: CredentialStatus): boolean {
   return status.state !== "ready" && status.state !== "empty";
 }
 
+/** What {@link archiveSealedStore} did. */
+export interface SealedStoreArchive {
+  /** The archive's file name beside the store. */
+  readonly name: string;
+  /**
+   * Whether every directory sync succeeded. `false` means the move happened
+   * but a power cut could still undo part of it: report it, never hide it.
+   */
+  readonly synced: boolean;
+}
+
 /**
- * Moves the sealed file at `path` aside, never over anything: it is linked
- * to a fresh `<name>.locked-<time>-<random>` beside it, then its old name is
- * removed, and the directory is synced. Answers the archive's file name, or
- * `null` when nothing was at `path`.
+ * Moves the sealed file at `path` aside. It never overwrites, never deletes,
+ * and a crash at any point leaves the bytes under at least one name:
+ *
+ * 1. link the file to a fresh `<name>.locked-<time>-<random>` beside it
+ *    (`link` fails rather than replace an existing name);
+ * 2. sync the directory, so the new name is durable before the old one goes;
+ * 3. remove the old name, and sync the directory again.
+ *
+ * Not atomic: a crash between 1 and 3 leaves both names, which is the safe
+ * side. A directory that cannot be synced does not stop the move; it is
+ * reported through {@link SealedStoreArchive.synced}. Answers `null` when
+ * nothing was at `path`.
  */
-export function archiveSealedStore(path: string, now: Date): string | null {
+export function archiveSealedStore(path: string, now: Date): SealedStoreArchive | null {
   const stamp = now
     .toISOString()
     .replace(/[-:]/g, "")
     .replace(/\.\d+Z$/, "Z");
   const name = `${basename(path)}.locked-${stamp}-${randomBytes(4).toString("hex")}`;
-  const archive = join(dirname(path), name);
+  const directory = dirname(path);
   try {
-    // `link` never replaces: a name that exists fails rather than losing it.
-    linkSync(path, archive);
+    linkSync(path, join(directory, name));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+  const linked = syncDirectory(directory);
   unlinkSync(path);
+  const removed = syncDirectory(directory);
+  return { name, synced: linked && removed };
+}
+
+/** Whether `directory` synced. Some filesystems cannot; the caller reports it. */
+function syncDirectory(directory: string): boolean {
   try {
-    const directory = openSync(dirname(path), "r");
+    const fd = openSync(directory, "r");
     try {
-      fsyncSync(directory);
+      fsyncSync(fd);
     } finally {
-      closeSync(directory);
+      closeSync(fd);
     }
+    return true;
   } catch {
-    // Some filesystems cannot sync a directory; the move itself has happened.
+    return false;
   }
-  return name;
 }

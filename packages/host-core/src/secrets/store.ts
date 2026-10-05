@@ -25,6 +25,7 @@ import {
   credentialsUnavailable,
   SealedStoreUnreadableError,
   type CredentialStatus,
+  type SealedStoreArchive,
 } from "./credential-state";
 import { pendingNoticeSecretStart } from "./pending-notice-secret";
 
@@ -183,6 +184,11 @@ function sameSlot(left: SecretMetadata, right: SecretMetadata): boolean {
 export interface SecretStoreReset {
   /** The sealed file's new name beside it, or `null` when there was none. */
   readonly archive: string | null;
+  /**
+   * Whether the move was synced to disk. `false`: it happened, but a power
+   * cut could leave the store under its old name too. Tell the person.
+   */
+  readonly synced: boolean;
   readonly status: CredentialStatus;
 }
 
@@ -425,17 +431,25 @@ export class SecretStore {
 
   /**
    * Gives up stored credentials this store cannot open: the sealed file is
-   * moved aside (kept, never deleted) and the store starts empty, ready for
-   * the secrets to be entered again. Refused while stored credentials open;
-   * revoke them instead. Person or local-admin intent only.
+   * moved aside (kept, never deleted; see `archiveSealedStore`) and the store
+   * starts empty, ready for the secrets to be entered again. Only for
+   * `locked` or `corrupt`: open stored credentials are revoked instead, and a
+   * `refused` key configuration is fixed instead, since moving a store that
+   * key may well open would not help. Person or local-admin intent only.
    */
   reset(now: Date = new Date()): SecretStoreReset {
-    if (!credentialsUnavailable(this.status())) {
+    const status = this.status();
+    if (status.state === "refused") {
+      throw new Error(
+        "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+      );
+    }
+    if (!credentialsUnavailable(status)) {
       throw new Error("Saved secrets are not locked, so there is nothing to reset.");
     }
-    let archive: string | null;
+    let archived: SealedStoreArchive | null;
     try {
-      archive = archiveSealedStore(this.#path, now);
+      archived = archiveSealedStore(this.#path, now);
     } catch {
       // Never a path or a filesystem error's text.
       // eslint-disable-next-line preserve-caught-error
@@ -443,7 +457,11 @@ export class SecretStore {
     }
     this.#failure = null;
     this.#status = null;
-    return { archive, status: this.status() };
+    return {
+      archive: archived?.name ?? null,
+      synced: archived?.synced ?? true,
+      status: this.status(),
+    };
   }
 
   #requireEncryption(): void {

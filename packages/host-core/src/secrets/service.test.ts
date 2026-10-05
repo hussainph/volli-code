@@ -191,4 +191,18 @@ describe("person-only secret request service", () => {
     expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
     expect(service.environment("s")).toEqual({ [input.name]: sentinel });
   });
+  it("warns when a reset could not be synced to disk, and still reports it done", () => {
+    const { service, store } = setup();
+    const status = { state: "empty", reason: null, unavailable: [] } as const;
+    vi.spyOn(store, "reset").mockReturnValue({ archive: "a", synced: false, status });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(service.reset()).toEqual({ ok: true, credentials: status });
+      expect(warn).toHaveBeenCalledWith(
+        "[volli] saved secrets were set aside, but the directory could not be synced",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

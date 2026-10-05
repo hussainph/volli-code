@@ -152,7 +152,12 @@ export class SecretService {
 
   /** Sets locked stored secrets aside and starts empty; a person's explicit, confirmed action. */
   reset(): CredentialsResult {
-    return { ok: true, credentials: this.store.reset().status };
+    const { status, synced } = this.store.reset();
+    if (!synced) {
+      // The move happened; only its durability across a power cut is unknown.
+      console.warn("[volli] saved secrets were set aside, but the directory could not be synced");
+    }
+    return { ok: true, credentials: status };
   }
 
   submit(requestId: string, value: string, scope: SecretScope): Promise<void> {

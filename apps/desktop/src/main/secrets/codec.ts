@@ -8,6 +8,8 @@ interface Keychain {
   getSelectedStorageBackend?(): string;
 }
 const MAGIC = Buffer.from("VSC1");
+/** The headless file key's envelope (`@volli/host-core/secrets`, VC-559). */
+const FILE_KEY_MAGIC = Buffer.from("VSF1");
 
 /**
  * The keychain would not open the data key (VC-641). The store reports
@@ -51,6 +53,14 @@ export function keychainSecretCodec(keychain: Keychain): SecretKeyPort {
     },
     decryptString(value) {
       if (!available()) throw locked();
+      if (value.subarray(0, 4).equals(FILE_KEY_MAGIC)) {
+        // A headless host's key-file store: healthy, just not ours to open.
+        throw new SecretKeyUnavailableError(
+          "other-adapter",
+          "The saved secrets were sealed by a headless host's key file, and this app seals " +
+            "with the keychain, so it cannot open them. Reset them and enter the secrets again.",
+        );
+      }
       if (value.length < 37 || !value.subarray(0, 4).equals(MAGIC)) {
         throw new Error("Invalid secret storage.");
       }

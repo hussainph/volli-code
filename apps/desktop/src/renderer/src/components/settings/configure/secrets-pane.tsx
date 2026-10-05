@@ -56,7 +56,11 @@ export function SecretsPane({ project }: { project: Project }) {
       action={<SectionAction label="Refresh" onAct={refresh} />}
     >
       {credentials !== null && LOCKED_LINE[credentials.state] !== undefined ? (
-        <LockedCredentials line={LOCKED_LINE[credentials.state]!} onChanged={refresh} />
+        <LockedCredentials
+          line={LOCKED_LINE[credentials.state]!}
+          resettable={credentials.state !== "refused"}
+          onChanged={refresh}
+        />
       ) : null}
       {status === "loading" ? (
         <Empty>Loading credentials…</Empty>
@@ -78,7 +82,16 @@ const LOCKED_LINE: Partial<Record<CredentialStatus["state"], string>> = {
   corrupt: "Saved secrets can't be read.",
 };
 
-function LockedCredentials({ line, onChanged }: { line: string; onChanged: () => void }) {
+function LockedCredentials({
+  line,
+  resettable,
+  onChanged,
+}: {
+  line: string;
+  /** A refused key configuration is fixed, never reset (VC-641). */
+  resettable: boolean;
+  onChanged: () => void;
+}) {
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
 
@@ -112,9 +125,16 @@ function LockedCredentials({ line, onChanged }: { line: string; onChanged: () =>
         <Button type="button" variant="outline" disabled={busy} onClick={() => void act("unlock")}>
           Try again
         </Button>
-        <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
-          Reset…
-        </Button>
+        {resettable ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            Reset…
+          </Button>
+        ) : null}
       </div>
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>

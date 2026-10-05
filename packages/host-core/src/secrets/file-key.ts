@@ -60,6 +60,7 @@ import {
   openSync,
   readSync,
   rmSync,
+  statSync,
   type Stats,
   writeSync,
 } from "node:fs";
@@ -223,6 +224,7 @@ function readKey(path: string): Buffer | null {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return null;
+    if (errorCode(error) === "EACCES") classifyDenied(path);
     throw unreadable(path, error);
   }
   try {
@@ -248,6 +250,23 @@ function readKey(path: string): Buffer | null {
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * An open the kernel denied says nothing about why. A key another user owns
+ * (mode 0600, so this user cannot read it) or one that denies its owner but
+ * grants others (0044) is unsafe, not lost: tell it from the file's metadata
+ * alone, never its bytes. `stat`, like the open, follows a symlink. A key this
+ * user owns with no access for anyone (0000) falls through to `unreadable`.
+ */
+function classifyDenied(path: string): void {
+  let stat: Stats;
+  try {
+    stat = statSync(path);
+  } catch {
+    return;
+  }
+  refuseShared(path, stat);
 }
 
 /** ssh's rule for a private key: only its owner may have any access to it. */

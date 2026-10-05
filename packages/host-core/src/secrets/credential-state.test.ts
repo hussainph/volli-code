@@ -83,13 +83,27 @@ describe("credential status", () => {
 });
 
 describe("archiving a sealed file", () => {
-  it("moves it aside under a fresh name, byte for byte", () => {
+  it("moves it aside under a fresh name, byte for byte, synced", () => {
     const path = join(dir, "session-secrets.enc");
     writeFileSync(path, "sealed bytes");
-    const name = archiveSealedStore(path, new Date("2026-10-05T12:34:56.789Z"));
-    expect(name).toMatch(/^session-secrets\.enc\.locked-20261005T123456Z-[0-9a-f]{8}$/);
-    expect(readdirSync(dir)).toEqual([name]);
-    expect(readFileSync(join(dir, name!), "utf8")).toBe("sealed bytes");
+    const archived = archiveSealedStore(path, new Date("2026-10-05T12:34:56.789Z"))!;
+    expect(archived.name).toMatch(/^session-secrets\.enc\.locked-20261005T123456Z-[0-9a-f]{8}$/);
+    expect(archived.synced).toBe(true);
+    expect(readdirSync(dir)).toEqual([archived.name]);
+    expect(readFileSync(join(dir, archived.name), "utf8")).toBe("sealed bytes");
+  });
+
+  it("makes the new name durable before it removes the old one", () => {
+    const path = join(dir, "session-secrets.enc");
+    writeFileSync(path, "sealed bytes");
+    const seen: string[][] = [];
+    // Each directory sync records which names exist at that moment.
+    faults.openDirectory = () => {
+      seen.push(readdirSync(dir).toSorted());
+      throw Object.assign(new Error("probe only"), { code: "EINVAL" });
+    };
+    const archived = archiveSealedStore(path, new Date())!;
+    expect(seen).toEqual([[archived.name, "session-secrets.enc"].toSorted(), [archived.name]]);
   });
 
   it("answers null when there is nothing to move", () => {
@@ -106,13 +120,14 @@ describe("archiving a sealed file", () => {
     expect(readdirSync(dir)).toEqual(["session-secrets.enc"]);
   });
 
-  it("keeps the move when the directory cannot be synced", () => {
+  it("keeps the move, and says so, when the directory cannot be synced", () => {
     const path = join(dir, "session-secrets.enc");
     writeFileSync(path, "sealed bytes");
     faults.openDirectory = () => {
       throw Object.assign(new Error("unsupported"), { code: "EINVAL" });
     };
-    const name = archiveSealedStore(path, new Date());
-    expect(readdirSync(dir)).toEqual([name]);
+    const archived = archiveSealedStore(path, new Date())!;
+    expect(archived.synced).toBe(false);
+    expect(readdirSync(dir)).toEqual([archived.name]);
   });
 });

@@ -67,18 +67,32 @@ describe("existing keychain ciphertext (VC-559: macOS unchanged)", () => {
     }
   });
 
-  it("does not open the headless file key's envelope, and stays generic about it", () => {
+  it("does not open the headless file key's envelope, and calls it another adapter's (VC-641)", () => {
     const dir = mkdtempSync(join(tmpdir(), "volli-keychain-fixture-"));
     try {
-      const fileSealed = fileSecretKey({ path: join(dir, "key") }).encryptString("headless");
+      const path = join(dir, "session-secrets.enc");
+      new SecretStore(path, fileSecretKey({ path: join(dir, "key") })).put({
+        name: "HEADLESS",
+        value: "headless-value",
+        scope: "always",
+      });
+      const fileSealed = readFileSync(path);
       const keychain = {
         ...FIXTURE_KEYCHAIN,
         decryptString: vi.fn(FIXTURE_KEYCHAIN.decryptString),
       };
       expect(() => keychainSecretCodec(keychain).decryptString(fileSealed)).toThrow(
-        "Invalid secret storage.",
+        /^The saved secrets were sealed by a headless host's key file/,
       );
+      const store = new SecretStore(path, keychainSecretCodec(keychain));
+      expect(store.status()).toEqual({
+        state: "locked",
+        reason: "other-adapter",
+        unavailable: ["session-env"],
+      });
+      expect(store.list()).toEqual([]);
       expect(keychain.decryptString).not.toHaveBeenCalled();
+      expect(readFileSync(path).equals(fileSealed)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

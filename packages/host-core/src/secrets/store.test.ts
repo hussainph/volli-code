@@ -651,6 +651,23 @@ describe("SecretStore when stored credentials are locked (VC-641)", () => {
     expect(keychain.decryptString).toHaveBeenCalledTimes(2);
   });
 
+  it("resets a lock with nothing sealed to an empty store", () => {
+    const keychain = lockedCodec() as SecretKeyPort & { lock(): void };
+    const refusing = {
+      ...keychain,
+      probe: () => {
+        throw new SecretKeyUnavailableError("malformed", "Not a key.");
+      },
+    };
+    const locked = new SecretStore(path, refusing);
+    expect(locked.status()).toMatchObject({ state: "locked", reason: "malformed" });
+    expect(locked.reset()).toEqual({
+      archive: null,
+      synced: true,
+      status: { state: "locked", reason: "malformed", unavailable: ["session-env"] },
+    });
+  });
+
   it("resets only what it cannot open, and never deletes the sealed file", () => {
     expect(() => store.reset()).toThrow(
       "Saved secrets are not locked, so there is nothing to reset.",
