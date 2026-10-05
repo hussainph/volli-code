@@ -4,15 +4,17 @@
  *
  * The running host rewrites the file (atomically, mode 0600) at every state
  * change. It holds no secret: paths, a pid, versions, the capabilities this
- * host serves and, when the database would not open, the typed reason
- * (`databaseFailure`, VC-602) with the sentence every verb answers with.
+ * host serves, the credential status (VC-641: `ready`, `empty`, `locked`,
+ * `refused` or `corrupt`, with a typed reason and never a key path) and,
+ * when the database would not open, the typed reason (`databaseFailure`,
+ * VC-602) with the sentence every verb answers with.
  *
  * A file alone could be stale after a crash, so `status` believes it only
  * when its pid is alive AND its socket accepts a connection. Exit codes:
  *
  * | code | meaning                                                         |
  * | ---- | --------------------------------------------------------------- |
- * | 0    | serving                                                         |
+ * | 0    | serving, whatever the credential status                         |
  * | 1    | up, but refusing to serve: the database failed to open          |
  * | 3    | not serving: stopped, starting, stopping, crashed or unreachable |
  *
@@ -25,6 +27,7 @@ import { createConnection } from "node:net";
 import { join } from "node:path";
 
 import type { DbOpenFailure } from "@volli/host-core";
+import type { CredentialStatus } from "@volli/host-core/secrets";
 
 export const STATUS_FILE_NAME = "hostd-status.json";
 
@@ -68,6 +71,13 @@ export interface HostdStatus {
   readonly socketPath: string;
   readonly database: HostdDatabaseStatus | null;
   readonly capabilities: HostdCapabilities;
+  /**
+   * Whether saved credentials opened (VC-641); `null` until boot has looked.
+   * Not `ready` or `empty` means stored secrets are unavailable and the host
+   * serves everything else; the fix is in the log. Absent in a file written
+   * by an older hostd.
+   */
+  readonly credentials?: CredentialStatus | null;
 }
 
 export function statusFilePath(dataDir: string): string {

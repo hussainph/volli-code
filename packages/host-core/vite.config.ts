@@ -60,6 +60,13 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        // The automation assembly over the ready Session facade (VC-622). Every
+        // branch is a decision made once at boot on a machine nobody watches:
+        // which degraded capability drops which port, and the two failures a
+        // timer fires into an unattended log. A branch read wrong is a
+        // scheduler that silently never starts, or a recovery error that
+        // reaches no one.
+        "src/session-runtime/automations.ts",
         "src/session-control/suspend-clock.ts",
         // Birth-frozen membership must never name an absent host capability (VC-622).
         "src/session-runtime/host-capabilities.ts",
@@ -91,6 +98,11 @@ export default defineConfig({
         // and another user, a lost key or a silent re-key, and none of it shows
         // anywhere until it is wrong.
         "src/secrets/file-key.ts",
+        // Credential status (VC-641): which key failures lock credentials,
+        // which refuse an unsafe key, and the reset that sets a sealed file
+        // aside rather than deleting it. A branch read wrong here bricks a
+        // host or overwrites what a lost key still opens.
+        "src/secrets/credential-state.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a

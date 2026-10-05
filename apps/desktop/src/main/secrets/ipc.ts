@@ -67,4 +67,8 @@ export function registerSecretIpc(
     service.replace(text(input["id"]), text(input["value"]));
     return { ok: true };
   });
+  // Locked stored secrets (VC-641): try again, or set them aside after the
+  // renderer's confirm. Neither has an agent, verb or socket equivalent.
+  handle("volli:secrets-unlock", () => service.unlock());
+  handle("volli:secrets-reset", () => service.reset());
 }

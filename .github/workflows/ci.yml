@@ -195,6 +195,8 @@ jobs:
           apps/desktop/scripts/smoke-quiet-check.test.mjs
           apps/desktop/e2e/lib/kickoff-support.test.mjs
           apps/desktop/e2e/lib/focus-ring-probe.test.mjs
+          apps/desktop/e2e/lib/smoke-kit.test.mjs
+          apps/desktop/e2e/lib/shutdown-trace.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.

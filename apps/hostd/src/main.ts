@@ -4,13 +4,15 @@
  * Exit codes: 0 after a clean stop; 1 when something failed at runtime or the
  * shutdown was not clean; 2 for usage errors; 78 (`EX_CONFIG`) for a boot
  * refusal an operator must fix, which the systemd unit does not restart.
- * `status` exits 0 serving, 1 refusing, 3 not serving.
+ * `status` exits 0 serving, 1 refusing, 3 not serving. `credentials reset`
+ * exits 0 when it reset or had nothing to reset, 1 when it did not.
  */
 import { EXIT_CONFIG, HostdBootError } from "./boot-error";
 import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
 
 import { parseHostdArgs, USAGE, type HostdCommand } from "./args";
 import { socketActivationFd } from "./activation";
+import { runCredentialsReset } from "./credentials";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
 import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
@@ -44,6 +46,13 @@ async function main(): Promise<number> {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       return statusExitCode(report.verdict);
     }
+    case "credentials-reset":
+      return runCredentialsReset(command, {
+        env: process.env,
+        now: () => new Date(),
+        out: (text) => process.stdout.write(text),
+        err: (text) => process.stderr.write(text),
+      });
     case "operator-token":
       return runOperatorToken(command, {
         uid: () => process.getuid!(),

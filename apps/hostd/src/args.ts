@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { HostdBootError } from "./boot-error";
+import type { CredentialsResetCommand } from "./credentials";
 import type { OperatorTokenCommand } from "./operator-token";
 import { DEFAULT_OPERATORS_FILE } from "./operators";
 
@@ -14,6 +15,10 @@ export const USAGE = `Usage:
                                                    Serve this data directory.
   volli-hostd status --data-dir <dir>              Report health; exit 0 serving,
                                                    1 refusing, 3 not serving.
+  volli-hostd credentials reset --data-dir <dir> [--yes]
+                                                   With hostd stopped: set aside saved
+                                                   secrets it cannot open, and start
+                                                   with none.
   volli-hostd operator-token --for <login>         As root: issue <login> an operator
   volli-hostd operator-token --revoke <login>      token, or revoke it. [--operators
                                                    <file>] [--service-user <name>]
@@ -35,6 +40,7 @@ export type HostdCommand =
       operatorsFile: string;
     }
   | { kind: "status"; dataDir: string }
+  | CredentialsResetCommand
   | OperatorTokenCommand
   | { kind: "help" }
   | { kind: "version" };
@@ -56,9 +62,20 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   if (values.help === true) return { kind: "help" };
   if (values.version === true) return { kind: "version" };
   const [verb, ...rest] = positionals;
-  const known = verb === "status" || verb === "operator-token";
+  const known = verb === "status" || verb === "operator-token" || verb === "credentials";
+  // `credentials` takes one action word, `reset`.
+  const action = verb === "credentials" ? rest.shift() : undefined;
+  if (verb === "credentials" && action !== "reset") {
+    throw new HostdBootError(
+      "usage",
+      action === undefined ? "credentials needs an action: reset." : `Unknown argument: ${action}`,
+    );
+  }
   if (rest.length > 0 || (verb !== undefined && !known)) {
     throw new HostdBootError("usage", `Unknown argument: ${known ? rest[0] : verb}`);
+  }
+  if (verb !== "credentials" && values.yes !== undefined) {
+    throw new HostdBootError("usage", "--yes belongs to credentials reset.");
   }
   if (verb === "operator-token") return operatorTokenCommand(values, cwd);
   if (
@@ -75,6 +92,12 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
     throw new HostdBootError("usage", "--data-dir <dir> is required.");
   }
   const dataDir = resolve(cwd, values["data-dir"]);
+  if (verb === "credentials") {
+    if ([values.socket, values.operators].some((v) => v !== undefined)) {
+      throw new HostdBootError("usage", "credentials reset takes --data-dir and --yes only.");
+    }
+    return { kind: "credentials-reset", dataDir, confirmed: values.yes === true };
+  }
   if (verb === "status") {
     if ([values.socket, values.operators].some((v) => v !== undefined)) {
       throw new HostdBootError(
@@ -139,6 +162,7 @@ function parse(argv: readonly string[]) {
       for: { type: "string" },
       revoke: { type: "string" },
       "service-user": { type: "string" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
