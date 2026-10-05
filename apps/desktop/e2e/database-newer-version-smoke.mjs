@@ -39,10 +39,18 @@ import {
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
+import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
+
 const NEWER_TITLE = "This database was created by a newer version of Volli";
 const DAMAGED_TITLE = "Volli couldn't load its data";
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const MIN_READER_KEY = "volli:min-reader-version";
+// Cheap breadcrumbs are automatic in CI; intrusive sampling is diagnostic opt-in.
+const sampleShutdown = process.env.VOLLI_NEWER_DB_SAMPLE === "1";
+const traceShutdown =
+  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) ||
+  process.env.VOLLI_NEWER_DB_TRACE === "1" ||
+  sampleShutdown;
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -112,13 +120,31 @@ async function fixture(name) {
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, child: app.process(), label, stdout: "", stderr: "", page: null };
+  const run = {
+    app,
+    child: app.process(),
+    label,
+    stdout: "",
+    stderr: "",
+    debuggerWaitTraced: false,
+    page: null,
+    tracePath: traceShutdown
+      ? join(scratch, `${label.replaceAll(" launch", "")}-shutdown.jsonl`)
+      : null,
+  };
+  run.child.once("exit", (code, signal) =>
+    traceClose(run.tracePath, "child-exit", { code, signal }),
+  );
   runs.add(run);
   run.child.stdout?.on("data", (chunk) => {
     run.stdout = `${run.stdout}${chunk}`.slice(-48000);
   });
   run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-48000);
+    if (!run.debuggerWaitTraced && run.stderr.includes("Waiting for the debugger to disconnect")) {
+      run.debuggerWaitTraced = true;
+      traceClose(run.tracePath, "debugger-disconnect-wait");
+    }
   });
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
@@ -128,12 +154,25 @@ async function openApp(config, label) {
   page.setDefaultTimeout(8000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
+  await installShutdownTrace(app, run.tracePath);
   return run;
 }
 
 async function closeRun(run) {
   // Degraded and healthy apps both get the app's own shutdown drain window.
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  traceClose(run.tracePath, "quit-requested");
+  const finishSampling = sampleStalledClose(run.child, sampleShutdown ? run.tracePath : null);
+  let exit;
+  try {
+    exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+    traceClose(run.tracePath, "close-result", exit);
+  } finally {
+    await finishSampling();
+    if (run.tracePath && (!exit || exit.exit.code !== 0 || exit.closeFailures.length > 0))
+      console.error(
+        `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
+      );
+  }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
   assert.ok(
@@ -391,8 +430,9 @@ try {
   );
   for (const path of [join(APP_DIR, "dist-electron/main.cjs"), join(APP_DIR, "dist/index.html")])
     await fs.access(path);
-  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
-  scratch = await fs.mkdtemp(join(REPO, ".tmp", "newer-db-"));
+  const evidenceRoot = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".tmp");
+  await fs.mkdir(evidenceRoot, { recursive: true });
+  scratch = await fs.mkdtemp(join(evidenceRoot, "newer-db-"));
   console.log(`Evidence: ${scratch}`);
   const head = await schemaHead();
   // Derived, never pinned: always above whatever head this build has.
@@ -426,9 +466,12 @@ try {
       join(scratch, "result.json"),
       `${JSON.stringify({ ok: code === 0, checks, failures }, null, 2)}\n`,
     );
-    if (code === 0)
+    if (code === 0) {
       for (const name of ["seed", "incompatible", "compatible"])
         await fs.rm(join(scratch, name), { recursive: true, force: true });
+      for (const name of await fs.readdir(scratch))
+        if (name.includes("-shutdown.jsonl")) await fs.rm(join(scratch, name), { force: true });
+    }
   }
 }
 console.log(`${code === 0 ? "ALL CHECKS PASSED" : "FAILED"}: ${checks.length} completed checks`);

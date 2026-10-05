@@ -6,7 +6,14 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 
-import { CORE_E2E, SMOKE_QUARANTINE, parseArgs, runOne, selectSmokes } from "./run-smokes.mjs";
+import {
+  CORE_E2E,
+  SMOKE_QUARANTINE,
+  parseArgs,
+  runOne,
+  selectSmokes,
+  smokeScheduleFor,
+} from "./run-smokes.mjs";
 import { createSmokeReporter, runWithRetry, smokeAttemptEnvironment } from "./smoke-results.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -17,6 +24,27 @@ function fixture(t) {
   return dir;
 }
 const attempt = (code, ms = 10) => ({ code, ms, signal: null, output: `exit ${code}` });
+
+test("newer-database runs exclusively without dropping, quarantining or reordering peers", () => {
+  const names = [
+    "browser-tab-smoke.mjs",
+    "database-newer-version-smoke.mjs",
+    "database-recovery-smoke.mjs",
+    "terminal-smoke.mjs",
+    "split-view-smoke.mjs",
+  ];
+  assert.deepEqual(smokeScheduleFor(names), {
+    concurrent: ["browser-tab-smoke.mjs", "database-recovery-smoke.mjs", "split-view-smoke.mjs"],
+    exclusive: ["database-newer-version-smoke.mjs", "terminal-smoke.mjs"],
+  });
+  assert.equal(names.length, 5);
+  const rest = selectSmokes(parseArgs(["--tier", "rest"]));
+  const schedule = smokeScheduleFor(rest);
+  assert.ok(schedule.exclusive.includes("database-newer-version-smoke.mjs"));
+  assert.equal(schedule.concurrent.length + schedule.exclusive.length, rest.length);
+  assert.equal(new Set([...schedule.concurrent, ...schedule.exclusive]).size, rest.length);
+  assert.ok(!SMOKE_QUARANTINE.has("database-newer-version-smoke.mjs"));
+});
 
 test("first-attempt success runs once", async () => {
   const calls = [];
