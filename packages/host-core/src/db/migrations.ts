@@ -3350,6 +3350,12 @@ export interface MigrateOptions {
   fingerprints?: MigrationFingerprints;
   /** Tests only: the disk the free-space preflight reads. */
   disk?: DiskProbe;
+  /**
+   * The caller already ran the free-space preflight, before it opened its
+   * writable handle (`openVolliDb`), so a refusal there left the file and its
+   * WAL byte-identical. The runner does not measure a second time.
+   */
+  diskChecked?: boolean;
 }
 
 /**
@@ -3384,8 +3390,9 @@ export function migrate(
   if (currentVersion > 0) {
     // Before anything is written: the safety copy and the rewrite after it
     // need about twice the database free, and running out halfway names
-    // neither the cause nor the remedy (VC-633).
-    assertMigrationDiskSpace(dbPath, options.disk);
+    // neither the cause nor the remedy (VC-633). It fails open: only a
+    // measurement that worked and shows too little room refuses.
+    if (options.diskChecked !== true) assertMigrationDiskSpace(dbPath, options.disk);
     try {
       assertDatabaseIntegrity(db);
     } catch (error) {

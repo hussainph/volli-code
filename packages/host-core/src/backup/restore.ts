@@ -491,6 +491,10 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = OFF");
+    // As at startup: the second walk below takes a safety copy and compacts,
+    // and the migration free-space budget assumes VACUUM builds its compacted
+    // copy in memory, not as a third copy on this disk (`disk-preflight.ts`).
+    db.pragma("temp_store = MEMORY");
     // To the bundle's schema first: its rows are shaped for the columns that
     // existed when it was written.
     migrate(db, dbPath, { toVersion: bundle.document.schemaVersion });

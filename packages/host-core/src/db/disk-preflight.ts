@@ -16,6 +16,27 @@
  * journal and the filesystem's own reserve. It errs high on a small migration
  * over a big file, and that is the right side: the alternative is a failure
  * mid-upgrade.
+ *
+ * Its one assumption is that SQLite's temporary storage is in memory
+ * (`temp_store = MEMORY`), which every caller that migrates an existing
+ * database sets: `openVolliDb` at startup and a backup restore's staging
+ * handle. VACUUM builds the compacted database in a temporary database first
+ * and then writes it back through the WAL; with memory temp storage that
+ * build costs RAM, so the disk sees only the safety copy and the WAL rewrite,
+ * the two copies counted here. With file-backed temp storage on the same
+ * volume the build is a third copy and this budget is short by about the
+ * database's size. That would not refuse a boot, since a compaction failure
+ * is reported and the migrated database kept (`migration-compaction.ts`), but
+ * a new caller of `migrate` must set the pragma for the estimate to hold. And
+ * it is a bound for a migration that keeps the data about the same size; one
+ * that grows it substantially needs its own budget.
+ *
+ * It fails open. Only a measurement that worked and shows too little room
+ * refuses; when the measurement itself fails (`statfs` unsupported by the
+ * filesystem, ENOSYS in a sandbox, EIO), it logs one warning naming the error
+ * and the migration goes ahead exactly as it did before this check existed.
+ * A probe that cannot see the disk is not evidence that the disk is full, and
+ * refusing on it would keep Volli from starting on a disk with ample room.
  */
 import { statfsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -23,7 +44,14 @@ import { dirname } from "node:path";
 /** Headroom beyond the two copies: WAL growth, journal pages, filesystem slack. */
 export const MIGRATION_DISK_HEADROOM_BYTES = 64 * 1024 * 1024;
 
-/** Why a migration did not start: the disk cannot hold it. Nothing was written. */
+/** The warning a failed free-space measurement logs before the migration goes ahead. */
+export const DISK_PREFLIGHT_LOG_PREFIX = "[migration disk preflight]";
+
+/**
+ * Why a migration did not start: the disk cannot hold it. Nothing was
+ * written; at startup `openVolliDb` measures before it opens any writable
+ * handle, so the database and its WAL are byte-identical after a refusal.
+ */
 export class InsufficientDiskSpaceError extends Error {
   override readonly name = "InsufficientDiskSpaceError";
   constructor(
@@ -90,12 +118,26 @@ export function migrationDiskRequirement(databaseBytes: number): number {
 /**
  * Throws {@link InsufficientDiskSpaceError} when the volume holding `dbPath`
  * has less free than {@link migrationDiskRequirement}. Reads only.
+ *
+ * Fails open: if either size or the free space cannot be measured, for any
+ * reason, it logs one warning naming the error and returns, and the migration
+ * proceeds unchecked. Only a successful measurement can refuse.
  */
 export function assertMigrationDiskSpace(dbPath: string, probe: DiskProbe = nodeDiskProbe): void {
   const directory = dirname(dbPath);
-  const databaseBytes = probe.fileSize(dbPath) + probe.fileSize(`${dbPath}-wal`);
+  let databaseBytes: number;
+  let freeBytes: number;
+  try {
+    databaseBytes = probe.fileSize(dbPath) + probe.fileSize(`${dbPath}-wal`);
+    freeBytes = probe.freeBytes(directory);
+  } catch (error) {
+    console.warn(
+      `${DISK_PREFLIGHT_LOG_PREFIX} could not measure free disk space in ${directory}, ` +
+        `so the migration goes ahead unchecked: ${String(error)}`,
+    );
+    return;
+  }
   const requiredBytes = migrationDiskRequirement(databaseBytes);
-  const freeBytes = probe.freeBytes(directory);
   if (freeBytes < requiredBytes) {
     throw new InsufficientDiskSpaceError(directory, databaseBytes, requiredBytes, freeBytes);
   }

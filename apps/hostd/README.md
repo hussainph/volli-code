@@ -507,10 +507,15 @@ where `N` is the schema the old build left. Retention keeps that copy.
 
 - **Free space first.** A migration needs about twice the database free on the
   data directory's volume: a safety copy, then the rewrite (compaction is a
-  full VACUUM). The host checks this with `statfs` before writing anything.
-  When there isn't room, it stays up in `refusing`, every verb answers
+  full VACUUM, built in memory and written back through the WAL). The host
+  checks this with `statfs` before it opens the database for writing. When
+  there isn't room, it stays up in `refusing`, every verb answers
   `DB_UNAVAILABLE`, and the log line says how much it needs, how much is free
-  and that nothing was changed. Free the space and restart.
+  and that nothing was changed: the database and its WAL are byte-identical.
+  Free the space and restart. If `statfs` itself fails (a filesystem that
+  doesn't support it, an I/O error), the host logs one
+  `[migration disk preflight]` warning naming the error and migrates anyway,
+  as it did before this check existed.
 - **Why not just reinstall the old archive.** If the new build's migrations
   raised the database's floor (`raisesMinReader`), the old build refuses the
   file as "from a newer version of Volli" and leaves it untouched. If they
