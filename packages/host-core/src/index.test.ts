@@ -114,7 +114,10 @@ beforeEach(() => {
 afterEach(async () => {
   // stop() is the host's one teardown and never rejects; it is idempotent for
   // a test that already stopped its host.
-  for (const core of opened.splice(0)) await core.stop("test teardown");
+  for (const core of opened.splice(0)) {
+    await core.stop("test teardown");
+    if (isLiveHost(core) && core.database.db.open) core.database.db.close();
+  }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -595,6 +598,57 @@ describe("createHostCore composition", () => {
 });
 
 describe("createHostCore lifecycle", () => {
+  it("desktop policy skips detached and maintenance joins and leaves SQLite open", async () => {
+    const core = live(
+      compose(
+        { log: { error: vi.fn() } },
+        {
+          ...headlessOptions(dataDir()),
+          stopPolicy: "desktop-quit",
+        },
+      ),
+    );
+    const work = Promise.withResolvers<void>();
+    core.detachedWork.track(work.promise);
+    const settled = vi.spyOn(core.maintenance, "settled");
+    const pragma = vi.spyOn(core.database.db, "pragma");
+    const close = vi.spyOn(core.database.db, "close");
+    await core.start(recordingRuntime());
+    expect(await core.stop("quit")).toEqual({ reason: "quit", clean: true });
+    expect(calls).toEqual([
+      "runtime start",
+      "stop producers",
+      "stop maintenance",
+      "close runtime",
+      "close socket",
+      "stop activity",
+    ]);
+    expect(core.detachedWork.pending).toBe(1);
+    expect(settled).not.toHaveBeenCalled();
+    expect(pragma).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(core.database.db.open).toBe(true);
+    work.resolve();
+    await core.detachedWork.drain();
+  });
+
+  it("also passes the desktop policy to a degraded host", async () => {
+    const root = dataDir();
+    const host = degraded(
+      compose(
+        { log: { error: vi.fn() } },
+        {
+          ...headlessOptions(root),
+          databasePath: writeDamagedDatabase(root),
+          stopPolicy: "desktop-quit",
+        },
+      ),
+    );
+    await host.start(recordingRuntime());
+    await host.stop("quit");
+    expect(calls).toEqual(["runtime start", "stop producers", "close runtime", "close socket"]);
+  });
+
   it("boots the adopted runtime, then stops it and the host's own services in order", async () => {
     const log = { error: vi.fn() };
     const core = live(compose({ log }, headlessOptions(dataDir())));

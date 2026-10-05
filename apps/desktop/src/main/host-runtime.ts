@@ -10,26 +10,16 @@ export function createDesktopHostRuntime<Services>(options: {
   lifecycle: Pick<SessionRuntimeLifecycle<Services>, "ready" | "close">;
   bindReady(ready: RecoveredSessionServices<Services>): void;
   stopProducers(): void;
-  closeShells(): Promise<void>;
   closeSocket(): Promise<boolean | void>;
-  settleProducers(): Promise<void>;
 }) {
   const owner = {
     start: async () => {
       options.bindReady(await options.lifecycle.ready());
     },
     stopProducers: options.stopProducers,
-    close: async () => {
-      try {
-        await options.lifecycle.close();
-      } finally {
-        try {
-          await options.closeShells();
-        } finally {
-          await options.settleProducers();
-        }
-      }
-    },
+    // Desktop's accepted quit has always joined only the Session lifecycle
+    // beside the socket. Shell/Automation/detached joins belong to hostd.
+    close: () => options.lifecycle.close(),
     closeSocket: options.closeSocket,
   };
   return {

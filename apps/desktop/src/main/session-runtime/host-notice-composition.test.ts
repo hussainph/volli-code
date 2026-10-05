@@ -7,7 +7,7 @@
  *   `createHostCore` and a real `createSessionRuntimeLifecycle` run here over a
  *   recorded runtime, RPC, exporter and agent socket, composed in desktop's
  *   runtime-owner shape: the RPC binds only from the recovered proof, after
- *   readiness, and the database closes only after every drain.
+ *   readiness, and desktop exits without checkpointing or closing the database.
  * - Background-shell notices pair ordinary exact redaction with the
  *   unfinished-credential preview, built through the real `BackgroundShellHost`
  *   constructor over desktop's own keychain codec and `SecretService`.
@@ -58,7 +58,10 @@ afterEach(async () => {
   for (const gate of recoveryGates.splice(0)) gate.resolve();
   for (const shell of shells.splice(0)) await shell.close();
   // stop() is idempotent and never rejects; a test that already stopped joins it.
-  for (const host of hosts.splice(0)) await host.stop("test teardown");
+  for (const host of hosts.splice(0)) {
+    await host.stop("test teardown");
+    if (isLiveHost(host) && host.database.db.open) host.database.db.close();
+  }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function tempDir(prefix: string): string {
@@ -86,6 +89,7 @@ function hostPorts(): HostCorePorts {
 function composeHost(databasePath?: string): HostCore {
   const host = createHostCore(hostPorts(), {
     dataDir: tempDir("volli-desktop-edge-"),
+    stopPolicy: "desktop-quit",
     ...(databasePath === undefined ? {} : { databasePath }),
     onTransactionViolation: throwTransactionViolation,
     devDiagnostics: true,
@@ -99,7 +103,7 @@ function composeHost(databasePath?: string): HostCore {
  * Desktop's composition over one host, with every outside owner recorded:
  * the runtime lifecycle gets the live runtime, a late-bound RPC slot and the
  * exporter; the host's runtime owner awaits readiness before binding the RPC,
- * and its close drains the lifecycle before the shells, beside the socket.
+ * and its close drains only the lifecycle, beside the socket, as on main.
  */
 function composeDesktopEdge(
   host: HostCore,
@@ -178,13 +182,9 @@ function composeDesktopEdge(
       sessionRpc = bindRpc(ready);
     },
     stopProducers: stopAutomations,
-    closeShells: async () => {
-      calls.push("shells.close");
-    },
     closeSocket: async () => {
       calls.push("socket.close");
     },
-    settleProducers: async () => {},
   });
   const start = desktop.start;
   return {
@@ -200,7 +200,7 @@ function composeDesktopEdge(
 }
 
 describe("desktop runtime edge composition", () => {
-  it("binds the RPC only from recovered readiness, and the quit trigger drains it before the database closes", async () => {
+  it("binds the RPC only from recovered readiness, and quits without checkpointing or closing the database", async () => {
     const host = composeHost();
     if (!isLiveHost(host)) throw new Error(host.database.error);
     const live: LiveHostCore = host;
@@ -220,11 +220,13 @@ describe("desktop runtime edge composition", () => {
     expect(live.database.db.open).toBe(true);
 
     edge.calls.length = 0;
+    const checkpoint = vi.spyOn(live.database.db, "pragma");
+    const close = vi.spyOn(live.database.db, "close");
     const report = await edge.quit();
     expect(report).toEqual({ reason: "quit", clean: true });
     // Producers stop first; the late-bound RPC and the runtime close beside the
-    // socket; the exporter flushes with the database open; shells close after
-    // the Session drain; the database closes last.
+    // socket; the exporter flushes with the database open. No new writer
+    // joins or synchronous WAL checkpoint/close are added to desktop quit.
     expect(edge.calls).toEqual([
       "automations.stop",
       "automations.stop",
@@ -232,17 +234,18 @@ describe("desktop runtime edge composition", () => {
       "runtime.close",
       "socket.close",
       "flush (database open)",
-      "shells.close",
     ]);
     expect(edge.rpc.close).toHaveBeenCalledOnce();
-    expect(live.database.db.open).toBe(false);
+    expect(live.database.db.open).toBe(true);
+    expect(checkpoint).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
     // One drain: a second quit joins it, and nothing re-runs.
     await expect(edge.quit()).resolves.toBe(report);
     expect(edge.rpc.close).toHaveBeenCalledOnce();
     await expect(edge.lifecycle.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
   });
 
-  it("a quit during recovery never binds the RPC, and still closes the database after the sweep", async () => {
+  it("a quit during recovery never binds the RPC, joins the existing sweep and leaves the database open", async () => {
     const host = composeHost();
     if (!isLiveHost(host)) throw new Error(host.database.error);
     const edge = composeDesktopEdge(host);
@@ -256,11 +259,10 @@ describe("desktop runtime edge composition", () => {
       return report;
     });
     // The Session drain finishes, but its close joins the in-flight recovery
-    // sweep: the shells, the detached drain and the database all wait for it.
+    // sweep, exactly as on main: the accepted quit waits for it.
     await vi.waitFor(() => expect(edge.calls).toContain("flush (database open)"));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(stopped).toBe(false);
-    expect(edge.calls).not.toContain("shells.close");
     expect(host.database.db.open).toBe(true);
     edge.recovery.resolve();
     await refused;
@@ -269,9 +271,9 @@ describe("desktop runtime edge composition", () => {
     expect(edge.bindRpc).not.toHaveBeenCalled();
     expect(edge.calls).not.toContain("services");
     expect(edge.calls).not.toContain("rpc.close");
-    expect(edge.calls.slice(-2)).toEqual(["flush (database open)", "shells.close"]);
+    expect(edge.calls.at(-1)).toBe("flush (database open)");
     expect(edge.calls).toContain("runtime.close");
-    expect(host.database.db.open).toBe(false);
+    expect(host.database.db.open).toBe(true);
   });
 
   it("runs a degraded host through the same start and stop, with no runtime and no RPC to close", async () => {
@@ -293,7 +295,6 @@ describe("desktop runtime edge composition", () => {
       "rpc.close",
       "socket.close",
       "flush (database closed)",
-      "shells.close",
     ]);
   });
 });

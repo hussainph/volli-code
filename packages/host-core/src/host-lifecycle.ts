@@ -4,7 +4,8 @@
  * and the ports below; it no longer sequences teardown itself.
  *
  * STOP, in order. Every step runs even when an earlier one failed, because the
- * last step is the database and a failure upstream must not leave it open:
+ * full-drain policy's last step is the database. Desktop quit preserves its
+ * historical process-exit policy: no additional joins, checkpoint or DB close:
  *
  * 1. **Producers, synchronously:** the scheduler and pending armed Runs, then
  *    the maintenance loops (retention, automatic reap). Nothing new is started
@@ -14,15 +15,15 @@
  *    `host-shutdown.ts`) and, when given, the agent socket, CONCURRENTLY. This
  *    is desktop's accepted-quit shape; each rejection is reported as it
  *    happens and the step still waits for the other.
- * 3. **An in-flight start** is joined. Closing the runtime above is what
+ * 3. **Full drain only:** an in-flight start is joined. Closing the runtime above is what
  *    unblocks a boot still waiting on recovery. Its rejection already
  *    reached the `start()` caller, so it does not make the stop unclean.
- * 4. **Detached work** (Done-trims a ticket move started, a headless socket's
+ * 4. **Full drain only:** detached work (Done-trims a ticket move started, a headless socket's
  *    in-flight requests; see `detached-work.ts`) is drained, so none of it
  *    outlives the database.
  * 5. **The activity watch** is stopped: its flush timer is the last thing that
  *    reads the database on its own, so it keeps flushing through the drains.
- * 6. **The WAL checkpoint and database close.**
+ * 6. **Full drain only:** the WAL checkpoint and database close.
  *
  * NO DEADLINE HERE. The deadline stays at the host edge, which wraps `stop()`
  * in `settleShutdownBeforeDeadline` (desktop's quit gate). A bound inside the
@@ -69,6 +70,9 @@ export interface HostLifecyclePorts {
   reportFailure(step: HostLifecycleStep, error: unknown): void;
 }
 
+/** Desktop exits with SQLite open; headless hosts drain all writers and close it. */
+export type HostStopPolicy = "desktop-quit" | "drain-and-close";
+
 export type HostLifecycleState =
   | "idle"
   | "starting"
@@ -97,7 +101,10 @@ export class HostStoppedError extends Error {
   override name = "HostStoppedError";
 }
 
-export function createHostLifecycle(ports: HostLifecyclePorts): HostLifecycle {
+export function createHostLifecycle(
+  ports: HostLifecyclePorts,
+  stopPolicy: HostStopPolicy = "drain-and-close",
+): HostLifecycle {
   let state: HostLifecycleState = "idle";
   let starting: Promise<void> | undefined;
   let stopping: Promise<HostStopReport> | undefined;
@@ -154,10 +161,12 @@ export function createHostLifecycle(ports: HostLifecyclePorts): HostLifecycle {
       pending("close-runtime", () => ports.closeRuntime()),
       closeSocket === undefined ? undefined : pending("close-socket", () => closeSocket()),
     ]);
-    await starting?.catch(() => undefined);
-    await pending("drain-detached", () => ports.drainDetached());
+    if (stopPolicy === "drain-and-close") {
+      await starting?.catch(() => undefined);
+      await pending("drain-detached", () => ports.drainDetached());
+    }
     sync("stop-activity", () => ports.stopActivity());
-    sync("close-database", () => ports.closeDatabase());
+    if (stopPolicy === "drain-and-close") sync("close-database", () => ports.closeDatabase());
     state = "stopped";
     return { reason, clean };
   }

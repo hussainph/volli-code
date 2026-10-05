@@ -734,6 +734,7 @@ const appStartup = app.whenReady().then(async () => {
   let ptyManagerRef: PtyManager | undefined;
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
+    stopPolicy: "desktop-quit",
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
@@ -1454,9 +1455,7 @@ const appStartup = app.whenReady().then(async () => {
       runtimeSessionAgents.stop();
       ptyManagerRef?.stopParkSweep();
     },
-    closeShells: () => backgroundShells.close(),
     closeSocket: shutdownAgentSocket,
-    settleProducers: () => runtimeAutomations.settled(),
   });
   const readyRuntimeServices = await desktopRuntime.start();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached

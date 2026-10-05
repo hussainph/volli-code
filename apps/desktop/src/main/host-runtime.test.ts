@@ -30,14 +30,8 @@ function fixture() {
     stopProducers: vi.fn(() => {
       calls.push("producers.stop");
     }),
-    closeShells: vi.fn(async () => {
-      calls.push("shells.close");
-    }),
     closeSocket: vi.fn(async () => {
       calls.push("socket.close");
-    }),
-    settleProducers: vi.fn(async () => {
-      calls.push("producers.settled");
     }),
   };
   const desktop = createDesktopHostRuntime(options);
@@ -54,7 +48,7 @@ function fixture() {
 }
 
 describe("desktop host adapter", () => {
-  it("binds only recovered services and joins runtime, shells and producers in order", async () => {
+  it("binds only recovered services and joins only the original runtime/socket drains", async () => {
     const f = fixture();
     expect(await f.desktop.start()).toBe(f.proof);
     expect(f.options.bindReady).toHaveBeenCalledExactlyOnceWith(f.proof);
@@ -62,28 +56,17 @@ describe("desktop host adapter", () => {
     f.calls.length = 0;
     f.owner().stopProducers();
     await Promise.all([f.owner().close(), f.owner().closeSocket?.()]);
-    expect(f.calls).toEqual([
-      "producers.stop",
-      "runtime.close",
-      "socket.close",
-      "shells.close",
-      "producers.settled",
-    ]);
+    expect(f.calls).toEqual(["producers.stop", "runtime.close", "socket.close"]);
   });
 
-  it.each(["runtime", "shells"] as const)(
-    "a failed %s close cannot skip later writer joins",
-    async (failure) => {
-      const f = fixture();
-      await f.desktop.start();
-      const error = new Error("close failed");
-      if (failure === "runtime") f.options.lifecycle.close.mockRejectedValueOnce(error);
-      else f.options.closeShells.mockRejectedValueOnce(error);
-      await expect(f.owner().close()).rejects.toBe(error);
-      expect(f.options.closeShells).toHaveBeenCalledOnce();
-      expect(f.options.settleProducers).toHaveBeenCalledOnce();
-    },
-  );
+  it("reports a failed runtime close without adding other joins", async () => {
+    const f = fixture();
+    await f.desktop.start();
+    const error = new Error("close failed");
+    f.options.lifecycle.close.mockRejectedValueOnce(error);
+    await expect(f.owner().close()).rejects.toBe(error);
+    expect(f.calls).toEqual(["ready", "bind", "ready"]);
+  });
 
   it("preserves accepted and refused synchronous quit gate order", () => {
     for (const refused of [false, true]) {
