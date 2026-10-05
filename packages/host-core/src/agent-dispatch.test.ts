@@ -77,6 +77,7 @@ function scenario() {
     token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
   };
   const service = createAgentCommandService({
+    busyWorktreeSites: async () => [],
     db: ctx.db,
     sessionEngine,
     appVersion: "1.2.3",
@@ -142,7 +143,7 @@ describe("the dispatch table (VC-167)", () => {
 
 describe("the envSession preload policy each entry declares", () => {
   /** The three that resolve their own terminal record instead of an identity. */
-  const NO_ENV_SESSION = ["session.link", "session.harness", "hook"];
+  const NO_ENV_SESSION = ["session.start", "session.link", "session.harness", "hook"];
 
   it("skips the VOLLI_SESSION lookup for exactly the three that resolve their own", () => {
     const skipped = Object.entries(AGENT_VERB_TABLE)
@@ -291,6 +292,7 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
     // Deliberately WITHOUT `--session`: that flag is the one selector `cost`
     // resolves against a projection, and it is covered on its own below.
     cost: { project: "/repo/volli" },
+    "session.start": { id: "VC-1" },
     "session.list": { project: "/repo/volli" },
     "session.peek": { id: "not-a-real-session" },
     "session.show": { id: "not-a-real-session" },

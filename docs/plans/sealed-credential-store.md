@@ -1,6 +1,10 @@
 # One sealed host credential store
 
-**Status:** owner-approved design, VC-631 / VC-539, 2026-10-04.
+**Status:** owner-approved design, VC-631 / VC-539, 2026-10-04. Lost-key
+degradation shipped in VC-641; the typed module, lock and key-id format in
+VC-642 ([what exists](../secrets.md#the-typed-credential-module-vc-642)). The
+§6 lock is SQLite's `fcntl` file lock on `host-credentials.lock`, the
+mechanism `db/open-lock.ts` already ships on both hosts.
 This PR changes documentation only: no migration, credential access or deletion.
 The owner's decisions are recorded at the end. **Lost-key degradation comes
 first:** fix hostd's current boot refusal using the existing store/key port,
@@ -415,6 +419,20 @@ package it for both hosts, and prove its semantics before implementation ships.
   Keep launch redaction history for replaced/revoked values and add every newly
   observed value before it can appear in tool output. If inventory is locked,
   block new secret-injecting/unredactable execution; the board still works.
+
+Two windows are accepted, not closed (VC-642 review, owner-accepted):
+
+- **Read-to-spawn.** A command's environment is read under the lock and then
+  the process starts. A revocation committed between the two still reaches
+  that one command; the next one reads again and is clean. Closing it would
+  mean holding the global lock across process start. This is the in-flight
+  authorized request above.
+- **Replaying an old legacy file.** The legacy `session-secrets.enc` payload
+  (`{ version: 1, secrets }`) has no generation or tombstone, so restoring an
+  older copy sealed under the same key (a hostile same-uid writer, or a hand
+  restore) brings revoked secrets back on the next read. Main behaves the
+  same. The typed inventory's generation is the answer for families that move
+  there; VC-644 or a later family adds a generation check against rollback.
 
 Only locking-aware builds may share the store. Stop older processes before
 upgrading/cutting over; advisory locks cannot constrain a binary that ignores

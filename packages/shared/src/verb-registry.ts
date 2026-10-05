@@ -326,6 +326,8 @@ export interface VerbEntry {
   /** The dot-name — this verb's identity on every surface. */
   readonly key: string;
   readonly accessModes: readonly VerbAccessMode[];
+  /** Person-only socket door; never widens an agent CLI or Role bundle. */
+  readonly operatorCli?: true;
   readonly actor: VerbActor;
   readonly handler: VerbBinding;
   /** Whether `volli help` prints the verb. Involuntary verbs stay unlisted. */
@@ -1530,33 +1532,11 @@ export const VERB_REGISTRY = [
     options: [],
   },
   {
-    // Attended-only Session start (VC-13): rides the app-owned product start
-    // route (the Sessions facade) over the socket. The CLI's only transport is
-    // that socket and the Pi runtime lives in Electron main, so there is
-    // deliberately no headless path — app not running is APP_UNREACHABLE, and
-    // `volli app launch` is the sanctioned recovery.
-    //
-    // CONTROL TIER, and now actually so (VC-92 §3, completed in VC-163).
-    //
-    // VC-162 added the `tool` mode and `project` bundle membership beside the
-    // `cli` one, which left the verb dual-surface — and `verbTier` read that
-    // honestly as coordination, because a tier is the WEAKEST door a verb is
-    // reachable through. Removing `cli` and flipping the actor to `role` is
-    // what shuts the socket door, and only now is the control claim true.
-    //
-    // Why it had to leave the socket rather than be gated on it: a socket call
-    // can be attributed but never authenticated, so "only a Board Session may
-    // start Sessions" would have rested on an environment variable any process
-    // running as the user can set. VC-163's per-attachment token narrows that
-    // to injected strings and cross-session confusion; it does not close it
-    // against a hostile same-uid process, and starting agent work is the one
-    // verb whose misuse cannot tolerate that residue. A tool call carries its
-    // caller in the binding instead of in the request.
-    //
-    // Both doors still resolve ONE handler id. The agent path is the `project`
-    // bundle's `session_start` tool; the human path is the app.
+    // Agent control stays tool-only. VC-622 admits the person at a headless
+    // host's operator door only; Session evidence always wins and is refused.
     key: "session.start",
     accessModes: ["tool"],
+    operatorCli: true,
     actor: "role",
     handler: { site: "main", id: "session.start" },
     listed: true,
@@ -1564,13 +1544,8 @@ export const VERB_REGISTRY = [
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
-    // Argv-free since VC-163, because this verb has no argv any more. Notes are
-    // printed on every door (see `commandDetail`), so a note naming `-m` would
-    // teach a flag the shell will refuse — the same lie the suppressed usage
-    // line was suppressed for. What each note says is true of the tool call and
-    // of the app alike.
     notes: [
-      "Runs in the app: attended-only, never headless; the board does not move.",
+      "The person may start over a headless host socket with an operator token. Agents use the named tool; the board does not move.",
       "Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.",
       "An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.",
       `A tier names a kind of work (${AGENT_MODEL_TIERS.join(", ")}) and resolves to the model configured for it in Settings; a tier and a model are alternatives.`,
@@ -3114,7 +3089,9 @@ export type VerbKey = RegistryEntry["key"];
 type SocketProjected<E extends VerbEntry> = E extends { handler: { site: "main" } }
   ? "cli" extends E["accessModes"][number]
     ? E["key"]
-    : never
+    : E extends { operatorCli: true }
+      ? E["key"]
+      : never
   : never;
 
 /**
@@ -3127,7 +3104,9 @@ export type AgentCommand = SocketProjected<RegistryEntry>;
 type SocketBinding<E extends VerbEntry> = E extends { handler: { site: "main" } }
   ? "cli" extends E["accessModes"][number]
     ? E["handler"]["id"]
-    : never
+    : E extends { operatorCli: true }
+      ? E["handler"]["id"]
+      : never
   : never;
 
 /**
@@ -3155,7 +3134,9 @@ export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly strin
 /** The socket-projected entries: a `main` handler site, plus a `cli` access mode. */
 function socketProjectedFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
   return entries.filter(
-    (entry) => entry.handler.site === "main" && entry.accessModes.includes("cli"),
+    (entry) =>
+      entry.handler.site === "main" &&
+      (entry.accessModes.includes("cli") || entry.operatorCli === true),
   );
 }
 
@@ -3177,7 +3158,8 @@ export function agentCommandBindingsFrom(
 
 /**
  * The commands the agent socket accepts — derived, never authored. A verb
- * reaches this list by declaring a `cli` access mode and a `main` handler, so
+ * reaches this list by declaring a `cli` access mode (or person-only operator
+ * exception) and a `main` handler, so
  * the socket surface cannot drift from the registry.
  *
  * The cast restores the literal union {@link agentCommandsFrom} widens to

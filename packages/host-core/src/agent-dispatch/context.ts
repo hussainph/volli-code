@@ -57,6 +57,8 @@ import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
+  /** Execution venue for host-issued Session facts; desktop keeps local. */
+  venue?: import("@volli/shared").SessionExecutionVenue;
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;
@@ -182,7 +184,7 @@ export interface AgentCommandServiceOptions {
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
   /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
-  busyWorktreeSites?: BusyWorktreeSites;
+  busyWorktreeSites: BusyWorktreeSites;
   /**
    * Interrupts every live agent attachment of a ticket after a committed
    * backward move. Its command and receipt are Session evidence; Esc leaves

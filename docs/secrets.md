@@ -33,7 +33,14 @@ commands in the requesting Session without reattachment.
 **Settings → Configure → Secrets** lists names, scope, and last use, with
 write-only replacement and revocation. Availability checks do not mark use; only
 subprocess injection updates last use. Revocation stops *future spawns* from
-receiving that scope's value. A running process already has its environment;
+receiving that scope's value, in every process sharing the profile (desktop,
+hostd, `volli-hostd credentials`): each injection reads the sealed file again
+under the credential lock (VC-642). Nothing waits for that lock on Electron's
+main thread: a command started while another Volli process holds it fails at
+once with "busy, try again", and Settings waits for it asynchronously, briefly,
+then shows the secrets as busy rather than missing. The window between that
+read and the process starting is accepted (see the typed module below). A
+running process already has its environment;
 stop its background shell to retire that copy. Historical values remain in the
 launch's redaction set after replacement/revocation so old output stays scrubbed.
 
@@ -59,7 +66,7 @@ status** the first time it is asked (`secrets/credential-state.ts`):
 |---|---|---|---|
 | `ready` | the sealed file opened | used | allowed |
 | `empty` | no sealed file yet, or after a reset | none | allowed |
-| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable | not used | refused |
+| `locked` | key missing, wrong, malformed, or unreadable by its owner (e.g. mode 0000); keychain locked, denied or unavailable; store sealed by the other adapter (`VSC1` on a headless host, `VSF1` on desktop); sealed file unreadable; written by a newer Volli (`newer-format`); the credential lock file unusable (`lock-unusable`: a symlink, not a file, another user's); another Volli process holding the lock at that instant (`busy`, for that read only) | not used | refused |
 | `refused` | key file unsafe: group/other access (including 0044, which denies its owner), another owner (told from its metadata when the open itself is denied), not a regular file; relative `VOLLI_SECRET_KEY_FILE` | not used; the key is never read for use | refused |
 | `corrupt` | the key opened and the file does not authenticate or parse | not used | refused |
 
@@ -74,6 +81,15 @@ store holds was never decrypted this launch, so no process can have it, and the
 redaction boundary stays whole. The status is remembered: a locked keychain is
 asked once per unlock, not by every read.
 
+A key lost while the host runs is noticed by the next read, not the next
+launch (VC-642): every read of the sealed file happens under the credential
+lock, and the headless key file is read again first. A removed key locks
+stored secrets (`missing`), a replaced one too (`wrong-key`); the file stays
+byte-identical, values already seen stay in the redaction set, and putting the
+key back and unlocking opens them again. A keychain is not asked again while
+the launch runs, since asking may prompt. A sealed file whose `version` is
+newer than this build's is `locked` (`newer-format`) and left alone.
+
 Only material sealed under this key is gated: today, persistent Session
 secrets. Model sign-ins (Pi `auth.json`), web search keys and MCP credentials
 are not under this key yet and keep working; the typed store (VC-631) adds
@@ -84,7 +100,9 @@ Two ways out, both a person's or local admin's intent, never an agent verb:
 - **Unlock**: put the key back, unlock the keychain or fix the mode, then try
   again (desktop: **Try again** in Settings → Configure → Secrets; hostd:
   restart).
-- **Reset** (`locked` or `corrupt` only): the sealed file is moved aside to
+- **Reset** (`locked` or `corrupt` only, and never for `busy` or
+  `lock-unusable`, where the store itself may be fine: wait and try again, or
+  move the lock file aside): the sealed file is moved aside to
   `session-secrets.enc.locked-<time>-<random>` beside it, and the store starts
   empty for the secrets to be entered again (desktop: **Reset…**, confirmed;
   hostd: `volli-hostd credentials reset --yes`, with hostd stopped). The move
@@ -104,6 +122,101 @@ remains the no-keychain choice. The research document named in the ticket is
 not present on the base commit (`f960412c`); the VC-470 store comments document
 the earlier prompt problem.
 
+## The typed credential module (VC-642)
+
+`@volli/host-core/secrets` holds the one module every application credential
+family moves onto ([design](plans/sealed-credential-store.md) §3, §6, §7).
+No family is sealed in its typed inventory yet: each moves in with its own
+ticket and compatibility gate (web keys VC-643/644, MCP and persistent Session
+imports VC-645, Pi VC-646, rotation VC-649). Persistent Session secrets already
+run on its lock and durable file engine, in their own file and format: the same
+`session-secrets.enc`, envelope (`VSF1`/`VSC1`) and `{ version: 1, secrets }`
+payload, so the release before this one opens, uses and writes everything this
+one writes (`n1-compatibility.test.ts`, against main's exact code).
+
+- **The lock** (`credential-lock.ts`). `host-credentials.lock` beside the
+  database: an empty 0600 file that desktop, hostd and `volli-hostd
+  credentials` lock before every read-for-use and every change. It is SQLite's
+  own file lock (`BEGIN EXCLUSIVE` on a connection that never writes, released
+  by `ROLLBACK`), the mechanism the database open lock and hostd's instance
+  lock already use, so it needs no new native module. On Linux and macOS that
+  is a POSIX `fcntl` lock: the kernel drops it when its process dies (a crash
+  never leaves a stale lock, and none is stolen by age or PID), it locks the
+  inode (two spellings of one data directory meet at one lock), and a child
+  process never inherits it. **Nothing ever waits for it synchronously**: a
+  synchronous critical section (Electron's main thread runs them) tries once
+  and refuses at once while another process holds it. A caller that can wait
+  retries asynchronously between attempts (`retryWhileBusy`), never holding
+  the lock across an await; an asynchronous holder queues in order and polls,
+  up to 10 s. A busy read is `locked` with reason `busy` for that answer alone,
+  never remembered, never "empty" and never a stale `ready`, and listing and
+  status come from one read so they cannot disagree. Every acquisition checks
+  that the inode it locked is still the file at the path and moves to the new
+  one if the lock file was unlinked and recreated, so processes do not stay
+  split across two lock files. A lock file that is a symlink, not a regular
+  file or another user's is `locked` (`lock-unusable`), with a sentence naming
+  it and the fix (move it aside); it is never a reason to reset the
+  credentials it guards. One of ours that holds junk is emptied in place. The
+  lock is advisory: an older build that does not take it, or a hostile
+  program running as the same user, is not stopped, so stop older processes
+  before upgrading.
+- **The durable file contract** (`durable-file.ts`, `sealed-document.ts`).
+  Under the lock, every read reloads the file and opens it with the key its
+  header names, so another process's revocation, and a key removed or
+  replaced mid-run, are seen by the next read rather than the next launch.
+  A change applies to what was just reloaded, never to a cached copy, so two
+  processes' changes both survive. A write checks that the active file is
+  still the bytes it opened (never sealing over a file it did not
+  authenticate), writes a unique `O_EXCL` 0600 temporary, fsyncs it, renames
+  it over the active name and fsyncs the directory. A crash leaves the old
+  file or the new one, never a mixture; a crashed writer's temporary is swept
+  by the next write. A directory that cannot be synced is reported; for the
+  typed inventory it is an "indeterminate" error, read again before retrying.
+- **Key ids and the envelope** (`credential-key-id.ts`, `sealed-envelope.ts`,
+  port `ports/credential-keyring.ts`). `host-credentials.enc` is
+  `VHC1 | backend | key id (16) | nonce (12) | tag (16) | ciphertext`,
+  AES-256-GCM with the header as associated data. The key id is 128 bits of a
+  labelled SHA-256 of the key, labelled differently from `VSF1`'s 64-bit id.
+  A keyring resolves exactly the id a header names and refuses an id two
+  keys claim; an unknown id is `locked`, never empty. A save never seals over
+  a file under another key: changing keys is rotation, an explicit operation.
+  The headless keyring (`fileCredentialKeyring`) reads the same key file as
+  `fileSecretKey`; a keychain keyring arrives with the first desktop family.
+- **The typed inventory** (`inventory.ts`, `credential-families.ts`). The
+  plaintext is a schema version, a UUID, a commit generation and typed
+  records, each with a UUID, a family, a fixed-field selector, a value, a
+  revision (the generation of the commit that last wrote it) and a timestamp.
+  A record removed and saved again gets a new UUID and a later revision, so
+  neither ever repeats, and a caller commits against the record it read
+  (`expect: { id, revision }`): a sign-out, or a sign-out then a new sign-in,
+  beats a refresh that finishes late. It keeps
+  VC-641's states; a newer schema is `locked` (`newer-format`) and never
+  rewritten.
+
+| Family | Selector | Value | Read by |
+|---|---|---|---|
+| `session-env` | scope (`project` or `always`), name, project | string | Session injection only |
+| `web-search` | provider | string | `WebAccessSettings` |
+| `mcp` | server id, endpoint | the whole MCP record (values, OAuth grant, registration) | MCP connection |
+| `pi-provider` | provider | Pi's tagged `Credential`, provider fields kept | Pi's `CredentialStore` adapter |
+| `host-private` | purpose | string | M2 pairing |
+| `device-verifier` | host, workspace, device | string | device authentication |
+| `worker-verifier` | host, workspace, worker | string | worker authentication |
+
+Not families, by owner decision: VC-623's operator verifier (its integrity
+is a root-owned file a service-writable store cannot give) and a user's own
+Pi `auth.json`. No provider custody: every key is generated and kept on the
+host. The new files are excluded from backups (`host-credentials.enc*`,
+`host-credentials.lock`), and structured file reads refuse
+`host-credentials.*` and `session-secrets.key*` beside the older stores.
+
+Two windows stay open by decision ([plan](plans/sealed-credential-store.md) §6):
+a revocation committed between reading a command's environment and starting
+the command still reaches that one command (the next one is clean), and
+restoring an older `session-secrets.enc` sealed under the same key brings
+revoked Session secrets back, because the legacy payload has no generation or
+tombstone. A later family (VC-644 or after) adds a generation check.
+
 ## Headless hosts
 
 A host with no OS keychain (`apps/hostd`, VC-562) passes the **file-key
@@ -120,8 +233,10 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   temporary file, fsynced, then hard-linked into place. You may write one
   yourself (`(umask 077 && openssl rand -base64 32 > key)`: under the usual
   umask 022, `openssl ... > key` creates it readable by everyone before any
-  `chmod` runs). Nothing reads
-  the file until stored secrets exist, and it is read once per process.
+  `chmod` runs). Nothing needs
+  the file until stored secrets exist; after that it is read again, under the
+  credential lock, before each use of the store, so a key removed or replaced
+  mid-run locks stored secrets at once.
 - **Refusals, each naming its fix.** Like ssh with a private key, Volli refuses
   a key file that grants group or other users any access (`chmod 600 <path>`)
   or belongs to another user (`chown`). It also refuses a path that is not a
@@ -289,5 +404,15 @@ sanitized failures. `file-key.test.ts` beside them runs the headless adapter
 through the real store in CI's Linux host lane. It covers the round trip,
 permission and owner refusals, a missing, different or keychain-sealed key,
 and the create race. `apps/desktop/src/main/secrets/codec.test.ts` opens
-keychain ciphertext captured before the port existed. UI tests exercise uncontrolled passwords,
+keychain ciphertext captured before the port existed. VC-642 adds real
+multi-process tests with child `node` processes (`store-processes.test.ts`,
+`credential-lock.test.ts`, `inventory.test.ts`): concurrent saves and
+last-use commits merge with none lost, a revocation in one process is not
+injected by the next command in another, a writer killed at each write step
+leaves the old file or the new one, the lock is released by a killed holder
+and not kept by its children, and a key removed or replaced mid-run locks
+stored secrets at the next read. `n1-compatibility.test.ts` and
+`codec.test.ts` run main's exact store, codec and key adapter (pinned by git
+blob id) against this build's files in both directions. They run on macOS
+locally and in CI's Linux host lane. UI tests exercise uncontrolled passwords,
 immediate clearing, trusted titles, labelled prose, and dedicated IPC only.

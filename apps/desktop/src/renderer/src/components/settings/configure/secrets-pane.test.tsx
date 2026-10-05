@@ -171,6 +171,24 @@ describe("Configure Secrets", () => {
     expect(host.textContent).toContain("No saved credentials");
   });
 
+  it.each([
+    ["busy", "Saved secrets are busy in another Volli process."],
+    ["lock-unusable", "Saved secrets can't be used: their lock file needs fixing."],
+  ] as const)(
+    "says when stored secrets are unavailable for a %s lock, offering Try again but never Reset (VC-642)",
+    async (reason, line) => {
+      api.secrets.list.mockResolvedValue({
+        ...locked,
+        credentials: { state: "locked", reason, unavailable: ["session-env"] },
+      });
+      await render();
+      const status = host.querySelector('[data-slot="secret-credentials-status"]');
+      expect(status?.textContent).toContain(line);
+      expect(status?.textContent).toContain("Try again");
+      expect(status?.textContent).not.toContain("Reset…");
+    },
+  );
+
   it("tries again, and says so when the keychain is still locked", async () => {
     api.secrets.list.mockResolvedValue(locked);
     api.secrets.unlock.mockResolvedValueOnce({ ok: true, credentials: lockedStatus });

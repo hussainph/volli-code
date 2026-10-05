@@ -60,6 +60,9 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        "src/session-runtime/facade.ts",
+        "src/session-runtime/agents.ts",
+        "src/session-runtime/context.ts",
         // The automation assembly over the ready Session facade (VC-622). Every
         // branch is a decision made once at boot on a machine nobody watches:
         // which degraded capability drops which port, and the two failures a
@@ -103,6 +106,22 @@ export default defineConfig({
         // aside rather than deleting it. A branch read wrong here bricks a
         // host or overwrites what a lost key still opens.
         "src/secrets/credential-state.ts",
+        // The typed sealed credential module (VC-642): the lock every process
+        // sharing a store takes, the durable write that never tears or
+        // overwrites a file it did not authenticate, the key-id format and the
+        // typed inventory. A branch wrong here is a lost revocation, a torn
+        // store, or a save sealed over credentials a lost key still opens.
+        "src/secrets/credential-lock.ts",
+        "src/secrets/durable-file.ts",
+        "src/secrets/sealed-document.ts",
+        "src/secrets/credential-key-id.ts",
+        "src/secrets/credential-families.ts",
+        "src/secrets/sealed-envelope.ts",
+        "src/secrets/inventory.ts",
+        // The Session-secrets store, now on the module above (VC-642): every
+        // branch decides whether a revoked secret is injected, a value is
+        // scrubbed, or a locked store is sealed over.
+        "src/secrets/store.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a

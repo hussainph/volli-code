@@ -1,5 +1,5 @@
 /**
- * The door {@link DesktopDecisions} speaks to Settings through (VC-478).
+ * The door {@link HostDecisions} speaks to Settings through (VC-478).
  *
  * Thin on purpose, like `../web/ipc.ts`: three guarded requests in, the whole
  * view out, and no policy of its own. Nothing here carries a secret — a cloud
@@ -15,7 +15,7 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import type { DesktopDecisions } from "@volli/host-core/decision/desktop";
+import type { HostDecisions } from "@volli/host-core/decision/desktop";
 
 /**
  * Registers the surface, or the honest refusal: `decisions` is null when the
@@ -23,7 +23,7 @@ import type { DesktopDecisions } from "@volli/host-core/decision/desktop";
  * way, because an unregistered `invoke` channel hangs rather than failing.
  */
 export function registerDecisionModelIpcHandlers(
-  decisions: DesktopDecisions | null,
+  decisions: HostDecisions | null,
   unavailableReason: string = "Decision models are unavailable.",
 ): void {
   if (decisions === null) {

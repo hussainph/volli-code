@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
+import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -50,6 +50,10 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
+  // JS callers must fail closed too; the type alone cannot guard a missing supplier.
+  if (typeof options.busyWorktreeSites !== "function") {
+    throw new Error("The busy-worktree supplier is required.");
+  }
   const now = options.now ?? Date.now;
   /**
    * The newest fire-time main has ingested per session — the same watermark the
@@ -121,6 +125,16 @@ export function createAgentCommandService(
       // Engine. That is what lets the `hook` hot path be judged without paying
       // for the identity resolution its table entry deliberately skips.
       const door = doorActor(request, verifyToken, options.verifyOperatorToken);
+      if (verbEntry(request.cmd)?.operatorCli === true && door.kind !== "operator") {
+        return {
+          v: 1,
+          ok: false,
+          error: makeAgentError(
+            "WRONG_DOOR",
+            "Agents start Sessions through the named session_start tool. This CLI door requires a verified hostd operator token.",
+          ),
+        };
+      }
       const projects = listProjects(options.db);
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or

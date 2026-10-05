@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { operatorTokenFor, readOperatorTokenFile, untrustedSocketPath } from "./client";
-import type { OperatorTokenFileSystem } from "./client";
+import type { OperatorTokenFileRead, OperatorTokenFileSystem } from "./client";
 import { runCli } from "./run";
 
 /** A stat answer for a token file. */
@@ -345,5 +345,84 @@ describe("runCli with an operator token", () => {
   it("sends none when no reader is wired", async () => {
     const { env } = await invoke({});
     expect(env).toEqual({ socket: "/socket" });
+  });
+});
+
+async function startOperatorSession(
+  env: Record<string, string | undefined>,
+  readToken?: () => Promise<OperatorTokenFileRead>,
+  fault?: string | null,
+) {
+  const request = vi.fn(async (): Promise<AgentResponse> => ({ v: 1, ok: true, data: {} }));
+  const stderr: string[] = [];
+  const code = await runCli(["session", "start", "VC-1", "-m", "hello", "--json"], {
+    env,
+    cwd: "/work",
+    stdout: () => {},
+    stderr: (text) => stderr.push(text),
+    readText: async () => "",
+    observe: async () => ({}),
+    request,
+    launch: async () => ({ alreadyRunning: true }),
+    ...(readToken === undefined ? {} : { readOperatorToken: readToken }),
+    ...(fault === undefined ? {} : { socketPathFault: async () => fault }),
+  });
+  return { code, request, stderr: stderr.join("") };
+}
+
+describe("the operator-only Session start door", () => {
+  it("keeps the no-reader fallback refused and accepts the operator environment without a file", async () => {
+    expect((await startOperatorSession({ VOLLI_SOCKET: "/socket" })).stderr).toContain(
+      "WRONG_DOOR",
+    );
+    expect(
+      (await startOperatorSession({ VOLLI_SOCKET: "/socket", VOLLI_OPERATOR_TOKEN: "op" })).code,
+    ).toBe(0);
+  });
+  it("routes with a private operator token, read exactly once", async () => {
+    const readToken = vi.fn(async () => ({ token: "op" }));
+    const result = await startOperatorSession({ VOLLI_SOCKET: "/socket" }, readToken);
+    expect(result.code).toBe(0);
+    expect(readToken).toHaveBeenCalledTimes(1);
+    expect(result.request).toHaveBeenCalledWith(
+      "/socket",
+      expect.objectContaining({
+        cmd: "session.start",
+        args: { id: "VC-1", message: "hello" },
+        ctx: { cwd: "/work", env: { socket: "/socket", operatorToken: "op" } },
+      }),
+    );
+  });
+  it.each([
+    {},
+    { VOLLI_SOCKET: "/socket" },
+    { VOLLI_SOCKET: "/socket", VOLLI_SESSION: "s", VOLLI_OPERATOR_TOKEN: "op" },
+    { VOLLI_SOCKET: "/socket", VOLLI_SESSION_TOKEN: "s", VOLLI_OPERATOR_TOKEN: "op" },
+  ])("keeps ordinary and Session callers refused: %j", async (env) => {
+    const readToken = vi.fn(async () => null);
+    const result = await startOperatorSession(env, readToken);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("WRONG_DOOR");
+    expect(
+      result.request.mock.calls.every(
+        (call) => (call as unknown as [string, AgentRequest])[1].cmd !== "session.start",
+      ),
+    ).toBe(true);
+    if (env["VOLLI_SESSION"] || env["VOLLI_SESSION_TOKEN"] || !env["VOLLI_SOCKET"])
+      expect(readToken).not.toHaveBeenCalled();
+  });
+  it("keeps the token home at an untrusted socket, and reports why", async () => {
+    const result = await startOperatorSession(
+      { VOLLI_SOCKET: "/socket", VOLLI_OPERATOR_TOKEN: "op" },
+      vi.fn(async () => null),
+      "unsafe socket",
+    );
+    expect(result.stderr).toContain("not sending the operator token");
+    expect(result.stderr).toContain("WRONG_DOOR");
+    expect(
+      result.request.mock.calls.every(
+        (call) => (call as unknown as [string, AgentRequest])[1].cmd !== "session.start",
+      ),
+    ).toBe(true);
   });
 });

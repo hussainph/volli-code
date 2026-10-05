@@ -23,7 +23,7 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicket, getTicketBrief } from "../db/tickets-repo";
 import { recordSessionStartedOnce } from "../db/events-repo";
 import { createModelAutoSelect } from "../decision/auto-select";
-import type { DesktopDecisions } from "../decision/desktop";
+import type { HostDecisions } from "../decision/desktop";
 import { loadSkills } from "../skills";
 import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
@@ -31,15 +31,24 @@ import { readModelAccessDefaults } from "./model-access-preferences";
 import { createSessions, StructuredSessionsError, type SessionSkillPorts } from "./sessions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAssembly } from "./assembly";
-import type { RecoveredSessionServices } from "./lifecycle";
+import {
+  mapRecoveredSessionServices,
+  readRecoveredSessionServices,
+  type RecoveredSessionServices,
+} from "./lifecycle";
+import {
+  createRuntimeSessionAgents,
+  type RuntimeSessionAgentOptions,
+  type RuntimeSessionAgents,
+} from "./agents";
 
-export function createRuntimeSessionFacade(options: {
+function assembleSessionServices(options: {
   host: HostCore;
   assembly: ReturnType<typeof createRuntimeAssembly>;
   homeDir: string;
   venue: SessionExecutionVenue;
   events: HostEventBus;
-  decisions: DesktopDecisions | null;
+  decisions: HostDecisions | null;
   delegation: TicketSessionDelegationStore | null;
 }) {
   const {
@@ -328,12 +337,55 @@ export function createRuntimeSessionFacade(options: {
     transcriptArtifacts: options.assembly.transcriptArtifacts,
   };
 }
-export type RuntimeSessionFacade = ReturnType<typeof createRuntimeSessionFacade>;
+export type RuntimeSessionServices = ReturnType<typeof assembleSessionServices>;
+
+/** Inert staging only. No ledger consumer can obtain services without recovery. */
+export interface RuntimeSessionFacade {
+  waitForBirth(sessionId: string): Promise<void>;
+  agents(options: Omit<RuntimeSessionAgentOptions, "facade" | "services">): RuntimeSessionAgents;
+}
+const servicesByFacade = new WeakMap<RuntimeSessionFacade, RuntimeSessionServices>();
+
+export function createRuntimeSessionFacade(
+  options: Parameters<typeof assembleSessionServices>[0],
+): RuntimeSessionFacade {
+  const services = assembleSessionServices(options);
+  let agents: RuntimeSessionAgents | undefined;
+  const facade: RuntimeSessionFacade = {
+    // Synchronization only: never reads the ledger or exposes Sessions.
+    waitForBirth: async (sessionId) => {
+      await services.sessions?.waitForBirth?.(sessionId);
+    },
+    agents: (agentOptions) => {
+      if (agents !== undefined) throw new Error("Session agents have already been staged.");
+      agents = createRuntimeSessionAgents({ ...agentOptions, facade, services });
+      return agents;
+    },
+  };
+  servicesByFacade.set(facade, services);
+  return facade;
+}
+
+export function recoveredRuntimeSessionServices(
+  ready: RecoveredSessionServices<RuntimeSessionFacade>,
+): RuntimeSessionServices {
+  const services = servicesByFacade.get(readRecoveredSessionServices(ready));
+  if (services === undefined)
+    throw new Error("The recovered facade belongs to a different runtime.");
+  return services;
+}
+
+/** Preserve proof revocation while adapting the opaque facade for automations. */
+export function recoveredSessionAutomationPorts(
+  ready: RecoveredSessionServices<RuntimeSessionFacade>,
+) {
+  return mapRecoveredSessionServices(ready, () => recoveredRuntimeSessionServices(ready));
+}
 
 /** Renderer listing/peek/stop hooks, supplied only from recovered services. */
 export function recoveredSessionClientPorts(ready: RecoveredSessionServices<RuntimeSessionFacade>) {
   const { sessionEngine, runtime, autoTitler, peekSummarizer, transcriptArtifacts } =
-    ready.services;
+    recoveredRuntimeSessionServices(ready);
   return {
     sessionEngine,
     autoTitle:
@@ -359,7 +411,7 @@ export function recoveredSessionCommandPorts(
     autoTitler,
     piRuntimeHost,
     transcriptArtifacts,
-  } = ready.services;
+  } = recoveredRuntimeSessionServices(ready);
   if (sessionEngine === null) throw new Error("The Session engine is unavailable.");
   return {
     sessionEngine,

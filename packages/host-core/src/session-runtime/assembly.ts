@@ -30,7 +30,7 @@ import { McpSessionHost, serversForFrozenMcpTools } from "../mcp/session-host";
 import type { McpSettingsService } from "../mcp/settings";
 import type { DesktopMcpDispatch } from "../mcp/dispatch-policy";
 import type { DesktopCodeMode } from "../codemode/dev-config";
-import type { DesktopDecisions } from "../decision/desktop";
+import type { HostDecisions } from "../decision/desktop";
 import type { WebAccessSettings } from "../web/settings";
 import { webPortsFor } from "../web/ports";
 import type { SecretService } from "../secrets/service";
@@ -59,7 +59,7 @@ export interface RuntimeAssemblyOptions {
   venue: SessionExecutionVenue;
   hostPorts: Pick<HostCorePorts, "events" | "connectivity">;
   modelAccess: PiModelAccess | null;
-  decisions: DesktopDecisions | null;
+  decisions: HostDecisions | null;
   webAccess: WebAccessSettings | null;
   mcpSettings: McpSettingsService | null;
   mcpDispatch: DesktopMcpDispatch;
@@ -414,6 +414,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
+          venue,
           db: dbHandle.db,
           events: options.hostPorts.events,
           dataDir,

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vite-plus/test";
+import { expect, expectTypeOf, it, vi } from "vite-plus/test";
 import type { AgentRequest } from "@volli/shared";
 import { createHostAgentServices, createHostAgentSocket } from "./agent-services";
 import { HEADLESS_ATTENTION } from "./ports";
@@ -24,6 +24,7 @@ it("uses the same event bus and attention delivery for socket commands without a
       attention: { ...HEADLESS_ATTENTION, deliver },
     });
     const commands = services.createCommands({
+      busyWorktreeSites: async () => [],
       db: ctx.db,
       sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "0.2.1",
@@ -63,6 +64,18 @@ it("uses the same event bus and attention delivery for socket commands without a
   } finally {
     ctx.cleanup();
   }
+});
+
+it("requires a busy-worktree supplier at both the typed and JavaScript doors", () => {
+  type Options = Parameters<ReturnType<typeof createHostAgentServices>["createCommands"]>[0];
+  expectTypeOf<undefined>().not.toExtend<Options["busyWorktreeSites"]>();
+  const services = createHostAgentServices({
+    events: { publish: vi.fn() },
+    attention: HEADLESS_ATTENTION,
+  });
+  expect(() => services.createCommands({} as Options)).toThrow(
+    "busy-worktree supplier is required",
+  );
 });
 
 it("owns the socket before database construction and tolerates shutdown before start", async () => {

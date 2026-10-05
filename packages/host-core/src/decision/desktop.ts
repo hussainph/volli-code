@@ -7,7 +7,7 @@
  * module only supplies what only the desktop has — where the setting lives,
  * which project a Session belongs to, and the Session ledger its usage is
  * billed into. Every feature that calls a decision model holds the one
- * {@link DesktopDecisions.port} built here, under its own purpose.
+ * {@link HostDecisions.port} built here, under its own purpose.
  */
 
 import type Database from "better-sqlite3";
@@ -51,7 +51,7 @@ const CATALOG_TIMEOUT_MS = 5_000;
 /** How long a person's connection test may run before it reports a timeout. */
 const TEST_TIMEOUT_MS = 30_000;
 
-export interface DesktopDecisionsOptions {
+export interface HostDecisionsOptions {
   db: Database.Database;
   /** Pi's model collection — the same one chat turns run on. */
   models: PiModelAccess["models"];
@@ -65,7 +65,7 @@ export interface DesktopDecisionsOptions {
   log?: (message: string, error: unknown) => void;
 }
 
-export interface DesktopDecisions {
+export interface HostDecisions {
   /** The host decision service. Every caller names its purpose. */
   port: DecisionPort;
   /**
@@ -90,7 +90,7 @@ function deadline(ms: number): AbortSignal {
   return AbortSignal.timeout(ms);
 }
 
-export function createDesktopDecisions(options: DesktopDecisionsOptions): DesktopDecisions {
+export function createDesktopDecisions(options: HostDecisionsOptions): HostDecisions {
   const { db, models } = options;
   const now = options.now ?? Date.now;
   const log = options.log ?? ((message, error) => console.warn(message, error));

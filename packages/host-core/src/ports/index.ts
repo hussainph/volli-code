@@ -20,6 +20,7 @@ export type {
   HostEventMap,
   HostEventTopic,
 } from "./events";
+export type { CredentialKey, CredentialKeyBackend, CredentialKeyring } from "./credential-keyring";
 export { NO_POWER_EVENTS, type PowerEvent, type PowerPort } from "./power";
 export {
   isSecretKeyUnavailable,

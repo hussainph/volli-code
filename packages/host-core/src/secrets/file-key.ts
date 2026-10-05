@@ -33,8 +33,11 @@
  * - **Never logged.** No key byte, and no secret, reaches a message, a log
  *   line or an error. Messages name the key file's path, which is
  *   configuration.
- * - **Loaded once per process**, lazily: an empty profile, or one with only
- *   Session-scoped secrets, never touches the file.
+ * - **Loaded lazily, checked again before each use**: an empty profile, or
+ *   one with only Session-scoped secrets, never needs a key. Once one is in
+ *   use, the store's probe reads the file again under the credential lock
+ *   before every read (VC-642), so a key removed or replaced mid-run locks
+ *   stored secrets at the next read instead of the next launch.
  *
  * Its envelope is `VSF1 | key id (8) | iv (12) | tag (16) | ciphertext`,
  * AES-256-GCM with the first twelve bytes as associated data. The key id is a
@@ -66,7 +69,9 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
+import type { CredentialKey, CredentialKeyring } from "../ports/credential-keyring";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "../ports/secret-key";
+import { credentialKeyId } from "./credential-key-id";
 
 /** The secret store's file, beside the database in every host. */
 export const SECRET_STORE_FILE_NAME = "session-secrets.enc";
@@ -131,7 +136,18 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
   return {
     isEncryptionAvailable: () => true,
     probe() {
-      inspectSecretKeyFile(path);
+      // The store probes under its lock before every read (VC-642): hold only
+      // what the file holds now, so a key removed or replaced while the host
+      // runs is refused by the next open (`missing`, `wrong-key`) rather than
+      // used from memory until the next launch.
+      const current = readKey(path);
+      const same = current !== null && key !== undefined && current.equals(key);
+      current?.fill(0);
+      if (!same) {
+        key?.fill(0);
+        key = undefined;
+        id = undefined;
+      }
     },
     encryptString(value) {
       if (key === undefined) adopt(readKey(path) ?? createKey(path));
@@ -192,6 +208,56 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
         decipher.update(value.subarray(tagAt + TAG_BYTES)),
         decipher.final(),
       ]).toString("utf8");
+    },
+  };
+}
+
+/**
+ * The same key file as a {@link CredentialKeyring}, for the typed inventory
+ * (VC-642, `inventory.ts`). Every {@link CredentialKeyring.probe}, which the
+ * inventory runs under its lock before each read, reads the file again and
+ * holds what it finds: a key removed or replaced while the host runs is
+ * noticed by the next read (`missing`, `wrong-key`), and a key another
+ * process rotated in is picked up. Like {@link fileSecretKey}, it creates a
+ * key only to seal, and only when the file is absent.
+ */
+export function fileCredentialKeyring(options: FileSecretKeyOptions): CredentialKeyring {
+  const path = options.path;
+  let held: CredentialKey | null | undefined;
+  const load = (): CredentialKey | null => {
+    const key = readKey(path);
+    return key === null ? null : { id: credentialKeyId(key), key };
+  };
+  return {
+    backend: "file",
+    probe() {
+      held = load();
+    },
+    resolve(id) {
+      held ??= load();
+      if (held === null) {
+        throw new SecretKeyUnavailableError(
+          "missing",
+          `Saved credentials exist, but their key file ${path} is missing. Put the key file ` +
+            "back (mode 0600) to open them. Volli will not make a new key while they exist.",
+        );
+      }
+      if (held.id !== id) {
+        throw new SecretKeyUnavailableError(
+          "wrong-key",
+          `The key file ${path} is not the key the saved credentials were sealed with. ` +
+            "Put the original key file back.",
+        );
+      }
+      return held.key;
+    },
+    active() {
+      held ??= load();
+      if (held === null) {
+        const key = createKey(path);
+        held = { id: credentialKeyId(key), key };
+      }
+      return held;
     },
   };
 }

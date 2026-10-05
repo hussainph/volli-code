@@ -13,6 +13,8 @@ export function credentialPath(path: string): boolean {
     name.startsWith(".env.") ||
     name.startsWith("mcp-credentials.json") ||
     name.startsWith("session-secrets.enc") ||
+    name.startsWith("session-secrets.key") ||
+    name.startsWith("host-credentials.") ||
     name === "auth.json" ||
     name === "mcp-auth.json" ||
     /(?:^|\/)\.(?:ssh|aws|gnupg)(?:\/|$)/i.test(path) ||

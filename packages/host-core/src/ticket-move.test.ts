@@ -41,6 +41,7 @@ beforeEach(() => {
       blobsRoot: "unused",
     },
     now: () => 100,
+    busySites: async () => [],
     onMutation: vi.fn(),
     onDeliberateMove: vi.fn(),
     interruptTicketSessions: vi.fn(() => []),
@@ -104,6 +105,23 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it("commits Done but never starts a destructive trim without activity evidence", async () => {
+  ticket("target");
+  delete ports.busySites;
+  const trim = vi.spyOn(worktree, "trimFinishedWorktree");
+  expect(
+    column(
+      await executeTicketMove(
+        ports,
+        { projectId: PROJECT, ticketId: "target", toStatus: "done" },
+        context(),
+      ),
+      "done",
+    ),
+  ).toEqual(["target"]);
+  expect(trim).not.toHaveBeenCalled();
+});
 
 describe.each(ACTORS)("executeTicketMove with $kind actor", (actor) => {
   it("starts Done trim immediately, detaches it from the reply, and ignores a duplicate while it is pending", async () => {

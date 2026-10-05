@@ -562,7 +562,14 @@ describe("questions asked while a call runs", () => {
     let peakAsking = 0;
     let running = 0;
     let peakRunning = 0;
-    const mcpTool = (toolName: string, signIn: boolean): SurfaceTool => {
+    let requested = 0;
+    const readsStarted = Promise.withResolvers<void>();
+    const allowQuestions = Promise.withResolvers<void>();
+    const questionsRequested = Promise.withResolvers<void>();
+    const questionsStarted = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const answers = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const controller = new AbortController();
+    const mcpTool = (toolName: string, questionIndex?: number): SurfaceTool => {
       const marked = markedRead(toolName);
       return {
         id: marked.providerName,
@@ -573,14 +580,18 @@ describe("questions asked while a call runs", () => {
           execute: async () => {
             running += 1;
             peakRunning = Math.max(peakRunning, running);
-            await sleep(20);
-            if (signIn) {
+            if (running === 3) readsStarted.resolve();
+            await allowQuestions.promise;
+            if (questionIndex !== undefined) {
               // A server that needs a sign-in asks the person mid-call, as
               // VC-470's host does — through the scope the call was lent.
+              requested += 1;
+              if (requested === 2) questionsRequested.resolve();
               await scopedAsk(async () => {
                 asking += 1;
                 peakAsking = Math.max(peakAsking, asking);
-                await sleep(700);
+                questionsStarted[questionIndex]!.resolve();
+                await answers[questionIndex]!.promise;
                 asking -= 1;
               });
             }
@@ -596,23 +607,50 @@ describe("questions asked while a call runs", () => {
         },
       };
     };
-    const f = fixture({
-      tools: [mcpTool("first", true), mcpTool("second", true), mcpTool("third", false)],
-      limits: { timeoutMs: 1_000 },
-    });
-    f.host.honourParallelReads = true;
-    const g = createCodeModeTool(f.host);
-    const [first, second, third] = ["first", "second", "third"].map(
-      (name) => markedRead(name).providerName,
-    );
-    const result = await g.execute("outer", {
-      code: `return (await Promise.all([tools.${first}({}), tools.${second}({}), tools.${third}({})])).map((one) => one.text);`,
-    });
-    const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-    expect(text).toContain('["first","second","third"]');
-    expect(peakAsking).toBe(1);
-    expect(peakRunning).toBe(3);
-    expect(result.details.pausedMs).toBeGreaterThanOrEqual(1_400);
+    // Fake the host's Date.now and deadline timers together. The real worker
+    // reaches each barrier through IPC; no wall-clock sleep measures a pause.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const f = fixture({
+        tools: [mcpTool("first", 0), mcpTool("second", 1), mcpTool("third")],
+        limits: { timeoutMs: 1_000 },
+        signal: controller.signal,
+      });
+      f.host.honourParallelReads = true;
+      const g = createCodeModeTool(f.host);
+      const [first, second, third] = ["first", "second", "third"].map(
+        (name) => markedRead(name).providerName,
+      );
+      const pending = g.execute("outer", {
+        code: `return (await Promise.all([tools.${first}({}), tools.${second}({}), tools.${third}({})])).map((one) => one.text);`,
+      });
+      await readsStarted.promise;
+      vi.advanceTimersByTime(20);
+      allowQuestions.resolve();
+      await questionsRequested.promise;
+      await questionsStarted[0]!.promise;
+      vi.advanceTimersByTime(700);
+      answers[0]!.resolve();
+      await questionsStarted[1]!.promise;
+      // The held questions exceed the entire active budget without expiring it.
+      vi.advanceTimersByTime(700);
+      answers[1]!.resolve();
+      const result = await pending;
+      const text = result.content
+        .map((block) => (block.type === "text" ? block.text : ""))
+        .join("");
+      expect(result.isError).not.toBe(true);
+      expect(text).toContain('["first","second","third"]');
+      expect(peakAsking).toBe(1);
+      expect(peakRunning).toBe(3);
+      expect(result.details.pausedMs).toBe(1_400);
+      expect(result.details.activeMs).toBe(20);
+    } finally {
+      controller.abort();
+      allowQuestions.resolve();
+      for (const answer of answers) answer.resolve();
+      vi.useRealTimers();
+    }
   }, 15_000);
 });
 

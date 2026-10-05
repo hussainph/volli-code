@@ -526,3 +526,37 @@ describe("closeStaleAttachments", () => {
     ]);
   });
 });
+
+it("recovers only the supplied headless venue, leaving other hosts alone", async () => {
+  const venue = { id: "hostd-one", kind: "remote" as const };
+  const target = recorder({
+    p: [
+      session(
+        "s",
+        [
+          attachment({ id: "ours", adapterId: "pi", venue }),
+          attachment({ id: "terminal", venue }),
+          attachment({ id: "other", adapterId: "pi", venue: { id: "hostd-two", kind: "remote" } }),
+          attachment({ id: "desktop", adapterId: "pi" }),
+        ],
+        true,
+      ),
+    ],
+  });
+  await closeStaleAttachments({
+    engine: target.engine,
+    reconcile: target.reconcile,
+    projectIds: ["p"],
+    now: () => 100,
+    newId: () => "id",
+    onError: vi.fn(),
+    venue,
+  });
+  expect(target.reconciled).toEqual([{ sessionId: "s", attachmentId: "ours" }]);
+  expect(target.observed).toHaveLength(2);
+  expect(
+    target.observed.every(
+      (event) => event.attachmentId === "terminal" && event.provenance.venue?.id === "hostd-one",
+    ),
+  ).toBe(true);
+});

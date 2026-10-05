@@ -168,7 +168,10 @@ function asSession(
 
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
-  options: Omit<AgentCommandServiceOptions, "sessionEngine"> & { sessionEngine?: SessionEngine },
+  options: Omit<AgentCommandServiceOptions, "sessionEngine" | "busyWorktreeSites"> & {
+    sessionEngine?: SessionEngine;
+    busyWorktreeSites?: AgentCommandServiceOptions["busyWorktreeSites"];
+  },
 ) {
   // The acting Session has to EXIST for the door to resolve it: a valid token
   // naming a Session the Engine cannot find is an error, not an actor. Seeded
@@ -182,6 +185,7 @@ function createAgentCommandService(
   }
   return createAgentCommandServiceBase({
     ...options,
+    busyWorktreeSites: options.busyWorktreeSites ?? (async () => []),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
   });
@@ -3328,7 +3332,12 @@ describe("agent command service", () => {
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
     const sessionEngine = createTestSessionEngine(ctx.db);
-    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      venue: { id: "hostd", kind: "remote" },
+    });
 
     for (const cmd of ["session.done", "session.blocked"] as const) {
       const response = await service.execute({
@@ -3349,6 +3358,7 @@ describe("agent command service", () => {
     for (const event of signals) {
       // The legacy adapter/terminal source stays; the new part is the origin,
       // read back through the same reader every other door's origin is.
+      expect(event.provenance.venue).toEqual({ id: "hostd", kind: "remote" });
       expect(event.provenance.source).toMatchObject({ kind: "adapter", id: "terminal" });
       expect(
         readSessionOrigin(

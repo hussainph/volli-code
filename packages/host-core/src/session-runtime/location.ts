@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
-import type { Session } from "@volli/shared";
+import type { Session, SessionExecutionVenue } from "@volli/shared";
 
 import type { HostEventBus } from "../ports";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
@@ -60,8 +60,9 @@ async function withStartLease<T>(directory: string, work: () => Promise<T>): Pro
 export function createDesktopSessionLocationResolver(
   db: Database.Database,
   ports: { events: HostEventBus },
-  options: { dataDir: string },
+  options: { dataDir: string; venue?: SessionExecutionVenue },
 ): SessionLocationResolver {
+  const venue = options.venue ?? LOCAL;
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
     if (!project) throw new Error(`Project ${session.projectId} was not found`);
@@ -76,7 +77,7 @@ export function createDesktopSessionLocationResolver(
   const prepare = async (session: Session): Promise<SessionLocation> => {
     const { project, ticket } = site(session);
     if (ticket === null || !ticket.usesWorktree) {
-      return withStartLease(project.path, async () => ({ directory: project.path, venue: LOCAL }));
+      return withStartLease(project.path, async () => ({ directory: project.path, venue }));
     }
     // The lease covers the whole materialization: `ensure` is git work plus a
     // durable event, and a cleanup must not be able to take the directory
@@ -103,14 +104,14 @@ export function createDesktopSessionLocationResolver(
           kind: "worktree",
         });
       }
-      return { directory: identity.worktreePath, venue: LOCAL };
+      return { directory: identity.worktreePath, venue };
     });
   };
 
   return {
     async resolve(session) {
       const { project, ticket } = site(session);
-      return { directory: ticket?.worktreePath ?? project.path, venue: LOCAL };
+      return { directory: ticket?.worktreePath ?? project.path, venue };
     },
 
     prepare,
