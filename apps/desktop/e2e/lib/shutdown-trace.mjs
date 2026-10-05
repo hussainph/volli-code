@@ -34,7 +34,9 @@ export function sampleStalledClose(child, path) {
                   await execFileAsync(
                     "/usr/bin/sample",
                     [String(pid), "2", "-file", `${path}.${pid}.sample.txt`],
-                    { timeout: 7000 },
+                    // Symbolication can outlive the sampled process on a loaded runner.
+                    // This diagnostic budget does not delay closeAppBounded's signals.
+                    { timeout: 60000 },
                   );
                 } catch (error) {
                   traceClose(path, "sample-failed", { sampledPid: pid, error: error.message });
