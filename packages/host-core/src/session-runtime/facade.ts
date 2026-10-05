@@ -17,7 +17,7 @@ import {
   type SessionExecutionVenue,
   type SessionOrigin,
 } from "@volli/shared";
-import type { HostCore } from "../index";
+import { isLiveHost, type HostCore } from "../index";
 import type { HostEventBus } from "../ports/events";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket, getTicketBrief } from "../db/tickets-repo";
@@ -59,8 +59,8 @@ function assembleSessionServices(options: {
     decisions: desktopDecisions,
     delegation: sessionDelegation,
   } = options;
-  const { sessionEngine } = host;
-  const sessionDb = host.database.ok ? host.database.db : null;
+  const sessionEngine = isLiveHost(host) ? host.sessionEngine : null;
+  const sessionDb = isLiveHost(host) ? host.database.db : null;
   const { sessionRuntime, piRuntimeHost, sessionToolSurface } = options.assembly;
   const sessionSkills: SessionSkillPorts | null =
     sessionEngine !== null && sessionDb !== null
@@ -418,9 +418,9 @@ export function recoveredSessionCommandPorts(
     readTranscriptArtifact: (reference: Parameters<typeof transcriptArtifacts.read>[0]) =>
       transcriptArtifacts.read(reference),
     ...(sessions === null ? {} : { sessions }),
-    ...(sessionSkills === null
-      ? {}
-      : { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }),
+    // The host's live/degraded choice creates engine and skills together.
+    // An engine above proves these skills exist; no impossible degraded branch.
+    skillsIndex: (projectId: string) => (sessionSkills as SessionSkillPorts).index(projectId, []),
     ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
     ...(autoTitler === null
       ? {}

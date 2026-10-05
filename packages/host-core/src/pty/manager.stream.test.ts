@@ -9,14 +9,27 @@ import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { TerminalDataEvent } from "@volli/shared";
+import type { SessionExecutionVenue, TerminalDataEvent } from "@volli/shared";
+import type { SessionEngine } from "@volli/session-engine";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import type { HostClientEventSink, HostEventMap, HostEventTopic } from "../ports";
 import { syncProjectRoots } from "../project-roots";
 import { BATCH_MAX_CHARS } from "./output";
-import { PtyManager, type PtyHost } from "./manager";
+import { PtyManager, type PtyHost, type PtyManagerOptions } from "./manager";
 import { parkConfigFromEnv } from "./park";
+
+// Construction stays one options object whose first four fields are required
+// (VC-627). These checks run in the package typecheck.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type RequiredOptionKeys = {
+  [K in keyof PtyManagerOptions]-?: {} extends Pick<PtyManagerOptions, K> ? never : K;
+}[keyof PtyManagerOptions];
+const requiredOptionKeys: Equal<RequiredOptionKeys, "host" | "db" | "dbError" | "sessionEngine"> =
+  true;
+const engineStaysNullable: Equal<PtyManagerOptions["sessionEngine"], SessionEngine | null> = true;
+const oneOptionsObject: Equal<ConstructorParameters<typeof PtyManager>, [PtyManagerOptions]> = true;
 
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node-pty", () => ({ spawn }));
@@ -93,14 +106,13 @@ beforeEach(async () => {
     },
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
   };
-  manager = new PtyManager(
+  manager = new PtyManager({
     host,
-    testDb.db,
-    "",
-    createTestSessionEngine(testDb.db),
-    undefined,
-    parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
-  );
+    db: testDb.db,
+    dbError: "",
+    sessionEngine: createTestSessionEngine(testDb.db),
+    parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
+  });
 });
 
 afterEach(() => {
@@ -290,5 +302,90 @@ describe("ownership by client id (VC-509, VC-560)", () => {
     manager.detach(holder.sink, sessionId);
     expect(manager.busySessions({ id: "holder" })).toEqual([]);
     expect(manager.busySessions()).toEqual([{ sessionId, process: "node" }]);
+  });
+});
+
+describe("construction options (VC-627)", () => {
+  it("keeps the type-level construction shape", () => {
+    expect([requiredOptionKeys, engineStaysNullable, oneOptionsObject]).toEqual([true, true, true]);
+  });
+
+  it("builds a degraded supervisor from the four required fields alone", async () => {
+    const degraded = new PtyManager({
+      host: {
+        events: { publish: () => {} },
+        worktreeDeps: () => {
+          throw new Error("a degraded supervisor never asks for a worktree");
+        },
+        ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
+      },
+      db: null,
+      dbError: "database failed to open",
+      sessionEngine: null,
+    });
+    expect(
+      await degraded.create(makeClient("d").sink, {
+        workspaceId: "w",
+        cwd: root,
+        cols: 80,
+        rows: 24,
+      }),
+    ).toEqual({ ok: false, error: "database failed to open" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  async function venueOf(
+    hostVenue: SessionExecutionVenue | undefined,
+    venue?: SessionExecutionVenue,
+  ) {
+    const host: PtyHost = {
+      ...(hostVenue === undefined ? {} : { venue: hostVenue }),
+      events: { publish: () => {} },
+      worktreeDeps: () => {
+        throw new Error("a Board Session never asks for a worktree");
+      },
+      ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
+    };
+    const engine = createTestSessionEngine(testDb.db);
+    const built = new PtyManager({
+      host,
+      db: testDb.db,
+      dbError: "",
+      sessionEngine: engine,
+      parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
+      ...(venue === undefined ? {} : { venue }),
+    });
+    spawn.mockReturnValueOnce(makeFakePty());
+    const created = await built.create(makeClient("v").sink, {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    if (!created.ok) throw new Error(created.error);
+    const projection = await engine.getSession({ sessionId: created.sessionId });
+    const events = await engine.listEvents({ sessionId: created.sessionId });
+    built.killAll();
+    return {
+      attachment: projection!.attachments[0]!.venue,
+      events: [...new Set(events.map((event) => event.provenance.venue?.id))],
+    };
+  }
+
+  it("records an explicit venue option over the host's", async () => {
+    expect(await venueOf({ id: "host", kind: "remote" }, { id: "option", kind: "remote" })).toEqual(
+      { attachment: { id: "option", kind: "remote" }, events: ["option"] },
+    );
+  });
+
+  it("falls back to the host's venue, then to local", async () => {
+    expect(await venueOf({ id: "host", kind: "remote" })).toEqual({
+      attachment: { id: "host", kind: "remote" },
+      events: ["host"],
+    });
+    expect(await venueOf(undefined)).toEqual({
+      attachment: { id: "local", kind: "local" },
+      events: ["local"],
+    });
   });
 });

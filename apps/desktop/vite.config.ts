@@ -651,6 +651,7 @@ export default defineConfig(({ mode }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/host-runtime.ts",
         // When the web keys' sealed mirror reconciles, and that an accepted quit
         // stops it before it can start keychain work (VC-643). Every branch is
         // a rule about teardown nobody watches.

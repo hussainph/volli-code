@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vite-plus/test";
 import type { HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
-import type { HostCore, HostCorePorts } from "../index";
+import type { DegradedHostCore, HostCorePorts, LiveHostCore } from "../index";
 import type { AgentObservability } from "../observability/settings";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
@@ -28,6 +28,12 @@ vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
 vi.mock("./session-resumptions", () => ({ catchUpSessionResumptions: vi.fn(async () => {}) }));
+// The real VC-618 drain still runs, so its RPC/runtime → MCP → flush order is
+// asserted end to end below; the spy records the owners the lifecycle hands it.
+vi.mock("../host-shutdown", async (original) => {
+  const actual = await original<typeof import("../host-shutdown")>();
+  return { shutdownNativeSessions: vi.fn(actual.shutdownNativeSessions) };
+});
 vi.mock("../shell/shell-notices", () => ({
   relayShellNotices: vi.fn(() => vi.fn(async () => {})),
 }));
@@ -99,16 +105,13 @@ function fixture() {
     listSessions: vi.fn(async () => []),
   } as unknown as SessionEngine;
   const host = {
+    kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: engine,
     hostNoticeOutbox: {},
     sessionWakeBus: { subscribe: vi.fn() },
-    maintenance: {
-      shutdownNativeSessions: (
-        owners: Parameters<HostCore["maintenance"]["shutdownNativeSessions"]>[0],
-      ) => shutdownNativeSessions({ ...owners, log: console }),
-    },
-  } as unknown as HostCore;
+    detachedWork: { track: vi.fn() },
+  } as unknown as LiveHostCore;
   const ports = {
     power: { on: vi.fn(), removeListener: vi.fn() },
     events: { publish: vi.fn() },
@@ -147,7 +150,19 @@ function fixture() {
     },
     stopProducers: () => calls.push("automations.stop"),
   };
-  return { options, calls, services, delivery, resume, runtime, rpc, engine, quit: () => quit() };
+  return {
+    options,
+    calls,
+    services,
+    delivery,
+    resume,
+    watchdog,
+    runtime,
+    rpc,
+    observability,
+    engine,
+    quit: () => quit(),
+  };
 }
 
 describe("Session lifecycle port ordering (replaces desktop source scans)", () => {
@@ -216,6 +231,18 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     runtime.resolve();
     await drain;
     expect(f.calls.slice(-2)).toEqual(["mcp", "flush"]);
+    // One drain, through host-core's own shutdown with the host's log, not a
+    // maintenance-bag closure a host could forget to stage.
+    expect(shutdownNativeSessions).toHaveBeenCalledOnce();
+    expect(shutdownNativeSessions).toHaveBeenCalledWith({
+      log: f.options.ports.log,
+      sessionWatchdog: f.watchdog,
+      scheduledResumeHost: f.resume,
+      shellHostNotices: f.delivery,
+      sessionRpc: f.rpc,
+      sessionRuntime: f.runtime,
+      agentObservability: f.observability,
+    });
     await expect(owner.ready()).rejects.toThrow("closing");
   });
 
@@ -395,7 +422,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     });
     const owner = createSessionRuntimeLifecycle({
       ...f.options,
-      host: { ...f.options.host, sessionWakeBus: null },
+      // Type-impossible on a live host; covers the guard lifecycle.ts still carries.
+      host: { ...f.options.host, sessionWakeBus: null } as unknown as LiveHostCore,
     });
     const boot = owner.ready();
     const refused = expect(boot).rejects.toThrow("closed during recovery");
@@ -417,6 +445,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     rpc = f.rpc;
     await owner.close();
     expect(f.rpc.close).toHaveBeenCalledOnce();
+    expect(vi.mocked(shutdownNativeSessions).mock.lastCall![0].sessionRpc).toBe(f.rpc);
     expect(() => ready.services).toThrow("runtime is closing");
   });
 
@@ -482,20 +511,39 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
 
   it("degraded boot still installs a close, with no recovery engine or schedulers", async () => {
     const f = fixture();
-    const host = {
-      ...f.options.host,
-      database: { ok: false as const, error: "unavailable" },
-      sessionEngine: null,
-      hostNoticeOutbox: null,
-      sessionWakeBus: null,
+    // The degraded variant carries only its failure: no Session service to null-check.
+    const host: DegradedHostCore = {
+      kind: "degraded",
+      dataDir: "/data",
+      dbPath: "/data/volli.db",
+      database: { ok: false, error: "unavailable" },
+      databaseFailure: { kind: "other" },
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async (reason: string) => ({ reason, clean: true })),
     };
     const owner = createSessionRuntimeLifecycle({ ...f.options, host, runtime: null });
     await owner.ready();
     owner.observeScheduledResume({} as SessionProjection);
     owner.relayShellNotice({} as Parameters<typeof owner.relayShellNotice>[0]);
     expect(recovery.closeStaleAttachments).not.toHaveBeenCalled();
+    expect(notices.createHostNoticeDelivery).not.toHaveBeenCalled();
+    expect(control.createSessionWatchdog).not.toHaveBeenCalled();
+    expect(control.createScheduledResumeHost).not.toHaveBeenCalled();
     expect(f.calls).toEqual(["quit.hold", "ready.services"]);
     await owner.close();
+    // The MCP backstop and export flush still run for a degraded host.
+    expect(shutdownNativeSessions).toHaveBeenCalledWith({
+      log: f.options.ports.log,
+      sessionWatchdog: null,
+      scheduledResumeHost: null,
+      shellHostNotices: null,
+      sessionRpc: f.rpc,
+      sessionRuntime: null,
+      agentObservability: f.observability,
+    });
+    expect(f.calls.slice(-2)).toEqual(["mcp", "flush"]);
+    expect(host.start).not.toHaveBeenCalled();
+    expect(host.stop).not.toHaveBeenCalled();
   });
 });
 

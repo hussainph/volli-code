@@ -2,8 +2,8 @@
 
 The host's services, composed without Electron. Volli Cloud
 ([ruling](../../docs/plans/volli-cloud.md)) runs one host program everywhere:
-Electron main today, `apps/hostd` next. Both call `createHostCore` and wire
-what it returns. Electron main keeps only window-only work.
+Electron main and `apps/hostd` both call `createHostCore`, `start()` and
+`stop(reason)`. Electron main keeps the quit gates, deadline and native exit.
 
 ```ts
 import { createHostCore, throwTransactionViolation, type HostCorePorts } from "@volli/host-core";
@@ -19,9 +19,12 @@ const host = createHostCore(
     dataDir: "/var/lib/volli",
     onTransactionViolation: throwTransactionViolation,
     devDiagnostics: false,
+    processReaders: { liveSessionIds: () => [], openTerminalCwds: () => [] },
   },
 );
-if (!host.database.ok) console.error(host.database.error);
+if (host.kind === "degraded") console.error(host.database.error);
+await host.start();
+await host.stop("shutdown");
 ```
 
 ## Rules
@@ -171,22 +174,28 @@ VC-558 (slice 1) adds `src/automations/`, `src/agent-dispatch/`,
 exports. Tests move with them except the Automation IPC and harness-runtime
 integration tests, which still compose desktop modules.
 
-`host.automations` stages engine, service, runner, armed-arrival and scheduler
-construction in the original boot order. `host.agentServices` stages the verb
-and tool doors and watches over the same event and attention ports. The scheduler
-reads host facts and Node timers only; it never asks whether a window exists.
+`createHostAutomations` owns one engine/service and its runner, armed arrivals
+and scheduler, starting at recovered readiness in the original order. Execution
+is an explicit idle/unavailable/ready variant; a ready runner is never nullable.
+After stopping timer producers, `settled()` joins recovery, attempts and Run boots
+before SQLite closes. The `session-runtime/automations` adapter supplies the
+recovered Session ports.
+`createHostAgentCommands` builds the socket verb door; `session-runtime/agents`
+owns the lazy tool door and watches and releases their subscriptions at stop.
+There is no staged factory bag on the host. Both modules use the same event and
+attention ports; the scheduler never asks whether a window exists.
 `createHostAgentSocket` (`@volli/host-core/agent-services`) composes the early
 socket lifecycle before database boot. Its caller still supplies the unchanged
 `<dataDir>/volli.sock` path; mode 0600, v1 NDJSON, request limits, shutdown drain
 and the verb table are unchanged. Desktop retains `automations/ipc.ts` and the
 socket's app-quit adapter (`agent-socket-quit.ts`); host-core never holds an app
-lifecycle. Backup, recovery and maintenance remain for VC-618 (slice 2).
+lifecycle. Backup, recovery and maintenance live here too (VC-618/VC-627).
 
 VC-560 adds `src/pty/` (`@volli/host-core/pty/*`): the terminal supervisor
 (`manager.ts`, `PtyManager`), its output pipeline, warm park (`park.ts`,
 `park-controller.ts`), launch scope, launch line and offered-command run. The
 Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
-constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
+binds the host's supervisor; `PtyManager` takes one options object. See [Terminals](#terminals). `park.ts` moves into
 this gate with its test.
 
 VC-618 (VC-558 slice 2) adds `src/backup/` (`@volli/host-core/backup/*`),
@@ -197,12 +206,24 @@ format, redactions, credential exclusions and the minimum-reader marker guard
 are unchanged. Warm park was already moved by VC-560 into `src/pty/park.ts`;
 its desktop quit/confirm door remains in `main/pty/ipc.ts`.
 
-`host.maintenance` stages recovery, spawn-ledger, orphan-process and retention
-construction at desktop's original boot points. Retention and process alerts use
-`events`/`attention`; no maintenance scheduler needs a window. Desktop still
-starts them after first paint and triggers retention on focus. The retention
-singleton keeps its first construction and shared dismissal state across IPC and
-host reads, including the original read-only behavior without reclaim seams.
+The live host owns `maintenance` (one spawn ledger, orphan-process service,
+retention and automatic reap), `secretStore`, lazy `terminals.manager` when a
+terminal port exists (otherwise an explicit unavailable variant), and `worktreeDeps`. A degraded host carries its classified failure, not nullable
+live services. Recovery remains available independently for that variant.
+Desktop still starts maintenance after first paint and triggers retention on
+focus; hostd readiness enablement lands separately. The retention watch is shared per database
+with IPC, retaining dismissal state and read-only behavior without reclaim seams.
+
+`host.stop` has one interface and two policies. Both disarm producers/maintenance,
+join the existing runtime and socket drains (concurrent on desktop, sequential on
+hostd), and stop the activity timer. The default `drain-and-close` policy also
+joins in-flight start, maintenance and detached Done-trims, then checkpoints and
+closes SQLite. Desktop explicitly selects `desktop-quit`: no new writer joins,
+background-shell close, Automation settlement, checkpoint or DB close; process
+exit retains main's historical behavior. Deadlines stay at the process edge:
+desktop 15 s with Immediate native exit; hostd 30 s.
+Migration rollback backups and backup retention run through the shared database
+open/migration path. There is no periodic backup-bundle scheduler.
 
 Recovery's IPC door is `main/database-recovery-ipc.ts`; recovery screens, dialogs,
 restart and `app.quit` stay desktop-owned. `main/quit-gate.ts` keeps synchronous
@@ -362,15 +383,17 @@ until its remaining desktop dependencies move.
 - **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by
-  `scripts/n1/`): the newest `vX.Y.Z` release and the PR's base. N-1 must
+  `scripts/n1/`): the newest `vX.Y.Z` release, the newest `vX.Y.Z-canary.N`
+  canary (what a canary tester drops back to) and the PR's base. N-1 must
   open the profile, save and clear a credential, create and move a ticket,
   create a Session and make a bundle, and this build must read and back up
   what it left; or, when the floor is above N-1's head, N-1 must refuse with
-  the db and WAL byte-identical. A release from before the guard cannot
-  refuse, so no `raisesMinReader` migration may land while it is the latest
-  release. A shipped build's known fault is listed, by commit, in
+  the db and WAL byte-identical. A release or canary from before the guard
+  cannot refuse, so no `raisesMinReader` migration may land while it is the
+  latest of its channel: cut a release (or canary) containing VC-602 first. A shipped build's known fault is listed, by commit, in
   `KNOWN_HAZARDS` and asserted exactly. Run it locally with
-  `node scripts/n1/prepare.mjs --release --out ../../.scratch/n1`, then
+  `node scripts/n1/prepare.mjs --release --out ../../.scratch/n1` (or
+  `--canary`, or `--ref <commit>`), then
   `VOLLI_N1_MANIFEST=<printed path> vp test run src/db/n1-compatibility.test.ts`.
 - **Transaction ownership (VC-551).** No transaction spans an `await`. Use
   `withTransaction` / `settleTransaction` from `db/transaction-gate`.

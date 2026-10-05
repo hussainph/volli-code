@@ -532,12 +532,18 @@ export function getRetentionState(
  * pattern, but self-rescheduling with `setTimeout` so the delay can back off on
  * failure). Owns the transient {@link RetentionStore}; exposes `triggerNow`
  * (the on-focus/manual poll), the composed `getState`, and `dismiss`.
+ *
+ * `stop()` only disarms the timer; a poll already in flight keeps running and
+ * still writes (a `pr_opened` stamp, a `pr_merged` event, a reclaim). A host
+ * that is about to close the database stops the watch and then awaits
+ * {@link RetentionWatcher.settled} (VC-627).
  */
 export class RetentionWatcher {
   private readonly store = createRetentionStore();
   private timer: NodeJS.Timeout | null = null;
   private failures = 0;
-  private running = false;
+  /** The poll in flight, if any. Never rejects; `null` between polls. */
+  private inFlight: Promise<void> | null = null;
   private started = false;
 
   constructor(
@@ -552,7 +558,7 @@ export class RetentionWatcher {
     this.schedule(this.config.intervalMs);
   }
 
-  /** Stops the recurring poll. */
+  /** Stops the recurring poll. A poll already in flight runs on: see {@link settled}. */
   stop(): void {
     this.started = false;
     if (this.timer !== null) {
@@ -568,6 +574,16 @@ export class RetentionWatcher {
       this.timer = null;
     }
     void this.runOnce();
+  }
+
+  /**
+   * Resolves once no poll is in flight — including one a trigger started while
+   * this waited. Never rejects and adds no delay of its own. It does not stop
+   * the watch: after {@link stop}, nothing reschedules, so this is the last
+   * write the watch makes.
+   */
+  async settled(): Promise<void> {
+    while (this.inFlight !== null) await this.inFlight;
   }
 
   /** The composed retention state for a ticket (or `null` when unknown). */
@@ -594,8 +610,11 @@ export class RetentionWatcher {
 
   private async runOnce(): Promise<void> {
     // A trigger that lands mid-poll is dropped; the in-flight run reschedules.
-    if (this.running) return;
-    this.running = true;
+    if (this.inFlight !== null) return;
+    let finished!: () => void;
+    this.inFlight = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
     try {
       const result = await pollRetention(this.deps, this.store);
       this.failures =
@@ -606,7 +625,9 @@ export class RetentionWatcher {
       console.error("[retention] poll cycle failed:", error);
       this.failures += 1;
     } finally {
-      this.running = false;
+      this.inFlight = null;
+      // Waiters resume on a later microtask, after the reschedule below.
+      finished();
       this.schedule(nextBackoffDelay(this.failures, this.config));
     }
   }

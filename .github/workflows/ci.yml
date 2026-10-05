@@ -552,11 +552,15 @@ jobs:
   # then read what it left), or refuse it byte-identically if they raised the
   # floor. That is the author rule above MIGRATIONS in
   # packages/host-core/src/db/migrations.ts, checked against a real older
-  # build instead of only the author's word. Two N-1s, in parallel:
+  # build instead of only the author's word. Three N-1s, in parallel:
   #   - release: the newest vX.Y.Z tag, the build external users run and drop
   #     back to. Also holds the release policy: no floor raise may land while
   #     that release predates the downgrade guard (VC-602), since it could
   #     not refuse it.
+  #   - latest-canary: the newest vX.Y.Z-canary.N tag, the build a canary
+  #     tester drops back to when they hop between canaries. Held to the
+  #     same release policy: no floor raise while that canary predates the
+  #     guard.
   #   - base: the PR's base (the build that knows nothing of this change),
   #     or the previous main on a push.
   # Each N-1 is extracted with `git archive` and installs its own lockfile
@@ -569,7 +573,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [release, base]
+        lane: [release, latest-canary, base]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -596,6 +600,8 @@ jobs:
           set -euo pipefail
           if [[ "$LANE" == "release" ]]; then
             args=(--release)
+          elif [[ "$LANE" == "latest-canary" ]]; then
+            args=(--canary)
           else
             case "$EVENT" in
               pull_request) base="$PR_BASE" ;;

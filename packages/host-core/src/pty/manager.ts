@@ -239,6 +239,66 @@ const NO_SPAWN_LEDGER: SpawnLedgerPort = {
 
 const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
+/**
+ * What a {@link PtyManager} is built from (VC-627: one options object in place
+ * of the old positional constructor). The first four are required; every other
+ * field keeps the default its positional parameter had.
+ */
+export interface PtyManagerOptions {
+  /** What this supervisor asks of its host ({@link PtyHost}). */
+  readonly host: PtyHost;
+  /**
+   * The app database, or `null` when it failed to open. Every session
+   * persists a durable record, so with no db `create` fails outright
+   * (surfacing {@link PtyManagerOptions.dbError}).
+   */
+  readonly db: Database.Database | null;
+  /** The open failure to report when `db` is `null`. */
+  readonly dbError: string;
+  /**
+   * The host's composed engine, or `null` in degraded mode. Required: the
+   * supervisor never constructs a writer.
+   */
+  readonly sessionEngine: SessionEngine | null;
+  /**
+   * Process-tree inspection seam. Defaults to the real inspector; tests inject
+   * a fake so no `ps`/`pgrep`/`lsof` ever spawn.
+   */
+  readonly inspector?: ProcessInspector;
+  /**
+   * Warm-park tuning; a disabled config makes every park path a no-op.
+   * Defaults to {@link parkConfigFromEnv} over `process.env`.
+   */
+  readonly parkConfig?: ParkConfig;
+  /** The agent CLI's per-terminal environment (VC-163). Defaults to `null`. */
+  readonly agentRuntime?: AgentRuntimeEnvironment | null;
+  /**
+   * The userData attachment-bytes root (issue #77 PR 2) a non-worktree
+   * ticket's kickoff materializes from before spawn — see `resolveScope`.
+   * Defaults to `""` (never used in production; `registerTerminalIpcHandlers`
+   * always resolves the real path) so tests that never seed attachments need
+   * not pass it.
+   */
+  readonly blobsRootPath?: string;
+  /**
+   * Where each spawned shell is recorded so a sweep after a crash can still say
+   * whose process it is (VC-341). Defaults to the ledger that remembers
+   * nothing, which is what every test that is not about the ledger wants.
+   */
+  readonly spawnLedger?: SpawnLedgerPort;
+  /**
+   * The process's one reader of who is working (VC-339, VC-403), shared with
+   * the structured door rather than built here. Defaults to `null`, which
+   * budgets nothing — what a test that is not about the budget wants.
+   */
+  readonly concurrencyEnvReader?: SessionConcurrencyEnvReader | null;
+  /**
+   * The venue terminal provenance records. Wins over {@link PtyHost.venue};
+   * absent, the host's venue applies, else desktop's `local`/`local`.
+   */
+  readonly venue?: SessionExecutionVenue;
+}
+
 function terminalSystemProvenance(venue: SessionExecutionVenue, origin?: SessionOrigin) {
   return {
     source: {
@@ -308,47 +368,31 @@ export class PtyManager {
    */
   private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
-  /**
-   * @param host       what this supervisor asks of its host ({@link PtyHost}).
-   * @param db         the app database, or `null` when it failed to open. Every
-   *                   session persists a durable record, so with no db `create`
-   *                   fails outright (surfacing {@link dbError}).
-   * @param dbError    the open failure to report when `db` is `null`.
-   * @param sessionEngine the host's composed engine, or `null` in degraded mode.
-   *                   Required: the supervisor never constructs a writer.
-   * @param inspector  process-tree inspection seam (real by default; tests
-   *                   inject a fake so no `ps`/`pgrep`/`lsof` ever spawn).
-   * @param parkConfig warm-park tuning; disabled config makes every park path a
-   *                   no-op. Additive with defaults so existing callers/tests
-   *                   need not pass it.
-   * @param blobsRootPath the userData attachment-bytes root (issue #77
-   *                   PR 2) a non-worktree ticket's kickoff materializes from
-   *                   before spawn — see `resolveScope`. Defaults to `""`
-   *                   (never used in production; `registerTerminalIpcHandlers`
-   *                   always resolves the real path) so existing tests/callers
-   *                   that never seed attachments need not pass it.
-   * @param spawnLedger where each spawned shell is recorded so a sweep after a
-   *                   crash can still say whose process it is (VC-341).
-   *                   Defaults to the ledger that remembers nothing, which is
-   *                   what every test that is not about the ledger wants.
-   * @param concurrencyEnvReader the process's one reader of who is working
-   *                   (VC-339, VC-403), shared with the structured door rather
-   *                   than built here. Defaults to `null`, which budgets
-   *                   nothing — what a test that is not about the budget wants.
-   */
-  constructor(
-    private readonly host: PtyHost,
-    private readonly db: Database.Database | null,
-    private readonly dbError: string,
-    private readonly sessionEngine: SessionEngine | null,
-    private readonly inspector: ProcessInspector = createProcessInspector(),
-    private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
-    private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
-    private readonly blobsRootPath: string = "",
-    private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
-    concurrencyEnvReader: SessionConcurrencyEnvReader | null = null,
-  ) {
-    this.concurrencyEnvReader = concurrencyEnvReader;
+  private readonly host: PtyHost;
+  private readonly db: Database.Database | null;
+  private readonly dbError: string;
+  private readonly sessionEngine: SessionEngine | null;
+  private readonly inspector: ProcessInspector;
+  private readonly parkConfig: ParkConfig;
+  private readonly agentRuntime: AgentRuntimeEnvironment | null;
+  private readonly blobsRootPath: string;
+  private readonly spawnLedger: SpawnLedgerPort;
+  /** The explicit {@link PtyManagerOptions.venue}, when one was given. */
+  private readonly venueOverride: SessionExecutionVenue | undefined;
+
+  /** What this supervisor is built from: see {@link PtyManagerOptions}. */
+  constructor(options: PtyManagerOptions) {
+    this.host = options.host;
+    this.db = options.db;
+    this.dbError = options.dbError;
+    this.sessionEngine = options.sessionEngine;
+    this.inspector = options.inspector ?? createProcessInspector();
+    this.parkConfig = options.parkConfig ?? parkConfigFromEnv(process.env, process.platform);
+    this.agentRuntime = options.agentRuntime ?? null;
+    this.blobsRootPath = options.blobsRootPath ?? "";
+    this.spawnLedger = options.spawnLedger ?? NO_SPAWN_LEDGER;
+    this.concurrencyEnvReader = options.concurrencyEnvReader ?? null;
+    this.venueOverride = options.venue;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and the client — and every current
@@ -364,6 +408,15 @@ export class PtyManager {
         if (session !== undefined) this.pushParkState(session, id);
       },
     });
+  }
+
+  /**
+   * The venue this supervisor's terminals record in their provenance: the
+   * explicit option, else the host's, else desktop's `local`/`local`. Read at
+   * call time, as `host.venue` always was.
+   */
+  private get venue(): SessionExecutionVenue {
+    return this.venueOverride ?? this.host.venue ?? TERMINAL_VENUE;
   }
 
   /**
@@ -491,7 +544,7 @@ export class PtyManager {
           role: roleImpliedByTicket(scope.ticketId),
           parentSessionId: null,
           title: scope.title,
-          provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE, { kind: "user" }),
+          provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
         });
         sessionId = created.session.id;
         if (
@@ -526,12 +579,12 @@ export class PtyManager {
           sessionId,
           ...(startCommandId === undefined ? {} : { commandId: startCommandId }),
           occurredAt: Date.now(),
-          provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE),
+          provenance: terminalSystemProvenance(this.venue),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.host.venue ?? TERMINAL_VENUE,
+            venue: this.venue,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(detail),
             // A terminal companion carries no Authority Snapshot, and never
@@ -563,7 +616,7 @@ export class PtyManager {
           adapterId: "terminal",
           continuity: scope.resume === null ? "fresh" : "native_resume",
         },
-        provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE, { kind: "user" }),
+        provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
       });
       startCommandId = start.command.id;
     } catch (error) {
@@ -824,12 +877,12 @@ export class PtyManager {
           sessionId,
           commandId: start.command.id,
           occurredAt: now,
-          provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE),
+          provenance: terminalSystemProvenance(this.venue),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.host.venue ?? TERMINAL_VENUE,
+            venue: this.venue,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(terminalDetail),
             // No Snapshot, for the reason spelled out on the failure path above:
@@ -1034,7 +1087,7 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE),
+        provenance: terminalSystemProvenance(this.venue),
         outcome: exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
@@ -1078,7 +1131,7 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalAdapterProvenance(this.host.venue ?? TERMINAL_VENUE),
+        provenance: terminalAdapterProvenance(this.venue),
         exitCode,
       });
     } catch (error) {
@@ -1395,7 +1448,7 @@ export class PtyManager {
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
-          provenance: terminalSystemProvenance(this.host.venue ?? TERMINAL_VENUE, {
+          provenance: terminalSystemProvenance(this.venue, {
             kind: "volli",
             reason: "supervision",
           }),
@@ -1406,7 +1459,7 @@ export class PtyManager {
           id: randomUUID(),
           sessionId,
           occurredAt: Date.now(),
-          provenance: terminalAdapterProvenance(this.host.venue ?? TERMINAL_VENUE),
+          provenance: terminalAdapterProvenance(this.venue),
           kind: "command.receipt",
           attachmentId: session.attachmentId,
           receipt: {
@@ -1427,7 +1480,7 @@ export class PtyManager {
               id: randomUUID(),
               sessionId,
               occurredAt: Date.now(),
-              provenance: terminalAdapterProvenance(this.host.venue ?? TERMINAL_VENUE),
+              provenance: terminalAdapterProvenance(this.venue),
               kind: "command.receipt",
               attachmentId: session.attachmentId,
               receipt: {

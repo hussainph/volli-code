@@ -52,6 +52,7 @@ import type {
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
 import type { Sessions } from "@volli/host-core/session-runtime/sessions";
+import type { DetachedWorkPort } from "@volli/host-core/detached-work";
 import type { BusyWorktreeSites } from "@volli/host-core/worktree/activity";
 import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
 import type { VerifyOperatorToken } from "./resolution";
@@ -185,6 +186,12 @@ export interface AgentCommandServiceOptions {
   onSessionStarted?: (notice: SessionStartedNotice) => void;
   /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
   busyWorktreeSites: BusyWorktreeSites;
+  /**
+   * Where a `ticket move` into Done enrols its detached worktree trim, so the
+   * host's shutdown drains it before the database closes (VC-627). Absent
+   * (tests) means the trim runs untracked, as it always has.
+   */
+  detachedWork?: DetachedWorkPort;
   /**
    * Interrupts every live agent attachment of a ticket after a committed
    * backward move. Its command and receipt are Session evidence; Esc leaves
