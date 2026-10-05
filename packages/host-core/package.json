@@ -49,6 +49,10 @@
       "types": "./src/login-path-adoption.ts",
       "import": "./src/login-path-adoption.ts"
     },
+    "./maintenance-services": {
+      "types": "./src/maintenance-services.ts",
+      "import": "./src/maintenance-services.ts"
+    },
     "./db": {
       "types": "./src/db/index.ts",
       "import": "./src/db/index.ts"
@@ -152,6 +156,10 @@
     "./ticket-move": {
       "types": "./src/ticket-move.ts",
       "import": "./src/ticket-move.ts"
+    },
+    "./detached-work": {
+      "types": "./src/detached-work.ts",
+      "import": "./src/detached-work.ts"
     },
     "./ticket-commands": {
       "types": "./src/ticket-commands.ts",

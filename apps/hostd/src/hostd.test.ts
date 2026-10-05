@@ -25,6 +25,9 @@ import { insertProject } from "@volli/host-core/db/projects-repo";
 import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
 import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
+import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
+import type { DetachedWorkPort } from "@volli/host-core/detached-work";
+import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
 
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
@@ -36,6 +39,7 @@ import { readStatus, statusFilePath, type HostdState } from "./status";
 const faults = vi.hoisted(() => ({
   failStatusOn: null as string | null,
   runtimeReadyError: false,
+  runtimeConstructError: false,
   runtimeCloseError: false,
   automationsUnavailable: false,
   runtimeReadyGate: null as Promise<void> | null,
@@ -43,6 +47,9 @@ const faults = vi.hoisted(() => ({
   order: [] as string[],
   socketCloseFails: false,
   busySites: null as ((target: string) => Promise<readonly unknown[]>) | null,
+  detachedWork: null as DetachedWorkPort | null,
+  host: null as HostCore | null,
+  hostOptions: null as HostCoreOptions | null,
   /** When set, every command waits on it before it runs. */
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
@@ -76,18 +83,43 @@ vi.mock("@volli/host-core", async (importOriginal) => {
       // is being supplied through these notification ports.
       args[0].listOpenNativeBindings();
       args[0].observeScheduledResume?.({} as never);
+      faults.hostOptions = args[1];
       const host = actual.createHostCore(...args);
-      const createCommands: typeof host.agentServices.createCommands = (options) => {
-        faults.busySites = options.busyWorktreeSites;
-        const commands = host.agentServices.createCommands(options);
-        return {
-          execute: async (request) => {
-            if (faults.hold !== null) await faults.hold;
-            return commands.execute(request);
-          },
-        };
+      faults.host = host;
+      if (actual.isLiveHost(host)) {
+        const maintenance = host.maintenance;
+        const start = maintenance.start;
+        const stop = maintenance.stop;
+        vi.spyOn(maintenance, "start").mockImplementation(() => {
+          faults.order.push("maintenance.start");
+          start();
+        });
+        vi.spyOn(maintenance, "stop").mockImplementation(() => {
+          faults.order.push("maintenance.stop");
+          stop();
+        });
+      }
+      return host;
+    },
+  };
+});
+
+vi.mock("@volli/host-core/agent-services", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/host-core/agent-services")>();
+  return {
+    ...actual,
+    createHostAgentCommands: (
+      ...[ports, options]: Parameters<typeof actual.createHostAgentCommands>
+    ) => {
+      faults.busySites = options.busyWorktreeSites;
+      faults.detachedWork = options.detachedWork ?? null;
+      const commands = actual.createHostAgentCommands(ports, options);
+      return {
+        execute: async (request: AgentRequest) => {
+          if (faults.hold !== null) await faults.hold;
+          return commands.execute(request);
+        },
       };
-      return { ...host, agentServices: { ...host.agentServices, createCommands } };
     },
   };
 });
@@ -132,6 +164,7 @@ vi.mock("./session-runtime", async (original) => {
     createHeadlessSessionRuntime: (
       ...args: Parameters<typeof actual.createHeadlessSessionRuntime>
     ) => {
+      if (faults.runtimeConstructError) throw new Error("runtime construction failed");
       const runtime = actual.createHeadlessSessionRuntime(...args);
       faults.runtimeOwned = true;
       return {
@@ -148,6 +181,8 @@ vi.mock("./session-runtime", async (original) => {
         close: async () => {
           faults.order.push("runtime.close");
           await runtime.close();
+          // hostd's drain is sequential: nothing of the socket closes before this.
+          faults.order.push("runtime.closed");
           if (faults.runtimeCloseError) throw new Error("runtime close failed");
         },
       };
@@ -164,6 +199,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   faults.runtimeReadyError = false;
+  faults.runtimeConstructError = false;
   faults.runtimeCloseError = false;
   faults.automationsUnavailable = false;
   faults.runtimeReadyGate = null;
@@ -174,7 +210,15 @@ afterEach(async () => {
   faults.hold = null;
   faults.execute = null;
   faults.foreignOwner = null;
+  faults.busySites = null;
+  faults.detachedWork = null;
+  faults.host = null;
+  faults.hostOptions = null;
   await Promise.all(running.splice(0).map((host) => host.stop("test over")));
+  // Those stops record too; the next test starts from an empty order.
+  faults.order = [];
+  // The retention watch is a process singleton; each host here is a new process's.
+  resetRetentionWatcherForTest();
   chmodSync(root, 0o700);
   rmSync(root, { recursive: true, force: true });
 });
@@ -302,7 +346,7 @@ describe("booting against an empty data directory", () => {
       ok: true,
       data: { projects: [] },
     });
-    if (!host.host.database.ok) throw new Error("database did not open");
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
     insertProject(host.host.database.db, project("p1"));
     expect(await ask(socketPath, "project.list")).toMatchObject({
       ok: true,
@@ -335,7 +379,7 @@ describe("booting against an empty data directory", () => {
 
   it("boots again over what it left, keeping its data", async () => {
     const first = await boot();
-    if (!first.host.database.ok) throw new Error("database did not open");
+    if (!isLiveHost(first.host)) throw new Error("database did not open");
     insertProject(first.host.database.db, project("kept"));
     await first.stop("restart");
     const second = await boot();
@@ -696,9 +740,16 @@ describe("draining requests at shutdown", () => {
     const answer = faults.execute!(request);
     await Promise.resolve(); // Enter execute before stopping rejects new arrivals.
     const stopped = host.stop("SIGTERM");
-    setTimeout(release, 20);
+    // Ordered by events, not time: the socket has closed and the stop is
+    // waiting on the held request, with the database still open under it.
+    await vi.waitFor(() => expect(faults.order).toContain("socket.close"));
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    expect(host.host.database.db.open).toBe(true);
+    expect(stateOf(join(root, "data"))).toBe("stopping");
+    release();
     expect(await answer).toMatchObject({ ok: true, data: { projects: [] } });
     expect(await stopped).toBe(true);
+    expect(host.host.database.db.open).toBe(false);
   });
 
   it("abandons one that outlives the drain, and says the stop was not clean", async () => {
@@ -734,7 +785,10 @@ describe("shutdown faults", () => {
     expect(log.error).toHaveBeenCalledWith("agent socket did not close cleanly", {
       error: expect.any(Error),
     });
-    expect(log.error).not.toHaveBeenCalledWith("database did not close cleanly", expect.anything());
+    expect(log.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("host shutdown failed"),
+      expect.anything(),
+    );
     expect(existsSync(join(root, "data", "volli.db-wal"))).toBe(false);
   });
 
@@ -742,15 +796,16 @@ describe("shutdown faults", () => {
     const log = logger();
     const host = await boot({}, log);
     faults.socketCloseFails = true;
-    if (!host.host.database.ok) throw new Error("database did not open");
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
     host.host.database.db.close();
     expect(await host.stop("SIGTERM")).toBe(false);
     expect(log.error).toHaveBeenCalledWith("agent socket did not close cleanly", {
       error: expect.any(Error),
     });
-    expect(log.error).toHaveBeenCalledWith("database did not close cleanly", {
-      error: expect.any(Error),
-    });
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining("host shutdown failed at close-database:"),
+      { source: "host-core" },
+    );
   });
 });
 
@@ -772,7 +827,13 @@ it("settles queued CLI requests on startup rejection and closes every owner", as
   gate.resolve();
   expect(await booting).toBeInstanceOf(Error);
   expect(await answer).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
-  expect(faults.order).toEqual(["runtime.close", "socket.close"]);
+  // Never started, still stopped: the host's one stop owns a failed boot too.
+  expect(faults.order).toEqual([
+    "maintenance.stop",
+    "runtime.close",
+    "runtime.closed",
+    "socket.close",
+  ]);
   expect(existsSync(join(root, "data/volli.sock"))).toBe(false);
   expect(existsSync(join(root, "data/volli.db-wal"))).toBe(false);
 });
@@ -781,9 +842,10 @@ it("retains the startup failure even if runtime drain fails, and still closes so
   faults.runtimeCloseError = true;
   const log = logger();
   await expect(boot({}, log)).rejects.toThrow("Session startup failed");
-  expect(log.error).toHaveBeenCalledWith("Session runtime did not close after failed startup", {
-    error: expect.any(Error),
-  });
+  expect(log.error).toHaveBeenCalledWith(
+    expect.stringContaining("host shutdown failed at close-runtime: Error: runtime close failed"),
+    { source: "host-core" },
+  );
   expect(existsSync(join(root, "data/volli.sock"))).toBe(false);
   expect(existsSync(join(root, "data/volli.db-wal"))).toBe(false);
 });
@@ -802,10 +864,16 @@ it("rejects new requests while stopping and after stop, and reports failed runti
     ok: false,
     error: { code: "APP_UNREACHABLE" },
   });
-  expect(log.error).toHaveBeenCalledWith("Session runtime did not close cleanly", {
-    error: expect.any(Error),
-  });
-  expect(faults.order).toEqual(["runtime.close", "socket.close"]);
+  expect(log.error).toHaveBeenCalledWith(
+    expect.stringContaining("host shutdown failed at close-runtime: Error: runtime close failed"),
+    { source: "host-core" },
+  );
+  expect(faults.order).toEqual([
+    "maintenance.stop",
+    "runtime.close",
+    "runtime.closed",
+    "socket.close",
+  ]);
 });
 
 it("reports a missing automation runner without hiding the ready Session runtime", async () => {
@@ -813,5 +881,99 @@ it("reports a missing automation runner without hiding the ready Session runtime
   expect((await boot()).status().capabilities).toMatchObject({
     sessions: "available",
     automations: "unavailable",
+  });
+});
+
+describe("the host lifecycle hostd composes (VC-627)", () => {
+  it("keeps maintenance enablement separate, and stops its owner before anything drains", async () => {
+    const host = await boot();
+    expect(host.status().state).toBe("serving");
+    expect(faults.order).toEqual([]);
+    expect(await host.stop("SIGTERM")).toBe(true);
+    expect(faults.order).toEqual([
+      "maintenance.stop",
+      "runtime.close",
+      "runtime.closed",
+      "socket.close",
+    ]);
+  });
+
+  it("hands commands the host's detached work, and drains it after the socket, before the database", async () => {
+    const host = await boot();
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const live = host.host;
+    expect(faults.detachedWork).toBe(live.detachedWork);
+    const trim = Promise.withResolvers<void>();
+    faults.detachedWork!.track(trim.promise);
+    const stopped = host.stop("SIGTERM");
+    await vi.waitFor(() => expect(faults.order).toContain("socket.close"));
+    // Still draining: the database outlives the enrolled work.
+    expect(live.database.db.open).toBe(true);
+    expect(live.detachedWork.pending).toBe(1);
+    trim.resolve();
+    expect(await stopped).toBe(true);
+    expect(live.detachedWork.pending).toBe(0);
+    expect(live.database.db.open).toBe(false);
+  });
+
+  it("starts the host exactly once, and never maintenance on a database it refused", async () => {
+    const dataDir = join(root, "data");
+    await (await boot()).stop("seed");
+    running.pop();
+    const stamp = new Database(join(dataDir, "volli.db"));
+    stamp.pragma(`user_version = ${SCHEMA_HEAD + 1}`);
+    stamp
+      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
+      .run(MIN_READER_VERSION_KEY, String(SCHEMA_HEAD + 1));
+    stamp.pragma("wal_checkpoint(TRUNCATE)");
+    stamp.close();
+    faults.order = [];
+    const log = logger();
+    const host = await boot({}, log);
+    expect(host.host.kind).toBe("degraded");
+    expect(host.status().state).toBe("refusing");
+    // A second start answers the first: no second serve.
+    await host.host.start();
+    const refusals = log.error.mock.calls.filter(
+      ([message]) => message === "refusing to serve: the database did not open",
+    );
+    expect(refusals).toHaveLength(1);
+    expect(await host.stop("SIGTERM")).toBe(true);
+    expect(faults.order).toEqual(["socket.close"]);
+  });
+
+  it("reads live Sessions and busy worktrees from the runtime, failing closed until it recovers", async () => {
+    const gate = Promise.withResolvers<void>();
+    faults.runtimeReadyGate = gate.promise;
+    const booting = boot().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => expect(faults.runtimeOwned).toBe(true));
+    const options = faults.hostOptions!;
+    expect(options.processReaders.openTerminalCwds()).toEqual([]);
+    // No attachment token is minted yet: nothing is live in this process.
+    expect(options.processReaders.liveSessionIds()).toEqual([]);
+    // Composed but not recovered: a reclaim asks, and is refused.
+    await expect(options.reclaim!.busyWorktreeSites!(root)).rejects.toThrow("not ready");
+    await expect(options.reclaim!.releaseAgentSites!(root)).rejects.toThrow("not ready");
+    gate.resolve();
+    expect(await booting).toBeNull();
+    // Recovered: the reclaim reads the same supplier the commands guard with.
+    expect(await options.reclaim!.busyWorktreeSites!(root)).toEqual([]);
+    expect(await options.reclaim!.releaseAgentSites!(root)).toEqual({
+      released: [],
+      stillOpen: [],
+    });
+  });
+
+  it("refuses process and worktree reads when the runtime was never composed", async () => {
+    faults.runtimeConstructError = true;
+    await expect(boot()).rejects.toThrow("runtime construction failed");
+    const options = faults.hostOptions!;
+    expect(() => options.processReaders.liveSessionIds()).toThrow("not composed yet");
+    await expect(options.reclaim!.busyWorktreeSites!(root)).rejects.toThrow("not composed yet");
+    await expect(options.reclaim!.releaseAgentSites!(root)).rejects.toThrow("not composed yet");
+    expect(faults.order).toEqual(["maintenance.stop", "socket.close"]);
   });
 });

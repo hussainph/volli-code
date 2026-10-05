@@ -27,21 +27,36 @@
  *    up, `refusing`, every verb answers `DB_UNAVAILABLE` with the reason, and
  *    the status file carries the typed `databaseFailure`.
  *
- * SHUTDOWN: mark stopping; drain the shared Session runtime and shells; close
- * the socket and join outstanding requests; checkpoint and close SQLite;
- * release the instance lock; mark stopped. Runtime resources never outlive DB.
- * Terminals, browser, backup/retention and maintenance loops are not composed.
+ * 6. **Start.** `host.start` runs once and owns serving: Session recovery,
+ *    the commands every verb answers through, the status, and then the
+ *    maintenance loops (retention and the opt-in automatic reap).
+ *
+ * SHUTDOWN is host-core's `host.stop` (VC-627), for a normal stop and a
+ * failed boot alike: mark stopping; stop the Automation producers and the
+ * maintenance loops; drain the Session runtime and its shells; then, in
+ * hostd's sequential order, close the socket and join outstanding requests;
+ * drain detached work (a Done move's trim); stop the activity watch;
+ * checkpoint and close SQLite. hostd then releases the instance lock and
+ * marks stopped. Runtime resources never outlive the database. Terminals and
+ * the browser are not composed, and there is no periodic backup.
  */
 import { mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
-import type Database from "better-sqlite3";
 import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/shared";
-import { createHostCore, throwTransactionViolation, type HostCore } from "@volli/host-core";
+import {
+  createHostCore,
+  isLiveHost,
+  throwTransactionViolation,
+  type HostCore,
+  type HostCorePorts,
+} from "@volli/host-core";
 import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
+import { createHostAgentCommands } from "@volli/host-core/agent-services";
 
 import {
   createHeadlessSessionRuntime,
+  headlessModelAccess,
   type HeadlessRuntimeOptions,
   type HeadlessSessionRuntime,
 } from "./session-runtime";
@@ -226,14 +241,15 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           );
     }
 
-    /** Settles what every verb answers with, and publishes the state that goes with it. */
+    const runtimeOptions: HeadlessRuntimeOptions = options.runtime ?? {
+      binDir: dirname(process.execPath),
+      venue: { id: socketPath, kind: "remote" },
+    };
     let sessionRuntime: HeadlessSessionRuntime | undefined;
-    const serve = async (
-      host: HostCore,
-      ports: ReturnType<typeof headlessPorts>,
-    ): Promise<void> => {
-      const handle = host.database;
-      if (handle.ok) {
+
+    /** Settles what every verb answers with, and publishes the state that goes with it. */
+    const serve = async (host: HostCore, ports: HostCorePorts): Promise<void> => {
+      if (isLiveHost(host)) {
         database = { ok: true, path: host.dbPath };
         sessionRuntime = createHeadlessSessionRuntime({
           host,
@@ -241,10 +257,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           secrets,
           env: options.env,
           version: options.version,
-          options: options.runtime ?? {
-            binDir: dirname(process.execPath),
-            venue: { id: socketPath, kind: "remote" },
-          },
+          options: runtimeOptions,
         });
         const sessionPorts = await sessionRuntime.ready();
         capabilities = {
@@ -254,11 +267,14 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           automations: sessionPorts.automationsAvailable ? "available" : "unavailable",
         };
         settle(
-          host.agentServices.createCommands({
-            db: handle.db,
+          createHostAgentCommands(ports, {
+            db: host.database.db,
             ...sessionPorts,
             appVersion: options.version,
             verifyOperatorToken: operators.verify,
+            // A Done move's worktree trim outlives its reply; the host's stop
+            // drains it before the database closes.
+            detachedWork: host.detachedWork,
             // The audit line beside each operator write. `SO_PEERCRED` would
             // add the peer's uid and pid, but Node's `net` cannot read it
             // without a native addon; the login the token names is the
@@ -270,24 +286,29 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         logger.info("serving", { socketPath, database: host.dbPath, capabilities });
         return;
       }
-      database = {
-        ok: false,
-        path: host.dbPath,
-        error: handle.error,
-        failure: host.databaseFailure,
-      };
+      const { error } = host.database;
+      database = { ok: false, path: host.dbPath, error, failure: host.databaseFailure };
       settle(async () => ({
         v: 1,
         ok: false,
-        error: makeAgentError("DB_UNAVAILABLE", handle.error),
+        error: makeAgentError("DB_UNAVAILABLE", error),
       }));
       publish("refusing");
       logger.error("refusing to serve: the database did not open", {
         database: host.dbPath,
         failure: host.databaseFailure,
-        error: handle.error,
+        error,
       });
     };
+
+    // Settle queued socket requests on a failed start: shutdown must not wait
+    // on a readiness promise that can never resolve.
+    const unreachable = (): void =>
+      settle(async () => ({
+        v: 1,
+        ok: false,
+        error: makeAgentError("APP_UNREACHABLE", "The host could not start."),
+      }));
 
     let host: HostCore | undefined;
     try {
@@ -298,35 +319,74 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
       ports.listOpenNativeBindings = () => sessionRuntime?.openNativeBindings() ?? [];
       ports.observeScheduledResume = (projection) =>
         sessionRuntime?.observeScheduledResume(projection);
-      host = createHostCore(ports, {
+      const booting = createHostCore(ports, {
         dataDir,
         onTransactionViolation: throwTransactionViolation,
         devDiagnostics: false,
+        // The one sealed store this host opened at boot, never a second handle.
+        secretStore: secrets.store,
+        modelAccess: () => headlessModelAccess(options.env, runtimeOptions),
+        // This host's venue as it stands; the stable identity lands separately.
+        venue: () => runtimeOptions.venue,
+        // Read on every scan, and only after readiness (maintenance starts
+        // there). Fail closed rather than call every recorded process an orphan.
+        processReaders: {
+          liveSessionIds: () => {
+            if (sessionRuntime === undefined) throw runtimeNotComposed();
+            return sessionRuntime.liveSessionIds();
+          },
+          // No terminals are composed on a headless host.
+          openTerminalCwds: () => [],
+        },
+        reclaim: {
+          busyWorktreeSites: (target) =>
+            sessionRuntime === undefined
+              ? Promise.reject(runtimeNotComposed())
+              : sessionRuntime.reclaim.busyWorktreeSites(target),
+          releaseAgentSites: (directory) =>
+            sessionRuntime === undefined
+              ? Promise.reject(runtimeNotComposed())
+              : sessionRuntime.reclaim.releaseAgentSites(directory),
+        },
       });
-      await serve(host, ports);
+      host = booting;
+      // The host owns the order things come up and go down in. hostd's drain
+      // is SEQUENTIAL: the Session runtime (which joins its shells), then the
+      // socket, then the requests it still has executing — so no closeSocket
+      // runs beside the runtime; the socket closes inside `drainRequests`.
+      await booting.start({
+        start: async () => {
+          try {
+            await serve(booting, ports);
+          } catch (error) {
+            unreachable();
+            throw error;
+          }
+        },
+        stopProducers: () => sessionRuntime?.stopProducers(),
+        close: async () => {
+          await sessionRuntime?.close();
+        },
+        drainRequests: async () => {
+          await socket.shutdown();
+          const drained = await drain(inflight, options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS);
+          if (!drained) {
+            logger.error("abandoned requests still executing", { count: inflight.size });
+          }
+          return drained && !socketCloseFailed;
+        },
+      });
     } catch (error) {
-      // Nothing half-booted stays open: the socket closes, and so does a
-      // database that opened.
-      // Settle queued socket requests on failure; shutdown must not wait on a
-      // readiness promise that can never resolve.
-      settle(async () => ({
-        v: 1,
-        ok: false,
-        error: makeAgentError("APP_UNREACHABLE", "The host could not start."),
-      }));
-      try {
-        await sessionRuntime?.close();
-      } catch (drainError) {
-        logger.error("Session runtime did not close after failed startup", { error: drainError });
-      }
-      await socket.shutdown();
-      if (host?.database.ok === true) {
-        host.sessionActivityWatch?.stop();
-        closeDatabase(host.database.db, logger);
+      // Nothing half-booted stays open: the host's stop closes the runtime,
+      // the socket and a database that opened, in its one order.
+      unreachable();
+      if (host === undefined) {
+        await socket.shutdown();
+      } else {
+        await host.stop("boot failed");
       }
       throw error;
     }
-    const handle = host.database;
     const booted = host;
     const record = (next: HostdState): void => {
       try {
@@ -346,29 +406,10 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           logger.info("stopping", { reason });
           // A status file that cannot be written must not keep the database open.
           record("stopping");
-          // Refuses new connections and waits, up to its request timeout, for
-          // the ones already executing.
-          // Runtime drain owns resume/watchdog/notices/MCP/observability and
-          // joins background shells before the socket and SQLite are closed.
-          let runtimeClosed = true;
-          try {
-            await sessionRuntime?.close();
-          } catch (error) {
-            runtimeClosed = false;
-            logger.error("Session runtime did not close cleanly", { error });
-          }
-          await socket.shutdown();
-          const drained = await drain(inflight, options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS);
-          if (!drained) {
-            logger.error("abandoned requests still executing", { count: inflight.size });
-          }
-          // The activity watch's flush timer is the one thing left that reads
-          // the database on its own.
-          booted.sessionActivityWatch?.stop();
-          const closed = handle.ok ? closeDatabase(handle.db, logger) : true;
+          // host-core's stop reports each failed step through the host log.
+          const { clean } = await booted.stop(reason);
           lock.release();
           record("stopped");
-          const clean = runtimeClosed && drained && closed && !socketCloseFailed;
           logger.info("stopped", { clean });
           return clean;
         })();
@@ -376,6 +417,11 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
       },
     };
   }
+}
+
+/** A process or worktree read that arrived before the Session runtime existed. */
+function runtimeNotComposed(): Error {
+  return new Error("The headless Session runtime is not composed yet.");
 }
 
 /**
@@ -460,21 +506,5 @@ function prepareDataDir(dataDir: string, logger: HostdLogger): void {
         fix: `chmod 700 ${dataDir}`,
       },
     );
-  }
-}
-
-/**
- * Folds the WAL back into the database file, then closes it. Nothing else holds
- * the database by now: the socket has drained, and hostd composes nothing that
- * writes on its own.
- */
-function closeDatabase(db: Database.Database, logger: HostdLogger): boolean {
-  try {
-    db.pragma("wal_checkpoint(TRUNCATE)");
-    db.close();
-    return true;
-  } catch (error) {
-    logger.error("database did not close cleanly", { error });
-    return false;
   }
 }

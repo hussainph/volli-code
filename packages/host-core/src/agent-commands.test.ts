@@ -25,6 +25,8 @@ import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 
 import { importBlob } from "@volli/host-core/blob-import";
 import { blobsRoot } from "@volli/host-core/blob-store";
+import { createDetachedWorkTracker } from "@volli/host-core/detached-work";
+import type { TicketMovePorts } from "@volli/host-core/ticket-move";
 import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
 import { listComments } from "@volli/host-core/db/comments-repo";
 import {
@@ -991,6 +993,53 @@ describe("agent command service", () => {
           kind: "worktree",
         }),
       );
+    } finally {
+      trim.mockRestore();
+    }
+  });
+
+  it("socket ticket.move enrols its Done trim so a host drain waits for the trim's publish", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, status: "needs_review" }));
+    let settle!: (value: Awaited<ReturnType<typeof worktree.trimFinishedWorktree>>) => void;
+    const trim = vi.spyOn(worktree, "trimFinishedWorktree").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const events: string[] = [];
+    const detachedWork = createDetachedWorkTracker();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      busyWorktreeSites: async () => [],
+      detachedWork,
+      onMutation: (change) => void events.push(`published ${change.kind}`),
+    });
+    try {
+      const receipt = await service.execute({
+        v: 1,
+        cmd: "ticket.move",
+        args: { id: "VC-1", to: "done" },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+      });
+      expect(receipt).toMatchObject({ ok: true, data: { ticket: { status: "done" } } });
+      // The trim is handed the move's whole port set; the tracker rides it.
+      expect((trim.mock.calls[0]?.[0] as TicketMovePorts | undefined)?.detachedWork).toBe(
+        detachedWork,
+      );
+      expect(detachedWork.pending).toBe(1);
+      const drained = detachedWork.drain().then(() => void events.push("drained"));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(events).toEqual(["published ticket"]);
+      settle({
+        kind: "trimmed",
+        report: { worktreePath: "/mock", removed: [], kept: [], totalBytes: 0, dryRun: false },
+      });
+      await drained;
+      expect(events).toEqual(["published ticket", "published worktree", "drained"]);
     } finally {
       trim.mockRestore();
     }

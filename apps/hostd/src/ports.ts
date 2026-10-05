@@ -11,8 +11,8 @@
  * - **connectivity**: `ALWAYS_ONLINE`.
  * - **client** and **trash**: absent. host-core refuses those requests with
  *   its typed "needs the desktop app" errors, and never deletes instead.
- * - **listOpenNativeBindings** and **observeScheduledResume**: there is no
- *   Session runtime in hostd yet, so nothing is bound and nothing resumes.
+ * - **listOpenNativeBindings** and **observeScheduledResume**: inert until the
+ *   recovered Session runtime is composed; hostd binds them before start.
  */
 import { format } from "node:util";
 
