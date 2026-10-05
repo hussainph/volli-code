@@ -464,6 +464,17 @@ describe("trimFinishedWorktree", () => {
     return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_trimmed");
   }
 
+  it("skips trim when activity is unavailable, including JS callers", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+    const { busySites: _supplier, ...missing } = trimDeps();
+    expect(await trimFinishedWorktree(missing, "t1")).toMatchObject({
+      kind: "skipped",
+      reason: expect.stringContaining("activity is unavailable"),
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+    expect(trimEvents()).toEqual([]);
+  });
   it("trims a Done ticket's worktree, keeps its .env, and accounts for both", async () => {
     const wt = seedWorktree();
     seedTicket(wt, "done");

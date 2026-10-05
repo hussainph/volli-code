@@ -34,6 +34,7 @@ import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
 import { projectAddVerb } from "./project-verbs";
+import { sessionStartVerb } from "./operator-session-start";
 import {
   boardVerb,
   identifyVerb,
@@ -150,6 +151,7 @@ export const AGENT_VERB_TABLE: {
   // against it. Everything else the answer needs is one indexed read of the
   // usage projection — no Session history is folded to price a pass.
   cost: { handle: costVerb, envSession: "resolve" },
+  "session.start": { handle: sessionStartVerb, envSession: "skip" },
   "session.list": { handle: sessionListVerb, envSession: "resolve" },
   "session.show": { handle: sessionShowVerb, envSession: "resolve" },
   // The one verb that reads BOTH halves of the roster (VC-79), off one fold

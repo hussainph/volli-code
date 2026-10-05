@@ -20,7 +20,7 @@ import type { PendingArmedRunCoordinator } from "../automations/pending-armed-ru
 import type { PiRuntimeHost } from "./pi-adapter";
 import type { Sessions } from "./sessions";
 import type { AutoTitler } from "./auto-title";
-import type { RecoveredSessionServices } from "./lifecycle";
+import { readRecoveredSessionServices, type RecoveredSessionServices } from "./lifecycle";
 
 export interface ReadyAutomationSessions {
   sessions: Sessions | null;
@@ -61,7 +61,7 @@ export function createRuntimeAutomations(options: {
     /** Called with the lifecycle's recovered services, at the host's former boot point. */
     start(ready: RecoveredSessionServices<ReadyAutomationSessions>): void {
       if (started || stopped) return;
-      const { sessions, runtime, autoTitler } = ready.services;
+      const { sessions, runtime, autoTitler } = readRecoveredSessionServices(ready);
       started = true;
       runner =
         sessions !== null && runtime !== null && sessionDb !== null && engine !== null

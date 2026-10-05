@@ -21,15 +21,24 @@ function fixture() {
   const getOrRecordSessionInput = vi.fn(async ({ input }) => input);
   const waitForBirth = vi.fn(async () => {});
   const resolve = vi.fn(() => ["read", "codemode"]);
+  const surface = { resolve, resolveMcp: vi.fn(() => [] as unknown[]) };
   const context = createRuntimeContextResolver({
     db: db.db,
     sessionEngine: { getSession, listEvents, getOrRecordSessionInput } as unknown as SessionEngine,
     venue: { id: "test-host", kind: "remote" },
     mcpDispatch: desktopMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
     waitForBirth,
-    toolSurface: () => ({ resolve }) as unknown as SessionToolSurfacePorts,
+    toolSurface: () => surface as unknown as SessionToolSurfacePorts,
   });
-  return { context, getSession, listEvents, getOrRecordSessionInput, waitForBirth, resolve };
+  return {
+    context,
+    getSession,
+    listEvents,
+    getOrRecordSessionInput,
+    waitForBirth,
+    resolve,
+    surface,
+  };
 }
 
 describe("shared attach context", () => {
@@ -52,6 +61,7 @@ describe("shared attach context", () => {
   it("reuses frozen tools, resources and brief; never reselects today's tool surface", async () => {
     const f = fixture();
     f.listEvents.mockResolvedValue([
+      { payload: { kind: "turn.started" } },
       {
         payload: {
           kind: "session.input.recorded",
@@ -98,4 +108,106 @@ describe("shared attach context", () => {
     ]);
     await expect(f.context("s")).rejects.toThrow("Recorded runtime brief");
   });
+});
+
+function inputEvent(input: unknown) {
+  return { payload: { kind: "session.input.recorded", input } };
+}
+it("never retroactively grants today's MCP selection to a legacy Session", async () => {
+  const f = fixture();
+  f.surface.resolveMcp.mockReturnValue([{ serverId: "server", name: "read" }]);
+  expect(await f.context("s")).not.toHaveProperty("mcpTools");
+  const frozen = f.getOrRecordSessionInput.mock.calls[0]![0].input;
+  expect(frozen).toMatchObject({ kind: "tool-surface", tools: ["read"] });
+  expect(frozen).not.toHaveProperty("mcpTools");
+  f.listEvents.mockResolvedValue([inputEvent(frozen)]);
+  expect(await f.context("s")).not.toHaveProperty("mcpTools");
+  expect(f.surface.resolveMcp).not.toHaveBeenCalled();
+});
+it("binds the durable winner when another first attach already recorded the surface", async () => {
+  const f = fixture();
+  const tool = {
+    serverId: "server",
+    name: "read",
+    description: "reader",
+    inputSchema: { type: "object" },
+  };
+  const frozen = {
+    kind: "tool-surface",
+    tools: ["write"],
+    mcpTools: [tool],
+    codeMode: { marker: "winner" },
+  };
+  f.getOrRecordSessionInput.mockImplementation(async ({ input }) =>
+    input.kind === "tool-surface" ? frozen : input,
+  );
+  expect(await f.context("s")).toMatchObject({
+    toolSurface: ["write"],
+    mcpTools: [expect.objectContaining(tool)],
+    codeMode: { marker: "winner" },
+  });
+  expect(f.surface.resolveMcp).not.toHaveBeenCalled();
+});
+it("cannot backfill an in-flight birth: the barrier must actually wait", async () => {
+  const f = fixture();
+  const birth = Promise.withResolvers<void>();
+  f.waitForBirth.mockReturnValue(birth.promise);
+  const attach = f.context("s");
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(f.getSession).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  f.listEvents.mockResolvedValue([
+    inputEvent({
+      kind: "tool-surface",
+      tools: ["read"],
+      mcpTools: [],
+      codeMode: { marker: "frozen" },
+    }),
+  ]);
+  birth.resolve();
+  expect(await attach).toMatchObject({ toolSurface: ["read"], codeMode: { marker: "frozen" } });
+  expect(f.resolve).not.toHaveBeenCalled();
+});
+it("refuses unavailable project/model, orphan tickets and malformed subagent ancestry", async () => {
+  const f = fixture();
+  f.getSession.mockResolvedValueOnce({ session: { projectId: "missing" }, modelSelection: {} });
+  expect(await f.context("s")).toBeNull();
+  f.getSession.mockResolvedValueOnce({ session: { projectId: "p" }, modelSelection: null });
+  expect(await f.context("s")).toBeNull();
+  f.getSession.mockResolvedValueOnce({
+    session: { projectId: "p", ticketId: "missing", role: "ticket" },
+    modelSelection: {},
+  });
+  expect(await f.context("s")).toBeNull();
+  insertProject(db.db, testProject({ id: "other", path: "/other", ticketPrefix: "OT" }));
+  insertTicket(db.db, testTicket("other", { id: "foreign" }));
+  f.getSession.mockResolvedValueOnce({
+    session: { projectId: "p", ticketId: "foreign", role: "ticket" },
+    modelSelection: {},
+  });
+  expect(await f.context("s")).toBeNull();
+  f.getSession.mockResolvedValueOnce({
+    session: { projectId: "p", role: "subagent", ticketId: "t", parentSessionId: null },
+    modelSelection: {},
+  });
+  expect(await f.context("s")).toBeNull();
+  for (const ticketId of ["t", "foreign", "missing", null]) {
+    f.getSession
+      .mockResolvedValueOnce({
+        session: { projectId: "p", role: "subagent", ticketId, parentSessionId: "parent" },
+        modelSelection: {},
+      })
+      .mockResolvedValueOnce(null);
+    expect(await f.context("s")).toMatchObject({
+      role: "subagent",
+      ticketId: ticketId === "t" ? "t" : null,
+    });
+  }
+  delete (f.surface as { resolveMcp?: unknown }).resolveMcp;
+  f.getSession.mockResolvedValueOnce({
+    session: { projectId: "p", role: "ticket", ticketId: null },
+    modelSelection: {},
+  });
+  expect(await f.context("s")).toMatchObject({ role: "project" });
 });

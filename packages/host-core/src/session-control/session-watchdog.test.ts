@@ -47,6 +47,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
 
 function harness(input: {
   projections: SessionProjection[];
+  venue?: SessionWatchdogPorts["venue"];
   now?: () => number;
   stopSession?: SessionWatchdogPorts["stopSession"];
   suspendedMsWithin?: SessionWatchdogPorts["suspendedMsWithin"];
@@ -62,6 +63,7 @@ function harness(input: {
   // The tool calls each live binding has in flight; unset means none.
   const toolsById = new Map<string, readonly SessionInFlightTool[]>();
   const watchdog = createSessionWatchdog({
+    ...(input.venue === undefined ? {} : { venue: input.venue }),
     listBindings: () =>
       Array.from(byId.keys(), (sessionId) => ({
         sessionId,
@@ -89,6 +91,11 @@ function harness(input: {
 }
 
 describe("createSessionWatchdog", () => {
+  it("writes watchdog facts at the host venue", async () => {
+    const h = harness({ projections: [projection()], venue: { id: "hostd", kind: "remote" } });
+    await h.watchdog.scan();
+    expect(h.submits[0]).toMatchObject({ provenance: { venue: { id: "hostd", kind: "remote" } } });
+  });
   it("records one durable blocked signal and one notification per wedge episode", async () => {
     const h = harness({ projections: [projection()] });
 

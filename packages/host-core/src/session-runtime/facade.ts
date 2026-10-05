@@ -31,7 +31,11 @@ import { readModelAccessDefaults } from "./model-access-preferences";
 import { createSessions, StructuredSessionsError, type SessionSkillPorts } from "./sessions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAssembly } from "./assembly";
-import type { RecoveredSessionServices } from "./lifecycle";
+import {
+  mapRecoveredSessionServices,
+  readRecoveredSessionServices,
+  type RecoveredSessionServices,
+} from "./lifecycle";
 import {
   createRuntimeSessionAgents,
   type RuntimeSessionAgentOptions,
@@ -346,12 +350,17 @@ export function createRuntimeSessionFacade(
   options: Parameters<typeof assembleSessionServices>[0],
 ): RuntimeSessionFacade {
   const services = assembleSessionServices(options);
+  let agents: RuntimeSessionAgents | undefined;
   const facade: RuntimeSessionFacade = {
     // Synchronization only: never reads the ledger or exposes Sessions.
     waitForBirth: async (sessionId) => {
       await services.sessions?.waitForBirth?.(sessionId);
     },
-    agents: (agentOptions) => createRuntimeSessionAgents({ ...agentOptions, facade, services }),
+    agents: (agentOptions) => {
+      if (agents !== undefined) throw new Error("Session agents have already been staged.");
+      agents = createRuntimeSessionAgents({ ...agentOptions, facade, services });
+      return agents;
+    },
   };
   servicesByFacade.set(facade, services);
   return facade;
@@ -360,7 +369,7 @@ export function createRuntimeSessionFacade(
 export function recoveredRuntimeSessionServices(
   ready: RecoveredSessionServices<RuntimeSessionFacade>,
 ): RuntimeSessionServices {
-  const services = servicesByFacade.get(ready.services);
+  const services = servicesByFacade.get(readRecoveredSessionServices(ready));
   if (services === undefined)
     throw new Error("The recovered facade belongs to a different runtime.");
   return services;
@@ -370,12 +379,7 @@ export function recoveredRuntimeSessionServices(
 export function recoveredSessionAutomationPorts(
   ready: RecoveredSessionServices<RuntimeSessionFacade>,
 ) {
-  return {
-    ...ready,
-    get services() {
-      return recoveredRuntimeSessionServices(ready);
-    },
-  };
+  return mapRecoveredSessionServices(ready, () => recoveredRuntimeSessionServices(ready));
 }
 
 /** Renderer listing/peek/stop hooks, supplied only from recovered services. */

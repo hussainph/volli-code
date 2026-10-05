@@ -98,6 +98,7 @@ let testDb: TestDb;
 let root: string;
 let dataDir: string;
 let manager: PtyManager;
+let host: PtyHost;
 let ledger: ReturnType<typeof makeLedger>;
 
 beforeEach(async () => {
@@ -112,7 +113,7 @@ beforeEach(async () => {
   syncProjectRoots([root]);
   ledger = makeLedger();
   const events = { publish: () => {} };
-  const host: PtyHost = {
+  host = {
     events,
     worktreeDeps: (db) => worktreeDeps(db, { events }, { dataDir }),
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
@@ -153,6 +154,18 @@ async function start(client: ReturnType<typeof makeClient>, onDisconnect?: "clos
 }
 
 describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
+  it("uses a supplied host venue for terminal births and observations", async () => {
+    Object.assign(host, { venue: { id: "hostd", kind: "remote" } });
+    const sessionId = await start(makeClient("remote"));
+    const engine = createTestSessionEngine(testDb.db);
+    const projection = await engine.getSession({ sessionId });
+    expect(projection!.attachments[0]!.venue).toEqual({ id: "hostd", kind: "remote" });
+    expect(
+      (await engine.listEvents({ sessionId })).every(
+        (event) => event.provenance.venue?.id === "hostd",
+      ),
+    ).toBe(true);
+  });
   it("detaches without killing, and an attach resyncs the retained output without replaying input", async () => {
     const first = makeClient("first");
     const sessionId = await start(first);

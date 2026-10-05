@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { runGitCapturingAsync } from "./git";
 import {
@@ -130,7 +130,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       ],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -158,7 +161,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       files: ["target/debug/app", "target/debug/deps/app.d", "src/main.rs.bk"],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -181,7 +187,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       ],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -200,7 +209,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       files: [".env", ".env.production", "certs/local.pem", "node_modules/left-pad/index.js"],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -226,7 +238,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       files: ["certs/server.pem", "certs/server.key", "build/app.js"],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -251,7 +266,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       ],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -273,7 +291,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       files: [".claude/settings.local.json", ".claude/cache/blob", ".claude/history.jsonl"],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -294,6 +315,7 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
     });
 
     const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      busySites: async () => [],
       worktreePath: root,
       keepPatterns: [...DEFAULT_TRIM_KEEP_PATTERNS, "*.sqlite"],
     });
@@ -315,7 +337,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
     });
     symlinkSync(outside, join(root, "bazel-out"));
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -335,6 +360,7 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
     });
 
     const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      busySites: async () => [],
       worktreePath: root,
       dryRun: true,
     });
@@ -355,7 +381,10 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
     write(root, "small/a", "x");
     write(root, "big/a", "y".repeat(4096));
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -368,6 +397,24 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
 });
 
 describe("trimIgnoredArtifacts — refusals", () => {
+  it("refuses absent or unreadable activity evidence without touching artifacts", async () => {
+    const root = repoWith({ ignores: ["dist/"], tracked: ["package.json"], files: ["dist/a.js"] });
+    const gitSpy = vi.fn(runGitCapturingAsync);
+    expect(await trimIgnoredArtifacts(gitSpy, { worktreePath: root })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("activity is unavailable"),
+    });
+    await expect(
+      trimIgnoredArtifacts(gitSpy, {
+        worktreePath: root,
+        busySites: async () => {
+          throw new Error("activity failed");
+        },
+      }),
+    ).rejects.toThrow("activity failed");
+    expect(gitSpy).not.toHaveBeenCalled();
+    expect(existsSync(join(root, "dist"))).toBe(true);
+  });
   it("refuses a worktree with a live Session, naming the reason", async () => {
     const root = repoWith({
       ignores: ["node_modules/"],
@@ -423,7 +470,10 @@ describe("trimIgnoredArtifacts — refusals", () => {
     });
     writeFileSync(join(root, "package.json"), "edited\n");
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -439,7 +489,10 @@ describe("trimIgnoredArtifacts — refusals", () => {
       files: ["node_modules/left-pad/index.js", "notes.md"],
     });
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(true);
     expect(existsSync(join(root, "notes.md"))).toBe(true);
@@ -448,6 +501,7 @@ describe("trimIgnoredArtifacts — refusals", () => {
 
   it("refuses a folder that is not there", async () => {
     const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      busySites: async () => [],
       worktreePath: join(tmpdir(), "volli-trim-missing-does-not-exist"),
     });
 
@@ -458,7 +512,10 @@ describe("trimIgnoredArtifacts — refusals", () => {
     const root = mkdtempSync(join(tmpdir(), "volli-trim-nogit-"));
     temporaryRoots.push(root);
 
-    const result = await trimIgnoredArtifacts(runGitCapturingAsync, { worktreePath: root });
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
 
     expect(result.ok).toBe(false);
     if (result.ok) return;

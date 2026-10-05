@@ -326,10 +326,12 @@ export async function trimFinishedWorktree(
   // turns it off mid-session has turned it off for the next Done move too.
   if (!settings.trimOnFinish) return TRIM_SKIP("automatic trim is off");
 
+  if (typeof deps.busySites !== "function")
+    return TRIM_SKIP("Worktree activity is unavailable; refusing to trim.");
   const trimmed = await trimIgnoredArtifacts(deps.worktree.gitAsync, {
     worktreePath: ticket.worktree_path,
     keepPatterns: settings.keepPatterns,
-    ...(deps.busySites === undefined ? {} : { busySites: deps.busySites }),
+    busySites: deps.busySites,
   });
   if (!trimmed.ok) return TRIM_SKIP(trimmed.error);
   // Nothing removed is not an event: a worktree that was already trimmed (or

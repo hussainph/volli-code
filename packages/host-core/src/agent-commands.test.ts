@@ -3332,7 +3332,12 @@ describe("agent command service", () => {
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
     const sessionEngine = createTestSessionEngine(ctx.db);
-    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      sessionEngine,
+      appVersion: "1.2.3",
+      venue: { id: "hostd", kind: "remote" },
+    });
 
     for (const cmd of ["session.done", "session.blocked"] as const) {
       const response = await service.execute({
@@ -3353,6 +3358,7 @@ describe("agent command service", () => {
     for (const event of signals) {
       // The legacy adapter/terminal source stays; the new part is the origin,
       // read back through the same reader every other door's origin is.
+      expect(event.provenance.venue).toEqual({ id: "hostd", kind: "remote" });
       expect(event.provenance.source).toMatchObject({ kind: "adapter", id: "terminal" });
       expect(
         readSessionOrigin(

@@ -183,7 +183,7 @@ async function updateTerminalNative(
       occurredAt,
       provenance: {
         source: { kind: "adapter", id: "terminal", detail: null },
-        venue: { id: "local", kind: "local" },
+        venue: attachment.venue,
       },
       native: terminalNativeReference(next),
     });

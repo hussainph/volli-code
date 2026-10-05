@@ -11,7 +11,7 @@ import type { Watches } from "../watches";
 import { createDelegations, type Delegations } from "./delegate-session";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { RuntimeSessionFacade, RuntimeSessionServices } from "./facade";
-import type { RecoveredSessionServices } from "./lifecycle";
+import { readRecoveredSessionServices, type RecoveredSessionServices } from "./lifecycle";
 import type { createRuntimeAutomations } from "./automations";
 import type { McpSettingsService } from "../mcp/settings";
 
@@ -106,7 +106,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   };
   let agentToolDoor: AgentToolDoor | null | undefined;
   function toolDoor(ready: RecoveredSessionServices<RuntimeSessionFacade>): AgentToolDoor | null {
-    if (ready.services !== options.facade)
+    if (readRecoveredSessionServices(ready) !== options.facade)
       throw new Error("The recovered facade belongs to a different runtime.");
     if (agentToolDoor !== undefined) return agentToolDoor;
     agentToolDoor =
