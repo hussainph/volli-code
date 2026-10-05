@@ -45,8 +45,12 @@ const NEWER_TITLE = "This database was created by a newer version of Volli";
 const DAMAGED_TITLE = "Volli couldn't load its data";
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const MIN_READER_KEY = "volli:min-reader-version";
+// Cheap breadcrumbs are automatic in CI; intrusive sampling is diagnostic opt-in.
+const sampleShutdown = process.env.VOLLI_NEWER_DB_SAMPLE === "1";
 const traceShutdown =
-  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) || process.env.VOLLI_NEWER_DB_TRACE === "1";
+  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) ||
+  process.env.VOLLI_NEWER_DB_TRACE === "1" ||
+  sampleShutdown;
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -122,6 +126,7 @@ async function openApp(config, label) {
     label,
     stdout: "",
     stderr: "",
+    debuggerWaitTraced: false,
     page: null,
     tracePath: traceShutdown
       ? join(scratch, `${label.replaceAll(" launch", "")}-shutdown.jsonl`)
@@ -136,8 +141,10 @@ async function openApp(config, label) {
   });
   run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-48000);
-    if (run.stderr.includes("Waiting for the debugger to disconnect"))
+    if (!run.debuggerWaitTraced && run.stderr.includes("Waiting for the debugger to disconnect")) {
+      run.debuggerWaitTraced = true;
       traceClose(run.tracePath, "debugger-disconnect-wait");
+    }
   });
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
@@ -147,14 +154,14 @@ async function openApp(config, label) {
   page.setDefaultTimeout(8000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
   assertBuiltRendererLoaded(page);
-  await bounded(`${label}: failure trace`, () => installShutdownTrace(app, run.tracePath));
+  await installShutdownTrace(app, run.tracePath);
   return run;
 }
 
 async function closeRun(run) {
   // Degraded and healthy apps both get the app's own shutdown drain window.
   traceClose(run.tracePath, "quit-requested");
-  const finishSampling = sampleStalledClose(run.child, run.tracePath);
+  const finishSampling = sampleStalledClose(run.child, sampleShutdown ? run.tracePath : null);
   let exit;
   try {
     exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });

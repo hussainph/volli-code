@@ -210,7 +210,7 @@ export const SMOKE_QUARANTINE = new Map();
  * shell state; one run also failed to acquire its GPU backend. A dropped first
  * command cannot be waited back.
  *
- * The retained probe runs last after the concurrent pass finishes.
+ * The retained probes run alone after the concurrent pass finishes.
  */
 const SERIAL = new Set([
   // Clicks and wheels a live terminal and asserts the SGR mouse reports that
@@ -229,7 +229,8 @@ const SERIAL = new Set([
   // shutdown waiting on background observer/DIPS initializers; app DB drain
   // already completed. Run after this shard's pool drains, with every browser
   // feature and durability barrier intact. This is scheduling, not quarantine:
-  // both attempts still gate and retain their own fresh-profile evidence.
+  // both attempts run alone and retain their own fresh-profile evidence.
+  // Retry success is still FLAKY; VC-635 validation requires first-attempt PASS.
   "database-newer-version-smoke.mjs",
 ]);
 

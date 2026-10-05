@@ -60,7 +60,7 @@ test("smoke-side breadcrumbs distinguish native exit return from observed child 
     [
       "quit-requested",
       "before-quit",
-      "native-exit-started-after-drain",
+      "native-exit-started",
       "native-exit-returned",
       "process-exit",
       "quit",
@@ -96,6 +96,39 @@ test("a failed diagnostic write never prevents the original native exit", async 
   assert.equal(electronApp.exit(0), "returned");
   assert.equal(originalExitCalled, true);
   assert.equal(errors.length, 3);
+});
+
+test("diagnostic evaluation rejection or timeout cannot fail a launch", async (t) => {
+  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
+  const scratch = await fs.mkdtemp(join(REPO, ".tmp", "shutdown-trace-test-"));
+  t.after(() => fs.rm(scratch, { recursive: true, force: true }));
+  const path = join(scratch, "trace.jsonl");
+  await assert.doesNotReject(
+    installShutdownTrace(
+      {
+        evaluate: async () => {
+          throw new Error("evaluation unavailable");
+        },
+      },
+      path,
+    ),
+  );
+  await assert.doesNotReject(
+    installShutdownTrace(
+      {
+        evaluate: () => new Promise(() => {}),
+      },
+      path,
+      { timeoutMs: 1 },
+    ),
+  );
+  const entries = (await fs.readFile(path, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.deepEqual(
+    entries.map(({ stage }) => stage),
+    ["trace-install-failed", "trace-install-failed"],
+  );
+  assert.match(entries[0].error, /evaluation unavailable/);
+  assert.match(entries[1].error, /deadline/);
 });
 
 test("sampling failure and an unwritable trace cannot reject cleanup", async (t) => {

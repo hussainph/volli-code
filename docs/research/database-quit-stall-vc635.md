@@ -30,11 +30,13 @@ smoke**, not a first-attempt green observation.
 | [37247781400](https://github.com/hussainph/volli-code/actions/runs/37247781400), `07580b406` | Compatible PID 11798: screenshot timeout, then SIGTERM cleanup after 20s | Drain 3ms; native exit returned after 81ms. All 888 main-thread samples wait for ThreadPool shutdown; the background worker again waits in `fsync`. Open-file snapshot includes Chromium `DIPS`/WAL and a zero-byte `declarative_performance_observer.db` with its 512-byte journal. No application `volli.db` is open in this snapshot. |
 
 Artifacts: each run's `smoke-results-rest-2-attempt-1`, including **both smoke
-attempts** and their separate `newer-db-*` evidence directories. Traces record
-parent quit request, main quit invocation/return, `before-quit`, drain
-start/settlement, native-exit entry/return, `will-quit`/`quit`, Node's exit event,
-and the parent's actual observed child exit. Native samples select only the
-tracked main PID and its descendants; a slow close also records scoped open files.
+attempts** and their separate `newer-db-*` evidence directories. Those historical
+captures used temporary product instrumentation to record quit/drain settlement
+in addition to native-exit entry/return and the parent's actual child exit. The
+final smoke-only trace does not observe drain settlement: it records quit
+request, app events, native-exit invocation/return, Node exit and child exit.
+Diagnostic native samples select only tracked main and descendants, with scoped
+open files; native sampling is no longer automatic in final CI.
 
 The second and third captures locate the failed cleanup **after** the application
 shutdown drain and `app.exit()` return, in Chromium's native persistence teardown.
@@ -108,11 +110,14 @@ work. It preserves BLOCK_SHUTDOWN and is not proof of a fix for a running fsync.
 
 Temporary product instrumentation is removed. Smoke-only breadcrumbs/native
 samples are retained only on failure, under the existing CI artifact directory;
-local tracing is opt-in via `VOLLI_NEWER_DB_TRACE=1`. Diagnostic I/O is
-best-effort and cannot prevent the original native exit or reject successful
-cleanup; failure-injection tests cover both. Expensive privileged stackshots
-were temporary diagnostics and are removed. Retained smoke-only sampling does
-not alter close deadlines, success criteria or product code.
+cheap breadcrumbs are installed on every CI launch (local opt-in:
+`VOLLI_NEWER_DB_TRACE=1`) but their files are kept only on failure. Diagnostic
+setup rejection/timeout and I/O cannot fail launch, prevent the original native
+exit or reject cleanup; failure-injection tests cover these paths. Privileged
+stackshots were temporary and are removed. Native sampling is intrusive and
+requires separate explicit `VOLLI_NEWER_DB_SAMPLE=1`; it is **off in final CI**
+so it cannot suspend threads or perturb the pass streak. Opt-in sampling still
+leaves close deadlines and success criteria unchanged.
 
 Initial candidate `67802aa7a`, [run 37249244261](https://github.com/hussainph/volli-code/actions/runs/37249244261),
 passed the full CI gate and newer-database on its first attempt (three graceful
@@ -167,11 +172,15 @@ slow successful incompatible close and then failed the compatible screenshot.
 PID-scoped stackshots confirm a 3-vCPU/7-GB VM and main at the same ThreadPool
 barrier. Two background workers are priority **4**, reported **runnable for
 7.107s/7.108s before the first sample**, with no execution during the 2.07s
-capture (one in BTM's `access`, another in `mkdir`). This establishes prolonged
-non-execution of runnable low-priority work, not merely a JS close timeout.
-Concurrent `sample` can suspend threads while collecting stacks, so stackshot
-suspension notes are **not** evidence of App Nap. Exact kernel/VM scheduling
-policy and the earlier fsync delay remain unresolved.
+capture (one in BTM's `PathExists/access`, before SQLite opens; another in
+`mkdir`). Runnable history starts before instrumentation, and non-suspended
+samples remain runnable: this establishes prolonged non-execution, not merely
+a JS close timeout or storage wait. The successful retry's DIPS database-file
+`fsync` kernel stack explicitly contains **`throttle_lowpri_io`**, followed by
+runnable low-priority work; it exits at +14.617s. Concurrent `sample` suspends
+threads while collecting stacks, so suspension notes are **not** App Nap
+proof. Exact host/hypervisor scheduling policy and the whole 20-second window
+remain unresolved.
 Neither App Nap flags nor global I/O sysctl changes are used. Disabling DIPS
 would remove a browser privacy feature and is **not applied**.
 
@@ -192,17 +201,24 @@ Pinned sources:
 
 Final scheduling candidate local checks:
 - `vp check` and `git diff --check`: pass.
-- `node --test apps/desktop/scripts/run-smokes.test.mjs apps/desktop/e2e/lib/smoke-kit.test.mjs apps/desktop/e2e/lib/shutdown-trace.test.mjs`: 45/45 pass, including schedule membership/coverage and diagnostic I/O failure injection.
+- `node --test apps/desktop/scripts/run-smokes.test.mjs apps/desktop/e2e/lib/smoke-kit.test.mjs apps/desktop/e2e/lib/shutdown-trace.test.mjs`: 46/46 pass, including schedule membership/coverage and diagnostic setup/I/O failure injection.
 - `vp run --filter @volli/desktop typecheck`: pass (all four TypeScript configs).
 - `vp test run src/main/quit-gate.test.ts src/main/agent-socket-quit.test.ts --maxWorkers "$VOLLI_CONCURRENCY_HINT"` from desktop: 29/29 pass.
 - `vp run --filter @volli/desktop build`: pass (existing chunk-size warnings).
 - Built newer-database with opt-in tracing: 8/8 checks, 3/3 graceful exits; recovery: 11/11 checks, 7/7 graceful exits. Browser features are at baseline.
 
-Earlier candidate CI artifacts show **all 17 gating smokes that call
-`closeAppBounded` passed on their first attempt**, including database recovery,
-browser recovery/trace, the eight Automation journeys, provisional chat,
-settings search, split view, ticket-open IPC and contrast. The helper's 27 tests
-still hold child ownership, deadlines, natural-exit races and signal escalation.
+The first scheduling candidate `5acd0cbe1`, CI run 37253147765, passed the full
+gate with baseline browser features. Its newer-database smoke passed first
+attempt in **29.393s total**, with three graceful exits and the exclusive-pass
+log. Across all four smoke lanes, **all 17 gating `closeAppBounded` caller smokes
+passed on their first attempt**, including database recovery, browser
+recovery/trace, eight Automation journeys, provisional chat, settings search,
+split view, ticket-open IPC and contrast. The unrelated core `board-smoke.mjs`
+was FLAKY (not a `closeAppBounded` caller); no claim of a wholly retry-free
+workflow is made. This observation precedes the final diagnostic-setup hardening
+and opt-in-only sampler; the unchanged-head streak is tracked separately.
+The helper's 27 tests still hold child ownership, deadlines, natural-exit races
+and signal escalation.
 Five other callers remain outside the gate under unchanged existing policy:
 credentialed Pi project/ticket chat, legacy settings-fill/global-artifacts, and
 the hour-long reflow research matrix. Those were not run and are not claimed green.

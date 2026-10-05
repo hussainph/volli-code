@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { appendFileSync, promises as fs } from "node:fs";
 import { promisify } from "node:util";
-import { descendantProcesses } from "./smoke-kit.mjs";
+import { createDeadline, descendantProcesses } from "./smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,32 +19,40 @@ export function traceClose(path, stage, details = {}) {
 }
 
 /** Smoke-side only: no tracing code ships in the application's quit path. */
-export async function installShutdownTrace(app, path) {
+export async function installShutdownTrace(app, path, { timeoutMs = 5000 } = {}) {
   if (!path) return;
-  await app.evaluate(({ app: electronApp }, tracePath) => {
-    const nodeFs = process.getBuiltinModule("node:fs");
-    const trace = (stage) => {
-      try {
-        nodeFs.appendFileSync(
-          tracePath,
-          `${JSON.stringify({ at: Date.now(), pid: process.pid, stage })}\n`,
-        );
-      } catch (error) {
-        console.error(`Shutdown diagnostic unavailable: ${error.message}`);
-      }
-    };
-    for (const event of ["before-quit", "will-quit", "quit"])
-      electronApp.on(event, () => trace(event));
-    process.on("exit", () => trace("process-exit"));
-    const exit = electronApp.exit;
-    electronApp.exit = function (...args) {
-      // The accepted coordinator enters exit only after its bounded drain.
-      trace("native-exit-started-after-drain");
-      const result = exit.apply(this, args);
-      trace("native-exit-returned");
-      return result;
-    };
-  }, path);
+  try {
+    await createDeadline({
+      label: "shutdown diagnostic setup",
+      expiresAt: Date.now() + timeoutMs,
+    }).run(() =>
+      app.evaluate(({ app: electronApp }, tracePath) => {
+        const nodeFs = process.getBuiltinModule("node:fs");
+        const trace = (stage) => {
+          try {
+            nodeFs.appendFileSync(
+              tracePath,
+              `${JSON.stringify({ at: Date.now(), pid: process.pid, stage })}\n`,
+            );
+          } catch (error) {
+            console.error(`Shutdown diagnostic unavailable: ${error.message}`);
+          }
+        };
+        for (const event of ["before-quit", "will-quit", "quit"])
+          electronApp.on(event, () => trace(event));
+        process.on("exit", () => trace("process-exit"));
+        const exit = electronApp.exit;
+        electronApp.exit = function (...args) {
+          trace("native-exit-started");
+          const result = exit.apply(this, args);
+          trace("native-exit-returned");
+          return result;
+        };
+      }, path),
+    );
+  } catch (error) {
+    traceClose(path, "trace-install-failed", { error: error.message });
+  }
 }
 
 export function sampleStalledClose(child, path, options = {}) {
