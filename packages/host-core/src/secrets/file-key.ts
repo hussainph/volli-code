@@ -66,7 +66,9 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
+import type { CredentialKey, CredentialKeyring } from "../ports/credential-keyring";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "../ports/secret-key";
+import { credentialKeyId } from "./credential-key-id";
 
 /** The secret store's file, beside the database in every host. */
 export const SECRET_STORE_FILE_NAME = "session-secrets.enc";
@@ -192,6 +194,56 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
         decipher.update(value.subarray(tagAt + TAG_BYTES)),
         decipher.final(),
       ]).toString("utf8");
+    },
+  };
+}
+
+/**
+ * The same key file as a {@link CredentialKeyring}, for the typed inventory
+ * (VC-642, `inventory.ts`). Every {@link CredentialKeyring.probe}, which the
+ * inventory runs under its lock before each read, reads the file again and
+ * holds what it finds: a key removed or replaced while the host runs is
+ * noticed by the next read (`missing`, `wrong-key`), and a key another
+ * process rotated in is picked up. Like {@link fileSecretKey}, it creates a
+ * key only to seal, and only when the file is absent.
+ */
+export function fileCredentialKeyring(options: FileSecretKeyOptions): CredentialKeyring {
+  const path = options.path;
+  let held: CredentialKey | null | undefined;
+  const load = (): CredentialKey | null => {
+    const key = readKey(path);
+    return key === null ? null : { id: credentialKeyId(key), key };
+  };
+  return {
+    backend: "file",
+    probe() {
+      held = load();
+    },
+    resolve(id) {
+      held ??= load();
+      if (held === null) {
+        throw new SecretKeyUnavailableError(
+          "missing",
+          `Saved credentials exist, but their key file ${path} is missing. Put the key file ` +
+            "back (mode 0600) to open them. Volli will not make a new key while they exist.",
+        );
+      }
+      if (held.id !== id) {
+        throw new SecretKeyUnavailableError(
+          "wrong-key",
+          `The key file ${path} is not the key the saved credentials were sealed with. ` +
+            "Put the original key file back.",
+        );
+      }
+      return held.key;
+    },
+    active() {
+      held ??= load();
+      if (held === null) {
+        const key = createKey(path);
+        held = { id: credentialKeyId(key), key };
+      }
+      return held;
     },
   };
 }

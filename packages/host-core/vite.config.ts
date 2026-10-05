@@ -103,6 +103,18 @@ export default defineConfig({
         // aside rather than deleting it. A branch read wrong here bricks a
         // host or overwrites what a lost key still opens.
         "src/secrets/credential-state.ts",
+        // The typed sealed credential module (VC-642): the lock every process
+        // sharing a store takes, the durable write that never tears or
+        // overwrites a file it did not authenticate, the key-id format and the
+        // typed inventory. A branch wrong here is a lost revocation, a torn
+        // store, or a save sealed over credentials a lost key still opens.
+        "src/secrets/credential-lock.ts",
+        "src/secrets/durable-file.ts",
+        "src/secrets/sealed-document.ts",
+        "src/secrets/credential-key-id.ts",
+        "src/secrets/credential-families.ts",
+        "src/secrets/sealed-envelope.ts",
+        "src/secrets/inventory.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a
