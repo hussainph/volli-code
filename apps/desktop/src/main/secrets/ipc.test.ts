@@ -1,7 +1,8 @@
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { SecretStore } from "@volli/host-core/secrets";
+import { fileSecretKey, SecretStore } from "@volli/host-core/secrets";
+import { startChild } from "@volli/host-core/secrets/test-support/processes";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { registerSecretIpc } from "./ipc";
 
@@ -102,13 +103,13 @@ describe("dedicated credential IPC", () => {
       { name: "API_TOKEN", toolCallId: "c" },
       new AbortController().signal,
     );
-    const before = service.list();
+    const before = await service.list();
     if (!before.ok) throw new Error("missing metadata");
     const input = { requestId: before.requests[0]!.id, value, scope: "session" };
     const failed = await invoke("volli:secret-submit", input);
     expect(failed).toMatchObject({ ok: false });
     expect(JSON.stringify(failed)).not.toContain(value);
-    expect(service.list()).toMatchObject({ requests: before.requests });
+    expect(await service.list()).toMatchObject({ requests: before.requests });
     expect(await invoke("volli:secret-submit", input)).toEqual({ ok: true });
     expect(await waiting).toBe("signed in");
     expect(settled).toHaveBeenCalledTimes(2);
@@ -120,7 +121,7 @@ describe("dedicated credential IPC", () => {
       { name: "API_TOKEN", toolCallId: "c" },
       new AbortController().signal,
     );
-    const list = service.list();
+    const list = await service.list();
     if (!list.ok) throw new Error("missing metadata");
     expect(
       await invoke("volli:secret-submit", {
@@ -131,38 +132,38 @@ describe("dedicated credential IPC", () => {
     ).toEqual({ ok: true });
     expect(await waiting).toBe("signed in");
     const metadata = store.list()[0]!;
-    expect(JSON.stringify(invoke("volli:secrets-list", "p"))).not.toContain(value);
+    expect(JSON.stringify(await invoke("volli:secrets-list", "p"))).not.toContain(value);
     expect(
-      invoke("volli:secret-replace", { id: metadata.id, value: "replacement-sentinel" }),
+      await invoke("volli:secret-replace", { id: metadata.id, value: "replacement-sentinel" }),
     ).toEqual({ ok: true });
     expect(store.environment("s", "p")["API_TOKEN"]).toBe("replacement-sentinel");
-    expect(invoke("volli:secret-revoke", metadata.id)).toEqual({ ok: true });
+    expect(await invoke("volli:secret-revoke", metadata.id)).toEqual({ ok: true });
     expect(store.environment("s", "p")).toEqual({});
     const next = port.request(
       { name: "API_TOKEN", toolCallId: "c2" },
       new AbortController().signal,
     );
-    const pending = service.list();
+    const pending = await service.list();
     if (!pending.ok) throw new Error("missing metadata");
     expect(await invoke("volli:secret-decline", pending.requests[0]!.id)).toEqual({ ok: true });
     expect(await next).toBe("declined");
     expect(invoke("volli:secrets-list", 1)).toMatchObject({ ok: false });
   });
-  it("lets the person retry or reset locked stored secrets, and nothing else (VC-641)", () => {
+  it("lets the person retry or reset locked stored secrets, and nothing else (VC-641)", async () => {
     // Nothing is locked: a reset is refused, generically.
-    expect(setup().invoke("volli:secrets-reset")).toEqual({
+    expect(await setup().invoke("volli:secrets-reset")).toEqual({
       ok: false,
       error: "Could not update the secret. Retry or choose Session storage.",
     });
     const { invoke } = setup();
     const dir = directories.at(-1)!;
     writeFileSync(join(dir, "session-secrets.enc"), "sealed by a keychain that is locked");
-    expect(invoke("volli:secrets-list", "p")).toMatchObject({
+    expect(await invoke("volli:secrets-list", "p")).toMatchObject({
       ok: true,
       secrets: [],
       credentials: { state: "locked", reason: "unavailable" },
     });
-    expect(invoke("volli:secrets-unlock")).toMatchObject({
+    expect(await invoke("volli:secrets-unlock")).toMatchObject({
       ok: true,
       credentials: { state: "locked" },
     });
@@ -171,11 +172,60 @@ describe("dedicated credential IPC", () => {
       senderFrame: {},
     });
     expect(foreign).toMatchObject({ ok: false });
-    expect(readdirSync(dir)).toEqual(["session-secrets.enc"]);
-    expect(invoke("volli:secrets-reset")).toEqual({
+    expect(readdirSync(dir)).toEqual(["host-credentials.lock", "session-secrets.enc"]);
+    expect(await invoke("volli:secrets-reset")).toEqual({
       ok: true,
       credentials: { state: "empty", reason: null, unavailable: [] },
     });
-    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
+    expect(readdirSync(dir)).toEqual([
+      "host-credentials.lock",
+      expect.stringMatching(/^session-secrets\.enc\.locked-/),
+    ]);
   });
+  it("never blocks the main thread while another Volli process holds the lock (VC-642)", async () => {
+    const dir = mkdtempSync(join(process.cwd(), ".secret-ipc-test-"));
+    directories.push(dir);
+    const service = new SecretService(
+      new SecretStore(join(dir, "session-secrets.enc"), fileSecretKey({ path: join(dir, "key") })),
+    );
+    service.store.put({ name: "STORED", value: "stored-sentinel", scope: "always" });
+    const sender = { mainFrame: {} };
+    registerSecretIpc(service, (candidate) => candidate === sender);
+    const invoke = (channel: string, ...args: unknown[]) =>
+      handlers.get(channel)!({ sender, senderFrame: sender.mainFrame }, ...args);
+    const child = startChild({ kind: "hold", lock: join(dir, "host-credentials.lock") });
+    try {
+      await child.next();
+      const order: string[] = [];
+      setTimeout(() => order.push("timer"), 10);
+      const started = performance.now();
+      const listing = (invoke("volli:secrets-list", "p") as Promise<unknown>).then((result) => {
+        order.push("settled");
+        return result;
+      });
+      // The handler returned without waiting for the other process.
+      expect(performance.now() - started).toBeLessThan(100);
+      const settled = await listing;
+      // The 10 ms timer ran while the list waited, asynchronously, for the lock.
+      expect(order).toEqual(["timer", "settled"]);
+      // Still held after the bounded wait: busy for this answer, never a stale ready.
+      expect(settled).toEqual({
+        ok: true,
+        requests: [],
+        secrets: [],
+        credentials: { state: "locked", reason: "busy", unavailable: ["session-env"] },
+      });
+      // Injection on the same thread refuses at once rather than stall it.
+      const injecting = performance.now();
+      expect(() => service.store.environment("s", "p")).toThrow("busy");
+      expect(performance.now() - injecting).toBeLessThan(100);
+    } finally {
+      child.process.kill("SIGKILL");
+      await child.exited;
+    }
+    expect(await invoke("volli:secrets-list", "p")).toMatchObject({
+      credentials: { state: "ready" },
+      secrets: [{ name: "STORED" }],
+    });
+  }, 30_000);
 });

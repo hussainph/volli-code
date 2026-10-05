@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { fileSecretKey, SecretStore } from "@volli/host-core/secrets";
+import { SecretStore as N1SecretStore } from "@volli/host-core/secrets/test-support/n1/secrets/store";
 import { keychainSecretCodec } from "./codec";
 
 /**
@@ -243,5 +245,48 @@ describe("a locked or denied keychain (VC-641)", () => {
     expect(() =>
       keychainSecretCodec(keychain).decryptString(Buffer.from(VSC1_ENVELOPE, "base64")),
     ).toThrow("Invalid wrapped key.");
+  });
+});
+
+/**
+ * N-1 on a desktop profile (VC-642): main's exact `SecretStore` at the base
+ * commit (`@volli/host-core`'s `test-support/n1/`, pinned there by blob id)
+ * with this keychain codec, which is itself unchanged from main (pinned
+ * below). An existing store opens with identical contents after the upgrade,
+ * and N-1 opens, uses and writes back everything this build writes.
+ */
+describe("N-1 compatibility on desktop (VC-642)", () => {
+  it("keeps this codec byte-identical to main's", () => {
+    const bytes = readFileSync(new URL("./codec.ts", import.meta.url));
+    const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    expect(blob).toBe("ad447b12191a87eb6ddf6579564c7795ceb830f8");
+  });
+
+  it("opens the same store as N-1, and each build opens what the other writes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "volli-keychain-n1-"));
+    vi.spyOn(Date, "now").mockReturnValue(1_791_000_000_000);
+    try {
+      const path = join(dir, "session-secrets.enc");
+      const current = () => new SecretStore(path, keychainSecretCodec(FIXTURE_KEYCHAIN));
+      const previous = () => new N1SecretStore(path, keychainSecretCodec(FIXTURE_KEYCHAIN));
+      writeFileSync(path, Buffer.from(VSC1_STORE, "base64"), { mode: 0o600 });
+      expect(current().list()).toEqual(previous().list());
+      current().put({ name: "NEW_TOKEN", value: "new-value", scope: "always" });
+      expect(previous().environment("s", "project-fixture")).toEqual(
+        current().environment("s", "project-fixture"),
+      );
+      const old = previous();
+      old.revoke(old.list().find((item) => item.name === "NEW_TOKEN")!.id);
+      old.put({ name: "N1_TOKEN", value: "n1-value", scope: "always" });
+      expect(current().list()).toEqual(previous().list());
+      expect(current().environment("s", "elsewhere")).toEqual({
+        STRIPE_API_KEY: "sk_fixture_always",
+        N1_TOKEN: "n1-value",
+      });
+      expect(readFileSync(path).subarray(0, 4).toString()).toBe("VSC1");
+    } finally {
+      vi.restoreAllMocks();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

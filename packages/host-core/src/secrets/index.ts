@@ -1,8 +1,12 @@
 /**
  * `@volli/host-core/secrets` — persistent Session secrets and the keys that
- * seal them (VC-481, VC-559). `SecretStore` takes a {@link SecretKeyPort}:
- * desktop passes its keychain adapter, a headless host passes
- * {@link fileSecretKey}. See `docs/secrets.md` ("Headless hosts").
+ * seal them (VC-481, VC-559), and the typed sealed credential module every
+ * application credential family moves onto (VC-642): the credential lock,
+ * the durable file contract, the key-id format and the typed inventory.
+ * `SecretStore` takes a {@link SecretKeyPort}: desktop passes its keychain
+ * adapter, a headless host passes {@link fileSecretKey}. See
+ * `docs/secrets.md` ("Headless hosts") and
+ * `docs/plans/sealed-credential-store.md`.
  */
 export {
   isSecretKeyUnavailable,
@@ -10,13 +14,65 @@ export {
   type SecretKeyPort,
   type SecretKeyRefusal,
 } from "../ports/secret-key";
+export type {
+  CredentialKey,
+  CredentialKeyBackend,
+  CredentialKeyring,
+} from "../ports/credential-keyring";
+export {
+  CREDENTIAL_FAMILIES,
+  isCredentialFamily,
+  type CredentialFamily,
+  type CredentialObject,
+  type CredentialSelector,
+  type CredentialValue,
+} from "./credential-families";
+export { credentialKeyId, CredentialKeySet, isCredentialKeyId } from "./credential-key-id";
+export {
+  CREDENTIAL_LOCK_FILE_NAME,
+  CredentialLock,
+  CredentialLockBusyError,
+  credentialLockFor,
+  CredentialLockUnusableError,
+  retryWhileBusy,
+} from "./credential-lock";
+export {
+  publishSealedFile,
+  readSealedFile,
+  SealedFileChangedError,
+  SealedFileIndeterminateError,
+  type PublishOptions,
+  type PublishStep,
+} from "./durable-file";
+export {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CredentialRevisionConflictError,
+  type CredentialRecordRef,
+  INVENTORY_SCHEMA,
+  SealedInventory,
+  type ChangeOptions,
+  type CredentialRecord,
+  type CredentialRecordMetadata,
+  type SealedInventoryOptions,
+  type SealedInventoryReset,
+} from "./inventory";
+export {
+  SealedDocument,
+  SealedStoreCorruptError,
+  type SealedCodec,
+  type SealedDocumentOptions,
+  type SealedUpdate,
+} from "./sealed-document";
 export {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
   CREDENTIALS_READY,
+  credentialsBusy,
+  credentialsResettable,
   credentialStatusFor,
   credentialsUnavailable,
   SEALED_CREDENTIAL_KINDS,
+  SealedStoreNewerError,
   SealedStoreUnreadableError,
   type CredentialKind,
   type CredentialReason,
@@ -25,6 +81,7 @@ export {
   type SealedStoreArchive,
 } from "./credential-state";
 export {
+  fileCredentialKeyring,
   fileSecretKey,
   inspectSecretKeyFile,
   SECRET_KEY_FILE_ENV,

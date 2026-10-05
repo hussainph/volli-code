@@ -447,7 +447,10 @@ sudo systemctl start volli-hostd
 It refuses a data directory boot would refuse (another user's, or writable by
 every user), and takes the instance lock, so it refuses while hostd runs. The
 lock file it may leave, `hostd.lock`, is the one hostd itself creates and
-keeps; it holds nothing. It does nothing when secrets open or there are none,
+keeps; it holds nothing. The move itself happens under the credential lock,
+`host-credentials.lock` (VC-642), an empty file every process sharing the
+store locks before it reads or writes saved secrets; it holds nothing either.
+It does nothing when secrets open or there are none,
 and refuses, even with `--yes`, while the key configuration is `refused`: a
 reset cannot fix a relative `VOLLI_SECRET_KEY_FILE` or an unsafe key file, and
 an environment typo must not move a store the right key opens.

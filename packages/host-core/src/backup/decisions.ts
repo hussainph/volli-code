@@ -26,7 +26,12 @@
  * for the app to fill when it next creates the resource.
  */
 
-import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
+import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_LOCK_FILE_NAME,
+  SECRET_KEY_FILE_NAME,
+  SECRET_STORE_FILE_NAME,
+} from "@volli/host-core/secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
 
 /** What a backup does with one persisted table. */
@@ -597,6 +602,20 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "A headless host's secret key (VC-559); a backup never carries what opens a credential.",
+  },
+  {
+    // The typed sealed inventory (VC-642), its temporaries and any archive a
+    // reset set aside: the same rule as the Session store above.
+    area: `${CREDENTIAL_INVENTORY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "The typed sealed credential inventory (VC-642) and anything a reset set aside; credentials never travel in backups.",
+  },
+  {
+    area: CREDENTIAL_LOCK_FILE_NAME,
+    decision: "exclude",
+    reason:
+      "The credential lock (VC-642): an empty file whose kernel lock coordinates processes. Not data.",
   },
   {
     area: "browser-pictures",

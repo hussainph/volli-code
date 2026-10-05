@@ -107,8 +107,10 @@ describe("SecretStore persistence", () => {
     expect(decrypted.version).toBe(1);
     expect(decrypted.secrets).toHaveLength(2);
     expect(JSON.stringify(decrypted)).not.toContain("ephemeral-session-value");
+    const opened = vi.mocked(encryption.decryptString).mock.calls.length;
     const relaunched = new SecretStore(path, encryption);
-    expect(encryption.decryptString).toHaveBeenCalledTimes(1);
+    // Lazy: constructing opens nothing.
+    expect(encryption.decryptString).toHaveBeenCalledTimes(opened);
     expect(relaunched.list()).toEqual([global, project]);
     expect(relaunched.environment("s", "p")).toEqual({
       API_TOKEN: "durable-global-value",
@@ -124,7 +126,7 @@ describe("SecretStore persistence", () => {
     new SecretStore(path, encryption).list();
     expect(statSync(path).mode & 0o777).toBe(0o600);
     store.put({ name: "TOKEN", value: "replacement", scope: "always" });
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(readdirSync(dir)).toEqual(["credentials.enc", "host-credentials.lock"]);
   });
 
   it("keeps session values entirely in memory without encryption", () => {
@@ -228,7 +230,7 @@ describe("SecretStore persistence", () => {
     expect(error.cause).toBeUndefined();
     expect(store.list()).toHaveLength(1);
     expect(readFileSync(path)).toEqual(before);
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(readdirSync(dir)).toEqual(["credentials.enc", "host-credentials.lock"]);
     vi.mocked(encryption.decryptString).mockImplementation(() => {
       throw new Error("original-value leaked by codec");
     });
@@ -240,20 +242,54 @@ describe("SecretStore persistence", () => {
     );
   });
 
-  it("sanitizes filesystem write errors, does not update memory, and cleans temporary files", () => {
-    store.list(); // Cache the empty store before placing a directory at the file path.
+  it.skipIf(process.getuid?.() === 0)(
+    "sanitizes filesystem write errors, does not update memory, and cleans temporary files",
+    () => {
+      store.list(); // Takes the lock once, so it exists before the directory turns read-only.
+      chmodSync(dir, 0o500);
+      try {
+        const error = caught(() =>
+          store.put({ name: "TOKEN", value: "private-value", scope: "always" }),
+        );
+        expect(error.message).toBe("Could not persist encrypted secrets.");
+        expect(error.message).not.toContain(dir);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      expect(store.list()).toEqual([]);
+      expect(store.status().state).toBe("empty");
+      expect(readdirSync(dir)).toEqual(["host-credentials.lock"]);
+    },
+  );
+
+  it("finds a directory where the file was, on its next read, as corrupt", () => {
+    store.list();
     mkdirSync(path);
-    const error = caught(() =>
-      store.put({ name: "TOKEN", value: "private-value", scope: "always" }),
+    expect(caught(() => store.put({ name: "TOKEN", value: "v", scope: "always" })).message).toBe(
+      "Could not decrypt secret storage.",
     );
-    expect(error.message).toBe("Could not persist encrypted secrets.");
+    expect(store.status().state).toBe("corrupt");
+  });
+
+  it("leaves a newer build's file alone: locked, never rewritten (VC-642)", () => {
+    writeFileSync(path, encryption.encryptString(JSON.stringify({ version: 2, secrets: [] })));
+    const before = readFileSync(path);
     expect(store.list()).toEqual([]);
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(store.status()).toEqual({
+      state: "locked",
+      reason: "newer-format",
+      unavailable: ["session-env"],
+    });
+    expect(() => store.put({ name: "TOKEN", value: "v", scope: "always" })).toThrow("newer Volli");
+    expect(readFileSync(path)).toEqual(before);
   });
 
   it.each([
-    { version: 2, secrets: [] },
+    null,
+    5,
     { version: 1, secrets: {} },
+    { version: 1, secrets: [null] },
+    { version: "2", secrets: [] },
     {
       version: 1,
       secrets: [{ id: "x", name: "PATH", value: "unsafe", scope: "always", lastUsedAt: null }],
@@ -304,14 +340,26 @@ describe("SecretStore scopes and metadata", () => {
     });
     store.put({ name: "OTHER", value: "other", scope: "project", projectId: "elsewhere" });
     store.put({ name: "ISOLATED", value: "isolated", scope: "session", sessionId: "another" });
+    // Same name, another Session: its own slot, not a replacement.
+    store.put({ name: "TOKEN", value: "another-session", scope: "session", sessionId: "another" });
+    expect(store.environment("another", "p")).toMatchObject({ TOKEN: "another-session" });
     expect(store.environment("s", "p")).toEqual({ TOKEN: "session" });
     expect(store.environment("other-session", "p")).toEqual({ TOKEN: "project" });
     expect(store.environment("s", "elsewhere")).toEqual({ TOKEN: "global", OTHER: "other" });
     expect(store.list("p").map((item) => item.id)).toEqual([global.id, project.id, session.id]);
+    expect(store.list().filter((item) => item.name === "TOKEN")).toHaveLength(4);
     expect(store.list().every((item) => !("value" in item))).toBe(true);
     const copy = store.list()[0]!;
     copy.name = "MUTATED";
     expect(store.list()[0]?.name).toBe("TOKEN");
+  });
+
+  it("keeps one Project slot per project for the same name", () => {
+    const first = store.put({ name: "TOKEN", value: "p1", scope: "project", projectId: "p1" });
+    const second = store.put({ name: "TOKEN", value: "p2", scope: "project", projectId: "p2" });
+    expect(second.id).not.toBe(first.id);
+    expect(store.environment("s", "p1")).toEqual({ TOKEN: "p1" });
+    expect(store.environment("s", "p2")).toEqual({ TOKEN: "p2" });
   });
 
   it("updates lastUsedAt only for selected values and persists durable timestamps", () => {
@@ -409,6 +457,12 @@ describe("live output redaction", () => {
     expect(store.redactPartial("log\nReady ALMOND123\nWAL")).toBe("log\n‹secret:MULTILINE›");
     expect(store.redactPartial("log\nReady ALMOND123\nWALNUT456")).toBe("log\n‹secret:MULTILINE›");
     expect(store.redactPartial("log\nReady elsewhere")).toBe("log\nReady elsewhere");
+  });
+
+  it("withholds an unfinished credential-shaped tail even with no stored value", () => {
+    expect(store.redactPartial("ready https://alice:opaque")).toBe("ready https://[redacted]");
+    expect(store.redactPartial("ready eyJheader")).toBe("ready [redacted]");
+    expect(store.redactPartial("ready")).toBe("ready");
   });
 
   it("uses the longest trailing prefix and handles repeated overlapping characters", () => {
@@ -648,7 +702,6 @@ describe("SecretStore when stored credentials are locked (VC-641)", () => {
       LIVE: "live-value",
     });
     expect(locked.unlock().state).toBe("ready");
-    expect(keychain.decryptString).toHaveBeenCalledTimes(2);
   });
 
   it("resets a lock with nothing sealed to an empty store", () => {
@@ -676,22 +729,27 @@ describe("SecretStore when stored credentials are locked (VC-641)", () => {
     expect(() => store.reset()).toThrow("Saved secrets are not locked");
     const before = readFileSync(path);
 
-    const keychain = lockedCodec() as SecretKeyPort & { lock(): void };
+    const keychain = lockedCodec() as SecretKeyPort & { lock(): void; unlock(): void };
     keychain.lock();
     const locked = new SecretStore(path, keychain);
     const { archive, status } = locked.reset(new Date("2026-10-05T00:00:00.000Z"));
     expect(status).toEqual({ state: "empty", reason: null, unavailable: [] });
-    expect(readdirSync(dir)).toEqual([archive]);
+    expect(readdirSync(dir)).toEqual([archive, "host-credentials.lock"]);
     expect(readFileSync(join(dir, archive!))).toEqual(before);
+    // Every read opens the file again (VC-642), so the backend must open what it sealed.
+    keychain.unlock();
     locked.put({ name: "TOKEN", value: "re-entered", scope: "always" });
     expect(locked.status().state).toBe("ready");
-    expect(readdirSync(dir).toSorted()).toEqual([archive, "credentials.enc"].toSorted());
+    expect(readdirSync(dir).toSorted()).toEqual(
+      [archive, "credentials.enc", "host-credentials.lock"].toSorted(),
+    );
   });
 
   it.skipIf(process.getuid?.() === 0)(
     "answers a reset it could not finish with a sentence that names no path",
     () => {
       writeFileSync(path, "corrupt");
+      expect(store.status().state).toBe("corrupt");
       chmodSync(dir, 0o500);
       try {
         const error = caught(() => store.reset());
