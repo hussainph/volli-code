@@ -56,10 +56,11 @@ export function createHeadlessSessionRuntime(input: {
     throw new Error("The Session database is unavailable.");
   const db = host.database.db;
   const sessionEngine = host.sessionEngine;
+  const homeDir = env["HOME"] || homedir();
   const modelAccess =
     options.modelAccess ??
     piOwnedModelAccess({
-      agentDir: env["PI_CODING_AGENT_DIR"] || join(env["HOME"] || homedir(), ".pi", "agent"),
+      agentDir: env["PI_CODING_AGENT_DIR"] || join(homeDir, ".pi", "agent"),
     });
   const decisions = host.runtimeServices.createDecisions(modelAccess, options.venue);
   const mcpSettings = host.runtimeServices.createMcp().settings;
@@ -145,13 +146,13 @@ export function createHeadlessSessionRuntime(input: {
   const automations = createRuntimeAutomations({
     host,
     piRuntimeHost: assembly.piRuntimeHost,
-    homeDir: env["HOME"] || homedir(),
+    homeDir,
     log: ports.log,
   });
   const facade = createRuntimeSessionFacade({
     host,
     assembly,
-    homeDir: env["HOME"] || homedir(),
+    homeDir,
     venue: options.venue,
     events: ports.events,
     decisions,
