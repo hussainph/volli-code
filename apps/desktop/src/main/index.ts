@@ -104,6 +104,7 @@ import { createHostAgentCommands } from "@volli/host-core/agent-services";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
+import { AGENT_TOOLS_REMOVED_APP_STATE_KEY } from "./agent-tools-state";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { registerDecisionModelIpcHandlers } from "./decision/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
@@ -2229,9 +2230,8 @@ const appStartup = app.whenReady().then(async () => {
   // Cleared by File → Install. The old consent key (`volli:agent-tools-consent`)
   // is deliberately ignored: "deferred" was a first-boot dialog answer that
   // latched forever, which is the failure this ticket removes.
-  const agentToolsRemovedKey = "volli:agent-tools-removed";
   const agentToolsRemoved = (): boolean =>
-    dbHandle.ok && getAllAppState(dbHandle.db)[agentToolsRemovedKey] === "true";
+    dbHandle.ok && getAllAppState(dbHandle.db)[AGENT_TOOLS_REMOVED_APP_STATE_KEY] === "true";
 
   // The skill installer targets the real OS home via app.getPath("home"), which
   // on macOS ignores $HOME — so a
@@ -2373,7 +2373,7 @@ const appStartup = app.whenReady().then(async () => {
       // A repair is an explicit request for working tools. Lift suppression
       // before touching the filesystem, or fail instead of leaving an install
       // present on disk yet silently skipped on every later boot.
-      setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+      setAppState(dbHandle.db, AGENT_TOOLS_REMOVED_APP_STATE_KEY, "false", Date.now());
     }
     await regenerateHarnessRuntime();
     await installAgentToolsQuietly();
@@ -2390,7 +2390,7 @@ const appStartup = app.whenReady().then(async () => {
   const installAgentTools = async (): Promise<void> => {
     if (dbHandle.ok) {
       try {
-        setAppState(dbHandle.db, agentToolsRemovedKey, "false", Date.now());
+        setAppState(dbHandle.db, AGENT_TOOLS_REMOVED_APP_STATE_KEY, "false", Date.now());
       } catch (error) {
         dialog.showErrorBox("Agent Tools Installation Failed", errorMessage(error));
         throw error;
@@ -2469,7 +2469,7 @@ const appStartup = app.whenReady().then(async () => {
     }
     if (dbHandle.ok) {
       try {
-        setAppState(dbHandle.db, agentToolsRemovedKey, "true", Date.now());
+        setAppState(dbHandle.db, AGENT_TOOLS_REMOVED_APP_STATE_KEY, "true", Date.now());
       } catch (error) {
         dialog.showErrorBox("Agent Tools Removal Failed", errorMessage(error));
         return;

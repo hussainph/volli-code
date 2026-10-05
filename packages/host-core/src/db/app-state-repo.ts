@@ -3,8 +3,13 @@
  * `StateStorage` the renderer's ui/workspace Zustand persist stores swap
  * localStorage for. Values are opaque JSON strings — this layer never
  * parses them.
+ *
+ * Keys are typed: a key must be registered, live, in `@volli/shared`'s
+ * app_state registry (VC-574), so a writer with an unregistered constant does
+ * not compile.
  */
 import type Database from "better-sqlite3";
+import type { AppStateKey } from "@volli/shared";
 import { prepared } from "./prepared";
 
 interface AppStateRow {
@@ -31,13 +36,18 @@ export function getAllAppState(db: Database.Database): Record<string, string> {
  * wants one small row should not have to materialize all of them. Still
  * unparsed — this layer never knows what a value means.
  */
-export function getAppState(db: Database.Database, key: string): string | undefined {
+export function getAppState(db: Database.Database, key: AppStateKey): string | undefined {
   return prepared<[string], AppStateRow>(db, "SELECT * FROM app_state WHERE key = ?").get(key)
     ?.value;
 }
 
 /** Upserts one `app_state` key. */
-export function setAppState(db: Database.Database, key: string, value: string, now: number): void {
+export function setAppState(
+  db: Database.Database,
+  key: AppStateKey,
+  value: string,
+  now: number,
+): void {
   prepared(
     db,
     `INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)
@@ -55,6 +65,6 @@ export function setAppState(db: Database.Database, key: string, value: string, n
  * whose payload is empty, which every reader here has to parse and reject. A
  * deleted key simply isn't in the bootstrap payload.
  */
-export function deleteAppState(db: Database.Database, key: string): void {
+export function deleteAppState(db: Database.Database, key: AppStateKey): void {
   prepared(db, "DELETE FROM app_state WHERE key = ?").run(key);
 }

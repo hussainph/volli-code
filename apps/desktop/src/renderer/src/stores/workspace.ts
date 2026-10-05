@@ -76,6 +76,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+
+export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { publishWorkspaceTabSelection } from "@renderer/lib/workspace-tab-selection";
 import {
@@ -2531,7 +2533,7 @@ export function createWorkspaceStore(
         },
       }),
       {
-        name: "volli:workspace",
+        name: WORKSPACE_UI_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,
