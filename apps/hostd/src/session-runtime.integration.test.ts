@@ -412,6 +412,11 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
   }, 20_000);
 });
 
+/** Runs the CLI it is given, then stays, as a login shell does after a command. */
+const OPERATOR_SHELL = `const run = require("node:child_process").spawnSync(process.execPath, process.argv.slice(1), { stdio: "inherit" });
+if (run.status !== 0) process.exit(run.status ?? 1);
+setInterval(() => {}, 1 << 30);`;
+
 /**
  * The M1 demo's journey (VC-563), with only the provider wire scripted: an
  * operator registers a git repository whose `origin` is a local bare remote,
@@ -535,11 +540,10 @@ describe("M1 headless smoke (VC-563)", () => {
     // The operator's shell, as SSH holds it: the CLI starts the Session and
     // the shell stays. Its whole process group hangs up mid-turn.
     const shell = spawn(
-      "sh",
+      process.execPath,
       [
-        "-c",
-        `"$0" "$@" && exec sleep 600`,
-        process.execPath,
+        "-e",
+        OPERATOR_SHELL,
         ...cliArgs(
           "session",
           "start",

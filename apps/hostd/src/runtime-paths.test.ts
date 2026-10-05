@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,7 +62,11 @@ it("boots from the workspace build with the installed sandbox and the dev launch
 });
 
 it("ships a dev launcher for the workspace CLI bundle", () => {
-  const launcher = resolve(import.meta.dirname, "../dev-bin/volli");
-  expect(statSync(launcher).mode & 0o111).toBe(0o111);
-  expect(readFileSync(launcher, "utf8")).toContain("packages/cli/dist/volli.cjs");
+  const launcher = openSync(resolve(import.meta.dirname, "../dev-bin/volli"), "r");
+  try {
+    expect(fstatSync(launcher).mode & 0o111).toBe(0o111);
+    expect(readFileSync(launcher, "utf8")).toContain("packages/cli/dist/volli.cjs");
+  } finally {
+    closeSync(launcher);
+  }
 });
