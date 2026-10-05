@@ -38,7 +38,6 @@ import type Database from "better-sqlite3";
 import type { WebKeySealing } from "@volli/shared";
 
 import { prepared } from "@volli/host-core/db/prepared";
-import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import {
   CredentialLockBusyError,
   credentialStatusFor,
@@ -145,7 +144,7 @@ export class WebCredentialMirror {
    */
   reconcile(): WebMirrorResult {
     const result = this.#attempt();
-    this.#onResult(result);
+    this.#tell(result);
     return result;
   }
 
@@ -175,7 +174,7 @@ export class WebCredentialMirror {
         } catch {
           result = { sealing: "pending", reason: "busy" };
         }
-        this.#onResult(result);
+        this.#tell(result);
       } while (this.#again);
       return result;
     };
@@ -193,7 +192,7 @@ export class WebCredentialMirror {
    */
   sealing(): WebKeySealing {
     try {
-      return withTransaction(this.#db, () => {
+      return this.#read(() => {
         const source = this.#source();
         const receipt = prepared<[], MirrorRow>(
           this.#db,
@@ -210,6 +209,24 @@ export class WebCredentialMirror {
     } catch {
       return "pending";
     }
+  }
+
+  /** A listener's failure is never the save's or the boot's. */
+  #tell(result: WebMirrorResult): void {
+    try {
+      this.#onResult(result);
+    } catch {
+      // A log line that could not be written; the outcome stands.
+    }
+  }
+
+  /**
+   * One read transaction (`BEGIN DEFERRED`, only SELECTs): a consistent WAL
+   * snapshot that never takes SQLite's write lock, so it never waits on a
+   * writer while this process holds the credential lock.
+   */
+  #read<T>(work: () => T): T {
+    return this.#db.transaction(work).deferred();
   }
 
   #attempt(): WebMirrorResult {
@@ -253,7 +270,7 @@ export class WebCredentialMirror {
 
   /** Every web key row and the source revision, in one read transaction. */
   #snapshot(): MirrorSnapshot | null {
-    return withTransaction(this.#db, () => {
+    return this.#read(() => {
       const source = this.#source();
       if (source === undefined) return null;
       return {

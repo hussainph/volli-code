@@ -21,6 +21,7 @@ import {
   type PublishStep,
 } from "../secrets/durable-file";
 import { fileCredentialKeyring } from "../secrets/file-key";
+import { keychainCredentialKeyring } from "../secrets/keychain-keyring";
 import { CREDENTIAL_INVENTORY_FILE_NAME, SealedInventory } from "../secrets/inventory";
 import { SealedFileUnverifiedError, SealedStoreCorruptError } from "../secrets/sealed-document";
 import { runChild, startChild } from "../secrets/test-support/processes";
@@ -155,6 +156,35 @@ describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
     expect(db.prepare("SELECT inventory_id, generation FROM web_credential_mirror").get()).toEqual({
       inventory_id: null,
       generation: null,
+    });
+  });
+
+  it("is none, not pending, with no keys where the keychain cannot answer", () => {
+    const mirror = new WebCredentialMirror({
+      db,
+      inventory: new SealedInventory({
+        path: inventoryPath,
+        keyring: keychainCredentialKeyring({
+          path: join(dir, "host-credentials.key"),
+          keychain: {
+            isEncryptionAvailable: () => false,
+            encryptString: () => Buffer.alloc(0),
+            decryptString: () => "",
+          },
+        }),
+        families: ["web-search"],
+      }),
+      onResult: () => {
+        throw new Error("a log line that could not be written");
+      },
+    });
+    expect(mirror.reconcile()).toMatchObject({ sealing: "none", written: false });
+    expect(mirror.sealing()).toBe("none");
+    writeSecret(db, BRAVE_SEARCH_KEY_SECRET, BRAVE, 1);
+    expect(mirror.reconcile()).toEqual({
+      sealing: "pending",
+      reason: "locked",
+      detail: "unavailable",
     });
   });
 

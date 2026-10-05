@@ -19,9 +19,10 @@
  *   sealed inventory has to be opened ({@link CredentialKeyring.resolve}) or
  *   one is first sealed ({@link CredentialKeyring.active}). An unwrapped key is
  *   held by id for the launch, so later reads and saves never ask again.
- *   {@link CredentialKeyring.probe} never asks the keychain (asking may
- *   prompt): it checks that the keychain answers at all, and reads the wrapped
- *   file again so a key replaced by another process is unwrapped afresh.
+ *   {@link CredentialKeyring.probe} never asks the keychain for a key (asking
+ *   may prompt): it reads the wrapped file again, so a key replaced by
+ *   another process is unwrapped afresh, and only when there is one checks
+ *   that the keychain answers at all.
  * - **Fail closed, never plaintext.** An unavailable keychain, Electron's
  *   Linux `basic_text` backend, a refused unwrap, a missing or damaged
  *   wrapped file: each is a {@link SecretKeyUnavailableError}, so the
@@ -38,6 +39,7 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
   fstatSync,
   fsyncSync,
   linkSync,
@@ -74,6 +76,15 @@ export interface KeychainCredentialKeyringOptions {
   /** `<dataDir>/host-credentials.key`. */
   readonly path: string;
   readonly keychain: CredentialKeychain;
+  /**
+   * The inventory this key seals (`<dataDir>/host-credentials.enc`). While
+   * nothing is there, a wrapped key this keychain will not open seals
+   * nothing, so it is set aside (renamed, never deleted) and a new key made,
+   * rather than leave sealing stuck (a profile copied from another machine,
+   * a keychain item replaced). With a sealed inventory present it is never
+   * replaced: that is a reset, person intent. Omitted: never replaced.
+   */
+  readonly inventoryPath?: string;
 }
 
 function unavailable(): SecretKeyUnavailableError {
@@ -114,8 +125,11 @@ export function keychainCredentialKeyring(
   return {
     backend: "keychain",
     probe() {
-      if (!available()) throw unavailable();
       const wrapped = readWrapped(path);
+      // No wrapped key: nothing sealed here can be opened, and nothing is
+      // asked of the keychain (on macOS even asking whether it is available
+      // can reach it). With one, a keychain that will not answer is locked.
+      if (wrapped !== null && !available()) throw unavailable();
       // Replaced or removed since it was unwrapped: never use the old key for it.
       if (held !== null && (wrapped === null || !held.wrapped.equals(wrapped))) {
         held.key.key.fill(0);
@@ -142,9 +156,23 @@ export function keychainCredentialKeyring(
       return key.key;
     },
     active() {
-      const wrapped = readWrapped(path);
-      if (wrapped !== null) return unwrap(wrapped);
       if (!available()) throw unavailable();
+      try {
+        const wrapped = readWrapped(path);
+        if (wrapped !== null) return unwrap(wrapped);
+      } catch (error) {
+        // The keychain answered and refused (it is available, checked above),
+        // or the file is damaged: replaceable only while nothing is sealed.
+        const reason = (error as SecretKeyUnavailableError).reason;
+        if (
+          (reason !== "unavailable" && reason !== "malformed") ||
+          options.inventoryPath === undefined ||
+          existsSync(options.inventoryPath)
+        ) {
+          throw error;
+        }
+        setAside(path);
+      }
       const key = randomBytes(32);
       const text = key.toString("base64");
       let sealed: Buffer;
@@ -210,6 +238,26 @@ function readWrapped(path: string): Buffer | null {
     return Buffer.from(buffer.subarray(MAGIC.length, length));
   } finally {
     closeSync(fd);
+  }
+}
+
+/**
+ * Moves an orphaned wrapped key aside under a unique name beside it, never
+ * overwriting and never deleting: a hard link, a directory sync, then the old
+ * name goes. Excluded from backups by the `host-credentials.key*` rule.
+ */
+function setAside(path: string): void {
+  const aside = `${path}.unused-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  try {
+    linkSync(path, aside);
+    syncDirectory(dirname(path));
+    rmSync(path);
+  } catch {
+    throw new SecretKeyUnavailableError(
+      "unreadable",
+      `The keychain will not open the key in ${path}, and it could not be set aside. ` +
+        "Move it aside; nothing is sealed under it.",
+    );
   }
 }
 

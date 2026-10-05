@@ -38,6 +38,7 @@
  * mutate"): that is each family's switch, behind a floor raise.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import type { CredentialKeyring } from "../ports/credential-keyring";
 import { SecretKeyUnavailableError, isSecretKeyUnavailable } from "../ports/secret-key";
@@ -375,30 +376,32 @@ export class SealedInventory {
   mirror(family: CredentialFamily, read: () => MirrorSnapshot): MirrorOutcome {
     let snapshot: MirrorSnapshot | undefined;
     let outcome: MirrorOutcome | undefined;
+    // Nothing to protect, answered before the key backend is asked anything:
+    // a keychain that is unavailable (or a key file that is unsafe) cannot
+    // make "no key and no sealed copy" pending.
+    const empty = this.#document.lock.withSync(() => {
+      if (existsSync(this.#document.path)) return null;
+      const source = checkedSnapshot(family, read());
+      return source.entries.length === 0 ? source : null;
+    });
+    if (empty !== null) return nothing(empty);
     const exact = (inventory: Inventory): boolean =>
       sameEntries(inventory.records, family, snapshot!.entries) &&
       sameReceipt(inventory.receipts?.[family], snapshot!.receipt);
     this.#change(
       (current, generation, existing) => {
-        snapshot = read();
-        // Checked before anything is sealed: what this writes must parse again,
-        // or it would turn every family in the file corrupt.
-        const slots = new Set<string>();
-        for (const entry of snapshot.entries) {
-          if (!validSelector(family, entry.selector) || !validValue(family, entry.value)) {
-            throw new Error("Invalid credential.");
-          }
-          const slot = selectorKey(family, entry.selector);
-          if (slots.has(slot)) throw new Error("Invalid credential.");
-          slots.add(slot);
+        snapshot = checkedSnapshot(family, read());
+        if (existing === null && snapshot.entries.length === 0) {
+          // The source emptied since the look above.
+          outcome = nothing(snapshot);
+          return null;
         }
-        if (!validReceipt(snapshot.receipt)) throw new Error("Invalid credential.");
-        if ((existing === null && snapshot.entries.length === 0) || exact(current)) {
+        if (exact(current)) {
           outcome = {
             kind: "current",
             receipt: snapshot.receipt,
-            inventory: existing?.inventory ?? null,
-            generation: existing?.generation ?? null,
+            inventory: existing!.inventory,
+            generation: existing!.generation,
             records: snapshot.entries.length,
           };
           return null;
@@ -541,6 +544,28 @@ function sameEntries(
 
 function sameReceipt(left: MirrorReceipt | undefined, right: MirrorReceipt): boolean {
   return left !== undefined && left.source === right.source && left.revision === right.revision;
+}
+
+/** "Nothing to protect": an empty source and no sealed file, so nothing written. */
+function nothing(empty: MirrorSnapshot): MirrorOutcome {
+  return { kind: "current", receipt: empty.receipt, inventory: null, generation: null, records: 0 };
+}
+
+/**
+ * The source's snapshot, checked before anything is sealed from it: what is
+ * written must parse again, or it would turn every family in the file corrupt.
+ */
+function checkedSnapshot(family: CredentialFamily, snapshot: MirrorSnapshot): MirrorSnapshot {
+  const slots = new Set<string>();
+  for (const entry of snapshot.entries) {
+    const slot = validSelector(family, entry.selector) && selectorKey(family, entry.selector);
+    if (slot === false || !validValue(family, entry.value) || slots.has(slot)) {
+      throw new Error("Invalid credential.");
+    }
+    slots.add(slot);
+  }
+  if (!validReceipt(snapshot.receipt)) throw new Error("Invalid credential.");
+  return snapshot;
 }
 
 function validReceipt(value: unknown): value is MirrorReceipt {

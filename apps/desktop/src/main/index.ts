@@ -108,6 +108,7 @@ import {
 } from "@volli/host-core/session-runtime/assembly";
 import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
 import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
   CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
   keychainCredentialKeyring,
   SecretStore,
@@ -948,6 +949,7 @@ const appStartup = app.whenReady().then(async () => {
     keyring: keychainCredentialKeyring({
       path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
       keychain: safeStorage,
+      inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
     }),
     onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
   });
@@ -2000,9 +2002,12 @@ const appStartup = app.whenReady().then(async () => {
       console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
     });
     // Web search keys' sealed mirror (VC-643): rebuilt from the database on
-    // every launch, deletes included, after first paint because opening it
-    // may ask the keychain. Never rejects; the outcome is logged above.
-    void webAccess?.reconcileSealing();
+    // every launch, deletes included. Like the repack above, it waits out
+    // first paint and boot (opening it may ask the keychain), and never holds
+    // quit open. Never rejects; the outcome is logged above.
+    if (webAccess !== null) {
+      setTimeout(() => void webAccess.reconcileSealing(), 5_000).unref();
+    }
   });
 
   // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching

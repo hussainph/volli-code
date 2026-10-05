@@ -8,9 +8,5 @@
     // read-only storage digest tool loads it under Node's type stripper.
     "allowImportingTsExtensions": true
   },
-  "include": ["src"],
-  // Main's exact copies of the files VC-643 changed, loaded only by the N-1
-  // child process through `n1-hooks.mjs`, which resolves their imports as if
-  // they sat at their real paths. Checked by git blob id, never compiled here.
-  "exclude": ["src/web/test-support/n1"]
+  "include": ["src"]
 }

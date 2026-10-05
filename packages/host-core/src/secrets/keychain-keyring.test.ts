@@ -161,8 +161,11 @@ describe("keychain credential keyring", () => {
       path: join(dir, "other.key"),
       keychain: fakeKeychain({ backend: "basic_text" }).keychain,
     });
-    expect(reason(() => linux.probe())).toBe("unavailable");
+    // Nothing wrapped yet: a probe asks the keychain nothing at all.
+    linux.probe();
     expect(reason(() => linux.active())).toBe("unavailable");
+    writeFileSync(join(dir, "other.key"), Buffer.from("VHK1wrapped:x"));
+    expect(reason(() => linux.probe())).toBe("unavailable");
     const gnome = keychainCredentialKeyring({
       path: join(dir, "gnome.key"),
       keychain: fakeKeychain({ backend: "gnome_libsecret" }).keychain,
@@ -212,6 +215,59 @@ describe("keychain credential keyring", () => {
     rmSync(path);
     mkdirSync(path);
     expect(reason(() => keyring.active())).toBe("not-a-file");
+  });
+
+  it("sets an orphaned wrapped key aside only while nothing is sealed under it", () => {
+    const inventoryPath = join(dir, CREDENTIAL_INVENTORY_FILE_NAME);
+    // Made by another machine's keychain: this one refuses to unwrap it.
+    writeFileSync(path, Buffer.from("VHK1foreign-wrapping"));
+    const { keychain } = fakeKeychain();
+    // Never without being told where the inventory is.
+    expect(reason(() => keychainCredentialKeyring({ path, keychain }).active())).toBe(
+      "unavailable",
+    );
+    // A sealed inventory present: never replaced (that is a reset).
+    writeFileSync(inventoryPath, "sealed");
+    const guarded = keychainCredentialKeyring({ path, keychain, inventoryPath });
+    expect(reason(() => guarded.active())).toBe("unavailable");
+    expect(readFileSync(path).toString()).toBe("VHK1foreign-wrapping");
+    rmSync(inventoryPath);
+    // Nothing sealed: set aside, never deleted, and a fresh key made.
+    const fresh = keychainCredentialKeyring({ path, keychain, inventoryPath }).active();
+    expect(fresh.key).toHaveLength(32);
+    const aside = readdirSync(dir).filter((name) =>
+      name.startsWith(`${CREDENTIAL_KEYCHAIN_KEY_FILE_NAME}.unused-`),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0]!)).toString()).toBe("VHK1foreign-wrapping");
+    // A damaged one too; an unreadable one is not ours to move.
+    writeFileSync(path, Buffer.from("VHK1"));
+    expect(keychainCredentialKeyring({ path, keychain, inventoryPath }).active().key).toHaveLength(
+      32,
+    );
+    chmodSync(path, 0o000);
+    expect(
+      reason(() => keychainCredentialKeyring({ path, keychain, inventoryPath }).active()),
+    ).toBe("unreadable");
+    chmodSync(path, 0o600);
+    // A locked keychain is never a reason to replace anything.
+    const locked = fakeKeychain();
+    locked.state.available = false;
+    const before = readFileSync(path);
+    expect(
+      reason(() =>
+        keychainCredentialKeyring({ path, keychain: locked.keychain, inventoryPath }).active(),
+      ),
+    ).toBe("unavailable");
+    expect(readFileSync(path)).toEqual(before);
+    // When it cannot be set aside, it says so.
+    writeFileSync(path, Buffer.from("VHK1foreign-wrapping"));
+    faults.link = () => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    };
+    expect(
+      reason(() => keychainCredentialKeyring({ path, keychain, inventoryPath }).active()),
+    ).toBe("unreadable");
   });
 
   it("uses the key another process created first, never replacing it", () => {

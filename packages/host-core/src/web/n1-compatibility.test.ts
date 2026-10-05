@@ -10,7 +10,8 @@
  *
  * N-1 runs as a separate `node` process (`test-support/n1-child.ts`) whose
  * resolve hook (`n1-hooks.mjs`) swaps in main's exact copy of every host-core
- * file this ticket changed (`test-support/n1/`, main at `b1f92b52d`): its
+ * file this ticket changed (`test-support/n1/<path>.pinned`, main at
+ * `b1f92b52d`): its
  * migrations (schema head 58), backup decisions, Web Access settings and the
  * secrets module those import. The first test proves the copies are
  * byte-identical to main by git blob id, and that the child loaded no other
@@ -47,15 +48,24 @@ const MAIN_BLOBS: Readonly<Record<string, string>> = {
   "backup/decisions.ts": "3bee0329d2db6e95869d71657fd4f00d25f6724e",
   "db/migrations.ts": "c69d9ccfec7af8b72d79f4ea5a8e89793709a223",
   "secrets/index.ts": "bacebc68ca1d859ee5763f472c8d0b05bae3c3b9",
+  "secrets/credential-families.ts": "7de22c209496e793f97eee0d656d1617f56cb504",
+  "secrets/credential-state.ts": "a7bb5eb8da41673c6f72855058a4d0105876aaa4",
   "secrets/inventory.ts": "4f69c6f66f3301c0dd75f8a797169f9c599a0211",
   "secrets/sealed-document.ts": "aac9492e633f2e8c04e6be87bb32623f2d20d389",
+  "web/credential.ts": "aa1fcbf7d71e379b61e7fd1e04d298c1721f3dcc",
   "web/settings.ts": "99135b1b759c1e6357e92effe0cb1bef8d4025bc",
 };
 
-/** Every host-core source file this ticket adds or changes. None may run unpinned as N-1. */
+/**
+ * Every host-core source file this ticket adds or changes (comments included).
+ * None may run unpinned as N-1. Outside host-core it changed only types
+ * (`@volli/shared`'s `WebAccessSettingsView`), which erase to nothing.
+ */
 const CHANGED_BY_VC_643 = new Set([
   ...Object.keys(MAIN_BLOBS),
   "db/web-credential-migration.ts",
+  // Type-only: erased, so never loaded at run time either way.
+  "ports/credential-keyring.ts",
   "runtime-services.ts",
   "secrets/keychain-keyring.ts",
   "web/credential-mirror.ts",
@@ -188,7 +198,7 @@ const sourceRevision = (db: Database.Database) =>
 describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () => {
   it("tests against main's exact code", async () => {
     for (const [file, blob] of Object.entries(MAIN_BLOBS)) {
-      const bytes = readFileSync(new URL(`./test-support/n1/${file}`, import.meta.url));
+      const bytes = readFileSync(new URL(`./test-support/n1/${file}.pinned`, import.meta.url));
       expect(gitBlobId(bytes), file).toBe(blob);
     }
     const db = openDb();
@@ -197,7 +207,7 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     expect(run.results).toEqual([{ head: 58, userVersion: SCHEMA_HEAD, floor: 58 }]);
     // The child did run real host-core code, and none of what this ticket changed.
     expect(run.loaded).toContain("db/database-file.ts");
-    expect(run.loaded).toContain("web/credential.ts");
+    expect(run.loaded).toContain("db/secrets-repo.ts");
     expect(run.loaded.filter((file) => CHANGED_BY_VC_643.has(file))).toEqual([]);
   });
 

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import type { CredentialKeyring } from "../ports/credential-keyring";
+import { SecretKeyUnavailableError } from "../ports/secret-key";
 import { CredentialLock, CredentialLockBusyError } from "./credential-lock";
 import { SealedFileChangedError } from "./durable-file";
 import { fileCredentialKeyring } from "./file-key";
@@ -77,6 +78,43 @@ describe("SealedInventory.mirror", { timeout: 30_000 }, () => {
       generation: null,
       records: 0,
     });
+    expect(() => readFileSync(path)).toThrow();
+    expect(() => readFileSync(keyPath)).toThrow();
+  });
+
+  it("answers nothing to protect without asking a key backend that cannot answer", () => {
+    const unavailable: CredentialKeyring = {
+      backend: "file",
+      probe() {
+        throw new SecretKeyUnavailableError("unavailable", "keychain locked");
+      },
+      resolve() {
+        throw new SecretKeyUnavailableError("unavailable", "keychain locked");
+      },
+      active() {
+        throw new SecretKeyUnavailableError("unavailable", "keychain locked");
+      },
+    };
+    const inventory = open({ keyring: unavailable });
+    expect(inventory.mirror("web-search", () => snapshot(4, {}))).toMatchObject({
+      kind: "current",
+      inventory: null,
+      records: 0,
+    });
+    // Something to protect does ask, and is refused.
+    expect(() => inventory.mirror("web-search", () => snapshot(5, { brave: BRAVE }))).toThrow(
+      /keychain locked/,
+    );
+  });
+
+  it("writes nothing when the source empties between the first look and the seal", () => {
+    let reads = 0;
+    const outcome = open().mirror("web-search", () => {
+      reads += 1;
+      return reads === 1 ? snapshot(1, { brave: BRAVE }) : snapshot(2, {});
+    });
+    expect(outcome).toMatchObject({ kind: "current", inventory: null, records: 0 });
+    expect(outcome.receipt.revision).toBe(2);
     expect(() => readFileSync(path)).toThrow();
     expect(() => readFileSync(keyPath)).toThrow();
   });

@@ -253,6 +253,16 @@ mirror back. The read switch is VC-644.
   failed, or this host has no keyring) or `none`. A pending save is a save. The
   log says `held in the profile database (legacy mode, not encrypted)` with a
   reason code; nothing claims the keys are encrypted, and no value is logged.
+- **Asked once per launch.** A keychain that refuses, or key material that is
+  locked or corrupt, keeps sealing pending for the rest of that launch (the
+  inventory remembers the failure, so the keychain is not asked again on
+  every save); the next launch tries again. No key, no sealed file: `none`,
+  without asking the keychain at all. A wrapped key this keychain will not
+  open, with no sealed inventory beside it (a profile copied from another
+  Mac), seals nothing, so it is moved aside (`host-credentials.key.unused-*`,
+  never deleted) and a new key made. With a sealed inventory present it is
+  never replaced. Settings shows none of this yet (owner decision: the label
+  comes with VC-644); the view and the log carry it.
 - **Older builds.** The release before this one opens a 059 database (floor
   58), and saves, clears, attaches, bundles and restores exactly as before;
   the triggers count its writes, and the next launch of this build reconciles
