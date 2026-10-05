@@ -652,10 +652,18 @@ new install. Your drop-ins in `/etc/systemd/system/volli-hostd.service.d/` stay.
 `/opt/volli-hostd.prev-*` folder until the new version has served you for a
 while; remove older ones by name.
 
-**To roll back**, stop both units, set the new install aside (kept, not
-deleted), put the previous one back with its units, start it, and check. Only
-if the new version had already migrated the database does the old one refuse
-it; then restore the cold copy taken before the upgrade:
+**To roll back**, put the previous install back **and the database back to its
+migration safety copy**: a box rolls back to the safety copy, not to the old
+binary (VC-633). The first time the new version opened the database it
+migrated it, and before that committed it published a verified copy of the
+database exactly as the old version left it:
+`/var/lib/volli-hostd/volli.db.backup-v<N>`, where `N` is the old schema.
+Reinstalling only the old install is not a rollback. If the new version raised
+the database's floor, the old one refuses it (`refusing`, left untouched); if
+it didn't, the old one serves a database newer than it knows, and `serving`
+then says nothing about whether it was migrated. Everything written since the
+upgrade goes with the rollback; if you need any of it, make a backup with the
+new version first.
 
 ```sh
 box$ P=/opt/volli-hostd.prev-<YYYYmmdd-HHMMSS>                 # the install to return to
@@ -664,17 +672,25 @@ box$ sudo mv /opt/volli-hostd /opt/volli-hostd.failed-$(date +%Y%m%d-%H%M%S)
 box$ sudo mv "$P" /opt/volli-hostd
 box$ sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
        /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
+box$ sudo -u volli sh -c 'ls -lt /var/lib/volli-hostd/volli.db.backup-v*'  # newest first; N is in its name
+box$ N=<N>                                                       # the schema you are returning to
+box$ D=/var/lib/volli-hostd T=$(date +%Y%m%d-%H%M%S)
+box$ for f in volli.db volli.db-wal volli.db-shm; do sudo -u volli test -e "$D/$f" && sudo -u volli mv "$D/$f" "$D/$f.rolled-back-$T"; done
+box$ sudo -u volli cp "$D/volli.db.backup-v$N" "$D/volli.db"    # copy, never move: it stays the rollback point
+box$ sudo -u volli sqlite3 "$D/volli.db" 'PRAGMA integrity_check; PRAGMA user_version;'   # ok, then N
 box$ sudo systemctl daemon-reload && sudo systemctl start volli-hostd.socket volli-hostd
 box$ volli-hostd --version                                      # the old version again
-box$ sleep 5; sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq -r '.verdict, (.detail // empty)'
+box$ sleep 5; sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq -r '.verdict, (.detail // empty)'   # serving
 ```
 
 `not-serving` with `starting` only means it is still booting: run the last
-line again. `serving` means the new version had not migrated the database: you are done.
-`refusing` means it had (the old version leaves a newer database untouched):
-follow **To restore** under [Backups](#backups) with the copy taken before the
-upgrade. It stops both units, sets the migrated state aside, unpacks the copy,
-starts hostd and checks `serving`.
+line again. The `volli.db*.rolled-back-*` files are the migrated database, the
+only copy of what was written since the upgrade: delete them only once you are
+sure you do not want it. If no `volli.db.backup-v*` is newer than the upgrade,
+the new version never migrated the database: skip the database lines. If the safety copy does
+not check `ok`, follow **To restore** under [Backups](#backups) with the cold
+copy taken before the upgrade instead. Why and what it costs:
+[`apps/hostd/README.md`](../../apps/hostd/README.md#upgrading-and-rolling-back).
 
 ## Running in the foreground
 

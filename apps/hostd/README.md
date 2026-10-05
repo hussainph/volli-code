@@ -581,24 +581,28 @@ where `N` is the schema the old build left. Retention keeps that copy.
   comments, Sessions and their history. If you need any of it, make a backup
   bundle with the new build before you roll back.
 
-To roll back (systemd layout above; `N` from the file name):
+To roll back (systemd layout above; `N` from the file name). The data
+directory is `0700` and owned by the service user, so every step inside it
+runs as that user. The box runbook has the same steps with the install swap:
+[`docs/runbooks/hostd-box.md`](../../docs/runbooks/hostd-box.md#upgrades).
 
 ```sh
-sudo systemctl stop volli-hostd volli-hostd.socket
-cd /var/lib/volli-hostd
+sudo systemctl stop volli-hostd.socket volli-hostd
+D=/var/lib/volli-hostd
+sudo -u volli sh -c "ls -l $D/volli.db.backup-v*"   # the safety copy; N is in its name
 # Set the migrated database aside. Never delete it; it is the only copy of what
 # was written since the upgrade.
 stamp=$(date +%Y%m%d-%H%M%S)
 for f in volli.db volli.db-wal volli.db-shm; do
-  [ -e "$f" ] && sudo -u volli mv "$f" "$f.rolled-back-$stamp"
+  sudo -u volli test -e "$D/$f" && sudo -u volli mv "$D/$f" "$D/$f.rolled-back-$stamp"
 done
 # Copy the safety copy, don't move it: it stays the rollback point.
-sudo -u volli cp volli.db.backup-vN volli.db
-sudo -u volli sqlite3 volli.db 'PRAGMA integrity_check; PRAGMA user_version;'  # ok, N
+sudo -u volli cp "$D/volli.db.backup-vN" "$D/volli.db"
+sudo -u volli sqlite3 "$D/volli.db" 'PRAGMA integrity_check; PRAGMA user_version;'  # ok, N
 # Reinstall the previous archive over /opt/volli-hostd (as in the install above),
 # then start it.
 sudo systemctl start volli-hostd.socket volli-hostd
-sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
+sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir "$D"
 ```
 
 Credential files (`host-credentials.*`, the secret key) are not in the
