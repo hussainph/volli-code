@@ -375,11 +375,16 @@ function publicStartedBy(
 }
 
 /** Latest durable signal, not a turn outcome or the current attention state. */
-function publicSessionSignal(projection: SessionProjection | undefined) {
+function publicSessionSignal(projection: SessionProjection | undefined, observedAt: number) {
   const signal = projection?.signal;
   return signal == null
     ? null
-    : { kind: signal.signal, reason: signal.reason, at: signal.occurredAt };
+    : {
+        kind: signal.signal,
+        reason: signal.reason,
+        at: signal.occurredAt,
+        ageMs: Math.max(0, observedAt - signal.occurredAt),
+      };
 }
 
 /** `volli session show` — metadata without spending a transcript read. */
@@ -424,7 +429,7 @@ export async function sessionShowVerb(
           kind: terminal.ticketId === null ? "project" : "ticket",
           status: terminal.endedAt === null ? "running" : "exited",
           harness: effectiveHarnessId(terminal),
-          signal: publicSessionSignal(projection),
+          signal: publicSessionSignal(projection, observedAt),
           startedBy: publicStartedBy(
             readSessionProvenance(options.db, {
               sessionId: terminal.id,
@@ -493,7 +498,7 @@ export async function sessionShowVerb(
       base,
       {
         role: record.role,
-        signal: publicSessionSignal(projection),
+        signal: publicSessionSignal(projection, observedAt),
         waitingOn: record.waitingOn,
         interruptedReason: interruptedReason(record, projection),
         startedBy: publicStartedBy(provenance, true),
@@ -697,7 +702,7 @@ export async function sessionAnswerVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, sessionEngine } = context;
+  const { options, sessionEngine, now } = context;
   const chat = chatProjectionForPublicId(await context.loadProjections(), request.args["id"]);
   if (!chat.ok) return chat.response;
   const record = chatSessionRecord(chat.projection);
@@ -716,7 +721,7 @@ export async function sessionAnswerVerb(
       role: record.role,
       title: record.title,
       state: answer.state,
-      signal: publicSessionSignal(chat.projection),
+      signal: publicSessionSignal(chat.projection, now()),
       turns: answer.turns,
       unreadable: answer.unreadable,
       answer: answer.text,

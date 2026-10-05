@@ -93,12 +93,14 @@ describe("renderHelp command detail", () => {
     );
   });
 
-  it("documents Session signal reads and their JSON timestamp", () => {
+  it("documents Session signal reads, quoted reasons and JSON timestamp and age", () => {
     for (const verb of ["show", "answer"]) {
       const detail = renderHelp(["session", verb]);
       expect(detail).toContain("done/blocked signal");
-      expect(detail).toContain("signal: {kind, reason, at} or null");
+      expect(detail).toContain("signal: {kind, reason, at, ageMs} or null");
+      expect(detail).toContain("quoted reason");
       expect(detail).toContain("Unix time in milliseconds");
+      expect(detail).toContain("ageMs is elapsed milliseconds");
     }
     expect(renderHelp(["session", "show"])).toContain("Reads need no operator token");
   });

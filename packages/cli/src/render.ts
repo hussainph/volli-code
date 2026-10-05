@@ -583,11 +583,20 @@ function resumedByText(session: Record<string, unknown>): string | null {
     : null;
 }
 
+function hasSessionSignal(signal: unknown): signal is Record<string, unknown> {
+  return isRecord(signal) && (signal["kind"] === "done" || signal["kind"] === "blocked");
+}
+
+function sessionSignalReason(signal: unknown): string | null {
+  if (!hasSessionSignal(signal)) return null;
+  const reason = signal["reason"];
+  return typeof reason === "string" && reason.trim().length > 0 ? reason : null;
+}
+
+/** Only host facts belong inline; the Session's reason belongs in quoted prose. */
 function sessionSignalLine(signal: unknown): string {
-  if (!isRecord(signal)) return "signal  -";
-  return `signal  ${[signal["kind"], signal["reason"], signal["at"]]
-    .map((value) => terminalSafeInline(value ?? "-"))
-    .join(" · ")}`;
+  if (!hasSessionSignal(signal)) return "signal  -";
+  return `signal  ${signal["kind"]} · ${ageText(signal["ageMs"])} ago`;
 }
 
 function renderSessionShow(data: Record<string, unknown>): string | null {
@@ -634,6 +643,20 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
     `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
     sessionSignalLine(data["signal"]),
   );
+  const reason = sessionSignalReason(data["signal"]);
+  if (reason !== null) {
+    if (reason.length > TICKET_SHOW_PROSE_MAX_CHARS) {
+      lines.push(
+        `The signal reason was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters; use --json for the rest.`,
+      );
+    }
+    lines.push(
+      ...untrustedProseResponseLines({
+        response: "session show response",
+        blocks: [{ label: "signal reason", text: reason.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) }],
+      }),
+    );
+  }
   return lines.join("\n");
 }
 
@@ -723,23 +746,24 @@ function renderSessionAnswer(data: Record<string, unknown>): string {
     ...(typeof data["title"] === "string" ? [terminalSafeInline(data["title"])] : []),
   ].join("  ");
   const answer = data["answer"];
-  const signalLines = isRecord(data["signal"]) ? [sessionSignalLine(data["signal"])] : [];
-  if (typeof answer !== "string") {
-    return [
-      header,
-      unreadable
-        ? "Its last message could not be read from the transcript store."
-        : "It has said nothing yet.",
-      ...signalLines,
-    ].join("\n");
-  }
+  const reason = sessionSignalReason(data["signal"]);
+  const blocks = [
+    ...(typeof answer === "string" ? [{ label: "final message", text: answer }] : []),
+    ...(reason === null ? [] : [{ label: "signal reason", text: reason }]),
+  ];
   return [
     header,
-    ...untrustedProseResponseLines({
-      response: "session answer response",
-      blocks: [{ label: "final message", text: answer }],
-    }),
-    ...signalLines,
+    ...(typeof answer === "string"
+      ? []
+      : [
+          unreadable
+            ? "Its last message could not be read from the transcript store."
+            : "It has said nothing yet.",
+        ]),
+    ...(blocks.length === 0
+      ? []
+      : untrustedProseResponseLines({ response: "session answer response", blocks })),
+    ...(hasSessionSignal(data["signal"]) ? [sessionSignalLine(data["signal"])] : []),
   ].join("\n");
 }
 

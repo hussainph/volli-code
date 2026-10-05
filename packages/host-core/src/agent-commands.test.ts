@@ -3191,12 +3191,34 @@ describe("agent command service", () => {
         });
         expect(submitted.receipt?.status).toBe("completed");
         const signal = (await sessionEngine.getSession({ sessionId }))!.signal!;
-        const expected = { kind, reason, at: signal.occurredAt };
+        const expected = {
+          kind,
+          reason,
+          at: signal.occurredAt,
+          ageMs: Math.max(0, PEEK_AT - signal.occurredAt),
+        };
         expect(await show()).toMatchObject({ ok: true, data: { signal: expected } });
         expect(await answer()).toMatchObject({
           ok: true,
           data: { state: "completed", signal: expected },
         });
+      }
+      // A reader whose clock precedes the durable signal cannot report a negative age.
+      const behind = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        sessionEngine,
+        now: () => 0,
+      });
+      for (const cmd of ["session.show", "session.answer"] as const) {
+        expect(
+          await behind.execute({
+            v: 1,
+            cmd,
+            args: { id: shortId },
+            ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+          }),
+        ).toMatchObject({ ok: true, data: { signal: { kind: "blocked", ageMs: 0 } } });
       }
       // A fresh reader still gets the last signal from durable projections.
       const restarted = createAgentCommandService({
@@ -3294,7 +3316,12 @@ describe("agent command service", () => {
     expect(await show()).toMatchObject({
       ok: true,
       data: {
-        signal: { kind: "blocked", reason: "Waiting for credentials", at: signal.occurredAt },
+        signal: {
+          kind: "blocked",
+          reason: "Waiting for credentials",
+          at: signal.occurredAt,
+          ageMs: Math.max(0, timestamp - 1 - signal.occurredAt),
+        },
       },
     });
     expect(mutations).toEqual([

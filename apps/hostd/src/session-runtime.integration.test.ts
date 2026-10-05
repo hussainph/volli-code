@@ -853,18 +853,28 @@ describe("M1 headless smoke (VC-563)", () => {
       kind: "done",
       reason: "pushed",
       at: expect.any(Number),
+      ageMs: expect.any(Number),
     });
     const signalEvent = (
       await live(host).sessionEngine.listEvents({ sessionId: started.sessionId })
     ).find((event) => event.payload.kind === "session.signaled")!;
     expect(shownJson.signal.at).toBe(signalEvent.occurredAt);
     const answeredJson = await cliReadJson("session", "answer", started.session);
-    expect(answeredJson.signal).toEqual(shownJson.signal);
-    const signalLine = `signal  done · pushed · ${shownJson.signal.at}`;
+    expect(answeredJson.signal).toMatchObject({
+      kind: "done",
+      reason: "pushed",
+      at: shownJson.signal.at,
+      ageMs: expect.any(Number),
+    });
+    expect(shownJson.signal.ageMs).toBeGreaterThanOrEqual(0);
+    expect(answeredJson.signal.ageMs).toBeGreaterThanOrEqual(shownJson.signal.ageMs);
+    const signalLine = /signal  done · \d+[smh] ago/;
     const shownHuman = await cliReadHuman("session", "show", started.session);
     const answeredHuman = await cliReadHuman("session", "answer", started.session);
-    expect(shownHuman).toContain(signalLine);
-    expect(answeredHuman).toContain(signalLine);
+    expect(shownHuman).toMatch(signalLine);
+    expect(answeredHuman).toMatch(signalLine);
+    expect(shownHuman).toContain("signal reason:\n  | pushed\n");
+    expect(answeredHuman).toContain("signal reason:\n  | pushed\n");
     console.log(`VC-661 session show --json .signal: ${JSON.stringify(shownJson.signal)}`);
     console.log(`VC-661 session show (human):\n${shownHuman.trimEnd()}`);
     console.log(`VC-661 session answer (human):\n${answeredHuman.trimEnd()}`);
