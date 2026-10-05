@@ -103,6 +103,8 @@ import {
 import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
+export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
+
 /**
  * The per-workspace nav pages (NAV_ITEMS). `home` is the tabbed environment
  * that holds the permanent Board tab plus the project's own Sessions (VC-54);
@@ -2531,7 +2533,7 @@ export function createWorkspaceStore(
         },
       }),
       {
-        name: "volli:workspace",
+        name: WORKSPACE_UI_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,

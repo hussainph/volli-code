@@ -16,7 +16,7 @@ import {
 import { appStateStorage, type SyncStateStorage } from "@renderer/lib/app-state-storage";
 
 /** The single app_state row that owns every project's editor draft. */
-const DRAFT_KEY = "volli:automation-editor-draft";
+export const DRAFT_KEY = "volli:automation-editor-draft";
 const DRAFT_VERSION = 1;
 
 export type AutomationOwnershipDraft = "project" | "global";
