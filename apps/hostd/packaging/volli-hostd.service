@@ -9,7 +9,7 @@
 #     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
 #   sudo install -m 644 volli-hostd.service volli-hostd.socket /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
-#   journalctl -u volli-hostd -o cat | jq .
+#   journalctl -u volli-hostd -o cat | jq -R 'fromjson?'
 #
 # An operator (a person, never the service account) writes over SSH with a
 # token root issues, and reaches the socket through the service's group:
@@ -64,6 +64,11 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
+# /home, /root and /run/user are invisible. Nothing hostd or a Session uses
+# lives there: HOME, Pi's auth.json, the push key and the Ticket worktrees
+# (~/.volli/worktrees) are under /var/lib/volli-hostd, and project checkouts
+# go in /srv (docs/runbooks/hostd-box.md). Operators' tokens stay out of reach.
+ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

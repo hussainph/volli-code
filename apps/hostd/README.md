@@ -107,7 +107,11 @@ In order; each refusal is logged as one JSON line and exits **78**
 ## Session environment and model credentials
 
 Sessions get the service's explicit `PATH`, with the artifact's `bin` first
-(the shipped Node and `volli` CLI). hostd executes no login-shell rc files.
+(the shipped Node and `volli` CLI), and `VOLLI_SOCKET` naming this host's
+agent socket (the `--socket` path), so the agent's `volli` (`session done`,
+board moves) reaches the host that runs it (VC-563). Desktop bakes its socket
+into a generated shim instead; the artifact's `bin/volli` is shared with
+operators and bakes nothing. hostd executes no login-shell rc files.
 Provision project tools on that PATH in the systemd/launchd environment.
 Model credentials belong to Pi: `PI_CODING_AGENT_DIR`, or `$HOME/.pi/agent`.
 They are separate from Volli's sealed Session environment secrets and must
@@ -308,7 +312,7 @@ fields. `console.*` from host-core is routed through the same logger.
 carries a key, a secret or a request payload.
 
 ```sh
-journalctl -u volli-hostd -o cat | jq -r '[.ts, .level, .msg] | @tsv'
+journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
 ```
 
 ## Packaging
@@ -404,6 +408,17 @@ socket, its real `write` tool creates a file, `turn.completed` arrives and the
 CLI reads the completed answer. No in-process `startSessionOperation` shortcut
 counts as that proof.
 
+Its M1 smoke (VC-563) is the box demo's journey on the source boot's runtime
+paths: an operator token registers a repository whose `origin` is a local bare
+remote (`volli project add`), creates a Ticket and starts a Session over the
+built CLI. The client that started it hangs up (its whole process group, as an
+SSH drop would) while the turn runs; the agent writes a file, commits and
+pushes from its Ticket worktree under `~/.volli/worktrees`, and runs
+`volli session done` from inside the Session. The test asserts the pushed ref
+on the bare remote, each ledger command's receipt, the done signal, one
+completed turn and a fresh CLI's answer. Beside it, `node apps/hostd/dist/hostd.cjs`
+boots, serves and stops clean.
+
 The boot check unpacks the archive in a fresh container with no checkout and
 no system Node on `PATH`, probes the natives, executes a Code Mode host call
 through the shipped worker and wasm, boots against an empty data
@@ -411,6 +426,23 @@ directory, waits for `status` to report `serving`, lists projects through the
 socket with the bundled CLI, sends `SIGTERM`, requires exit 0, status
 `not-serving` (stopped), no socket and no WAL left, `PRAGMA integrity_check` =
 `ok`, and that every log line is JSON.
+
+## Running from source
+
+For development, from the repository root after `pnpm install`:
+
+```sh
+pnpm --filter @volli/hostd --filter @volli/cli run build
+(umask 077 && node apps/hostd/dist/hostd.cjs --data-dir .tmp/hostd-dev)
+VOLLI_SOCKET=.tmp/hostd-dev/volli.sock node packages/cli/dist/volli.cjs project list
+```
+
+A workspace build finds Code Mode's sandbox through the installed
+`@volli/agent-runtime`, as desktop's unpackaged build does, and puts
+`apps/hostd/dev-bin` (a `volli` launcher for the workspace CLI bundle, run by
+the `node` on `PATH`) first on its Sessions' `PATH`
+(`src/runtime-paths.ts`). The integration test boots exactly this. The box
+runbook (`docs/runbooks/hostd-box.md`) uses the artifact.
 
 ## Running under systemd
 
@@ -445,7 +477,10 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
   of service, not disclosure).
 - **`RestartPreventExitStatus=78`**: a boot refusal waits for the operator.
 - **Hardening** that leaves git, Node, node-pty and a shell working:
-  `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, the
+  `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`,
+  `ProtectHome=yes` (the service's `HOME`, and so its worktrees under
+  `~/.volli/worktrees`, is the data directory; project checkouts belong in
+  `/srv`, never under `/home`), the
   kernel and control-group protections, an empty `CapabilityBoundingSet=`,
   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
   `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
@@ -458,12 +493,12 @@ is gone for good), set them aside and start over, with hostd stopped and the
 unit's `VOLLI_SECRET_KEY_FILE` in the environment:
 
 ```sh
-sudo systemctl stop volli-hostd
+sudo systemctl stop volli-hostd.socket volli-hostd   # the socket too, or a CLI call restarts it
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd          # says what it found
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd --yes    # sets it aside
-sudo systemctl start volli-hostd
+sudo systemctl start volli-hostd.socket volli-hostd
 ```
 
 It refuses a data directory boot would refuse (another user's, or writable by
@@ -514,6 +549,162 @@ volumes), hostd cannot create the key atomically and says so with
 `no-hard-links`. Create it by hand instead, as above or with
 `(umask 077 && openssl rand -base64 32 > key)`; creation only runs when the
 file is absent. See `docs/secrets.md`, "Headless hosts".
+
+## Upgrading and rolling back
+
+**A box rolls back to its safety copy, not to the old binary.** (VC-633)
+
+An upgrade is the new archive plus a restart. On the first open the new
+build migrates the database, and before the migration commits it publishes
+a verified copy of the database as it was: `<data-dir>/volli.db.backup-v<N>`,
+where `N` is the schema the old build left. Retention keeps that copy.
+Before you upgrade, note `N`, keep the current install as its own directory
+and take a cold copy of the data directory. The box runbook's
+[upgrade](../../docs/runbooks/hostd-box.md#upgrades) does all three.
+
+- **Free space first.** A migration needs about twice the database free on the
+  data directory's volume: a safety copy, then the rewrite (compaction is a
+  full VACUUM, built in memory and written back through the WAL). The host
+  checks this with `statfs` before it opens the database for writing. When
+  there isn't room, it stays up in `refusing`, every verb answers
+  `DB_UNAVAILABLE`, and the log line says how much it needs, how much is free
+  and that nothing was changed: the database and its WAL are byte-identical.
+  Free the space and restart. If `statfs` itself fails (a filesystem that
+  doesn't support it, an I/O error), the host logs one
+  `[migration disk preflight]` warning naming the error and migrates anyway,
+  as it did before this check existed.
+- **Why not just reinstall the old archive.** If the new build's migrations
+  raised the database's floor (`raisesMinReader`), the old build refuses the
+  file as "from a newer version of Volli" and leaves it untouched. If they
+  didn't, the old build runs against a schema it doesn't know. That's allowed,
+  and CI's N-1 lanes test it, but anything the newer build derives is stale
+  until you upgrade again. Either way, only the safety copy is exactly the
+  database the old build last wrote.
+- **What a rollback loses.** Everything written since the upgrade: tickets,
+  comments, Sessions and their history. If you need any of it, make a backup
+  bundle with the new build before you roll back.
+
+To roll back (systemd layout above). The data directory is `0700` and owned
+by the service user, so every step inside it runs as that user. The box
+runbook has the same steps:
+[`docs/runbooks/hostd-box.md`](../../docs/runbooks/hostd-box.md#upgrades).
+
+The rollback checks the database with the `sqlite3` command-line tool, which
+the archive doesn't include (it carries the `better-sqlite3` module, not the
+CLI). On Ubuntu:
+
+```sh
+sudo apt-get update && sudo apt-get install -y sqlite3
+command -v sqlite3
+```
+
+You need two things before anything is stopped or moved:
+
+- **`P`, the previous install, as its own directory.** The runbook's upgrade
+  keeps it as `/opt/volli-hostd.prev-*`. If you upgraded by extracting over
+  `/opt/volli-hostd`, build a fresh one from the previous archive. Never
+  extract the old archive over the current install: that leaves a mix of both.
+
+  ```sh
+  OLD=./volli-hostd-0.1.0-linux-x64.tar.gz   # example: replace with the previous archive
+  sha256sum -c "$OLD.sha256"
+  P=/opt/volli-hostd.prev-$(date +%Y%m%d-%H%M%S)
+  sudo mkdir "$P"
+  sudo tar -xzf "$OLD" -C "$P" --strip-components=1 --no-same-owner
+  sudo "$P/bin/node" "$P/lib/probe-natives.cjs"
+  echo "P=$P"                                 # use this as P below
+  ```
+
+- **`N`, the schema the old build left.** Before an upgrade,
+  `sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db 'PRAGMA user_version;'`
+  prints it. Its safety copy is the exact file `volli.db.backup-v<N>`, digits
+  only after the `v`, dated at the new build's first start. It is not simply
+  the newest match: never pick a `.pending-*`, `.corrupt-*` or `.preserved-*`
+  copy, or a `-wal`/`-shm` sidecar.
+
+  ```sh
+  sudo -u volli ls -lt /var/lib/volli-hostd | grep -E ' volli\.db\.backup-v[0-9]+$'   # newest first
+  sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db 'PRAGMA user_version;'   # the schema now
+  ```
+
+Then run the rollback as one block. It stops at the first failed step, and
+starts nothing until every check has passed:
+
+1. It checks `P` and stops both units.
+2. It reads the schema. At `N` the database was never migrated and is kept.
+   Above `N`, it first checks that the safety copy exists and isn't empty, and
+   that it reads `ok` and then `N`, read-only. `integrity_check` exits 0 even
+   when it finds damage, so the block compares the output.
+3. Only then does it set `volli.db` and its `-wal`, `-shm` and `-journal` aside
+   in a new `rolled-back-*` folder. Never delete that folder: it is the only
+   copy of what was written since the upgrade. It copies the safety copy in
+   (copy, don't move: it stays the rollback point) and checks the copy too.
+   The copy's check opens it read-write: over a read-only connection,
+   `integrity_check` skips CHECK constraints. The safety copy itself is only
+   ever opened read-only.
+4. It swaps `P` in as `/opt/volli-hostd`, installs its units, reloads systemd
+   and starts.
+
+```sh
+P=/opt/volli-hostd.prev-20261004-120000   # example: replace with the install to return to
+N=59                                      # example: replace with the schema it left
+(
+  set -eu
+  D=/var/lib/volli-hostd
+  B="$D/volli.db.backup-v$N"
+  T=$(date +%Y%m%d-%H%M%S)
+  check_db() {   # check_db FILE [-readonly]: it must read ok, then N
+    f=$1; shift
+    sudo -u volli test -s "$f" || { echo "missing or empty: $f" >&2; return 1; }
+    result=$(sudo -u volli sqlite3 "$@" "$f" 'PRAGMA integrity_check; PRAGMA user_version;') ||
+      return 1
+    [ "$result" = "$(printf 'ok\n%s' "$N")" ] ||
+      { printf 'check failed: %s:\n%s\n' "$f" "$result" >&2; return 1; }
+  }
+  sudo test -x "$P/bin/volli-hostd"
+  sudo systemctl stop volli-hostd.socket volli-hostd
+  now=$(sudo -u volli sqlite3 -readonly "$D/volli.db" 'PRAGMA user_version;')
+  if [ "$now" = "$N" ]; then
+    echo "volli.db is at schema $N: never migrated, kept as it is"
+  elif [ "$now" -gt "$N" ]; then
+    check_db "$B" -readonly           # the rollback point: never written to
+    aside=$(sudo -u volli mktemp -d "$D/rolled-back-$T.XXXXXX")
+    for f in volli.db volli.db-wal volli.db-shm volli.db-journal; do
+      if sudo -u volli test -e "$D/$f"; then sudo -u volli mv "$D/$f" "$aside/$f"; fi
+    done
+    sudo -u volli cp "$B" "$D/volli.db"
+    check_db "$D/volli.db"             # read-write: read-only skips CHECK constraints
+    echo "migrated database set aside in $aside"
+  else
+    echo "volli.db is at schema $now, below N=$N: wrong N" >&2
+    exit 1
+  fi
+  sudo mv /opt/volli-hostd "/opt/volli-hostd.failed-$T"
+  sudo mv "$P" /opt/volli-hostd
+  sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
+    /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl start volli-hostd.socket volli-hostd
+  echo "rolled back: started $P's install on schema $N"
+)
+sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
+```
+
+**If the block stops on an error, it has started nothing.** Don't start the
+units by hand. A failed database step means the safety copy can't be used.
+Examples: no `volli.db`, a missing or empty copy, or a check that didn't read
+`ok` and then `N`. Restore the copy of the data directory you took before the
+upgrade instead ([runbook, Backups](../../docs/runbooks/hostd-box.md#backups),
+all but its start), then run the block again: it finds the database at `N`,
+keeps it and finishes the swap. Whether the new build migrated is read from
+the schema. The absence of a newer `volli.db.backup-v*` doesn't prove it.
+`/opt/volli-hostd.failed-*` is the new install; remove it once the old one
+serves. The read-only checks can leave empty `-wal`/`-shm` files beside the
+safety copy and the database; they are harmless.
+
+Credential files (`host-credentials.*`, the secret key) are not in the
+database and stay where they are. The old build reads its keys from the
+database it was given.
 
 ## Running under launchd (macOS)
 
