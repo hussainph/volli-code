@@ -12931,7 +12931,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-8. MODIFIED PACKAGES (2)
+8. MODIFIED PACKAGES (3)
 =========================================================================================================
 
 These packages are modified before they are bundled, by the pnpm patches recorded
@@ -12939,6 +12939,7 @@ in pnpm-workspace.yaml. The patch files are in the repository and state the chan
 
   @dnd-kit/core@6.3.1 — patches/@dnd-kit__core@6.3.1.patch
   @earendil-works/pi-codemode@1.0.0 — patches/@earendil-works__pi-codemode@1.0.0.patch
+  node-pty@1.1.0 — patches/node-pty@1.1.0.patch
 
 =========================================================================================================
 9. ADDITIONAL NOTICES (2)

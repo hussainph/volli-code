@@ -116,6 +116,10 @@ patchedDependencies:
   # main's memory for the length of its deadline. Upstream bounds the VM heap
   # but not what the host accumulates from it. Absent, upstream behavior.
   "@earendil-works/pi-codemode@1.0.0": patches/@earendil-works__pi-codemode@1.0.0.patch
+  # VC-639: Linux/libuv can report PTY EOF with bytes still on the master
+  # (libuv#4992/#5165). Drain before stream EOF destroys the fd/decoder;
+  # delaying the supervisor's public exit cannot recover those bytes.
+  node-pty@1.1.0: patches/node-pty@1.1.0.patch
 
 peerDependencyRules:
   allowAny:
