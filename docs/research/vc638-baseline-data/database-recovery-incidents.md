@@ -67,7 +67,7 @@ Call log:
 - db-recovery: attempt 1 **49.9s exit 1**, attempt 2 **28.3s exit 1** — **the identical
   screenshot timeout on both attempts** (first-attempt-1 also shows
   `[transcript-repack] scanned=0 repacked=0 skipped=0` in the fresh-launch stdout).
-- Board (see `board-115-incidents.md`): attempt 1 117.7s exit 1 with check 11.5 failed
+- Board (incident evidence on VC-655): attempt 1 117.7s exit 1 with check 11.5 failed
   (`highAfterMutation=0 highAfterReload=1`); attempt 2 45.6s exit 0.
 - Windows: db-recovery 22:03:12.6→22:04:30.8 (a1 →22:04:02.5). Attempt-1 peers:
   **board a1** (22:02:34.9→22:04:32.5), **composer-basics** (22:03:12.6→22:04:21.3),

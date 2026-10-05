@@ -7,9 +7,13 @@ re-runs triggered. Companion files:
 - `runs-inventory.md` — every main run examined, lane totals, first-attempt smoke failures.
 - `database-recovery-incidents.md` — the 4 `database-recovery-smoke.mjs` incidents: exact
   signatures, per-attempt durations, reconstructed concurrent peers.
-- `board-115-incidents.md` — the 2 board check 11.5 incidents.
-- Raw log archives, extracted job logs and smoke artifacts are cached (uncommitted) in the
-  workspace under `.tmp/vc638/` (`.tmp` is gitignored).
+
+Board check 11.5 incident evidence is recorded on the **VC-655** board-flakes
+follow-up. After recovery was moved to the serial pool,
+[run 37292128058](https://github.com/hussainph/volli-code/actions/runs/37292128058),
+attempts **1–18**, recorded **18/18 first-attempt recovery passes**, compared with
+this census's **4/17 first-attempt recovery failures**. These are separate small
+populations, not a statistical elimination claim.
 
 ## Window and method
 
@@ -130,11 +134,8 @@ each peer was consuming CPU or I/O throughout:
    that artifact-root omission and separates quiet tracing from intrusive sampling.
 6. **Smoke-process intervals are measured**, from `results.json` start/finish fields.
    Exact per-check times and CPU/I/O consumption inside those intervals are unknown.
-7. **`gh run list` served stale data** for this repo during investigation (top entry dated
-   Sep 9 while Oct runs existed); every figure here comes from the REST endpoints
-   (`runs`, `runs/{id}/attempts/{n}/jobs`, `.../logs`, `artifacts`) instead.
-8. **Line numbers refer to baseline main `3abede2fd`**, the most recent failing
-   run in this census, not the evolving diagnostic/fix PR head.
-9. **`database-newer-version-smoke.mjs` is out of scope** (different smoke, VC-635); its
+7. **Line numbers refer to baseline main `3abede2fd`**, the most recent failing
+   run in this census, not the diagnostic/fix PR head.
+8. **`database-newer-version-smoke.mjs` is out of scope** (different smoke, VC-635); its
    serialization is nonetheless the nearest prior fix and the reason db-recovery's own
    concurrency exposure is now the open question.

@@ -1,7 +1,9 @@
 # VC-638: recovery screenshot and native-quit CI flake
 
 Investigation/fix PR: [#756](https://github.com/hussainph/volli-code/pull/756).
-**Scheduling candidate; final-head acceptance is recorded on the PR.**
+**Scheduling result:** [run 37292128058](https://github.com/hussainph/volli-code/actions/runs/37292128058),
+attempts **1–18**, has **18/18 first-attempt recovery passes**, compared with
+**4/17 first-attempt recovery failures** in the main census.
 Current failure-window evidence is insufficient to identify a specific native
 wait or prove that VC-638 shares VC-635's low-priority starvation cause.
 
@@ -94,9 +96,9 @@ Artifact: `smoke-results-core-attempt-9/recovery-2qy6fH`, including screenshot
 JSONL, tracked PID samples, quiet shutdown JSONL and the successful failure PNG.
 The baseline retry quit failure still has no native sample identifying its wait.
 
-Under the owner's ten-observation investigation budget, apply the narrow,
-reversible scheduling candidate that VC-635's measured same-runner starvation
-supports: run **database recovery alone after its lane's concurrent pool drains**.
+The narrow, reversible scheduling change follows VC-635's measured same-runner
+starvation evidence: run **database recovery alone after its lane's concurrent
+pool drains**.
 The recurrence establishes a transient capture failure under the same full-pool
 exposure, not its exact native mechanism. This is containment of that test regime,
 **not a proven product bug or a claimed upstream compositor/quit fix**. No feature,
@@ -118,49 +120,31 @@ reload. A bounded projection-readiness observation is appropriate; persistence
 is still checked independently after reload. No product bug is established by
 the historical single-sample failure.
 
-This PR leaves board production code, tests and smoke **unchanged**, following
-owner steering to avoid widening the recovery fix. A prepared readiness-only
-smoke change and pending-IPC store-test enhancement were locally verified but
-removed from the diff. The historical 11.5 failure is not proven to share the
-native screenshot/quit cause; bounded DOM-projection readiness belongs in a
-separate follow-up.
+Board production code, tests and smoke are **unchanged**. The historical 11.5
+failure is not proven to share the native screenshot/quit cause; bounded
+DOM-projection readiness and the separate 8.5 multi-drag flake are tracked in
+**VC-655**, including the historical board incident evidence.
 
-## Verification so far (local, not CI acceptance)
+## Scheduling-head results and limits
 
-- Offline frozen install with scripts ignored; Electron install and native
-  rebuild: pass. Desktop build passes with existing chunk-size warnings.
-- Desktop typecheck (four configs): pass.
-- Final candidate runner/quiet-window/close/shutdown/screenshot helper tests:
-  **67/67** pass, including stale-PID guards and capture timing.
-- Exploratory board store tests: 142/142; built board journey: all checks pass,
-  including 11.5. The exploratory changes are not retained in this PR.
-- Earlier built diagnostic recovery with quiet tracing: 11/11 checks, seven
-  graceful code-zero exits. Success retains screenshots/result but no shutdown
-  traces/profiles.
-- Candidate validation on the shared local machine: a combined verification
-  command exhausted its outer 180-second wall budget during launch (not an
-  assertion outcome); only its tracked orphan app/helpers were terminated.
-  A standalone recovery then failed degraded-launch close after three checks:
-  native exit returned in 34ms, but actual child exit required SIGTERM at 20s.
-  This remains a real failure, not a pass. Lane-local serialization cannot
-  prevent contention from other Sessions/OS work; there is no upstream bounded
-  native-exit guarantee. An explicit opt-in local native capture is separate
-  from the CI acceptance streak.
-- `vp check` and `git diff --check`: pass after focused formatting/lint fixes.
+[Run 37292128058](https://github.com/hussainph/volli-code/actions/runs/37292128058),
+attempts **1–18**, used scheduling head
+`317717c1a387faf956f415e2abb7fc35763bad42` and fixed checkout
+`f8b1d3d020d7602dcd3f618f9077d614212d2b05`, with native sampling off.
+Recovery passed **18/18 first attempts**. Each uploaded artifact records all
+11 recovery checks, exactly seven graceful/natural code-zero exits with null
+signals and no close failures, and a passing quiet-window verdict.
 
-## Final-head acceptance method
+Attempts **11–18** are eight consecutive observations with **all nine core
+smokes first-attempt PASS**, verified from results, recovery logs and quiet-window
+JSON rather than job color. Earlier core streaks ended with retry-green board
+failures: 11.5 on attempt 4 (`highAfterMutation=0 highAfterReload=1`) and 8.5 on
+attempt 10 (`slotted=false`, slots `settled=false`). Neither counts toward the
+eight-pass core streak; recovery still passed first attempt in both.
 
-Acceptance requires at least **eight consecutive core observations with all
-nine smokes first-attempt PASS on one unchanged scheduling head**, verified from
-the uploaded artifacts rather than job color. The PR tracks completion and exact
-results; native sampling must remain off.
-Each observation must have all 11 recovery checks, seven graceful code-zero exits
-with no close failures/signals, and a passing quiet-window verdict. Record
-run/attempt/job IDs and the exact head on the PR without changing code mid-streak.
-
-The 17-main-run baseline (4/17 first failures), ten diagnostic observations
-(1/10 FLAKY), and the final small acceptance streak are separate populations.
-Do not pool them or claim statistically proven elimination/improvement. Other
-OS/VM load remains possible even with no local smoke peers. Board's separate
-single-sample failure is not fixed here. The owner performs independent review
-and merge; this Session must not merge the PR.
+The main census (**4/17 recovery first failures**), diagnostic observations
+(**1/10 recovery FLAKY**), and scheduling-head observations (**0/18 recovery first
+failures**) are separate small populations, not statistically proven elimination
+or evidence of the original screenshot's precise native dependency. Lane-local
+serialization cannot prevent other OS/VM load, and native exit remains unbounded
+(the **VC-652** follow-up). Board's separate flakes are not fixed here.
