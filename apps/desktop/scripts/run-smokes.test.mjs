@@ -25,7 +25,7 @@ function fixture(t) {
 }
 const attempt = (code, ms = 10) => ({ code, ms, signal: null, output: `exit ${code}` });
 
-test("newer-database runs exclusively without dropping, quarantining or reordering peers", () => {
+test("fresh-database smokes run exclusively without dropping, quarantining or reordering peers", () => {
   const names = [
     "browser-tab-smoke.mjs",
     "database-newer-version-smoke.mjs",
@@ -34,8 +34,12 @@ test("newer-database runs exclusively without dropping, quarantining or reorderi
     "split-view-smoke.mjs",
   ];
   assert.deepEqual(smokeScheduleFor(names), {
-    concurrent: ["browser-tab-smoke.mjs", "database-recovery-smoke.mjs", "split-view-smoke.mjs"],
-    exclusive: ["database-newer-version-smoke.mjs", "terminal-smoke.mjs"],
+    concurrent: ["browser-tab-smoke.mjs", "split-view-smoke.mjs"],
+    exclusive: [
+      "database-newer-version-smoke.mjs",
+      "database-recovery-smoke.mjs",
+      "terminal-smoke.mjs",
+    ],
   });
   assert.equal(names.length, 5);
   const rest = selectSmokes(parseArgs(["--tier", "rest"]));
@@ -44,6 +48,12 @@ test("newer-database runs exclusively without dropping, quarantining or reorderi
   assert.equal(schedule.concurrent.length + schedule.exclusive.length, rest.length);
   assert.equal(new Set([...schedule.concurrent, ...schedule.exclusive]).size, rest.length);
   assert.ok(!SMOKE_QUARANTINE.has("database-newer-version-smoke.mjs"));
+  const core = selectSmokes(parseArgs(["--tier", "core"]));
+  const coreSchedule = smokeScheduleFor(core);
+  assert.deepEqual(coreSchedule.exclusive, ["database-recovery-smoke.mjs", "terminal-smoke.mjs"]);
+  assert.equal(coreSchedule.concurrent.length + coreSchedule.exclusive.length, CORE_E2E.size);
+  assert.equal(new Set([...coreSchedule.concurrent, ...coreSchedule.exclusive]).size, core.length);
+  assert.ok(!SMOKE_QUARANTINE.has("database-recovery-smoke.mjs"));
 });
 
 test("first-attempt success runs once", async () => {

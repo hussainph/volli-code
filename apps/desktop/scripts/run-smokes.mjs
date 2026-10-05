@@ -232,6 +232,13 @@ const SERIAL = new Set([
   // both attempts run alone and retain their own fresh-profile evidence.
   // Retry success is still FLAKY; VC-635 validation requires first-attempt PASS.
   "database-newer-version-smoke.mjs",
+  // VC-638: recovery also repeatedly cold-boots, screenshots and quits. Its
+  // screenshot flake recurred with board/composer/theming peers; VC-635 measured
+  // native starvation in this runner regime. Reduce that exposure by the same
+  // narrow scheduling policy, not by changing paint/quit assertions or budgets.
+  // Current post-timeout samples do not establish the original native wait:
+  // docs/research/database-recovery-contention-vc638.md records that limit.
+  "database-recovery-smoke.mjs",
 ]);
 
 export function smokeScheduleFor(names) {
