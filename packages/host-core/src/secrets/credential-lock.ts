@@ -61,7 +61,6 @@ import {
   ftruncateSync,
   lstatSync,
   openSync,
-  statSync,
   type Stats,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -246,7 +245,8 @@ function acquire(path: string, holder: Holder): void {
     begin(path, database);
     let current: Stats;
     try {
-      current = statSync(path);
+      // `lstat`: the lock file is never a symlink (connect refuses one).
+      current = lstatSync(path);
     } catch {
       current = { dev: -1, ino: -1 } as Stats;
     }
