@@ -458,6 +458,16 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   // A handle and nothing else (VC-9): the answer is read whole or not at all.
   "session.answer": { options: {} },
+  "session.start": {
+    options: {
+      "-m": { kind: "value", key: "message" },
+      "--message": { kind: "value", key: "message" },
+      "--title": { kind: "value", key: "title" },
+      "--model": { kind: "value", key: "model" },
+      "--tier": { kind: "value", key: "tier" },
+      "--reasoning": { kind: "value", key: "reasoning" },
+    },
+  },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,
   "session.link": { options: { "--dry-run": DRY_RUN } },
@@ -499,11 +509,15 @@ interface VerbRoute {
 }
 
 /** CLI-executable routes projected from any supplied registry table. */
-function routesFrom(entries: readonly VerbEntry[]): ReadonlyMap<string, VerbRoute> {
+function routesFrom(
+  entries: readonly VerbEntry[],
+  operator: boolean,
+): ReadonlyMap<string, VerbRoute> {
   return new Map(
     entries.flatMap((entry) => {
       const mechanics = CLI_MECHANICS[entry.key as VerbKey];
-      return mechanics === undefined || !entry.accessModes.includes("cli")
+      return mechanics === undefined ||
+        !(entry.accessModes.includes("cli") || (operator && entry.operatorCli === true))
         ? []
         : [[cliVerbName(entry.key), { entry, mechanics }] as const];
     }),
@@ -657,11 +671,12 @@ function parseVerb(route: VerbRoute, rest: readonly string[]): CliParseResult {
 export function parseCliArgs(
   argv: readonly string[],
   entries: readonly VerbEntry[] = VERB_REGISTRY,
+  options: { operator?: boolean } = {},
 ): CliParseResult {
   if (argv.includes("--help") || argv.includes("-h")) return helpFromFlag(argv);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
 
-  const routes = routesFrom(entries);
+  const routes = routesFrom(entries, options.operator === true);
   if (argv.length >= 2) {
     const pair = routes.get(`${argv[0]} ${argv[1]}`);
     if (pair !== undefined) return parseVerb(pair, argv.slice(2));

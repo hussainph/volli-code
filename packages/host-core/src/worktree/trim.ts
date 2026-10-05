@@ -83,7 +83,7 @@ export interface TrimInput {
   keepPatterns?: readonly string[];
   /** Measure and report, delete nothing — what the UI previews with. */
   dryRun?: boolean;
-  /** Absent means nothing structured can be asked, so nothing structured blocks. */
+  /** Absent means activity cannot be checked: trim fails closed. */
   busySites?: BusyWorktreeSites;
 }
 
@@ -354,7 +354,9 @@ export async function trimIgnoredArtifacts(
   // the orphan delete, and the cleanup ask it. VC-284 wrote that module because
   // two copies of "is anything running in there?" is two answers; a trim with its
   // own copy would have been the third.
-  const busy = busySiteWithin(worktreePath, (await input.busySites?.(worktreePath)) ?? []);
+  if (typeof input.busySites !== "function")
+    return err("Worktree activity is unavailable; refusing to trim.");
+  const busy = busySiteWithin(worktreePath, await input.busySites(worktreePath));
   if (busy !== null) return err(busyRefusal(busy));
 
   const tracked = await trackedChangeRefusal(git, worktreePath);

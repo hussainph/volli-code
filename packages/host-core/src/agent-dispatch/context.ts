@@ -57,6 +57,8 @@ import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
+  /** Execution venue for host-issued Session facts; desktop keeps local. */
+  venue?: import("@volli/shared").SessionExecutionVenue;
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;

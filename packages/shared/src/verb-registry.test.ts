@@ -54,6 +54,7 @@ const SOCKET_SURFACE = [
   "session.show",
   "session.peek",
   "session.answer",
+  "session.start",
   "session.done",
   "session.blocked",
   "session.link",
@@ -275,20 +276,20 @@ describe("AGENT_COMMANDS projection", () => {
     expect([...AGENT_COMMANDS]).toEqual(SOCKET_SURFACE);
   });
 
-  // The acceptance line, as an assertion rather than as prose: "No agent-control
-  // verb exists on the socket." Absence is the enforcement — a tool call is
-  // bound to the attachment that made it, and a socket call can only ever be
-  // attributed, so the control tier is not gated on the socket, it is missing
-  // from it (VC-92 §6.1).
-  it("carries no control-tier verb at all", () => {
+  // Agent control stays tool-only. The socket's one exception is verified
+  // by hostd's operator credential, never by a Session environment.
+  it("carries only the person-only exception to the control tier", () => {
     const onSocket = VERB_REGISTRY.filter((entry) =>
       (AGENT_COMMANDS as readonly string[]).includes(entry.key),
     );
-    expect(onSocket.filter((entry) => verbTier(entry) === "control")).toEqual([]);
+    expect(
+      onSocket.filter((entry) => verbTier(entry) === "control").map((entry) => entry.key),
+    ).toEqual(["session.start"]);
+    expect(verbEntry("session.start")).toMatchObject({ accessModes: ["tool"], operatorCli: true });
   });
 
-  it("no longer answers session.start or ticket.archive", () => {
-    expect(AGENT_COMMANDS).not.toContain("session.start");
+  it("answers the operator start but never ticket.archive", () => {
+    expect(AGENT_COMMANDS).toContain("session.start");
     expect(AGENT_COMMANDS).not.toContain("ticket.archive");
   });
 
@@ -398,7 +399,7 @@ describe("verbTier", () => {
     // VC-310 adds label.merge, the label cleanup write. VC-623 adds
     // project.add, the one write only the person may make.
     expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(14);
-    expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
+    expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(1);
   });
 
   it("gives an app-only verb no tier at all", () => {
@@ -907,6 +908,7 @@ describe("REFERENCE_VERBS", () => {
     const socket = new Set<string>(AGENT_COMMANDS);
     expect([...socket].filter((key) => !reference.has(key))).toEqual([
       "project.add",
+      "session.start",
       "session.harness",
       "hook",
     ]);

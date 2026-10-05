@@ -27,17 +27,10 @@
  *    up, `refusing`, every verb answers `DB_UNAVAILABLE` with the reason, and
  *    the status file carries the typed `databaseFailure`.
  *
- * SHUTDOWN ({@link RunningHostd.stop}): mark `stopping`; close the socket,
- * which refuses new connections and waits up to its 10 s request bound; wait
- * up to {@link DRAIN_TIMEOUT_MS} more for executions still running (an
- * abandoned one makes the stop unclean); checkpoint the WAL and close the
- * database; release the instance lock; mark `stopped`.
- *
- * What hostd does not compose yet: the Session runtime (Pi, tools, MCP,
- * skills, `createSessions`), so Session verbs answer `APP_UNREACHABLE` exactly
- * as desktop's do when its runtime did not come up; the automation scheduler,
- * which starts Sessions; terminals; the browser (VC-619); and backup,
- * retention and the maintenance loops (VC-618).
+ * SHUTDOWN: mark stopping; drain the shared Session runtime and shells; close
+ * the socket and join outstanding requests; checkpoint and close SQLite;
+ * release the instance lock; mark stopped. Runtime resources never outlive DB.
+ * Terminals, browser, backup/retention and maintenance loops are not composed.
  */
 import { mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -47,6 +40,11 @@ import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/sh
 import { createHostCore, throwTransactionViolation, type HostCore } from "@volli/host-core";
 import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
 
+import {
+  createHeadlessSessionRuntime,
+  type HeadlessRuntimeOptions,
+  type HeadlessSessionRuntime,
+} from "./session-runtime";
 import { HostdBootError } from "./boot-error";
 import { acquireInstanceLock } from "./instance-lock";
 import type { HostdLogger } from "./log";
@@ -84,6 +82,7 @@ export interface HostdOptions {
    * or a variable — whoever owns that file can mint a person.
    */
   readonly operatorsOwnerUid?: number;
+  readonly runtime?: HeadlessRuntimeOptions;
   readonly now?: () => Date;
   /**
    * How long a stop waits, after the socket has closed, for requests still
@@ -199,7 +198,18 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
       await socket.start({
         socketPath,
         listenFd: options.listenFd,
-        execute: (request) => track(ready.then((execute) => execute(request))),
+        execute: (request) =>
+          track(
+            ready.then((execute) =>
+              state === "stopping" || state === "stopped"
+                ? {
+                    v: 1,
+                    ok: false,
+                    error: makeAgentError("APP_UNREACHABLE", "The host is stopping."),
+                  }
+                : execute(request),
+            ),
+          ),
       });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -217,18 +227,36 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     }
 
     /** Settles what every verb answers with, and publishes the state that goes with it. */
-    const serve = (host: HostCore): void => {
+    let sessionRuntime: HeadlessSessionRuntime | undefined;
+    const serve = async (
+      host: HostCore,
+      ports: ReturnType<typeof headlessPorts>,
+    ): Promise<void> => {
       const handle = host.database;
       if (handle.ok) {
         database = { ok: true, path: host.dbPath };
-        capabilities = { ...UNAVAILABLE, board: "available" };
+        sessionRuntime = createHeadlessSessionRuntime({
+          host,
+          ports,
+          secrets,
+          env: options.env,
+          version: options.version,
+          options: options.runtime ?? {
+            binDir: dirname(process.execPath),
+            venue: { id: socketPath, kind: "remote" },
+          },
+        });
+        const sessionPorts = await sessionRuntime.ready();
+        capabilities = {
+          ...UNAVAILABLE,
+          board: "available",
+          sessions: "available",
+          automations: sessionPorts.automationsAvailable ? "available" : "unavailable",
+        };
         settle(
           host.agentServices.createCommands({
             db: handle.db,
-            // Until runtime composition lands, this host owns no execution sites.
-            busyWorktreeSites: async () => [],
-            // Non-null whenever the database opened (`createHostSessionServices`).
-            sessionEngine: host.sessionEngine!,
+            ...sessionPorts,
             appVersion: options.version,
             verifyOperatorToken: operators.verify,
             // The audit line beside each operator write. `SO_PEERCRED` would
@@ -264,15 +292,33 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     let host: HostCore | undefined;
     try {
       publish("starting");
-      host = createHostCore(headlessPorts(logger), {
+      const ports = headlessPorts(logger);
+      // Deferred at the host edge only: the attachment assembly holds its ports
+      // at construction, and no ledger consumer is exposed before ready().
+      ports.listOpenNativeBindings = () => sessionRuntime?.openNativeBindings() ?? [];
+      ports.observeScheduledResume = (projection) =>
+        sessionRuntime?.observeScheduledResume(projection);
+      host = createHostCore(ports, {
         dataDir,
         onTransactionViolation: throwTransactionViolation,
         devDiagnostics: false,
       });
-      serve(host);
+      await serve(host, ports);
     } catch (error) {
       // Nothing half-booted stays open: the socket closes, and so does a
       // database that opened.
+      // Settle queued socket requests on failure; shutdown must not wait on a
+      // readiness promise that can never resolve.
+      settle(async () => ({
+        v: 1,
+        ok: false,
+        error: makeAgentError("APP_UNREACHABLE", "The host could not start."),
+      }));
+      try {
+        await sessionRuntime?.close();
+      } catch (drainError) {
+        logger.error("Session runtime did not close after failed startup", { error: drainError });
+      }
       await socket.shutdown();
       if (host?.database.ok === true) {
         host.sessionActivityWatch?.stop();
@@ -302,6 +348,15 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           record("stopping");
           // Refuses new connections and waits, up to its request timeout, for
           // the ones already executing.
+          // Runtime drain owns resume/watchdog/notices/MCP/observability and
+          // joins background shells before the socket and SQLite are closed.
+          let runtimeClosed = true;
+          try {
+            await sessionRuntime?.close();
+          } catch (error) {
+            runtimeClosed = false;
+            logger.error("Session runtime did not close cleanly", { error });
+          }
           await socket.shutdown();
           const drained = await drain(inflight, options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS);
           if (!drained) {
@@ -313,7 +368,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           const closed = handle.ok ? closeDatabase(handle.db, logger) : true;
           lock.release();
           record("stopped");
-          const clean = drained && closed && !socketCloseFailed;
+          const clean = runtimeClosed && drained && closed && !socketCloseFailed;
           logger.info("stopped", { clean });
           return clean;
         })();

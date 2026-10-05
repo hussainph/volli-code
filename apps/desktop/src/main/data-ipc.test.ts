@@ -335,7 +335,11 @@ beforeEach(() => {
   fixtureSessionEngine = createTestSessionEngine(ctx.db);
   registerDataIpcHandlers(
     { ok: true, db: ctx.db },
-    { sessionEngine: fixtureSessionEngine, detectBaseBranch: async () => null },
+    {
+      sessionEngine: fixtureSessionEngine,
+      detectBaseBranch: async () => null,
+      busyWorktreeSites: async () => [],
+    },
   );
 });
 

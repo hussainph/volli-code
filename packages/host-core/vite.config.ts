@@ -60,6 +60,9 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        "src/session-runtime/facade.ts",
+        "src/session-runtime/agents.ts",
+        "src/session-runtime/context.ts",
         // The automation assembly over the ready Session facade (VC-622). Every
         // branch is a decision made once at boot on a machine nobody watches:
         // which degraded capability drops which port, and the two failures a

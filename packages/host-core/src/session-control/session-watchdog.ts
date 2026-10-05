@@ -45,7 +45,7 @@ import {
   sessionWedge,
   shortSessionId,
 } from "@volli/shared";
-import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
+import type { SessionInFlightTool, SessionProjection, SessionExecutionVenue } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
@@ -62,6 +62,7 @@ export interface SessionWatchdogBinding {
 }
 
 export interface SessionWatchdogPorts {
+  venue?: SessionExecutionVenue;
   /** The executors this process holds open — the runtime's own binding list. */
   listBindings(): readonly SessionWatchdogBinding[];
   /** One Session's durable state; live progress comes from the binding above. */
@@ -152,7 +153,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
           id: "session-watchdog",
           detail: { sessionOrigin: { kind: "volli", reason: "supervision" } },
         },
-        venue: { id: "local", kind: "local" },
+        venue: ports.venue ?? { id: "local", kind: "local" },
       },
     });
     ports.notify?.({

@@ -29,6 +29,8 @@ volli="$root/bin/volli"
 
 step "natives load under the shipped Node"
 "$root/bin/node" "$root/lib/probe-natives.cjs"
+step "Code Mode executes from the artifact's worker and wasm"
+"$root/bin/node" "$root/lib/probe-codemode.mjs"
 "$hostd" --version
 
 step "boot against an empty data directory"
