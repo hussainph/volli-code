@@ -36,8 +36,8 @@ import type {
   TicketBodyMutation,
 } from "@volli/shared";
 
-import { getRegisteredHarness } from "@volli/host-core/db/harness-registry-repo";
-import { findLabelByName } from "@volli/host-core/db/labels-repo";
+import { getRegisteredHarness } from "../db/harness-registry-repo";
+import { findLabelByName } from "../db/labels-repo";
 import {
   createTicketCommand,
   createTicketCommentCommand,
@@ -45,7 +45,7 @@ import {
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   updateTicketFieldsCommand,
-} from "@volli/host-core/ticket-commands";
+} from "../ticket-commands";
 import { executeTicketMove } from "../ticket-move";
 import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
 import { failure } from "./context";

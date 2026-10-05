@@ -21,7 +21,7 @@ import type {
   ValidAutomationRuntime,
 } from "@volli/shared";
 
-import { sessionCreateCommandId } from "@volli/host-core/session-runtime/sessions";
+import { sessionCreateCommandId } from "../session-runtime/sessions";
 
 export interface AutomationCommand {
   id: string;

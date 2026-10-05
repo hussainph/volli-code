@@ -5,15 +5,15 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { listTicketEvents, recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { listTicketEvents, recordTicketEvent } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import {
   getTicketRow,
   insertTicket,
   setTicketRetentionKeep,
   updateTicketFields,
-} from "@volli/host-core/db/tickets-repo";
+} from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";

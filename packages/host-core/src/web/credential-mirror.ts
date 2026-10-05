@@ -51,7 +51,7 @@ import type Database from "better-sqlite3";
 
 import type { WebKeySealing } from "@volli/shared";
 
-import { prepared } from "@volli/host-core/db/prepared";
+import { prepared } from "../db/prepared";
 import {
   CredentialKeyPendingError,
   CredentialLockBusyError,
@@ -64,7 +64,7 @@ import {
   type MirrorEntry,
   type MirrorSnapshot,
   type SealedInventory,
-} from "@volli/host-core/secrets";
+} from "../secrets";
 
 import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET } from "./credential";
 

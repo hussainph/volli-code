@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { HostClientEventSink } from "../ports";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import {
   WATCH_REWATCH_GRACE_MS,
   WorktreeChangeWatchManager,

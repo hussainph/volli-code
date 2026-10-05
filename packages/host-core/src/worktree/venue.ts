@@ -23,8 +23,8 @@
 import type Database from "better-sqlite3";
 import type { VenueFileCounts, VenueKind, VenueReading, VenueSnapshot } from "@volli/shared";
 
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";

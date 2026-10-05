@@ -21,15 +21,15 @@ import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
 import type { PrCheck, TicketRetentionState } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { prepared } from "../db/prepared";
 import {
   listRetentionCandidates,
   listTrimCandidates,
   updateTicketFields,
   type TicketRow,
-} from "@volli/host-core/db/tickets-repo";
+} from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import {

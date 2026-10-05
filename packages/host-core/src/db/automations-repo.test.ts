@@ -23,12 +23,12 @@ import {
   setColumnArming,
   setColumnOrder,
   updateAutomation,
-} from "@volli/host-core/db/automations-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+} from "./automations-repo";
+import { insertProject } from "./projects-repo";
 import { insertSession } from "../session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
+import { insertTicket } from "./tickets-repo";
 
 let ctx: TestDb;
 

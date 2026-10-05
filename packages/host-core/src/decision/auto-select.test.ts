@@ -8,8 +8,8 @@ import {
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createModelAutoSelect } from "./auto-select";
 import { createDesktopDecisions } from "./desktop";
 import { DECISION_MODEL_APP_STATE_KEY } from "./settings";

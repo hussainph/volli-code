@@ -68,8 +68,8 @@ import type {
 } from "@volli/shared";
 import { CLEANUP_PRESERVATION_RULES } from "@volli/shared";
 
-import { listProjects } from "@volli/host-core/db/projects-repo";
-import { listWorktreePaths } from "@volli/host-core/db/tickets-repo";
+import { listProjects } from "../db/projects-repo";
+import { listWorktreePaths } from "../db/tickets-repo";
 import {
   busyRefusal,
   busySiteWithin,

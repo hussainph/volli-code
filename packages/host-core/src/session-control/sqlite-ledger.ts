@@ -38,9 +38,9 @@ import {
   sameCommandReceipt,
   UnknownSessionEventKindError,
 } from "@volli/shared";
-import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
-import { prepared } from "@volli/host-core/db/prepared";
-import { settleTransaction } from "@volli/host-core/db/transaction-gate";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
+import { prepared } from "../db/prepared";
+import { settleTransaction } from "../db/transaction-gate";
 
 type SqlRow = Record<string, unknown>;
 

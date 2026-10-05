@@ -91,8 +91,8 @@ import type {
   RemovableWorktreeOrphan,
   UnreadableWorktreeProject,
 } from "@volli/shared";
-import { listProjects } from "@volli/host-core/db/projects-repo";
-import { listWorktreePaths } from "@volli/host-core/db/tickets-repo";
+import { listProjects } from "../db/projects-repo";
+import { listWorktreePaths } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
 import { isWorktreeDirtyAsync } from "./dirty";

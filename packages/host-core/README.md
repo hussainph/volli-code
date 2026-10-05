@@ -594,10 +594,14 @@ move**: no behavior change, no migration, and the app is identical with the
    import paths; don't restyle. `git diff -M --stat origin/main...HEAD`
    should read as renames, so that open PRs touching the old paths can
    re-sync.
-3. **Export the cluster** as `./<cluster>` and `./<cluster>/*` in
-   `package.json`, then rewrite importers mechanically: `./<cluster>/x`
-   becomes `@volli/host-core/<cluster>/x`. Leave no re-export shims at the
-   old paths. A shim turns the rename into an add.
+3. **Rewrite importers by relative path.** Inside host-core, a moved file and
+   everything that imports it use relative paths (`../<cluster>/x`), never
+   the package's own name: a self-name import makes `x` impossible to stop
+   exporting. `src/package-interface.test.ts` fails on one, and
+   `node scripts/codemods/host-core-relative-imports.mjs` rewrites it.
+   Only importers outside the package (desktop, `hostd`) use
+   `@volli/host-core/<cluster>/x`, added to `package.json` `exports`. Leave
+   no re-export shims at the old paths. A shim turns the rename into an add.
 4. **Move construction.** The cluster's construction leaves the
    `app.whenReady` closure for `createHostCore`, or for a
    `create<Cluster>(ports, options)` that `createHostCore` calls, and appears

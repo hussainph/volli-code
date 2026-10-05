@@ -22,9 +22,9 @@ import {
   type DecisionModelSetting,
 } from "@volli/shared";
 
-import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
-import { prepared } from "@volli/host-core/db/prepared";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getAppState, setAppState } from "../db/app-state-repo";
+import { prepared } from "../db/prepared";
+import { getProjectById } from "../db/projects-repo";
 
 /** The app-wide decision model, one JSON setting. Absent reads as none. */
 export const DECISION_MODEL_APP_STATE_KEY = "volli:decision-model";

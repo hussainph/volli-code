@@ -11,9 +11,9 @@ import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { OrphanCleanupPlanItem } from "@volli/shared";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { cleanupOrphans } from "./cleanup";
 import { DEFAULT_RETENTION_TTL_DAYS, setRetentionTtlDays } from "./retention";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";

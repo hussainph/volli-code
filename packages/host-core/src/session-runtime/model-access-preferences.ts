@@ -20,8 +20,8 @@ import {
 
 import { supersededModelId } from "@volli/agent-runtime";
 
-import { setAppState } from "@volli/host-core/db/app-state-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { setAppState } from "../db/app-state-repo";
+import { prepared } from "../db/prepared";
 
 /**
  * The pre-purpose single default. Read only as a migration source: a profile

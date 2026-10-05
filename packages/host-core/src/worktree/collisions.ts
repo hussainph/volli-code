@@ -23,7 +23,7 @@ import type Database from "better-sqlite3";
 import { collisionMatrix, displayTicketId } from "@volli/shared";
 import type { CollisionMatrix, Project } from "@volli/shared";
 
-import { listTicketsByProject } from "@volli/host-core/db/tickets-repo";
+import { listTicketsByProject } from "../db/tickets-repo";
 import { readWorktreeChangeSetPaths, type WorktreeReadDeps } from "./read";
 
 /** One scanned worktree and how much of it the radar measured. */

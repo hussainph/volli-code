@@ -6,10 +6,10 @@ import { pendingScheduledResume } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { createTestSessionEngine } from "../testing/session-engine";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { listScheduledResumeSessionIds } from "@volli/host-core/db/scheduled-resume-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "./projects-repo";
+import { listScheduledResumeSessionIds } from "./scheduled-resume-repo";
+import { openTestDb, testProject } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
 
 let ctx: TestDb;
 

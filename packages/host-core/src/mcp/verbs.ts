@@ -57,14 +57,14 @@ import {
   type TicketEventActor,
 } from "@volli/shared";
 
-import { createComment } from "@volli/host-core/db/comments-repo";
+import { createComment } from "../db/comments-repo";
 import {
   listMcpOperations,
   mcpOperationId,
   recordMcpOperation,
   type McpOperationKind,
   type McpOperationOutcome,
-} from "@volli/host-core/db/mcp-operations-repo";
+} from "../db/mcp-operations-repo";
 import { optionalVerbText, requiredVerbText } from "../verb-input";
 import type { McpSettingsService } from "./settings";
 

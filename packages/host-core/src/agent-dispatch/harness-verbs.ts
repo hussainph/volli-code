@@ -35,19 +35,16 @@ import {
 import type { AgentRequest, AgentResponse, HarnessId, SessionRecord } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
-import { getRegisteredHarness } from "@volli/host-core/db/harness-registry-repo";
-import {
-  recordHarnessChannelEvent,
-  recordHarnessLaunch,
-} from "@volli/host-core/db/harness-channel-repo";
-import { getTicket } from "@volli/host-core/db/tickets-repo";
+import { getRegisteredHarness } from "../db/harness-registry-repo";
+import { recordHarnessChannelEvent, recordHarnessLaunch } from "../db/harness-channel-repo";
+import { getTicket } from "../db/tickets-repo";
 import { recordHarnessDelivery } from "../harness-registry";
 import {
   latestTerminalAttachment,
   readTerminalAttachmentDetail,
   terminalNativeReference,
   terminalSessionRecord,
-} from "@volli/host-core/session-control";
+} from "../session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";

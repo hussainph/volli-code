@@ -5,13 +5,9 @@ import type { SessionLocation, SessionLocationResolver } from "@volli/session-en
 import type { Session, SessionExecutionVenue } from "@volli/shared";
 
 import type { HostEventBus } from "../ports";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicket } from "@volli/host-core/db/tickets-repo";
-import {
-  acquireWorktreeStartLease,
-  ensure,
-  UNDER_DELETION_REFUSAL,
-} from "@volli/host-core/worktree";
+import { getProjectById } from "../db/projects-repo";
+import { getTicket } from "../db/tickets-repo";
+import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };

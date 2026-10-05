@@ -23,38 +23,31 @@ import type { UIMessage } from "ai";
 import type { HarnessEventNotice, SessionHarnessNotice } from "@volli/shared";
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 
-import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot } from "@volli/host-core/blob-store";
-import { createDetachedWorkTracker } from "@volli/host-core/detached-work";
-import type { TicketMovePorts } from "@volli/host-core/ticket-move";
-import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
-import { listComments } from "@volli/host-core/db/comments-repo";
-import {
-  getRegisteredHarness,
-  recordHarnessTrust,
-} from "@volli/host-core/db/harness-registry-repo";
-import {
-  insertProject,
-  listProjects,
-  updateProjectAuthorityPolicy,
-} from "@volli/host-core/db/projects-repo";
-import { listLatestSignals } from "@volli/host-core/db/signals-repo";
+import { importBlob } from "./blob-import";
+import { blobsRoot } from "./blob-store";
+import { createDetachedWorkTracker } from "./detached-work";
+import type { TicketMovePorts } from "./ticket-move";
+import { listHarnessChannels } from "./db/harness-channel-repo";
+import { listComments } from "./db/comments-repo";
+import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
+import { insertProject, listProjects, updateProjectAuthorityPolicy } from "./db/projects-repo";
+import { listLatestSignals } from "./db/signals-repo";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
   endSession,
   getSession,
   insertSession,
   setActiveHarnessId,
-} from "@volli/host-core/session-control/test-support";
+} from "./session-control/test-support";
 import {
   getTicket,
   insertTicket,
   listArchivedTicketsByProject,
   listTicketsByProject,
-} from "@volli/host-core/db/tickets-repo";
-import { listTicketEvents, recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+} from "./db/tickets-repo";
+import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
 import {
   CHAT_PEEK_ENTRIES,
   composeProjectBrief,
@@ -62,15 +55,12 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createTestSessionEngine } from "./testing/session-engine";
-import { writeModelAccessDefault } from "@volli/host-core/session-runtime/model-access-preferences";
-import { archiveTicketCommand, updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
-import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
-import * as worktree from "@volli/host-core/worktree";
-import {
-  getWorktreeSnapshots,
-  resetWorktreeSnapshotsForTest,
-} from "@volli/host-core/worktree/snapshot";
+import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
+import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
+import { createSessionTokenRegistry } from "./session-tokens";
+import { scriptedGit } from "./worktree/scripted-git";
+import * as worktree from "./worktree";
+import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
 

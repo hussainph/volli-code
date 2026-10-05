@@ -41,7 +41,7 @@ import type {
   SessionProjection,
 } from "@volli/shared";
 
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { projectForCreate, ticketForDisplayId } from "./resolution";

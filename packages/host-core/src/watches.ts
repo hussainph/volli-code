@@ -102,14 +102,14 @@ import type {
 } from "@volli/session-engine";
 import { readSessionAnswer } from "@volli/session-engine";
 
-import type { SubscribeSessionWake } from "@volli/host-core/session-control/session-wake";
+import type { SubscribeSessionWake } from "./session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
 import type { DetachedWorkPort } from "./detached-work";
 import {
   cutAtCodePoint,
   deliverHostNotice,
   errorText,
-} from "@volli/host-core/session-runtime/host-notice-delivery";
+} from "./session-runtime/host-notice-delivery";
 
 /** How long one watcher's changes are gathered before they are delivered as one notice. */
 export const WATCH_COALESCE_MS = 1_500;

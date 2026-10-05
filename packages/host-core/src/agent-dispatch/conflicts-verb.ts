@@ -17,7 +17,7 @@
 
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
 
-import { scanCollisions } from "@volli/host-core/worktree/collisions";
+import { scanCollisions } from "../worktree/collisions";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 
