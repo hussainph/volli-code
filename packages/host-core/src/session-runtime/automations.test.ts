@@ -1,4 +1,4 @@
-/** Lifted automation ports; recovery itself is covered in lifecycle.test.ts. */
+/** The runtime's Automations edge; the live module's own wiring is covered in automation-services.test.ts. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import {
@@ -11,6 +11,11 @@ import type { HostCore } from "../index";
 import { getProjectById } from "../db/projects-repo";
 import { loadPromptTemplates } from "../prompt-templates";
 import { loadSkills } from "../skills";
+import {
+  createHostAutomations,
+  type AutomationSessionPorts,
+  type HostAutomations,
+} from "../automation-services";
 import { createRuntimeAutomations, type ReadyAutomationSessions } from "./automations";
 import {
   createSessionRuntimeLifecycle,
@@ -22,6 +27,8 @@ import type { PiRuntimeHost } from "./pi-adapter";
 vi.mock("../db/projects-repo", () => ({ getProjectById: vi.fn() }));
 vi.mock("../prompt-templates", () => ({ loadPromptTemplates: vi.fn() }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
+vi.mock("../automation-services", () => ({ createHostAutomations: vi.fn() }));
+
 let lifecycle: ReturnType<typeof createSessionRuntimeLifecycle<null>>;
 let recovered: RecoveredSessionServices<null>;
 beforeEach(async () => {
@@ -51,40 +58,50 @@ afterEach(async () => {
   await lifecycle.close();
   vi.resetAllMocks();
 });
-type Automations = HostCore["automations"];
 
-function fixture(db = true, piRuntime = true) {
-  const engine = {};
-  const service = {};
-  const runner = { recover: vi.fn(async () => {}) };
-  const pending = { start: vi.fn(), stop: vi.fn() };
-  const scheduler = { start: vi.fn(async () => {}), refresh: vi.fn(async () => {}), stop: vi.fn() };
-  const make = {
-    createEngine: vi.fn(() => (db ? engine : null)),
-    createService: vi.fn((_engine: unknown, _ports: Parameters<Automations["createService"]>[1]) =>
-      db ? service : null,
-    ),
-    createRunner: vi.fn((_ports: Parameters<Automations["createRunner"]>[0]) => runner),
-    createPendingArmedRuns: vi.fn((_get: () => unknown) => pending),
-    createScheduler: vi.fn((_engine: unknown, _runner: unknown) => scheduler),
+const db = { name: "live" };
+const moduleInput = () => vi.mocked(createHostAutomations).mock.calls[0]![0];
+
+function fixture(options: { db?: boolean; piRuntime?: boolean } = {}) {
+  const live = options.db ?? true;
+  const service = { kind: "service" };
+  const runner = { kind: "runner" };
+  const pending = { kind: "pending" };
+  let armed = false;
+  let sessionPorts: AutomationSessionPorts | null | undefined;
+  const module = {
+    service,
+    get runner() {
+      return armed ? runner : null;
+    },
+    get pendingArmedRuns() {
+      return armed ? pending : null;
+    },
+    // The module's own guard is covered beside it; this one reads every call.
+    start: vi.fn((read: () => AutomationSessionPorts | null) => {
+      sessionPorts = read();
+      armed = true;
+    }),
+    stop: vi.fn(),
   };
+  vi.mocked(createHostAutomations).mockReturnValue(module as unknown as HostAutomations);
   const runtime = {
     command: vi.fn(async (_input: unknown): Promise<unknown> => ({ receipt: null })),
     projection: vi.fn(async (_input: unknown): Promise<unknown> => ({ projection: {} })),
     reportMessageDeliveryFailure: vi.fn(async () => {}),
   };
   const autoTitler = { refine: vi.fn(async () => {}) };
-  const services = { sessions: {}, runtime, autoTitler };
+  const services = { sessions: { kind: "sessions" }, runtime, autoTitler };
   const pi = { inspectModelAccess: vi.fn(async () => ({})) };
   const log = { error: vi.fn() };
-  const host = {
-    database: db ? { ok: true, db: {} } : { ok: false },
-    dataDir: "/data",
-    automations: make,
-  } as unknown as HostCore;
+  const events = { publish: vi.fn() };
   const owner = createRuntimeAutomations({
-    host,
-    piRuntimeHost: piRuntime ? (pi as unknown as PiRuntimeHost) : null,
+    host: {
+      database: live ? { ok: true, db: db as never } : { ok: false, error: "no database" },
+      dataDir: "/data",
+    },
+    events,
+    piRuntimeHost: (options.piRuntime ?? true) ? (pi as unknown as PiRuntimeHost) : null,
     homeDir: "/home",
     log,
   });
@@ -94,22 +111,25 @@ function fixture(db = true, piRuntime = true) {
       recovered,
       () => ({ ...services, ...over }) as unknown as ReadyAutomationSessions,
     );
-  const deps = () => make.createRunner.mock.calls[0]![0];
+  const ports = () => {
+    if (sessionPorts == null) throw new Error("The module was not armed with Session ports.");
+    return sessionPorts;
+  };
   return {
     owner,
     ready,
-    deps,
-    make,
-    engine,
+    ports,
+    sessionPorts: () => sessionPorts,
+    module,
     service,
+    runner,
+    pending,
     services,
     runtime,
     autoTitler,
     pi,
-    runner,
-    pending,
-    scheduler,
     log,
+    events,
   };
 }
 
@@ -143,7 +163,26 @@ const working = {
   lastActivityAt: 0,
 } as unknown as SessionProjection;
 
-describe("runtime automation assembly", () => {
+describe("live runtime automations", () => {
+  it("composes the one live module over the open database, the host's events and log", () => {
+    const f = fixture();
+    expect(createHostAutomations).toHaveBeenCalledOnce();
+    expect(moduleInput()).toMatchObject({ db, events: f.events, log: f.log });
+    expect(f.owner.service).toBe(f.service);
+    expect(f.owner.runner).toBeNull();
+    expect(f.owner.pendingArmedRuns).toBeNull();
+    expect(f.module.start).not.toHaveBeenCalled();
+  });
+
+  it("offers model-access inspection only when a Pi host booted", async () => {
+    const f = fixture();
+    await moduleInput().inspectModelAccess!();
+    expect(f.pi.inspectModelAccess).toHaveBeenCalledWith({});
+    vi.mocked(createHostAutomations).mockClear();
+    fixture({ piRuntime: false });
+    expect(moduleInput()).not.toHaveProperty("inspectModelAccess");
+  });
+
   it("rejects forged, copied and revoked recovery proofs before arming a runner", async () => {
     const f = fixture();
     const ready = f.ready();
@@ -153,51 +192,29 @@ describe("runtime automation assembly", () => {
     expect(() => f.owner.start({ ...ready })).toThrow("no recovery proof");
     await lifecycle.close();
     expect(() => f.owner.start(ready)).toThrow("closing");
-    expect(f.make.createRunner).not.toHaveBeenCalled();
+    expect(f.sessionPorts()).toBeUndefined();
+    expect(f.owner.runner).toBeNull();
   });
 
-  it("builds CRUD early, arms the same runner later, and keeps the pending runner getter live", async () => {
+  it("arms the module with the recovered Session side and keeps its getters live", () => {
     const f = fixture();
-    expect(f.make.createEngine).toHaveBeenCalledOnce();
-    expect(f.owner.service).toBe(f.service);
-    expect(f.owner.runner).toBeNull();
-    expect(f.owner.pendingArmedRuns).toBeNull();
-    const ports = f.make.createService.mock.calls[0]![1];
-    await ports.inspectModelAccess!();
-    expect(f.pi.inspectModelAccess).toHaveBeenCalledWith({});
-    ports.onAutomationsChanged!();
-    expect(f.scheduler.refresh).not.toHaveBeenCalled();
     f.owner.start(f.ready());
-    expect(f.make.createRunner).toHaveBeenCalledWith(
-      expect.objectContaining({ engine: f.engine, sessions: f.services.sessions }),
-    );
+    expect(f.module.start).toHaveBeenCalledOnce();
+    expect(f.ports().sessions).toBe(f.services.sessions);
     expect(f.owner.runner).toBe(f.runner);
     expect(f.owner.pendingArmedRuns).toBe(f.pending);
-    expect(f.pending.start).toHaveBeenCalledOnce();
-    expect(f.runner.recover).toHaveBeenCalledOnce();
-    expect(f.make.createScheduler).toHaveBeenCalledWith(f.engine, f.runner);
-    expect(f.scheduler.start).toHaveBeenCalledOnce();
-    expect(f.make.createPendingArmedRuns.mock.calls[0]![0]()).toBe(f.runner);
-    ports.onAutomationsChanged!();
-    expect(f.scheduler.refresh).toHaveBeenCalledOnce();
+    f.owner.stop();
+    expect(f.module.stop).toHaveBeenCalledOnce();
   });
 
-  it("offers no model-access inspection when no Pi host booted", () => {
-    const f = fixture(true, false);
-    expect(Object.keys(f.make.createService.mock.calls[0]![1])).toEqual(["onAutomationsChanged"]);
-  });
-
-  it("logs a failed recovery or scheduler start instead of surfacing either", async () => {
-    const f = fixture();
-    f.runner.recover.mockRejectedValueOnce(new Error("ledger locked"));
-    f.scheduler.start.mockRejectedValueOnce(new Error("cursor unreadable"));
-    f.owner.start(f.ready());
-    await vi.waitFor(() => {
-      expect(f.log.error).toHaveBeenCalledWith("[volli] automation recovery failed: ledger locked");
-      expect(f.log.error).toHaveBeenCalledWith(
-        "[volli] automation scheduler could not start: cursor unreadable",
-      );
-    });
+  it("arms pending Runs alone when the Session runtime or its facade is missing", () => {
+    const noSessions = fixture();
+    noSessions.owner.start(noSessions.ready({ sessions: null }));
+    expect(noSessions.sessionPorts()).toBeNull();
+    vi.mocked(createHostAutomations).mockClear();
+    const noRuntime = fixture();
+    noRuntime.owner.start(noRuntime.ready({ runtime: null }));
+    expect(noRuntime.sessionPorts()).toBeNull();
   });
 
   it("uses stable directories but re-reads the project policy after async supply reads", async () => {
@@ -208,7 +225,8 @@ describe("runtime automation assembly", () => {
       .mockReturnValueOnce({ ...project, skillModes: { alpha: "off" } });
     vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
     vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [skill] });
-    expect(await f.deps().promptSupply("p1")).toEqual({ templates: [], skills: [] });
+    expect(await f.ports().promptSupply("p1")).toEqual({ templates: [], skills: [] });
+    expect(getProjectById).toHaveBeenCalledWith(db, "p1");
     expect(loadPromptTemplates).toHaveBeenCalledWith({
       projectCommandsDir: "/repo/.volli/commands",
       globalCommandsDir: "/data/commands",
@@ -218,7 +236,7 @@ describe("runtime automation assembly", () => {
       globalSkillsDir: "/home/.agents/skills",
     });
     vi.mocked(getProjectById).mockReturnValueOnce(project).mockReturnValueOnce(undefined);
-    await expect(f.deps().promptSupply("p1")).rejects.toThrow("Unknown project");
+    await expect(f.ports().promptSupply("p1")).rejects.toThrow("Unknown project");
   });
 
   it("refuses prompt supply when the project or either disk read cannot be used", async () => {
@@ -228,14 +246,14 @@ describe("runtime automation assembly", () => {
     vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
     vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
     vi.mocked(getProjectById).mockReturnValueOnce(undefined);
-    await expect(f.deps().promptSupply("p1")).rejects.toThrow("Unknown project");
+    await expect(f.ports().promptSupply("p1")).rejects.toThrow("Unknown project");
     vi.mocked(loadPromptTemplates).mockResolvedValueOnce({
       ok: false,
       error: "templates unreadable",
     });
-    await expect(f.deps().promptSupply("p1")).rejects.toThrow("templates unreadable");
+    await expect(f.ports().promptSupply("p1")).rejects.toThrow("templates unreadable");
     vi.mocked(loadSkills).mockResolvedValueOnce({ ok: false, error: "skills unreadable" });
-    await expect(f.deps().promptSupply("p1")).rejects.toThrow("skills unreadable");
+    await expect(f.ports().promptSupply("p1")).rejects.toThrow("skills unreadable");
   });
 
   it("applies an empty mode map when the re-read project carries no skill modes", async () => {
@@ -246,13 +264,13 @@ describe("runtime automation assembly", () => {
       .mockReturnValueOnce({ ...project, skillModes: undefined });
     vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
     vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
-    await expect(f.deps().promptSupply("p1")).resolves.toEqual({ templates: [], skills: [] });
+    await expect(f.ports().promptSupply("p1")).resolves.toEqual({ templates: [], skills: [] });
   });
 
   it("forwards exact command/message ids, resources and origin, and delivery failures", async () => {
     const f = fixture();
     f.owner.start(f.ready());
-    const input: Parameters<ReturnType<typeof f.deps>["deliverInstructions"]>[0] = {
+    const input: Parameters<AutomationSessionPorts["deliverInstructions"]>[0] = {
       sessionId: "s1",
       commandId: "command-1",
       messageId: "message-1",
@@ -265,7 +283,7 @@ describe("runtime automation assembly", () => {
     };
     const result = { receipt: { status: "accepted" } };
     f.runtime.command.mockResolvedValue(result);
-    await expect(f.deps().deliverInstructions(input)).resolves.toBe(result);
+    await expect(f.ports().deliverInstructions(input)).resolves.toBe(result);
     expect(f.runtime.command).toHaveBeenCalledExactlyOnceWith({
       sessionId: input.sessionId,
       commandId: input.commandId,
@@ -280,7 +298,7 @@ describe("runtime automation assembly", () => {
       },
     });
     const failure = {} as Parameters<HostedSessionRuntime["reportMessageDeliveryFailure"]>[0];
-    await f.deps().reportInstructionDeliveryFailure(failure);
+    await f.ports().reportInstructionDeliveryFailure(failure);
     expect(f.runtime.reportMessageDeliveryFailure).toHaveBeenCalledWith(failure);
   });
 
@@ -288,62 +306,50 @@ describe("runtime automation assembly", () => {
     const f = fixture();
     f.owner.start(f.ready());
     f.runtime.projection.mockResolvedValueOnce({ projection: working });
-    await expect(f.deps().readSessionActivity("s1")).resolves.toBe("working");
+    await expect(f.ports().readSessionActivity("s1")).resolves.toBe("working");
     f.runtime.projection.mockRejectedValueOnce(new Error("projection unavailable"));
-    await expect(f.deps().readSessionActivity("s1")).rejects.toThrow("projection unavailable");
+    await expect(f.ports().readSessionActivity("s1")).rejects.toThrow("projection unavailable");
     expect(f.runtime.reportMessageDeliveryFailure).not.toHaveBeenCalled();
   });
 
   it("offers title refinement only when the host has a titler", () => {
     const bare = fixture();
     bare.owner.start(bare.ready({ autoTitler: null }));
-    expect(bare.deps()).not.toHaveProperty("refineAutoTitle");
+    expect(bare.ports()).not.toHaveProperty("refineAutoTitle");
+    vi.mocked(createHostAutomations).mockClear();
     const f = fixture();
     f.owner.start(f.ready());
     const request = { sessionId: "s1", firstMessage: "Ship it", heuristicTitle: "Nightly" };
-    f.deps().refineAutoTitle!(request);
+    f.ports().refineAutoTitle!(request);
     expect(f.autoTitler.refine).toHaveBeenCalledWith(request);
   });
+});
 
-  it("keeps degraded CRUD/pending honest and never schedules without a runner", () => {
-    const dbless = fixture(false);
-    dbless.owner.start(dbless.ready({ sessions: null, runtime: null }));
-    expect(dbless.owner.service).toBeNull();
-    expect(dbless.owner.runner).toBeNull();
-    expect(dbless.owner.pendingArmedRuns).toBeNull();
-    expect(dbless.make.createRunner).not.toHaveBeenCalled();
-    expect(dbless.make.createPendingArmedRuns).not.toHaveBeenCalled();
-    expect(dbless.make.createScheduler).not.toHaveBeenCalled();
-    expect(dbless.runner.recover).not.toHaveBeenCalled();
-    const f = fixture();
+describe("degraded runtime automations", () => {
+  it("composes no module and offers no service, runner or pending Runs", () => {
+    const f = fixture({ db: false });
+    expect(createHostAutomations).not.toHaveBeenCalled();
     f.owner.start(f.ready({ sessions: null, runtime: null }));
+    expect(f.owner.service).toBeNull();
     expect(f.owner.runner).toBeNull();
-    expect(f.make.createRunner).not.toHaveBeenCalled();
-    expect(f.pending.start).toHaveBeenCalledOnce();
-    expect(f.make.createPendingArmedRuns.mock.calls[0]![0]()).toBeNull();
-    expect(f.make.createScheduler).not.toHaveBeenCalled();
-    expect(f.runner.recover).not.toHaveBeenCalled();
+    expect(f.owner.pendingArmedRuns).toBeNull();
   });
 
-  it("starts once, stops both timers and refuses later starts, including a pre-start stop", () => {
-    const f = fixture();
-    f.owner.start(f.ready());
-    f.owner.start(f.ready());
-    expect(f.make.createRunner).toHaveBeenCalledOnce();
-    expect(f.pending.start).toHaveBeenCalledOnce();
-    expect(f.scheduler.start).toHaveBeenCalledOnce();
-    expect(f.runner.recover).toHaveBeenCalledOnce();
+  it("still refuses a forged proof, then settles once like the live owner", async () => {
+    const f = fixture({ db: false });
+    const ready = f.ready();
+    expect(() => f.owner.start({ ...ready })).toThrow("no recovery proof");
+    f.owner.start(ready);
+    await lifecycle.close();
+    // Settled: a revoked proof is no longer read.
+    expect(() => f.owner.start(ready)).not.toThrow();
+  });
+
+  it("refuses every start after a stop, even one with a revoked proof", async () => {
+    const f = fixture({ db: false });
+    const ready = f.ready();
     f.owner.stop();
-    expect(f.pending.stop).toHaveBeenCalledOnce();
-    expect(f.scheduler.stop).toHaveBeenCalledOnce();
-    f.owner.start(f.ready());
-    expect(f.make.createRunner).toHaveBeenCalledOnce();
-    const stopped = fixture();
-    stopped.owner.stop();
-    stopped.owner.start(stopped.ready());
-    expect(stopped.make.createRunner).not.toHaveBeenCalled();
-    expect(stopped.pending.start).not.toHaveBeenCalled();
-    expect(stopped.scheduler.start).not.toHaveBeenCalled();
-    expect(stopped.runner.recover).not.toHaveBeenCalled();
+    await lifecycle.close();
+    expect(() => f.owner.start(ready)).not.toThrow();
   });
 });

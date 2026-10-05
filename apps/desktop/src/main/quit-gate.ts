@@ -180,11 +180,14 @@ export function registerAcceptedQuitCoordinator(options: {
   shutdownAgentSocket(): Promise<void>;
   shutdownDeadlineMs?: number;
   reportFailure(error: unknown): void;
+  /** Former synchronous quit listeners, called in their original order. */
+  prepareQuit?(event: { preventDefault(): void }): void;
 }): void {
   let shutdownInFlight = false;
   options.lifecycle.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
     event.preventDefault();
+    options.prepareQuit?.(event);
     if (shutdownInFlight) return;
     // This coordinator may register before the synchronous destructive-work
     // gates so it can cover startup. Hold the quit now, then let every listener

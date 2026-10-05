@@ -1,194 +1,270 @@
-/**
- * `@volli/host-core` — the host's services, composed without Electron.
- *
- * Volli Cloud (docs/plans/volli-cloud.md) runs one host program everywhere:
- * Electron main today, `hostd` next. Both call {@link createHostCore} and wire
- * what it returns. Everything that decides how a host behaves on THIS machine
- * — where its data lives, whether a transaction-ownership bug throws, who
- * reads a failure — comes in as {@link HostCoreOptions}; everything it must
- * ask its host to do comes in as {@link HostCorePorts}. Nothing in this
- * package imports `electron` (`scripts/check-host-electron-imports.mjs`).
- *
- * Persistence, Session/runtime services, worktrees and files, secrets, agent
- * tools and dispatch, Automations, terminals and the engine-agnostic browser
- * live here. See README.md for the cluster exports, ports and move pattern.
- */
+/** The host's persistence, live services and lifecycle, composed without Electron. */
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
-import type { ConnectivityPort } from "@volli/agent-runtime";
+import type { ConnectivityPort, PiModelAccess } from "@volli/agent-runtime";
+import type { SessionExecutionVenue } from "@volli/shared";
 import { openVolliDb } from "./db";
 import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime";
+import type { WorktreeDeps } from "./worktree";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
 import type { TrashPort } from "./ports/trash";
 import { createHostFileServices, type HostFileServices } from "./file-services";
 import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
-import { createHostAgentServices, type HostAgentServices } from "./agent-services";
-import { createHostAutomationServices, type HostAutomationServices } from "./automation-services";
 import {
-  createHostMaintenanceServices,
-  type HostMaintenanceServices,
+  createHostMaintenance,
+  checkpointAndCloseDatabase,
+  type HostMaintenance,
+  type MaintenanceProcessReaders,
 } from "./maintenance-services";
+import type { RetentionReclaimSeams } from "./retention-runtime";
 import {
   classifyDbOpenFailure,
   dbOpenFailureLogLine,
   describeDbOpenFailure,
+  type DbOpenFailure,
 } from "./db-open-failure";
-import type { DbOpenFailure } from "./db-open-failure";
 import {
   createHostSessionServices,
   type HostSessionPorts,
   type HostSessionServices,
 } from "./session-services";
+import { createHostLifecycle, type HostStopReport } from "./host-lifecycle";
+import { createDetachedWorkTracker, type DetachedWorkTracker } from "./detached-work";
+import { SecretStore } from "./secrets/store";
+import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-key";
+import { PtyManager, type PtyManagerOptions } from "./pty/manager";
+import { blobsRoot } from "./blob-store";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
 export * from "./ports";
 export type { DbOpenFailure } from "./db-open-failure";
-
 export {
   logTransactionViolation,
   throwTransactionViolation,
   type TransactionViolationHandler,
 } from "./db/transaction-gate";
 
-/**
- * The database, or the one sentence that says why it is not there. A host
- * keeps serving with a degraded database: every data surface answers with
- * `error` instead of failing to start.
- */
+/** Transport adapter handle. Live services themselves never carry null databases. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
 
-/**
- * What host-core asks of the process hosting it. The README's "Ports" section
- * is the vocabulary; `src/ports/` holds each port and its headless answer.
- */
 export interface HostCorePorts extends HostSessionPorts {
-  /** Sleep and wake. A host that never sleeps passes `NO_POWER_EVENTS`. */
   power: PowerPort;
-  /**
-   * The network, for the Agent Runtime's retry policy. Desktop builds it from
-   * Electron's `net` and {@link HostCorePorts.power}; a headless host passes
-   * `ALWAYS_ONLINE` from `@volli/agent-runtime`.
-   */
   connectivity: ConnectivityPort;
-  /**
-   * What only a person's machine can do: open a link, reveal a file, the
-   * clipboard, menus. Absent on a headless host, where every request is
-   * refused with a `ClientCapabilityUnavailableError`.
-   */
   client?: ClientCapabilityPort;
-  /** Host-side recoverable deletion; absent on headless hosts, which refuse. */
   trash?: TrashPort;
 }
 
-/** How this host behaves. No defaults for policy: every host states it. */
-export interface HostCoreOptions {
-  /**
-   * The host's durable data directory. Desktop passes Electron's `userData`;
-   * a headless host passes its own state directory.
-   */
-  readonly dataDir: string;
-  /** Overrides {@link defaultDatabasePath}. Desktop dev/e2e passes `VOLLI_DB_PATH`. */
-  readonly databasePath?: string;
-  /**
-   * What a SQLite transaction-ownership violation does (VC-551). Desktop passes
-   * `throwTransactionViolation` in tests and dev and `logTransactionViolation`
-   * when packaged; a headless host passes `throwTransactionViolation`.
-   */
-  readonly onTransactionViolation: TransactionViolationHandler;
-  /**
-   * Who reads a failed open: `true` adds the dev-loop remedy (a repository,
-   * nvm, pnpm), `false` speaks to someone running a packaged build.
-   */
-  readonly devDiagnostics: boolean;
+/** A recovered runtime module, adopted before start can yield. */
+export interface HostRuntimeOwner {
+  start(): Promise<void> | void;
+  stopProducers(): void;
+  close(): Promise<void>;
+  /** Desktop closes this concurrently; hostd supplies its sequential socket/request drain. */
+  closeSocket?(): Promise<boolean | void>;
+  drainRequests?(): Promise<boolean | void>;
 }
 
-export interface HostCore extends HostSessionServices {
-  readonly worktrees: WorktreeRuntime;
+export interface HostCoreOptions {
+  readonly dataDir: string;
+  readonly databasePath?: string;
+  readonly onTransactionViolation: TransactionViolationHandler;
+  readonly devDiagnostics: boolean;
+  readonly processReaders: MaintenanceProcessReaders;
+  readonly reclaim?: RetentionReclaimSeams;
+  /** Lazy so model/catalog construction keeps the host's former boot point. */
+  readonly modelAccess?: () => PiModelAccess;
+  readonly venue?: (db: Database.Database) => SessionExecutionVenue;
+  readonly secretStore?: SecretStore;
+  readonly secretKey?: SecretKeyPort;
+  readonly terminal?: () => Pick<
+    PtyManagerOptions,
+    "host" | "agentRuntime" | "concurrencyEnvReader"
+  >;
+}
+
+interface HostLifecycleOwner {
   readonly dataDir: string;
   readonly dbPath: string;
   readonly database: DbHandle;
-  /** Staged construction, called in the host's existing boot order. */
-  readonly runtimeServices: HostRuntimeServices;
-  /** Staged durability/process construction, with no window-dependent start. */
-  readonly maintenance: HostMaintenanceServices;
-  readonly agentServices: HostAgentServices;
-  readonly automations: HostAutomationServices;
-  /** The client's capabilities, or one that refuses each readably when there is none. */
-  readonly client: ClientCapabilityPort;
-  readonly fileServices: HostFileServices;
-  /**
-   * Why the database did not open, typed for routing (VC-602): `null` when it
-   * opened. `database.error` is the sentence every degraded surface answers
-   * with; this is what a host branches on, such as desktop's "database is
-   * from a newer Volli" screen.
-   */
-  readonly databaseFailure: DbOpenFailure | null;
+  start(runtime?: HostRuntimeOwner): Promise<void>;
+  stop(reason: string): Promise<HostStopReport>;
 }
 
-/** `<dataDir>/volli.db`: where a host keeps its database unless told otherwise. */
+/** Failure is one variant, not a live host with six null Session services. */
+export interface DegradedHostCore extends HostLifecycleOwner {
+  readonly kind: "degraded";
+  readonly database: { ok: false; error: string };
+  readonly databaseFailure: DbOpenFailure;
+}
+
+export interface LiveHostCore extends HostLifecycleOwner, HostSessionServices {
+  readonly kind: "live";
+  readonly database: { ok: true; db: Database.Database };
+  readonly worktrees: WorktreeRuntime;
+  readonly worktreeDeps: WorktreeDeps;
+  readonly runtimeServices: HostRuntimeServices;
+  readonly maintenance: HostMaintenance;
+  readonly client: ClientCapabilityPort;
+  readonly fileServices: HostFileServices;
+  readonly detachedWork: DetachedWorkTracker;
+  readonly secretStore: SecretStore;
+  readonly ptyManager: PtyManager;
+}
+export type HostCore = LiveHostCore | DegradedHostCore;
+
+/** Narrow the host itself, not just its transport database handle. */
+export function isLiveHost(host: HostCore): host is LiveHostCore {
+  return host.database.ok;
+}
+
 export function defaultDatabasePath(dataDir: string): string {
   return join(dataDir, "volli.db");
 }
 
-/**
- * Opens (creating and migrating if needed) the host's database, installs
- * the transaction-ownership guard, and composes its Session services.
- *
- * Never throws for a database that will not open: the failure is classified
- * once, logged through `ports.log`, and returned as `{ ok: false, error }`.
- *
- * Boot-window rule: migrations and the open checks run on the raw handle,
- * before `openVolliDb` installs the guard. A statement handle created in that
- * window must not outlive boot — the guard wraps statements in the `prepared`
- * cache, but nothing else made before it exists.
- */
+/** Opens once, choosing the failure variant before constructing any live service. */
 export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): HostCore {
   const dbPath = options.databasePath ?? defaultDatabasePath(options.dataDir);
-  let database: DbHandle;
-  let databaseFailure: DbOpenFailure | null = null;
+  let db: Database.Database;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    const db = openVolliDb(dbPath, { onTransactionViolation: options.onTransactionViolation });
-    database = { ok: true, db };
+    db = openVolliDb(dbPath, { onTransactionViolation: options.onTransactionViolation });
   } catch (error) {
-    // The recorded reason is what every degraded handler answers with, so it
-    // is classified here, once: a native-ABI failure names the Node
-    // incompatibility and a fix its reader can carry out instead of a bare
-    // NODE_MODULE_VERSION number (VC-76). Which fix that is depends on who is
-    // looking, so the audience is stated rather than assumed (VC-160) — and the
-    // log keeps the raw message plus the dev-loop remedy either way, so a
-    // packaged user's report is still diagnosable.
-    database = { ok: false, error: describeDbOpenFailure(error, { dev: options.devDiagnostics }) };
-    databaseFailure = classifyDbOpenFailure(error);
+    const failure = classifyDbOpenFailure(error);
+    const message = describeDbOpenFailure(error, { dev: options.devDiagnostics });
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
+    const owner = lifecycleOwner(ports, {});
+    return {
+      kind: "degraded",
+      dataDir: options.dataDir,
+      dbPath,
+      database: { ok: false, error: message },
+      databaseFailure: failure,
+      ...owner,
+    };
   }
-  const client = clientCapabilities(ports.client);
-  const sessionServices = createHostSessionServices(database.ok ? database.db : null, ports);
+  const sessionServices = createHostSessionServices(db, ports);
   const worktrees = createWorktreeRuntime(ports, options);
-  return {
+  const client = clientCapabilities(ports.client);
+  const detachedWork = createDetachedWorkTracker({
+    reportFailure: (error) => ports.log.error("[volli] detached work failed:", error),
+  });
+  const maintenance = createHostMaintenance({
+    db,
+    ports,
     worktrees,
-    maintenance: createHostMaintenanceServices(
-      database.ok ? database.db : null,
-      ports,
-      { dataDir: options.dataDir, dbPath },
-      worktrees,
-    ),
+    processReaders: options.processReaders,
+    ...(options.reclaim === undefined ? {} : { reclaim: options.reclaim }),
+  });
+  let runtimeServices: HostRuntimeServices | undefined;
+  let ptyManager: PtyManager | undefined;
+  const secretStore =
+    options.secretStore ??
+    new SecretStore(
+      join(dirname(dbPath), "session-secrets.enc"),
+      options.secretKey ?? unavailableSecretKey,
+    );
+  const owner = lifecycleOwner(ports, {
+    stopMaintenance: () => {
+      maintenance.stop();
+      ptyManager?.stopParkSweep();
+    },
+    drainDetached: async () => {
+      await maintenance.settled();
+      await detachedWork.drain();
+    },
+    stopActivity: sessionServices.sessionActivityWatch.stop,
+    closeDatabase: () => checkpointAndCloseDatabase(db),
+  });
+  return {
+    kind: "live",
     dataDir: options.dataDir,
     dbPath,
-    database,
-    client,
-    fileServices: createHostFileServices(ports),
-    agentServices: createHostAgentServices(ports),
-    automations: createHostAutomationServices(database.ok ? database.db : null, ports),
-    databaseFailure,
+    database: { ok: true, db },
     ...sessionServices,
-    runtimeServices: createHostRuntimeServices(
-      database.ok ? database.db : null,
-      sessionServices.sessionEngine,
-      { client },
-      { dbPath },
-    ),
+    ...owner,
+    worktrees,
+    worktreeDeps: worktrees.deps(db),
+    client,
+    maintenance,
+    detachedWork,
+    secretStore,
+    get ptyManager() {
+      if (options.terminal === undefined) throw new Error("This host has no terminal port.");
+      return (ptyManager ??= new PtyManager({
+        ...options.terminal(),
+        db,
+        dbError: "",
+        sessionEngine: sessionServices.sessionEngine,
+        blobsRootPath: blobsRoot(options.dataDir),
+        spawnLedger: maintenance.spawnLedger,
+      }));
+    },
+    fileServices: createHostFileServices(ports),
+    get runtimeServices() {
+      return (runtimeServices ??= createHostRuntimeServices(
+        db,
+        sessionServices.sessionEngine,
+        { client },
+        {
+          dbPath,
+          ...(options.modelAccess === undefined ? {} : { modelAccess: options.modelAccess() }),
+          ...(options.venue === undefined ? {} : { venue: options.venue(db) }),
+        },
+      ));
+    },
+  };
+}
+
+const refuseSecretKey = (): never => {
+  throw new SecretKeyUnavailableError("unavailable", "This host has no secret key port.");
+};
+const unavailableSecretKey: SecretKeyPort = {
+  isEncryptionAvailable: refuseSecretKey,
+  encryptString: refuseSecretKey,
+  decryptString: refuseSecretKey,
+};
+
+function lifecycleOwner(
+  ports: Pick<HostCorePorts, "log">,
+  services: {
+    stopMaintenance?(): void;
+    drainDetached?(): Promise<void>;
+    stopActivity?(): void;
+    closeDatabase?(): void;
+  },
+): Pick<HostLifecycleOwner, "start" | "stop"> {
+  let runtime: HostRuntimeOwner | undefined;
+  let adopted = false;
+  const lifecycle = createHostLifecycle({
+    start: () => runtime?.start(),
+    stopProducers: () => runtime?.stopProducers(),
+    stopMaintenance: () => services.stopMaintenance?.(),
+    closeRuntime: async () => {
+      await runtime?.close();
+    },
+    closeSocket: async () => {
+      return await runtime?.closeSocket?.();
+    },
+    drainDetached: async () => {
+      const drained = await runtime?.drainRequests?.();
+      await services.drainDetached?.();
+      return drained;
+    },
+    stopActivity: () => services.stopActivity?.(),
+    closeDatabase: () => services.closeDatabase?.(),
+    reportFailure: (step, error) =>
+      ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
+  });
+  return {
+    start(owner) {
+      if (!adopted) {
+        runtime = owner;
+        adopted = true;
+      }
+      return lifecycle.start();
+    },
+    stop: lifecycle.stop,
   };
 }

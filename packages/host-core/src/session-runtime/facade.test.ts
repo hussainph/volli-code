@@ -2,7 +2,7 @@
 import { describe, expect, expectTypeOf, it, vi, afterEach } from "vite-plus/test";
 import { EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 import { readModelAccessDefaults } from "./model-access-preferences";
-import type { HostCore } from "../index";
+import type { DegradedHostCore, LiveHostCore } from "../index";
 import type { createRuntimeAssembly } from "./assembly";
 import { createSessions, type Sessions } from "./sessions";
 import { createAutoTitler, type AutoTitler } from "./auto-title";
@@ -14,6 +14,7 @@ import { recordSessionStartedOnce } from "../db/events-repo";
 import { getComment } from "../db/comments-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { loadSkills } from "../skills";
+import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import {
   createRuntimeSessionFacade,
   recoveredRuntimeSessionServices,
@@ -44,14 +45,30 @@ vi.mock("../db/events-repo", () => ({ recordSessionStartedOnce: vi.fn() }));
 vi.mock("../db/comments-repo", () => ({ getComment: vi.fn() }));
 vi.mock("../db/automations-repo", () => ({ listAutomationsForProject: vi.fn(() => []) }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
+vi.mock("../agent-services", () => ({
+  createHostAgentToolDoor: vi.fn(),
+  createHostAgentWatches: vi.fn(),
+}));
 vi.mock("./model-access-preferences", () => ({ readModelAccessDefaults: vi.fn() }));
 afterEach(() => vi.resetAllMocks());
 
-async function proofFor(facade: RuntimeSessionFacade, host: HostCore) {
+/** The degraded variant carries only its failure: no Session service survives it. */
+function degradedHost(error: string): DegradedHostCore {
+  return {
+    kind: "degraded",
+    dataDir: "/data",
+    dbPath: "/data/volli.db",
+    database: { ok: false, error },
+    databaseFailure: { kind: "other" },
+    start: async () => {},
+    stop: async (reason) => ({ reason, clean: true }),
+  };
+}
+async function proofFor(facade: RuntimeSessionFacade) {
   const owner = createSessionRuntimeLifecycle({
     // This port-composition test has no runtime to recover. The real lifecycle
     // still issues and revokes the proof; no structural cast can issue one.
-    host: { ...host, database: { ok: false, error: "test" }, sessionEngine: null },
+    host: degradedHost("test"),
     ports: {
       power: { on: vi.fn(), removeListener: vi.fn() },
       attention: { deliver: vi.fn() },
@@ -82,31 +99,31 @@ async function fixture() {
   vi.mocked(createPeekSummarizer).mockReturnValue({ summarize: vi.fn(async () => null) });
   const engine = {
     getSession: vi.fn().mockResolvedValue(null),
-    listEvents: vi.fn<NonNullable<HostCore["sessionEngine"]>["listEvents"]>().mockResolvedValue([]),
+    listEvents: vi.fn<LiveHostCore["sessionEngine"]["listEvents"]>().mockResolvedValue([]),
     getOrRecordSessionInput: vi.fn(async () => ({})),
     observe: vi.fn(async () => {}),
     submit: vi.fn(async () => ({ receipt: { status: "completed" } })),
   };
   const runtime = { command: vi.fn(async () => ({})), projection: vi.fn() };
-  const watch = {};
+  const watch = { dispose: vi.fn() };
   const door = vi.fn(async () => ({ text: "ok" }));
+  // The agent tool door and watches are host-core constructors, not host fields.
   const agentServices = {
-    createToolDoor: vi.fn<HostCore["agentServices"]["createToolDoor"]>(),
-    createWatches: vi.fn<HostCore["agentServices"]["createWatches"]>(),
+    createToolDoor: vi.mocked(createHostAgentToolDoor),
+    createWatches: vi.mocked(createHostAgentWatches),
   };
   agentServices.createToolDoor.mockReturnValue(
     door as ReturnType<typeof agentServices.createToolDoor>,
   );
   agentServices.createWatches.mockReturnValue(
-    watch as ReturnType<typeof agentServices.createWatches>,
+    watch as unknown as ReturnType<typeof agentServices.createWatches>,
   );
   const host = {
+    kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: engine,
     sessionWakeBus: { subscribe: vi.fn() },
-    agentServices,
-    maintenance: { shutdownNativeSessions: vi.fn(async () => {}) },
-  } as unknown as HostCore;
+  } as unknown as LiveHostCore;
   const pi = {
     inspectModelAccess: vi.fn(async () => ({
       observedAt: 0,
@@ -133,7 +150,7 @@ async function fixture() {
     decisions: null,
     delegation,
   });
-  const { ready, owner } = await proofFor(facade, host);
+  const { ready, owner } = await proofFor(facade);
   return {
     host,
     assembly,
@@ -154,6 +171,24 @@ async function fixture() {
 }
 
 describe("lifted Session facade and recovered agent staging", () => {
+  it("stops constructed agent watches and delegation subscriptions exactly once", async () => {
+    const f = await fixture();
+    const unsubscribe = vi.fn();
+    vi.mocked(f.host.sessionWakeBus.subscribe).mockReturnValue(unsubscribe);
+    const agents = stage(f);
+    agents.recoveryDelegationsFor();
+    agents.toolDoor(f.ready);
+    f.agentServices.createToolDoor.mock.lastCall![1].watches!();
+    agents.stop();
+    agents.stop();
+    expect(f.watch.dispose).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+
+    const idle = await fixture();
+    stage(idle).stop();
+    expect(idle.watch.dispose).not.toHaveBeenCalled();
+  });
+
   it("requires recovery proof at every public composition door", () => {
     expectTypeOf<RuntimeSessionFacade>().not.toExtend<
       Parameters<typeof recoveredSessionClientPorts>[0]
@@ -355,7 +390,9 @@ describe("lifted Session facade and recovered agent staging", () => {
       turnId: "turn",
       afterSequence: 12,
     });
-    const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![0];
+    // The door's mutations reach the staging's own event bus.
+    expect(f.agentServices.createToolDoor.mock.calls[0]![0]).toEqual({ events: f.events });
+    const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![1];
     expect(toolPorts.submitSessionMessage).toBe(
       recoveredRuntimeSessionServices(f.ready).submitKickoffMessage,
     );
@@ -390,7 +427,7 @@ describe("lifted Session facade and recovered agent staging", () => {
   it("keeps degraded composition inert and refuses CLI Session ports without an engine", async () => {
     const f = await fixture();
     const facade = createRuntimeSessionFacade({
-      host: { ...f.host, database: { ok: false, error: "unavailable" }, sessionEngine: null },
+      host: degradedHost("unavailable"),
       assembly: {
         ...f.assembly,
         sessionRuntime: null,
@@ -403,7 +440,7 @@ describe("lifted Session facade and recovered agent staging", () => {
       decisions: null,
       delegation: null,
     });
-    const { ready } = await proofFor(facade, f.host);
+    const { ready } = await proofFor(facade);
     expect(recoveredRuntimeSessionServices(ready)).toMatchObject({
       sessions: null,
       sessionSkills: null,
@@ -454,7 +491,7 @@ async function alternate(
     delegation: f.delegation,
     ...change,
   });
-  return { facade, ...(await proofFor(facade, f.host)) };
+  return { facade, ...(await proofFor(facade)) };
 }
 
 describe("facade captured ports and capability degradations", () => {
@@ -585,9 +622,12 @@ describe("facade captured ports and capability degradations", () => {
     });
     expect(recoveredSessionCommandPorts(noRuntime.ready)).not.toHaveProperty("sessions");
     await noRuntime.facade.waitForBirth("s");
-    const noDb = await alternate(f, { host: { ...f.host, database: { ok: false, error: "bad" } } });
-    expect(recoveredSessionCommandPorts(noDb.ready)).not.toHaveProperty("skillsIndex");
-    const other = await proofFor({ waitForBirth: async () => {}, agents: vi.fn() }, f.host);
+    // A missing database is the degraded variant now: no engine survives it, so
+    // the skills port is absent and the CLI command ports refuse as a whole.
+    const noDb = await alternate(f, { host: degradedHost("bad") });
+    expect(recoveredRuntimeSessionServices(noDb.ready).sessionSkills).toBeNull();
+    expect(() => recoveredSessionCommandPorts(noDb.ready)).toThrow("engine is unavailable");
+    const other = await proofFor({ waitForBirth: async () => {}, agents: vi.fn() });
     expect(() => recoveredRuntimeSessionServices(other.ready)).toThrow("different runtime");
     const liveBirth = vi.fn(async () => {});
     (f.sessions as Sessions).waitForBirth = liveBirth;
@@ -610,7 +650,7 @@ describe("agent staging ports", () => {
     const log = { error: vi.fn() };
     const agents = stage(f, { automations: { runner } as never, log });
     agents.toolDoor(f.ready);
-    const tool = f.agentServices.createToolDoor.mock.lastCall![0];
+    const tool = f.agentServices.createToolDoor.mock.lastCall![1];
     tool.projects();
     tool.authorityPolicy!("p");
     tool.actorTicketDisplay!(null);
@@ -660,12 +700,16 @@ describe("agent staging ports", () => {
     "fails closed with absent %s capability",
     async (missing) => {
       const f = await fixture();
-      const host = {
-        ...f.host,
-        ...(missing === "database" ? { database: { ok: false, error: "bad" } } : {}),
-        ...(missing === "engine" ? { sessionEngine: null } : {}),
-        ...(missing === "wake" ? { sessionWakeBus: null } : {}),
-      } as HostCore;
+      // "database" is the degraded variant; "engine" and "wake" are
+      // type-impossible on a live host and cover the guards agents.ts still carries.
+      const host =
+        missing === "database"
+          ? degradedHost("bad")
+          : ({
+              ...f.host,
+              ...(missing === "engine" ? { sessionEngine: null } : {}),
+              ...(missing === "wake" ? { sessionWakeBus: null } : {}),
+            } as unknown as LiveHostCore);
       const alternateFacade = await alternate(f, {
         host,
         ...(missing === "runtime" ? { assembly: { ...f.assembly, sessionRuntime: null } } : {}),
@@ -685,7 +729,7 @@ describe("agent staging ports", () => {
       const door = agents.toolDoor(alternateFacade.ready);
       if (["database", "delegation"].includes(missing)) expect(door).toBeNull();
       else {
-        const tool = f.agentServices.createToolDoor.mock.lastCall![0];
+        const tool = f.agentServices.createToolDoor.mock.lastCall![1];
         expect(tool.automations!()).toBeNull();
         expect(tool.watches!()).toBeNull();
         if (["runtime", "engine"].includes(missing)) expect(tool.supervise!()).toBeNull();

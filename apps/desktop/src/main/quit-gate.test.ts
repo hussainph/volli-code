@@ -542,3 +542,34 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 });
+
+describe("one host quit trigger", () => {
+  it("preserves synchronous producer, draft, terminal and repack ordering on cancellation", async () => {
+    const calls: string[] = [];
+    let trigger!: (event: { preventDefault(): void }) => void;
+    const shutdown = vi.fn(async () => {});
+    const exit = vi.fn();
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on: (_event, listener) => {
+          trigger = listener;
+        },
+        exit,
+      },
+      shutdownNativeSessions: shutdown,
+      shutdownAgentSocket: shutdown,
+      reportFailure: vi.fn(),
+      prepareQuit: (event) => {
+        calls.push("automations.stop", "draft.gate");
+        refuseQuit(event);
+        if (!quitAlreadyRefused(event)) calls.push("terminal.kill");
+        calls.push("repack.abort");
+      },
+    });
+    trigger({ preventDefault: vi.fn() });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["automations.stop", "draft.gate", "repack.abort"]);
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+});

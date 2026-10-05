@@ -68,15 +68,6 @@ async function seeded() {
 }
 
 describe("host Session composition", () => {
-  it("returns no Session services for a degraded database without asking process ports", () => {
-    const sinks = ports();
-    services = createHostSessionServices(null, sinks);
-    expect(Object.values(services)).toEqual([null, null, null, null, null, null]);
-    expect(sinks.attention.focusedSessionIds).not.toHaveBeenCalled();
-    expect(sinks.attention.deliver).not.toHaveBeenCalled();
-    expect(sinks.events.publish).not.toHaveBeenCalled();
-  });
-
   it("announces committed facts before folding and publishing, with one transaction writer", async () => {
     const { engine, sinks, order, sessionId } = await seeded();
     expect(order.length).toBeGreaterThan(0);

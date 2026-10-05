@@ -22,6 +22,7 @@ import {
   type WorktreeDeps,
 } from "./worktree";
 
+let watchers = new WeakMap<Database.Database, RetentionWatcher>();
 let watcher: RetentionWatcher | null = null;
 
 /**
@@ -61,7 +62,9 @@ export function getRetentionWatcher(
   worktree: () => WorktreeDeps,
   reclaimSeams?: RetentionReclaimSeams,
 ): RetentionWatcher {
-  watcher ??= new RetentionWatcher(
+  const existing = watchers.get(db);
+  if (existing !== undefined) return existing;
+  watcher = new RetentionWatcher(
     {
       db,
       net: runNet,
@@ -84,6 +87,7 @@ export function getRetentionWatcher(
     },
     retentionConfigFromEnv(process.env),
   );
+  watchers.set(db, watcher);
   return watcher;
 }
 
@@ -91,4 +95,5 @@ export function getRetentionWatcher(
 export function resetRetentionWatcherForTest(): void {
   watcher?.stop();
   watcher = null;
+  watchers = new WeakMap();
 }

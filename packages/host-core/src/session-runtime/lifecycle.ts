@@ -8,7 +8,8 @@
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import { errorMessage, type SessionProjection, type SessionExecutionVenue } from "@volli/shared";
-import type { HostCore, HostCorePorts } from "../index";
+import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
+import { shutdownNativeSessions } from "../host-shutdown";
 import { listProjects } from "../db/projects-repo";
 import { listScheduledResumeSessionIds } from "../db/scheduled-resume-repo";
 import {
@@ -87,7 +88,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   stopProducers(): void;
 }): SessionRuntimeLifecycle<Services> {
   const { host, ports, runtime, rpc, observability, delegation } = options;
-  const { database, sessionEngine, hostNoticeOutbox, sessionWakeBus } = host;
+  const { database } = host;
+  const liveHost = isLiveHost(host) ? host : undefined;
+  const sessionEngine = liveHost?.sessionEngine ?? null;
+  const hostNoticeOutbox = liveHost?.hostNoticeOutbox ?? null;
+  const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const notices =
     runtime === null || hostNoticeOutbox === null
       ? null
@@ -150,7 +155,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     ports.power.removeListener("resume", wake);
     // Preserve VC-618's stop → RPC/runtime → MCP backstop → export flush.
     // Its caller still owns the unchanged aggregate shutdown deadline.
-    const shutdown = host.maintenance.shutdownNativeSessions({
+    const shutdown = shutdownNativeSessions({
+      log: ports.log,
       sessionWatchdog: watchdog,
       scheduledResumeHost: resume,
       shellHostNotices: notices,

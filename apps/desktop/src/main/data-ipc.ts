@@ -6,6 +6,7 @@ import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { DbHandle } from "@volli/host-core";
+import type { DetachedWorkPort } from "@volli/host-core/detached-work";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
@@ -414,6 +415,7 @@ export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
     detectBaseBranch?: (projectPath: string) => Promise<string | null>;
+    detachedWork?: DetachedWorkPort;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -588,6 +590,7 @@ export function registerDataIpcHandlers(
   const movePorts = () => ({
     worktree: worktreeDeps(db),
     now: () => Date.now(),
+    detachedWork: options.detachedWork,
     ...busySeam(),
     interruptTicketSessions: options.interruptTicketSessions,
     onDeliberateMove: options.onDeliberateMove,

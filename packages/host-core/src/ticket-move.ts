@@ -19,6 +19,7 @@ import {
   type TicketMovedNotice,
   type TicketStatus,
 } from "@volli/shared";
+import type { DetachedWorkPort } from "./detached-work";
 import { getProjectById } from "./db/projects-repo";
 import { getTicket, getTicketRow, listTicketsByProject } from "./db/tickets-repo";
 import {
@@ -45,11 +46,17 @@ export interface TicketMovePorts extends TrimFinishDeps {
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
   notify?: (request: NotificationRequest) => unknown;
+  /**
+   * Where the detached Done trim enrols itself, so the host's shutdown can
+   * drain it before the database closes (VC-627). Absent means untracked —
+   * the trim still runs, exactly as before, but nothing waits for it.
+   */
+  detachedWork?: DetachedWorkPort;
 }
 
 /** The archive path shares the same best-effort trim, without being a move. */
 export function trimFinishedTicketInBackground(
-  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation">,
+  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation" | "detachedWork">,
   ticketId: string,
   projectId: string | undefined,
 ): void {
@@ -57,7 +64,9 @@ export function trimFinishedTicketInBackground(
   // never authorize the detached destructive act.
   if (typeof ports.busySites !== "function") return;
   // Start now, do not put a filesystem walk on the board reply's critical path.
-  void trimFinishedWorktree(ports, ticketId)
+  // The tracked promise is the whole chain, through its own failure log, so a
+  // drain waits for the trim's event write and the publish after it.
+  const work = trimFinishedWorktree(ports, ticketId)
     .then((outcome) => {
       if (outcome.kind !== "trimmed") return;
       getWorktreeSnapshots().invalidate(ticketId);
@@ -66,6 +75,7 @@ export function trimFinishedTicketInBackground(
     .catch((error: unknown) => {
       console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
     });
+  ports.detachedWork?.track(work);
 }
 
 function moveNotificationBody(kind: TicketEventActorKind, via: string | null): string {

@@ -202,6 +202,7 @@ export function registerTerminalIpcHandlers(
     : createSessionConcurrencyEnvReader({
         listAttachedSessions: () => sessionEngine.listAttachedSessions(),
       }),
+  ownership: { manager?: PtyManager; registerQuitGate?: boolean } = {},
 ): PtyManager {
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
@@ -210,31 +211,17 @@ export function registerTerminalIpcHandlers(
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
   const host = desktopPtyHost();
-  const manager = handle.ok
-    ? new PtyManager(
-        host,
-        handle.db,
-        "",
-        sessionEngine,
-        undefined,
-        undefined,
-        agentRuntime,
-        blobsRootPath,
-        // Every terminal shell lands in the spawn ledger (VC-341), so a shell
-        // that outlives this launch can still be attributed to its Session.
-        new SpawnLedger(handle.db),
-        concurrencyEnvReader,
-      )
-    : new PtyManager(
-        host,
-        null,
-        handle.error,
-        null,
-        undefined,
-        undefined,
-        agentRuntime,
-        blobsRootPath,
-      );
+  const manager =
+    ownership.manager ??
+    new PtyManager({
+      host,
+      db: handle.ok ? handle.db : null,
+      dbError: handle.ok ? "" : handle.error,
+      sessionEngine,
+      agentRuntime,
+      blobsRootPath,
+      ...(handle.ok ? { spawnLedger: new SpawnLedger(handle.db), concurrencyEnvReader } : {}),
+    });
 
   // Closed over the live runtime object rather than a snapshot of it: the
   // trusted set lands there only once the wrappers are generated, which is
@@ -368,34 +355,39 @@ export function registerTerminalIpcHandlers(
   // original quit still in flight. (Never preventDefault-then-app.quit():
   // Electron swallows a quit re-issued from inside before-quit, leaving a
   // confirmed quit doing nothing.)
-  app.on("before-quit", (event) => {
-    // The unsaved-editor gate ahead of this one already got a Cancel. Don't
-    // stack a second modal on an answer the user has given, and don't killAll
-    // over a quit that is not happening.
-    if (quitAlreadyRefused(event)) return;
-    // An accepted update install (VC-59) already carried this exact warning —
-    // busy terminals, counted and named — in its own dialog, so asking again
-    // here would be the double prompt that dialog exists to prevent. Standing
-    // down means skipping the CONFIRM only: killAll below still runs, or
-    // Squirrel would relaunch the new build over orphaned shells.
-    const busy = updateInstallQuitInFlight() ? [] : manager.busySessions();
-    if (
-      busy.length > 0 &&
-      !confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })
-    ) {
-      // `refuseQuit`, not a bare preventDefault: Electron runs every remaining
-      // before-quit listener anyway, and the native-Session shutdown behind this
-      // one ends in app.exit(0). Cancel used to delay the quit by one teardown
-      // and then kill the process regardless.
-      refuseQuit(event);
-      return;
-    }
-    manager.killAll();
-  });
+  if (ownership.registerQuitGate !== false) {
+    app.on("before-quit", (event) => prepareTerminalQuit(manager, event));
+  }
 
   // Start the recurring warm-park sweep here (not in the constructor) so tests
   // that construct a PtyManager directly never leak an interval.
   manager.startParkSweep();
 
   return manager;
+}
+
+/** Synchronous desktop quit trigger; the host owns the manager's lifetime. */
+export function prepareTerminalQuit(manager: PtyManager, event: { preventDefault(): void }): void {
+  // The unsaved-editor gate ahead of this one already got a Cancel. Don't
+  // stack a second modal on an answer the user has given, and don't killAll
+  // over a quit that is not happening.
+  if (quitAlreadyRefused(event)) return;
+  // An accepted update install (VC-59) already carried this exact warning —
+  // busy terminals, counted and named — in its own dialog, so asking again
+  // here would be the double prompt that dialog exists to prevent. Standing
+  // down means skipping the CONFIRM only: killAll below still runs, or
+  // Squirrel would relaunch the new build over orphaned shells.
+  const busy = updateInstallQuitInFlight() ? [] : manager.busySessions();
+  if (
+    busy.length > 0 &&
+    !confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })
+  ) {
+    // `refuseQuit`, not a bare preventDefault: Electron runs every remaining
+    // before-quit listener anyway, and the native-Session shutdown behind this
+    // one ends in app.exit(0). Cancel used to delay the quit by one teardown
+    // and then kill the process regardless.
+    refuseQuit(event);
+    return;
+  }
+  manager.killAll();
 }

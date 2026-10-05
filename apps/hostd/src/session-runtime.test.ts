@@ -1,6 +1,6 @@
 /** Composition contract; the integration test drives the real collaborators. */
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { HostCore, HostCorePorts } from "@volli/host-core";
+import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
 import type { RuntimeAssemblyOptions } from "@volli/host-core/session-runtime/assembly";
 import type { BackgroundShellHostDependencies } from "@volli/host-core/shell/background-shell-host";
@@ -11,7 +11,7 @@ const seam = vi.hoisted(() => ({
   lifecycle: vi.fn(),
   context: vi.fn(),
   concurrency: vi.fn(),
-  tokens: { mint: vi.fn(), revoke: vi.fn(), verify: vi.fn() },
+  tokens: { mint: vi.fn(), revoke: vi.fn(), verify: vi.fn(), liveSessionIds: vi.fn() },
   identities: vi.fn(),
   automations: vi.fn(),
   recovered: vi.fn(),
@@ -22,6 +22,7 @@ const seam = vi.hoisted(() => ({
   ticket: vi.fn(),
   project: vi.fn(),
   sites: vi.fn(() => [] as { sessionId: string; directory: string }[]),
+  release: vi.fn(),
   modelAccess: vi.fn(),
   observability: { start: vi.fn(), shutdown: vi.fn() },
 }));
@@ -94,8 +95,11 @@ vi.mock("@volli/host-core/session-runtime/facade", () => ({
 vi.mock("@volli/host-core/session-runtime/lifecycle", () => ({
   createSessionRuntimeLifecycle: seam.lifecycle,
 }));
-vi.mock("@volli/host-core/worktree/agent-sites", () => ({ agentSitesWithin: seam.sites }));
-import { createHeadlessSessionRuntime } from "./session-runtime";
+vi.mock("@volli/host-core/worktree/agent-sites", () => ({
+  agentSitesWithin: seam.sites,
+  releaseAgentSites: seam.release,
+}));
+import { createHeadlessSessionRuntime, headlessModelAccess } from "./session-runtime";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -109,7 +113,7 @@ function fixture() {
   const assembly = { sessionRuntime: runtime, piRuntimeHost: {}, sessionToolSurface: {} };
   seam.assembly.mockReturnValue(assembly);
   const door = vi.fn(async () => ({ text: "ok" }));
-  const agents = { toolDoor: vi.fn(() => door), recoveryDelegationsFor: vi.fn() };
+  const agents = { toolDoor: vi.fn(() => door), recoveryDelegationsFor: vi.fn(), stop: vi.fn() };
   const facade = { agents: vi.fn(() => agents), waitForBirth: vi.fn(async () => {}) };
   seam.facade.mockReturnValue(facade);
   const proof = { services: facade };
@@ -137,17 +141,21 @@ function fixture() {
   seam.shells.liveCwds.mockReturnValue([]);
   seam.sites.mockReturnValue([]);
   seam.concurrency.mockReturnValue(vi.fn(async () => ({ PATH: "/service/bin" })));
+  const runtimeServices = {
+    modelAccess: { models: "host-model-access" },
+    decisions: { decide: "host-decisions" },
+    mcp: { selectedTools: "host-mcp" },
+    webAccess: { web: "host-web-access" },
+  };
+  const spawnLedger = { ledger: "host-spawn-ledger" };
   const host = {
+    kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
     dataDir: "/data",
-    runtimeServices: {
-      createDecisions: vi.fn(),
-      createMcp: vi.fn(() => ({ settings: {} })),
-      createWebAccess: vi.fn(),
-    },
-    maintenance: { createSpawnLedger: vi.fn() },
-  } as unknown as HostCore;
+    runtimeServices,
+    maintenance: { spawnLedger },
+  } as unknown as LiveHostCore;
   const log = { warn: vi.fn(), error: vi.fn() };
   const store = { redact: vi.fn((text) => text), redactPartial: vi.fn((text) => text) };
   const input = {
@@ -160,6 +168,9 @@ function fixture() {
   };
   return {
     input,
+    host,
+    runtimeServices,
+    spawnLedger,
     runtime,
     assembly,
     agents,
@@ -178,13 +189,27 @@ describe("headless runtime ownership", () => {
     const f = fixture();
     const owner = f.launch();
     expect(f.lifecycle.ready).not.toHaveBeenCalled();
-    expect(seam.modelAccess).toHaveBeenCalledWith({ agentDir: "/auth" });
+    // The host's one lazy runtime-service module, never a second model factory here.
+    expect(seam.modelAccess).not.toHaveBeenCalled();
     expect(seam.observability.start).toHaveBeenCalledOnce();
     const input = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
     expect(input).toMatchObject({
       askUser: false,
       requestSecret: false,
       venue: f.input.options.venue,
+    });
+    expect(input.modelAccess).toBe(f.runtimeServices.modelAccess);
+    expect(input.decisions).toBe(f.runtimeServices.decisions);
+    expect(input.mcpSettings).toBe(f.runtimeServices.mcp);
+    expect(input.webAccess).toBe(f.runtimeServices.webAccess);
+    expect(seam.shellOptions!.ledger).toBe(f.spawnLedger);
+    // Automations take the host's metadata and its event port, never a host bag.
+    expect(seam.automations).toHaveBeenCalledWith({
+      host: { database: f.host.database, dataDir: "/data" },
+      events: f.input.ports.events,
+      piRuntimeHost: f.assembly.piRuntimeHost,
+      homeDir: "/home/service",
+      log: f.log,
     });
     expect(input).not.toHaveProperty("browser");
     await input.beforeExecution();
@@ -227,12 +252,65 @@ describe("headless runtime ownership", () => {
     const drain = seam.lifecycle.mock.lastCall![0];
     expect(drain.services()).toBe(f.facade);
     drain.stopProducers();
+    expect(f.automations.stop).toHaveBeenCalledOnce();
+    owner.stopProducers();
+    expect(f.automations.stop).toHaveBeenCalledTimes(2);
     drain.installQuitHold(vi.fn());
-    await drain.rpc().close();
-    expect(f.automations.stop).toHaveBeenCalled();
+    // The runtime's drain JOINS shell termination: it settles only after the
+    // shells have, so SQLite can never close under a shell still exiting.
+    const shellsClosed = Promise.withResolvers<void>();
+    seam.shells.close.mockReturnValueOnce(shellsClosed.promise);
+    let rpcClosed = false;
+    const rpcClose = drain
+      .rpc()
+      .close()
+      .then(() => {
+        rpcClosed = true;
+      });
     expect(seam.shells.close).toHaveBeenCalledOnce();
-    await owner.close();
-    expect(f.lifecycle.close).toHaveBeenCalled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(rpcClosed).toBe(false);
+    shellsClosed.resolve();
+    await rpcClose;
+    expect(rpcClosed).toBe(true);
+    // A shell that failed to stop fails the drain rather than vanishing.
+    seam.shells.close.mockRejectedValueOnce(new Error("shell survived"));
+    await expect(drain.rpc().close()).rejects.toThrow("shell survived");
+    expect(owner.close).toBe(f.lifecycle.close);
+  });
+  it("reads live Sessions from the attachment tokens it minted, on every call", () => {
+    const f = fixture();
+    const owner = f.launch();
+    seam.tokens.liveSessionIds.mockReturnValueOnce([]).mockReturnValueOnce(["s1"]);
+    expect(owner.liveSessionIds()).toEqual([]);
+    expect(owner.liveSessionIds()).toEqual(["s1"]);
+  });
+  it("refuses reclaim until recovery, then asks the recovered runtime", async () => {
+    const f = fixture();
+    const owner = f.launch();
+    await expect(owner.reclaim.busyWorktreeSites("/tree")).rejects.toThrow("not ready");
+    await expect(owner.reclaim.releaseAgentSites("/tree")).rejects.toThrow("not ready");
+    expect(seam.release).not.toHaveBeenCalled();
+    const ready = await owner.ready();
+    seam.shells.liveCwds.mockReturnValue(["/tree/shell"]);
+    expect(await owner.reclaim.busyWorktreeSites("/tree")).toEqual(
+      await ready.busyWorktreeSites("/tree"),
+    );
+    seam.release.mockResolvedValueOnce({ released: ["s"], stillOpen: [] });
+    expect(await owner.reclaim.releaseAgentSites("/tree")).toEqual({
+      released: ["s"],
+      stillOpen: [],
+    });
+    const [runtime, directory, deps] = seam.release.mock.lastCall!;
+    expect(runtime).toBe(f.runtime);
+    expect(directory).toBe("/tree");
+    expect(deps.newCommandId()).toMatch(/^[0-9a-f-]{36}$/);
+    deps.onError("s", new Error("refused"));
+    expect(f.log.error).toHaveBeenCalledWith(
+      "[volli] could not release Session s from /tree:",
+      "refused",
+    );
   });
   it("supplies busy Sessions and background shells, and fails closed on unreadable activity", async () => {
     const f = fixture();
@@ -248,19 +326,15 @@ describe("headless runtime ownership", () => {
     f.runtime.projection.mockRejectedValueOnce(new Error("unreadable"));
     await expect(ready.busyWorktreeSites("/tree")).rejects.toThrow("unreadable");
   });
-  it("uses explicit sandbox/model options and safe HOME fallbacks", async () => {
+  it("uses an explicit sandbox and reports a missing automation runner", async () => {
     const f = fixture();
     const owner = createHeadlessSessionRuntime({
       ...f.input,
       env: {},
-      options: {
-        ...f.input.options,
-        modelAccess: {} as never,
-        codeModeSandbox: { wasmPath: "/wasm" },
-      },
+      options: { ...f.input.options, codeModeSandbox: { wasmPath: "/wasm" } },
     });
-    expect(seam.modelAccess).not.toHaveBeenCalled();
     expect(seam.assembly.mock.lastCall![0].codeModeSandbox).toEqual({ wasmPath: "/wasm" });
+    expect(seam.automations.mock.lastCall![0].homeDir).toMatch(/.+/);
     f.automations.runner = null as never;
     f.automations.pendingArmedRuns = null as never;
     const ready = await owner.ready();
@@ -268,22 +342,25 @@ describe("headless runtime ownership", () => {
     ready.onDeliberateMove({} as never);
     f.assembly.sessionRuntime = null as never;
     expect(owner.openNativeBindings()).toEqual([]);
-    createHeadlessSessionRuntime({ ...f.input, env: { HOME: "/home/service" } });
-    expect(seam.modelAccess).toHaveBeenCalledWith({ agentDir: "/home/service/.pi/agent" });
-    createHeadlessSessionRuntime({ ...f.input, env: {} });
+  });
+  it("resolves the host's model access from the service account's own environment", () => {
+    seam.modelAccess.mockReturnValue({ models: "owned" });
+    const scripted = {} as never;
+    expect(headlessModelAccess({ PI_CODING_AGENT_DIR: "/auth" }, { modelAccess: scripted })).toBe(
+      scripted,
+    );
+    expect(seam.modelAccess).not.toHaveBeenCalled();
+    expect(headlessModelAccess({ HOME: "/h", PI_CODING_AGENT_DIR: "/auth" }, {})).toEqual({
+      models: "owned",
+    });
+    expect(seam.modelAccess).toHaveBeenLastCalledWith({ agentDir: "/auth" });
+    headlessModelAccess({ HOME: "/home/service" }, {});
+    expect(seam.modelAccess).toHaveBeenLastCalledWith({ agentDir: "/home/service/.pi/agent" });
+    headlessModelAccess({}, {});
     expect(seam.modelAccess.mock.lastCall![0].agentDir).toMatch(/\.pi\/agent$/);
   });
-  it("refuses absent database/engine/services and the unavailable tool door", async () => {
+  it("refuses absent recovered services and the unavailable tool door", async () => {
     const f = fixture();
-    expect(() =>
-      createHeadlessSessionRuntime({
-        ...f.input,
-        host: { ...f.input.host, database: { ok: false, error: "bad" } },
-      }),
-    ).toThrow("database is unavailable");
-    expect(() =>
-      createHeadlessSessionRuntime({ ...f.input, host: { ...f.input.host, sessionEngine: null } }),
-    ).toThrow("database is unavailable");
     const owner = f.launch();
     seam.recovered.mockReturnValueOnce({ sessions: null, runtime: f.runtime });
     await expect(owner.ready()).rejects.toThrow("runtime is unavailable");

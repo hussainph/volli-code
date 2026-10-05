@@ -153,6 +153,10 @@
       "types": "./src/ticket-move.ts",
       "import": "./src/ticket-move.ts"
     },
+    "./detached-work": {
+      "types": "./src/detached-work.ts",
+      "import": "./src/detached-work.ts"
+    },
     "./ticket-commands": {
       "types": "./src/ticket-commands.ts",
       "import": "./src/ticket-commands.ts"
