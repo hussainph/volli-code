@@ -8,10 +8,14 @@ const execFileAsync = promisify(execFile);
 /** Parent breadcrumbs remain available even when main's native thread blocks. */
 export function traceClose(path, stage, details = {}) {
   if (!path) return;
-  appendFileSync(
-    path,
-    `${JSON.stringify({ at: Date.now(), pid: process.pid, stage, ...details })}\n`,
-  );
+  try {
+    appendFileSync(
+      path,
+      `${JSON.stringify({ at: Date.now(), pid: process.pid, stage, ...details })}\n`,
+    );
+  } catch (error) {
+    console.error(`Shutdown diagnostic unavailable: ${error.message}`);
+  }
 }
 
 /** Smoke-side only: no tracing code ships in the application's quit path. */
@@ -19,11 +23,16 @@ export async function installShutdownTrace(app, path) {
   if (!path) return;
   await app.evaluate(({ app: electronApp }, tracePath) => {
     const nodeFs = process.getBuiltinModule("node:fs");
-    const trace = (stage) =>
-      nodeFs.appendFileSync(
-        tracePath,
-        `${JSON.stringify({ at: Date.now(), pid: process.pid, stage })}\n`,
-      );
+    const trace = (stage) => {
+      try {
+        nodeFs.appendFileSync(
+          tracePath,
+          `${JSON.stringify({ at: Date.now(), pid: process.pid, stage })}\n`,
+        );
+      } catch (error) {
+        console.error(`Shutdown diagnostic unavailable: ${error.message}`);
+      }
+    };
     for (const event of ["before-quit", "will-quit", "quit"])
       electronApp.on(event, () => trace(event));
     process.on("exit", () => trace("process-exit"));
@@ -38,15 +47,16 @@ export async function installShutdownTrace(app, path) {
   }, path);
 }
 
-export function sampleStalledClose(child, path) {
+export function sampleStalledClose(child, path, options = {}) {
   if (!path) return async () => {};
+  const { platform = process.platform, runCommand = execFileAsync } = options;
   let sampling = Promise.resolve();
   const timer =
-    process.platform === "darwin"
+    platform === "darwin"
       ? setTimeout(() => {
           if (child.exitCode !== null || child.signalCode !== null) return;
           sampling = (async () => {
-            const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
+            const { stdout } = await runCommand("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
               timeout: 2000,
             });
             const processes = [
@@ -55,7 +65,7 @@ export function sampleStalledClose(child, path) {
             ];
             await fs.writeFile(`${path}.processes.json`, `${JSON.stringify(processes, null, 2)}\n`);
             await Promise.all([
-              execFileAsync("/usr/sbin/lsof", ["-nP", "-p", String(child.pid)], {
+              runCommand("/usr/sbin/lsof", ["-nP", "-p", String(child.pid)], {
                 timeout: 5000,
                 maxBuffer: 2 * 1024 * 1024,
               }).then(
@@ -64,7 +74,7 @@ export function sampleStalledClose(child, path) {
               ),
               ...processes.map(async ({ pid }) => {
                 try {
-                  await execFileAsync(
+                  await runCommand(
                     "/usr/bin/sample",
                     [String(pid), "2", "-file", `${path}.${pid}.sample.txt`],
                     // Symbolication can outlive the sampled process on a loaded runner.

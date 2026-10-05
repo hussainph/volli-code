@@ -70,3 +70,57 @@ test("smoke-side breadcrumbs distinguish native exit return from observed child 
   assert.ok(entries.every((entry) => Number.isInteger(entry.at) && entry.pid === process.pid));
   assert.equal(entries.at(-1).code, 0);
 });
+
+test("a failed diagnostic write never prevents the original native exit", async (t) => {
+  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
+  const scratch = await fs.mkdtemp(join(REPO, ".tmp", "shutdown-trace-test-"));
+  t.after(() => fs.rm(scratch, { recursive: true, force: true }));
+  const path = join(scratch, "missing", "trace.jsonl");
+  const errors = [];
+  t.mock.method(console, "error", (message) => errors.push(message));
+  const originalOn = process.on;
+  t.mock.method(process, "on", function (event, listener) {
+    return event === "exit" ? this : originalOn.call(this, event, listener);
+  });
+  let originalExitCalled = false;
+  const electronApp = {
+    on() {},
+    exit(code) {
+      originalExitCalled = true;
+      assert.equal(code, 0);
+      return "returned";
+    },
+  };
+  traceClose(path, "quit-requested");
+  await installShutdownTrace({ evaluate: (fn, arg) => fn({ app: electronApp }, arg) }, path);
+  assert.equal(electronApp.exit(0), "returned");
+  assert.equal(originalExitCalled, true);
+  assert.equal(errors.length, 3);
+});
+
+test("sampling failure and an unwritable trace cannot reject cleanup", async (t) => {
+  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
+  const scratch = await fs.mkdtemp(join(REPO, ".tmp", "shutdown-trace-test-"));
+  t.after(() => fs.rm(scratch, { recursive: true, force: true }));
+  let trigger;
+  t.mock.method(globalThis, "setTimeout", (fn) => {
+    trigger = fn;
+    return 1;
+  });
+  t.mock.method(globalThis, "clearTimeout", () => {});
+  const errors = [];
+  t.mock.method(console, "error", (message) => errors.push(message));
+  const finish = sampleStalledClose(
+    { pid: 42, exitCode: null, signalCode: null },
+    join(scratch, "missing", "trace.jsonl"),
+    {
+      platform: "darwin",
+      runCommand: async () => {
+        throw new Error("process inspection failed");
+      },
+    },
+  );
+  trigger();
+  await assert.doesNotReject(finish());
+  assert.equal(errors.length, 1);
+});

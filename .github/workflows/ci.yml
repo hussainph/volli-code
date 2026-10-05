@@ -741,16 +741,6 @@ jobs:
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
 
-      - name: Investigate VC-635 quit-window lifecycle (non-gating, temporary)
-        if: github.head_ref == 'volli/VC-635-ci-flake-database-newer-version-smoke-launch-did' && matrix.shard == 2
-        continue-on-error: true
-        env:
-          VOLLI_SMOKE_DIR: ${{ runner.temp }}/smoke-results/quit-window-vc635
-        run: |
-          mkdir -p "$VOLLI_SMOKE_DIR"
-          trap 'rm -rf "$VOLLI_SMOKE_DIR/ud/.volli-quiet-app"' EXIT
-          env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/quit-window-lifecycle-smoke.mjs 2>&1 | tee "$VOLLI_SMOKE_DIR/probe.log"
-
       - name: Upload shard smoke attempts and native-window evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

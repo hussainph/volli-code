@@ -102,11 +102,38 @@ work. It preserves BLOCK_SHUTDOWN and is not proof of a fix for a running fsync.
 
 Temporary product instrumentation is removed. Smoke-only breadcrumbs/native
 samples are retained only on failure, under the existing CI artifact directory;
-local tracing is opt-in via `VOLLI_NEWER_DB_TRACE=1`. The built smoke verifies the
+local tracing is opt-in via `VOLLI_NEWER_DB_TRACE=1`. Diagnostic I/O is
+best-effort and cannot prevent the original native exit or reject successful
+cleanup; failure-injection tests cover both. The built smoke verifies the
 feature switch and absence of the observer DB/journal at launch and after clean
-exit, in all three profiles. Requested eight-run CI pass streak is pending.
+exit, in all three profiles.
+
+Initial candidate `67802aa7a`, [run 37249244261](https://github.com/hussainph/volli-code/actions/runs/37249244261),
+passed the full CI gate and newer-database on its first attempt (three graceful
+code-zero closes, no shard-2 FLAKY results). Local build, desktop typecheck,
+`vp check`, 32 product tests and 31 helper tests passed; the new feature policy has
+100% focused coverage. Local newer-database and recovery journeys passed all
+8 and 11 checks, respectively, with 10/10 graceful exits. A second local
+newer-database journey with final smoke-only tracing also passed (3/3 closes).
+Final unchanged-code CI pass-streak results are recorded in PR #748 and VC-635;
+this document records the diagnostic and initial candidate observations.
+
+Candidate CI artifacts also show **all 17 gating smokes that call
+`closeAppBounded` passed on their first attempt**, including database recovery,
+browser recovery/trace, the eight Automation journeys, provisional chat,
+settings search, split view, ticket-open IPC and contrast. The helper's 27 tests
+still hold child ownership, deadlines, natural-exit races and signal escalation.
+Five other callers remain outside the gate under unchanged existing policy:
+credentialed Pi project/ticket chat, legacy settings-fill/global-artifacts, and
+the hour-long reflow research matrix. Those were not run and are not claimed green.
 
 `quit-window-lifecycle-smoke.mjs` is legacy denied for a **second launch that never
 reports a ready window**, not part of the measured nightly quarantine. It shares
 the product shutdown path, but bypasses Playwright context-close for its normal
-quit and its documented readiness failure has not been shown to share this cause.
+quit. A temporary non-gating observation in candidate run 37249244261 passed
+checks 1–4: dirty editor, Cancel preserving app/socket, then accepted Discard
+exiting code zero with its socket removed. The second launch returned a ready
+window, then failed **seeded project selection** (`waitForSeededProjectReady`,
+line 619), before check 5. This remaining relaunch/UI-readiness failure is not
+fixed by suppressing observer storage and has not been shown to share VC-635's
+native-close cause. The temporary observation hook is removed.

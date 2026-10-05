@@ -170,7 +170,9 @@ async function closeRun(run) {
   } finally {
     await finishSampling();
     if (run.tracePath && (!exit || exit.exit.code !== 0 || exit.closeFailures.length > 0))
-      console.error(`SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8")}`);
+      console.error(
+        `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
+      );
   }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
