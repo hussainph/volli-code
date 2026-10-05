@@ -26,10 +26,10 @@ VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 Writes over the socket need an authenticated Session, or the person: an
 operator at the host's shell holding a token root issued
 ([Operators](#operators)). That is how a fresh host's board gets its first
-project (`volli project add`). Migration rollback backups and backup retention
-use the shared database open path; backup bundles remain explicit operations,
-not a periodic scheduler. Retention and automatic-reap enablement for hostd
-lands separately from the lifecycle restructuring (VC-627).
+project (`volli project add`). The host lifecycle starts retention and automatic
+process reap at readiness and joins them at stop (VC-627). Migration rollback
+backups and backup retention use the shared database open path; backup bundles
+remain explicit operations, not a periodic scheduler.
 
 ## Ports
 
