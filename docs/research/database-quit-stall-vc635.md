@@ -53,7 +53,7 @@ Pinned source:
 - [ThreadPool shutdown barrier](https://github.com/chromium/chromium/blob/152.0.7977.54/base/task/thread_pool/task_tracker.cc)
 - [VC-536 evidence and limits](smoke-flakes-2026-10.md#vc-536-database-recovery-native-shutdown-investigation)
 
-## Root cause and fix
+## First identified writer and partial mitigation
 
 UUID-matched disassembly of failed PID 7033 maps its background task to:
 
@@ -79,7 +79,7 @@ experimental/origin-trial controlled. Thus a fresh app boot with no observer
 policy starts an unnecessary durable write that native shutdown must wait for.
 Closing the store cannot leapfrog its initialization on the same sequenced runner.
 
-The fix disables `DeclarativePerformanceObserver` before any partition exists,
+The current partial mitigation disables `DeclarativePerformanceObserver` before any partition exists,
 merging rather than replacing existing `disable-features`. It applies equally to
 packaged/development apps and smokes. Volli has no integration with this
 experimental HTTP performance-reporting feature. Third-party pages in its browser
@@ -115,8 +115,54 @@ code-zero closes, no shard-2 FLAKY results). Local build, desktop typecheck,
 100% focused coverage. Local newer-database and recovery journeys passed all
 8 and 11 checks, respectively, with 10/10 graceful exits. A second local
 newer-database journey with final smoke-only tracing also passed (3/3 closes).
-Final unchanged-code CI pass-streak results are recorded in PR #748 and VC-635;
-this document records the diagnostic and initial candidate observations.
+The candidate is **not sufficient**. Final-head CI run 37249888674 on
+`331a5a547` failed its first workflow attempt; its diagnostic rerun is job-green
+only because of a retry (`FLAKY`). The clean pass streak is **0/8**. The first
+workflow attempt's second smoke attempt had three graceful exits but failed a
+compatible-page screenshot timeout, a separate uncorrected failure.
+
+## Remaining writer: Bounce Tracking Mitigation (DIPS)
+
+Run 37249888674 attempt 1, incompatible PID 7192, verified no observer DB but
+still needed SIGTERM after 20 seconds. Native-exit returned at +133ms. Matching
+the same framework UUID at this sample's own load base (`0x10ed84000`) maps all
+979 main samples to `TaskTracker::CompleteShutdown` and the background worker to:
+
+```text
+BtmStorage → BtmDatabase constructor → Init → InitImpl → OpenDatabase
+  → sql::Database::OpenInternal → PRAGMA journal_mode=WAL
+  → sqlite3PagerCommitPhaseOne → syncJournal → unixSync
+```
+
+The journal sync call is the same `0x1ade068` as the observer-store failure,
+but the caller is a different store. All 979 worker samples are within that
+sync. Only 29 samples are inside `fsync`; the remaining 950 stop at instruction
+`0x2522028` after successful fsync, before opening the parent directory for its
+sync. This is **not proof of 20 seconds blocked in a single fsync**. A thread
+stopped at a user instruction could be unscheduled, kernel-held or faulting;
+`sample` alone cannot distinguish them. Scoped lsof shows only `DIPS` (zero
+bytes) and `DIPS-journal` (512 bytes), with no `volli.db` or observer store. The
+archived DIPS header later contains a WAL-mode page, showing some progress
+before the forced cleanup.
+
+The diagnostic workflow rerun (attempt 2) first fails seed PID 7757: native-exit
+returned at +2.201s, SIGTERM at +20.047s, all 968 worker samples in the same
+BTM database initializer's SQLite sync. DIPS/DIPS-journal are
+again the only open browser-profile databases; its fresh-profile retry passes.
+
+Chromium's BTM runner is `BEST_EFFORT`, `PREFER_BACKGROUND`, default
+`SKIP_ON_SHUTDOWN`. An already-running SKIP task still blocks shutdown. On macOS
+this background thread type maps to `QOS_CLASS_BACKGROUND`. Low-priority I/O,
+App Nap and loaded-VM scheduling remain hypotheses, not captured causes. New
+failure-only CI stackshots are intended to distinguish those explanations.
+Disabling DIPS globally would remove a browser privacy feature and is **not
+applied**. App SQLite durability, native shutdown and the grace stay unchanged.
+
+Pinned sources:
+- [BTM service and task traits](https://github.com/chromium/chromium/blob/152.0.7977.54/content/browser/btm/btm_service_impl.cc)
+- [BTM database initialization](https://github.com/chromium/chromium/blob/152.0.7977.54/content/browser/btm/btm_database.cc)
+- [macOS thread-type mapping](https://github.com/chromium/chromium/blob/152.0.7977.54/base/threading/platform_thread_apple.mm)
+- [Running SKIP tasks block shutdown](https://github.com/chromium/chromium/blob/152.0.7977.54/base/task/thread_pool/task_tracker.cc)
 
 Candidate CI artifacts also show **all 17 gating smokes that call
 `closeAppBounded` passed on their first attempt**, including database recovery,

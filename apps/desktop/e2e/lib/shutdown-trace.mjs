@@ -49,7 +49,11 @@ export async function installShutdownTrace(app, path) {
 
 export function sampleStalledClose(child, path, options = {}) {
   if (!path) return async () => {};
-  const { platform = process.platform, runCommand = execFileAsync } = options;
+  const {
+    platform = process.platform,
+    runCommand = execFileAsync,
+    captureScheduling = process.env.CI === "true",
+  } = options;
   let sampling = Promise.resolve();
   const timer =
     platform === "darwin"
@@ -65,6 +69,28 @@ export function sampleStalledClose(child, path, options = {}) {
             ];
             await fs.writeFile(`${path}.processes.json`, `${JSON.stringify(processes, null, 2)}\n`);
             await Promise.all([
+              // CI-only scheduling evidence. Keep the report scoped to this PID;
+              // never prompt for privilege or modify scheduling/flush policies.
+              captureScheduling
+                ? runCommand(
+                    "/usr/bin/sudo",
+                    [
+                      "-n",
+                      "/usr/sbin/spindump",
+                      String(child.pid),
+                      "2",
+                      "10",
+                      "-onlyTarget",
+                      "-noBinary",
+                      "-noFile",
+                      "-stdout",
+                    ],
+                    { timeout: 60000, maxBuffer: 2 * 1024 * 1024 },
+                  ).then(
+                    ({ stdout: stackshot }) => fs.writeFile(`${path}.spindump.txt`, stackshot),
+                    (error) => traceClose(path, "spindump-failed", { error: error.message }),
+                  )
+                : Promise.resolve(),
               runCommand("/usr/sbin/lsof", ["-nP", "-p", String(child.pid)], {
                 timeout: 5000,
                 maxBuffer: 2 * 1024 * 1024,
