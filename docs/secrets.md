@@ -113,6 +113,11 @@ adapter**, `fileSecretKey({ path: secretKeyFilePath(dataDir) })`, from
   by another adapter. The keychain adapter answers a `VSF1` store with its
   usual "Could not decrypt secret storage."
 
+The operator token (VC-623) is not a Session secret and is not kept here: the
+host stores only its verifier, in a root-owned file outside the data
+directory, and the plaintext lives in the operator's own home
+(`apps/hostd/README.md`, "Operators").
+
 **Threat model.** The key file protects stored secrets from other users on the
 machine: both files are 0600, and a key file that others can read is refused.
 It also protects them from anyone holding a copy of the data directory without
@@ -141,6 +146,10 @@ the profile swap moves. Its report carries `credentials`: `carried: false`, the
 kinds to enter again (Session secrets, MCP server values and sign-ins, web
 search keys, model provider sign-ins), and one sentence a restore surface can
 show.
+
+Migration safety copies are different from bundles. Each `volli.db.backup-v<N>`
+is a whole copy of the database, so it carries the `secrets` table and the web
+search keys in it as plain text. Moving those keys out of `volli.db` is VC-631.
 
 Copying a data directory by hand is different. A keychain-sealed
 `session-secrets.enc` carried onto a headless host is refused as sealed by the

@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
-import type { SecretRequestMetadata, SecretScope } from "@volli/shared";
-import type { SecretsResult } from "../../ipc/secrets";
-import { isSecretName, type SecretStore, type SecretWaitPublisher } from "@volli/host-core/secrets";
-export type { SecretWaitPublisher } from "@volli/host-core/secrets";
+import type { SecretMetadata, SecretRequestMetadata, SecretScope } from "@volli/shared";
+import { isSecretName, type SecretStore, type SecretWaitPublisher } from "./index";
+export type { SecretWaitPublisher } from "./index";
+
+/**
+ * The person-only credential door's answer, moved with the service from
+ * `apps/desktop/src/ipc/secrets.ts`; the desktop IPC contract re-exports it.
+ */
+export type SecretsResult =
+  | { ok: true; requests: readonly SecretRequestMetadata[]; secrets: readonly SecretMetadata[] }
+  | { ok: false; error: string };
 
 interface SecretOwner {
   sessionId: string;

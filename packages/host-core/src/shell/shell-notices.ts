@@ -45,7 +45,7 @@ import {
   type HostNotice,
   type HostNoticeDeliveryPorts,
   type NoticeDelivery,
-} from "@volli/host-core/session-runtime/host-notice-delivery";
+} from "../session-runtime/host-notice-delivery";
 import type { BackgroundShellNotice } from "./background-shell-host";
 
 function bytesOf(value: string): number {

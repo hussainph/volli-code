@@ -196,8 +196,13 @@ function compactOptionsUsage(entry: VerbEntry): string {
 }
 
 function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
+  const label = `<${entry.positionalLabel ?? "id"}>`;
   const id =
-    entry.positionalId === undefined ? "" : entry.positionalId === "optional" ? " [<id>]" : " <id>";
+    entry.positionalId === undefined
+      ? ""
+      : entry.positionalId === "optional"
+        ? ` [${label}]`
+        : ` ${label}`;
   const opts = mode === "reference" ? fullOptionsUsage(entry) : compactOptionsUsage(entry);
   const extra = entry.extraUsage === undefined ? "" : ` ${entry.extraUsage}`;
   const prefix = mode === "reference" ? "" : "volli ";

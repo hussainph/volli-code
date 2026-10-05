@@ -41,6 +41,20 @@ describe("createSuspendClock", () => {
     }
   });
 
+  it("releases only its own announcements when the runtime closes", () => {
+    const power = new EventEmitter();
+    const other = () => power.eventNames();
+    power.on("resume", other);
+    const clock = createSuspendClock(power);
+    expect(power.listenerCount("resume")).toBe(2);
+    clock.close();
+    clock.close();
+    expect(power.listeners("resume")).toEqual([other]);
+    for (const event of ["suspend", "unlock-screen", "user-did-become-active"]) {
+      expect(power.listenerCount(event)).toBe(0);
+    }
+  });
+
   it("defaults to the wall clock", () => {
     const power = new EventEmitter();
     const clock = createSuspendClock(power);

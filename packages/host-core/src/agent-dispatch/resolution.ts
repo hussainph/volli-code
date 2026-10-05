@@ -300,7 +300,50 @@ export function attributedActor(
  */
 export type DoorActor =
   | { readonly kind: "session"; readonly sessionId: string }
+  /**
+   * The person, proven by a hostd-issued operator token (VC-623). `login` is
+   * the account the token was issued for — audit evidence, never authority:
+   * what the caller may do is the `user` policy actor's, and the write is
+   * attributed to the person, exactly as a UI write is.
+   */
+  | { readonly kind: "operator"; readonly login: string }
   | { readonly kind: "unauthenticated" };
+
+/** Who a verified operator token was issued for. */
+export interface OperatorIdentity {
+  readonly login: string;
+}
+
+/**
+ * Verifies an operator token, answering who it was issued for or `null`.
+ * Called only with a non-empty string; see {@link doorActor} for when.
+ */
+export type VerifyOperatorToken = (token: string) => OperatorIdentity | null;
+
+/**
+ * Whether the request carries any Session evidence at all — a token, valid or
+ * not, or a `VOLLI_SESSION` claim.
+ *
+ * Any of it means the operator token is never read (VC-623). That is what keeps
+ * "a request with no token, or with a Session token, is judged exactly as
+ * today" literally true: such a request takes the pre-operator path below, the
+ * only one that existed before. It also means a Session cannot turn into a
+ * person by adding a second credential to its own environment; the CLI sends
+ * none beside a Session's, and this door would ignore one anyway.
+ */
+function carriesSessionEvidence(request: AgentRequest): boolean {
+  return request.ctx.env.token !== undefined || request.ctx.env.session !== undefined;
+}
+
+/**
+ * The operator token this request presents for the door to judge, or `null`
+ * when it presents none or carries Session evidence that outranks it.
+ */
+export function presentedOperatorToken(request: AgentRequest): string | null {
+  if (carriesSessionEvidence(request)) return null;
+  const token = request.ctx.env.operatorToken;
+  return typeof token === "string" && token.length > 0 ? token : null;
+}
 
 /**
  * Who the caller IS at the door — authenticated, or not (VC-163).
@@ -311,8 +354,11 @@ export type DoorActor =
  * the system, granted on no evidence whatsoever. Every process running as the
  * signed-in user reached the socket, and every one of them was the user.
  *
- * Now the token decides, and there are exactly three outcomes — the third of
- * them {@link requestActor}'s, since only attribution needs the Session:
+ * Now the token decides. A hostd-issued operator token (VC-623) is a fourth
+ * outcome, reached only by a request carrying no Session evidence at all, and
+ * it proves the person; see {@link presentedOperatorToken}. Otherwise there are
+ * exactly three outcomes — the third of them {@link requestActor}'s, since only
+ * attribution needs the Session:
  *
  * - A token this launch minted, naming the Session the caller claims → the
  *   authenticated session actor.
@@ -334,7 +380,19 @@ export type DoorActor =
 export function doorActor(
   request: AgentRequest,
   verifyToken: (token: string | undefined) => string | null,
+  verifyOperatorToken: VerifyOperatorToken = () => null,
 ): DoorActor {
+  // The operator rung (VC-623) is reached only by a request with no Session
+  // evidence whatsoever, so everything below it is the door exactly as VC-163
+  // left it. A token this host did not issue, or has revoked, is the
+  // unauthenticated actor — never a Session, and never a person.
+  const operatorToken = presentedOperatorToken(request);
+  if (operatorToken !== null) {
+    const operator = verifyOperatorToken(operatorToken);
+    return operator === null
+      ? { kind: "unauthenticated" }
+      : { kind: "operator", login: operator.login };
+  }
   const authenticated = verifyToken(request.ctx.env.token);
   if (authenticated === null) return { kind: "unauthenticated" };
   // A token proves WHICH Session holds it, so a claim that disagrees with it is
@@ -365,6 +423,9 @@ export function requestActor(
   envSession: EnvSessionIdentity | null,
 ): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
   if (door.kind === "unauthenticated") return { ok: true, actor: { kind: "unauthenticated" } };
+  // The person, as a UI write is attributed (VC-623): the operator token proved
+  // it, and VC-92 §6.3's amendment makes that proof — never absence.
+  if (door.kind === "operator") return { ok: true, actor: { kind: "user" } };
   return envSession
     ? {
         ok: true,

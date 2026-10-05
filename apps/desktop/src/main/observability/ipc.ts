@@ -25,7 +25,7 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import type { AgentObservability } from "./settings";
+import type { AgentObservability } from "@volli/host-core/observability/settings";
 
 const answer = (settings: AgentObservabilityView): AgentObservabilityResult => ({
   ok: true,

@@ -54,7 +54,7 @@ const { attempt, summarize } = createRunner();
 // know which shell to ask).
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-/** The one boot-time report from main/login-path-adoption.ts. */
+/** The one boot-time report from @volli/host-core's login-path-adoption.ts. */
 const LOGIN_PATH_MARKER = /\[volli\] PATH (?:adopted from login shell \([1-9]\d* entries\)|kept)/;
 
 const WAIT_TIMEOUT_MS = 12_000;

@@ -31,8 +31,8 @@ import {
   type ObservabilitySink,
 } from "@volli/shared";
 
-import { setAppState } from "@volli/host-core/db/app-state-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { setAppState } from "../db/app-state-repo";
+import { prepared } from "../db/prepared";
 import { OtlpObservabilityExporter, type OtlpExporterOptions } from "./otlp";
 import { QueuedObservabilitySink, type ObservabilityExporter } from "./sink";
 
