@@ -39,6 +39,8 @@ import {
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
+import { sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
+
 const NEWER_TITLE = "This database was created by a newer version of Volli";
 const DAMAGED_TITLE = "Volli couldn't load its data";
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
@@ -106,19 +108,33 @@ async function fixture(name) {
       VOLLI_SKIP_CLOSE_CONFIRM: "1",
       VOLLI_SMOKE_BROWSER_HOST: "0",
       VOLLI_BROWSER_PROBE: "0",
+      VOLLI_SHUTDOWN_TRACE_FILE: join(scratch, `${name}-shutdown.jsonl`),
     },
   };
 }
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, child: app.process(), label, stdout: "", stderr: "", page: null };
+  const run = {
+    app,
+    child: app.process(),
+    label,
+    stdout: "",
+    stderr: "",
+    page: null,
+    tracePath: config.extraEnv.VOLLI_SHUTDOWN_TRACE_FILE,
+  };
+  run.child.once("exit", (code, signal) =>
+    traceClose(run.tracePath, "child-exit", { code, signal }),
+  );
   runs.add(run);
   run.child.stdout?.on("data", (chunk) => {
     run.stdout = `${run.stdout}${chunk}`.slice(-48000);
   });
   run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-48000);
+    if (run.stderr.includes("Waiting for the debugger to disconnect"))
+      traceClose(run.tracePath, "debugger-disconnect-wait");
   });
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
@@ -133,7 +149,16 @@ async function openApp(config, label) {
 
 async function closeRun(run) {
   // Degraded and healthy apps both get the app's own shutdown drain window.
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  traceClose(run.tracePath, "quit-requested");
+  const finishSampling = sampleStalledClose(run.child, run.tracePath);
+  let exit;
+  try {
+    exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+    traceClose(run.tracePath, "close-result", exit);
+  } finally {
+    await finishSampling();
+    console.log(`SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8")}`);
+  }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
   assert.ok(
@@ -391,8 +416,9 @@ try {
   );
   for (const path of [join(APP_DIR, "dist-electron/main.cjs"), join(APP_DIR, "dist/index.html")])
     await fs.access(path);
-  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
-  scratch = await fs.mkdtemp(join(REPO, ".tmp", "newer-db-"));
+  const evidenceRoot = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".tmp");
+  await fs.mkdir(evidenceRoot, { recursive: true });
+  scratch = await fs.mkdtemp(join(evidenceRoot, "newer-db-"));
   console.log(`Evidence: ${scratch}`);
   const head = await schemaHead();
   // Derived, never pinned: always above whatever head this build has.

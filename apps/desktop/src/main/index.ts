@@ -82,6 +82,7 @@ import {
   unsavedDocumentNames,
   updateInstallQuitInFlight,
 } from "./quit-gate";
+import { registerShutdownTrace } from "./shutdown-trace";
 import { isInternalNavigationTarget } from "./navigation";
 import {
   applyQuietAppPolicy,
@@ -344,6 +345,7 @@ protocol.registerSchemesAsPrivileged([
 // packaged launches instead of silently forking data — see the "known and
 // accepted limitation" doc comment atop the old (pre-SQLite)
 // stores/projects.ts for the localStorage-origin version of this same split.
+registerShutdownTrace(app);
 app.setName("Volli Code");
 
 // Capture smoke boot output before any readiness work, in built AND packaged
