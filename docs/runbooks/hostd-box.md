@@ -1,19 +1,42 @@
 # Runbook: a Volli host on an Ubuntu box (M1)
 
 This is how to stand up `volli-hostd` on a fresh Ubuntu server and run the M1
-demo over SSH with the `volli` CLI:
+demo over SSH with the `volli` CLI: register a small test repository, create a
+Ticket, start a Session with a real model, disconnect while the agent works,
+and come back to a finished Session whose branch was pushed.
 
-1. Register a small test repository.
-2. Create a Ticket.
-3. Start a Session with a real model.
-4. Disconnect while the agent works.
-5. Come back to a finished Session whose branch was pushed.
+## What to have ready
+
+- **The box:** a fresh Hetzner CX (or any) server, Ubuntu 24.04 x86-64, that
+  you can SSH into as `root` with your key. 2 GB of free disk is plenty.
+- **Your Mac:** `ssh` and `scp`, an SSH alias `box` for the box (step 0), and
+  `gh` signed in (`gh auth status`) to an account that can read
+  `hussainph/volli-code`.
+- **The hostd build:** the id of a green `CI` run, from the last 14 days,
+  whose code contains PR #760 (the first build in which an agent's own
+  `volli` reaches its hostd). Step 2 shows how to find it.
+- **A throwaway GitHub repository** you are an admin of. It must not be a
+  Mac-only project and must have at least one commit (tick "Add a README" when
+  you create it). The agent pushes one branch to it.
+- **Push credentials** for that repository: either admin rights on it, so you
+  can add the box's **deploy key with write access** (made in step 6), or a
+  **fine-grained token** limited to that one repository with Contents: read and
+  write.
+- **A model sign-in:** an Anthropic (or other provider) **API key**, or, for an
+  OAuth sign-in such as a Claude Pro/Max account, Node 22.19 or later with
+  `npx` and a browser on your Mac (step 5). Not a copy of your Mac's
+  `auth.json`.
+- **An email address for the agent's commits** (step 6), for example
+  `you+volli-box@example.com`.
+- **About 45 minutes**, and VC-541 open to record the result.
+
+Commands marked `mac$` run on your own machine, `root@box#` as `root` on the
+box (step 0 only), and `box$` on the box as your own login (here `alice`) with
+`sudo` where root is needed. Replace `<…>` placeholders, angle brackets
+included.
 
 It is written for a Hetzner CX box (x86-64, 4 vCPU, 8 GB) on Ubuntu 24.04,
 and it works the same on any systemd distribution with glibc 2.36 or later.
-Commands marked `box$` run on the box as your own login (here `alice`); `sudo`
-is shown where root is needed. Commands marked `mac$` run on your own machine.
-
 Desktop is not involved. Nothing here touches your Mac's Volli profile, its
 Keychain items or its `~/.pi/agent/auth.json`.
 
@@ -21,41 +44,89 @@ The reference for every hostd behavior named here is
 [`apps/hostd/README.md`](../../apps/hostd/README.md). This page is the order to
 do things in.
 
-## What you need ready
+## 0. Your Mac, and a login on the box
 
-| What                    | Detail                                                                                                                                                                                    |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The box                 | Ubuntu 24.04 x86-64, SSH as a login with `sudo`. 2 GB free disk is plenty.                                                                                                                |
-| The hostd artifact      | `volli-hostd-<version>-linux-x64.tar.gz` and its `.sha256`: the `volli-hostd-linux-x64` artifact of a green CI run on `main` (or a PR you want to try).                                    |
-| A small test repository | On GitHub (or any git host), **not** a Mac-only project: a README and a source file or two is enough. The agent will push one branch to it.                                                 |
-| Push credentials        | A **deploy key with write access** to that one repository (made on the box below), or a fine-grained token limited to it with Contents: read and write.                                    |
-| A model sign-in         | An API key for one provider (simplest), or an OAuth sign-in made **for the box** (see [Model sign-in](#5-sign-in-to-a-model-provider)). Not a copy of your Mac's `auth.json`.               |
+A new Hetzner server lets in only `root`, with the SSH key you chose when you
+created it. Make your own login with `sudo`, and give it the same key:
+
+```sh
+mac$ ssh root@<box-ip>
+root@box# adduser alice                   # choose a password (sudo asks for it); Enter through the rest
+root@box# usermod -aG sudo alice
+root@box# install -d -m 700 -o alice -g alice /home/alice/.ssh
+root@box# install -m 600 -o alice -g alice /root/.ssh/authorized_keys /home/alice/.ssh/
+root@box# exit
+```
+
+On your Mac, add an alias so `ssh box` and `scp … box:` reach that login. Add
+to `~/.ssh/config`:
+
+```text
+Host box
+  HostName <box-ip>
+  User alice
+```
+
+Then check both, and that `gh` is signed in:
+
+```sh
+mac$ ssh -t box 'id && sudo -v && echo sudo works'     # asks alice's password once
+mac$ gh auth status
+```
+
+Every other `box$` command is typed in an `ssh box` session.
 
 ## 1. Prepare the box
 
 ```sh
-box$ sudo apt-get update && sudo apt-get install -y git jq ca-certificates
+box$ sudo apt-get update && sudo apt-get install -y git jq ca-certificates openssh-client openssl sqlite3
 box$ ldd --version | head -1        # glibc 2.39 on 24.04; the artifact needs 2.36+
 ```
 
 hostd brings its own Node; do not install one for it. `git` is what Sessions
-commit and push with, and `jq` only reads the logs.
+commit and push with (and `openssh-client` is how they push over SSH),
+`openssl` makes the optional secret key in step 4, `jq` reads the logs and
+JSON answers, and `sqlite3` reads the done signal in step 8.
 
 **Optional: Tailscale, for SSH only.** If you would rather not expose port 22,
 install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`, then
-`sudo tailscale up --ssh`) and SSH to the box's tailnet name. hostd listens on
-nothing but a Unix socket, so there is no port to open for it. Attaching the
-desktop app to this host is M2; in M1 you drive it over SSH.
+`sudo tailscale up --ssh`) and point the `box` alias's `HostName` at the box's
+tailnet name. hostd listens on nothing but a Unix socket, so there is no port
+to open for it. Attaching the desktop app to this host is M2; in M1 you drive
+it over SSH.
 
 ## 2. Install the artifact
 
-Download it from the CI run (on your Mac, with `gh`), copy it over and check
-it:
+**Pick the build.** Use the newest green `CI` run on `main` whose code
+contains PR #760, or before #760 merges, that PR's newest green run:
 
 ```sh
-mac$ gh run download <run-id> -R hussainph/volli-code -n volli-hostd-linux-x64 -D hostd-artifact
-mac$ scp hostd-artifact/volli-hostd-* box:
-box$ sha256sum -c volli-hostd-*-linux-x64.tar.gz.sha256        # must print: OK
+mac$ gh pr view 760 -R hussainph/volli-code --json state,mergedAt
+mac$ gh run list -R hussainph/volli-code -w CI -b main -e push -s success -L 5 \
+       --json databaseId,headSha,createdAt,displayTitle            # once #760 is merged
+mac$ gh run list -R hussainph/volli-code -w CI \
+       -b volli/VC-563-volli-cloud-headless-end-to-end-smoke-and-the-do -s success -L 1 \
+       --json databaseId,headSha,createdAt                         # before it is
+mac$ RUN=<databaseId>
+```
+
+A main run qualifies when its `createdAt` is after #760's `mergedAt`. The
+artifact is kept for 14 days; for an older run, take a newer one.
+
+**Download it into a fresh folder** (named for the run, so archives of two
+versions never sit side by side), copy the folder over, and check it:
+
+```sh
+mac$ gh run download "$RUN" -R hussainph/volli-code -n volli-hostd-linux-x64 -D ~/volli-hostd-"$RUN"
+mac$ ls ~/volli-hostd-"$RUN"     # exactly one volli-hostd-<version>-linux-x64.tar.gz and its .sha256
+mac$ scp -r ~/volli-hostd-"$RUN" box:
+mac$ echo "$RUN"                 # you need it on the box
+```
+
+```sh
+box$ cd ~/volli-hostd-<run-id>
+box$ A=$(ls volli-hostd-*-linux-x64.tar.gz) && test -f "$A" && echo "$A"   # one file name, or stop
+box$ sha256sum -c "$A.sha256"        # must print: <file>: OK
 ```
 
 Install it root-owned. `--no-same-owner` matters: the archive records the CI
@@ -63,12 +134,12 @@ builder's uid, and without it whoever holds that uid on the box could rewrite
 `bin/node`.
 
 ```sh
-box$ sudo mkdir -p /opt/volli-hostd
-box$ sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd \
-       --strip-components=1 --no-same-owner
-box$ sudo /opt/volli-hostd/bin/node /opt/volli-hostd/lib/probe-natives.cjs   # natives load
+box$ sudo mkdir /opt/volli-hostd
+box$ sudo tar -xzf "$A" -C /opt/volli-hostd --strip-components=1 --no-same-owner
+box$ sudo /opt/volli-hostd/bin/node /opt/volli-hostd/lib/probe-natives.cjs   # {"ok":true,…}
 box$ sudo ln -sf /opt/volli-hostd/bin/volli /opt/volli-hostd/bin/volli-hostd /usr/local/bin/
 box$ volli-hostd --version
+box$ cd
 ```
 
 ## 3. The service user, the `volli` group and you
@@ -82,8 +153,9 @@ box$ sudo chmod 700 /var/lib/volli-hostd
 box$ sudo usermod -aG volli alice          # you: reach the socket
 ```
 
-Log out and back in so the group applies (`id` lists `volli`). The group gives
-you the socket and nothing in the data directory, which stays `0700`.
+Log out (`exit`) and `ssh box` again so the group applies: `id` must list
+`volli`. The group gives you the socket and nothing in the data directory,
+which stays `0700`.
 
 **What lives where**, because `HOME` is the data directory:
 
@@ -93,7 +165,8 @@ you the socket and nothing in the data directory, which stays `0700`.
 | `/var/lib/volli-hostd/pi-sessions/`        | Session transcripts.                                                 |
 | `/var/lib/volli-hostd/hostd-status.json`   | Health, read by `volli-hostd status`.                                |
 | `/var/lib/volli-hostd/.pi/agent/auth.json` | The model sign-in (Pi's, step 5).                                    |
-| `/var/lib/volli-hostd/.ssh/`               | The push key (step 6).                                               |
+| `/var/lib/volli-hostd/.ssh/`               | The push key, if you use a deploy key (step 6).                      |
+| `/var/lib/volli-hostd/.git-credentials`    | The push token, if you use one instead (step 6).                     |
 | `/var/lib/volli-hostd/.volli/worktrees/`   | Ticket worktrees: `<repo>-<id>/<TICKET>-<slug>`, one branch each.    |
 | `/srv/volli/<repo>`                        | The project checkouts you register (step 6).                         |
 | `/run/volli-hostd.sock`                    | The agent socket, bound by systemd as root (`root:volli 0660`).      |
@@ -105,9 +178,9 @@ twice over. **So do not register a project under your own home directory**:
 hostd would answer that the folder does not exist. Keep checkouts in
 `/srv/volli`.
 
-A copy of `/var/lib/volli-hostd` carries the model sign-in and the push key,
-and the secret key too if it is at its default path (step 4). Never sync it
-anywhere less trusted than the box itself.
+A copy of `/var/lib/volli-hostd` carries the model sign-in and the push
+credential, and the secret key too if it is at its default path (step 4).
+Never sync it anywhere less trusted than the box itself.
 
 ## 4. The systemd units, and the secret key
 
@@ -146,12 +219,13 @@ Start it:
 ```sh
 box$ sudo systemctl daemon-reload
 box$ sudo systemctl enable --now volli-hostd.socket volli-hostd
-box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq '{verdict, state: .status.state, capabilities: .status.capabilities, credentials: .status.credentials}'
+box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq '{verdict, detail, state: .status.state, capabilities: .status.capabilities, credentials: .status.credentials}'
 ```
 
 Success is `"verdict": "serving"` with `board`, `sessions` and `automations`
 `available` (terminals and browser are `unavailable` in M1), and credentials
-`empty` (or `ready`).
+`empty` (or `ready`). `"verdict": "not-serving"` with `"detail": "starting"` only
+means it is still booting: run it again a few seconds later.
 
 ## 5. Sign in to a model provider
 
@@ -160,78 +234,129 @@ Sessions run on Pi, which reads its sign-ins from
 `/var/lib/volli-hostd/.pi/agent/auth.json`. It is separate from Volli's sealed
 secrets, and it must belong to `volli` and be private to it.
 
-**An API key (simplest).** For Anthropic:
+**An API key (simplest).** For Anthropic, paste the key at the prompt (it is
+not echoed and stays out of your shell history):
 
 ```sh
 box$ sudo -u volli install -d -m 700 /var/lib/volli-hostd/.pi /var/lib/volli-hostd/.pi/agent
-box$ sudo -u volli sh -c 'umask 077; cat > /var/lib/volli-hostd/.pi/agent/auth.json' <<'EOF'
-{ "anthropic": { "type": "api_key", "key": "sk-ant-..." } }
-EOF
+box$ sudo -u volli bash -c 'umask 077; IFS= read -rsp "API key: " k; echo; printf "{ \"anthropic\": { \"type\": \"api_key\", \"key\": \"%s\" } }\n" "$k" > /var/lib/volli-hostd/.pi/agent/auth.json'
+box$ sudo stat -c '%U %a' /var/lib/volli-hostd/.pi/agent/auth.json      # volli 600
 ```
 
-The key is the provider id from `volli model list` (`anthropic`, `openai`, …).
+The top-level name is the provider id from `volli model list` (`anthropic`,
+`openai`, …).
 
 **Or an OAuth sign-in made for the box.** Do not copy your Mac's
 `~/.pi/agent/auth.json`: both machines would then refresh one grant, and the
 first refresh on either logs the other out (your desktop included). Make a
-separate grant instead, on your Mac, in an empty folder:
+separate grant on your Mac with Pi's own login tool. It needs Node 22.19 or
+later and `npx` on the Mac (`node --version`; Homebrew's `brew install node`
+gives both), and it writes `auth.json` into the current folder, so use a new,
+empty one:
 
 ```sh
-mac$ mkdir -m 700 box-login && cd box-login
-mac$ npx -y @earendil-works/pi-ai@1.0.0 login anthropic      # opens a browser; writes ./auth.json
+mac$ node --version                       # v22.19.0 or later
+mac$ mkdir -m 700 ~/box-login && cd ~/box-login
+mac$ (umask 077 && npx -y @earendil-works/pi-ai@1.0.0 login anthropic)
+```
+
+It does not open a browser by itself. It asks, then prints:
+
+1. `Select Anthropic login method:` — type `1` (Browser login) and Enter.
+2. `Open this URL in your browser:` and a long URL — copy it into the Mac's
+   browser and sign in with the account the box should use.
+3. The browser lands on a `localhost` page and the tool, still waiting in the
+   terminal, finishes by itself: `Credentials saved to auth.json`. If it keeps
+   waiting, copy the browser's final address (the `localhost` URL) and paste
+   it at the prompt.
+
+Choose `2` (Copy code login) instead if the browser is on a different machine
+from the terminal: it prints a URL, and after you sign in you paste the code
+the page shows. `npx -y @earendil-works/pi-ai@1.0.0 list` names the other
+providers that sign in this way.
+
+`umask 077` makes `auth.json` `0600` from its first byte. Copy it to the box,
+install it as `volli`'s, and remove both copies:
+
+```sh
+mac$ ls -l auth.json                      # -rw-------
 mac$ scp auth.json box:
 box$ sudo -u volli install -d -m 700 /var/lib/volli-hostd/.pi /var/lib/volli-hostd/.pi/agent
 box$ sudo install -o volli -g volli -m 600 auth.json /var/lib/volli-hostd/.pi/agent/auth.json && shred -u auth.json
-mac$ rm -P auth.json
+mac$ cd && rm -r ~/box-login
 ```
 
-No restart is needed: Pi reads the file when a Session asks. Check it once
-`VOLLI_SOCKET` is set (step 7; reads need only the group):
+No restart is needed: Pi reads the file when a Session asks. You check it in
+step 7, once you can reach the socket.
 
-```sh
-box$ volli model list | head -20        # your provider: "available", with its models
-```
+## 6. Git: credentials first, then the checkout
 
-## 6. Git: the push key and the checkout
-
-The agent commits and pushes as `volli`, with `volli`'s git identity and key.
+The agent commits and pushes as `volli`, with `volli`'s git identity and
+credential. Set the identity and the shared checkout folder:
 
 ```sh
 box$ sudo -u volli -H git config --global user.name "Volli on box"
-box$ sudo -u volli -H git config --global user.email "you+volli-box@example.com"
+box$ sudo -u volli -H git config --global user.email "<you+volli-box@example.com>"
+box$ sudo install -d -o volli -g volli -m 750 /srv/volli
+```
+
+Then give `volli` **one** push credential, **before** cloning: a private
+repository asks for credentials the moment you clone it, and nobody can answer
+a prompt the agent hits. Choose A or B.
+
+### A. A deploy key (SSH)
+
+```sh
 box$ sudo -u volli -H install -d -m 700 /var/lib/volli-hostd/.ssh
 box$ sudo -u volli -H ssh-keygen -t ed25519 -N "" -C "volli@box" -f /var/lib/volli-hostd/.ssh/id_ed25519
 box$ sudo cat /var/lib/volli-hostd/.ssh/id_ed25519.pub
 ```
 
 Add that public key to the test repository as a **deploy key with write
-access** (GitHub: the repository's Settings → Deploy keys → Add, tick "Allow
-write access"). It reaches that one repository and nothing else.
-
-Then clone it, as `volli`, into `/srv/volli`:
+access** (GitHub: the repository's Settings → Deploy keys → Add deploy key,
+tick "Allow write access"). It reaches that one repository and nothing else.
+Then clone over SSH; `accept-new` records GitHub's host key in `volli`'s
+`known_hosts`, so the agent's push later is not stopped by a host-key prompt:
 
 ```sh
-box$ sudo install -d -o volli -g volli -m 750 /srv/volli
 box$ sudo -u volli -H env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" \
        git clone git@github.com:<you>/<test-repo>.git /srv/volli/<test-repo>
-box$ sudo -u volli -H git -C /srv/volli/<test-repo> push --dry-run origin HEAD   # must not ask for anything
 ```
 
-The clone records GitHub's host key in `volli`'s `known_hosts`, so the agent's
-push later is not stopped by a prompt nobody can answer.
+### B. A fine-grained token (HTTPS)
 
-**A fine-grained token instead**, over HTTPS: limit it to this repository with
-Contents read and write, clone `https://github.com/<you>/<test-repo>.git`, and
-store it for `volli` only:
+Make the token on GitHub (Settings → Developer settings → Fine-grained
+tokens): repository access "Only select repositories" with just the test
+repository, and Repository permissions → Contents: Read and write. Store it for
+`volli` only, pasting it at the prompt (not echoed). It is saved in plain text
+in `/var/lib/volli-hostd/.git-credentials` (`0600`, `volli`'s), which is how
+git's `store` helper works; never put a token in a remote URL, where it would
+be printed and copied into every worktree's config:
 
 ```sh
 box$ sudo -u volli -H git config --global credential.helper store
-box$ sudo -u volli -H sh -c 'umask 077; printf "https://x-access-token:%s@github.com\n" "<token>" > ~/.git-credentials'
+box$ sudo -u volli -H bash -c 'umask 077; IFS= read -rsp "GitHub token: " t; echo; printf "https://x-access-token:%s@github.com\n" "$t" > "$HOME/.git-credentials"'
+box$ sudo stat -c '%U %a' /var/lib/volli-hostd/.git-credentials      # volli 600
+box$ sudo -u volli -H env GIT_TERMINAL_PROMPT=0 \
+       git clone https://github.com/<you>/<test-repo>.git /srv/volli/<test-repo>
 ```
 
-Use `sudo -u volli -H git -C /srv/volli/<test-repo> …` whenever you look at the
-checkout yourself: as `alice`, git refuses a repository another user owns
-("dubious ownership").
+### Check it pushes, without a prompt (A or B)
+
+As `volli`, with every prompt turned off, read the remote and then push and
+delete a throwaway branch. All three must succeed without asking anything; a
+read-only key or token fails the second:
+
+```sh
+box$ alias vgit='sudo -u volli -H env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" git -C /srv/volli/<test-repo>'
+box$ vgit ls-remote origin HEAD
+box$ vgit push origin HEAD:refs/heads/volli-preflight
+box$ vgit push origin --delete volli-preflight
+```
+
+Use `sudo -u volli -H git -C /srv/volli/<test-repo> …` (or `vgit`) whenever
+you look at the checkout yourself: as `alice`, git refuses a repository
+another user owns ("dubious ownership").
 
 ## 7. Your operator token
 
@@ -242,7 +367,8 @@ and start Sessions. Root issues it, the service account cannot.
 ```sh
 box$ sudo volli-hostd operator-token --for alice
 box$ echo 'export VOLLI_SOCKET=/run/volli-hostd.sock' >> ~/.bashrc && . ~/.bashrc
-box$ volli project list            # reads work for anyone in the group
+box$ volli project list            # reads work for anyone in the group; empty for now
+box$ volli model list | head -20   # your provider: "available", with its models
 ```
 
 The token is in `~/.config/volli/operator-token` (`0600`, yours). hostd reads
@@ -251,6 +377,9 @@ needed; its boot line `no operators file` only means none existed yet. The CLI
 sends it only to a socket root owns, which `/run/volli-hostd.sock` is.
 `sudo volli-hostd operator-token --revoke alice` revokes it from the next
 request.
+
+If your provider is not `available`, fix step 5 before going on (see
+[Troubleshooting](#troubleshooting)).
 
 ## 8. The demo
 
@@ -265,61 +394,110 @@ box$ volli ticket create --project Demo --title "Add a greeting" \
 `project add` prints the project with its prefix (here `DE`), its path and its
 base branch; `ticket create` prints `DE-1`.
 
-Pick a model from `volli model list` and start the Session. The kickoff says
-what done means, push and the signal included:
+**Start the Session.** Pick a model from `volli model list`. The kickoff opens
+with a deliberate two-minute pause, so the turn is certainly still running
+when you disconnect, then says what done means, push and the signal included:
 
 ```sh
 box$ volli session start DE-1 --model anthropic/claude-sonnet-4-5 --title "Box demo" \
-       -m "Add GREETING.md with one friendly line. Commit it, push your branch with 'git push -u origin HEAD', then run 'volli session done --reason pushed'."
+       -m "This is a disconnect test. First run exactly 'sleep 120' with your bash tool, in the foreground, and wait for it to finish. Then add GREETING.md with one friendly line, commit it, push your branch with 'git push -u origin HEAD', and finally run 'volli session done --reason pushed'."
 ```
 
 It answers at once with the Session's short id and `ready`: the Session exists,
-its worktree is cut, and the first turn is running on the box. Look in once:
+its worktree is cut, and the first turn is running on the box. Write the id
+down; you need it after you reconnect.
+
+**Check it is mid-turn**, within a minute:
 
 ```sh
-box$ volli session peek <id>          # the chat's tail: what the agent is doing now
+box$ volli session peek <id> --lines 5    # header: "<id>  working …"; newest line: "assistant  [bash]"
+box$ volli session answer <id>            # "<id>  running …"
 ```
 
-**Now disconnect** while it works: close the terminal, or type `~.` at the
-start of a line to drop SSH. Nothing on the box depends on your connection;
-the CLI only ever asked and returned.
+Both must hold: `peek`'s header says `working` and `answer` says `running`.
+Peek again after 10–20 seconds if the `[bash]` line has not appeared yet. If
+`answer` already says `completed` (or `peek` says `idle`), this run is not a
+mid-turn disconnect: do not count it. Start over with a new Ticket
+(`volli ticket create … --title "Add a greeting 2"` gives `DE-2`) and a new
+Session, and disconnect sooner.
 
-**Come back** a few minutes later with a new SSH session:
+**Now disconnect**, while it still says `working`: close the terminal window,
+or press Enter and type `~.` to drop SSH. Nothing on the box depends on your
+connection; the CLI only ever asked and returned.
+
+**Come back** at least three minutes later with a new `ssh box`:
 
 ```sh
 box$ volli session list --project Demo  # the Session, now idle
 box$ volli session answer <id>          # state: completed, and the agent's final message
-box$ volli session peek <id> --lines 30 # the turn: [write], [bash] … and the final message
+box$ volli session peek <id> --lines 30 # the turn: [bash] (the sleep), [write], [bash] … and the final message
 box$ volli session show <id>            # who started it, model, cost
 box$ volli ticket events DE-1           # created, session_started, worktree_changed
-box$ volli ticket show DE-1 --json | jq '{worktreePath, branch}'
-box$ sudo -u volli -H git -C /srv/volli/<test-repo> ls-remote origin 'volli/*'   # the pushed branch
 ```
 
-The dry run's answers, for comparison (the Session id differs):
+**Check the push.** The Ticket names its worktree and branch; the commit at
+the worktree's `HEAD` must be the one on the remote branch:
+
+```sh
+box$ volli ticket show DE-1 --json | jq '.ticket | {worktreePath, branch}'
+box$ wt=$(volli ticket show DE-1 --json | jq -r .ticket.worktreePath)
+box$ br=$(volli ticket show DE-1 --json | jq -r .ticket.branch)
+box$ sudo -u volli -H git -C "$wt" log -1 --stat --format='%H %an: %s'   # adds GREETING.md, by "Volli on box"
+box$ sudo -u volli -H git -C "$wt" rev-parse HEAD
+box$ sudo -u volli -H env GIT_TERMINAL_PROMPT=0 git -C "$wt" ls-remote origin "refs/heads/$br"   # the same hash
+```
+
+**Check the done signal.** No CLI read prints it back in M1. It is recorded in
+the Session's ledger, in hostd's database, and read-only `sqlite3` as `volli`
+shows it (`<id>` is the short id; it is the start of the full one):
+
+```sh
+box$ sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db \
+       "SELECT payload FROM session_events WHERE session_id LIKE '<id>%' AND json_extract(payload, '\$.kind') = 'session.signaled'"
+{"kind":"session.signaled","signal":"done","reason":"pushed"}
+```
+
+The agent's view of the same thing is in its final message (`session answer`)
+and its last `[bash]` call, whose output was `<id>  done`.
+
+The dry run's answers, for comparison. Its kickoff had no pause (its tool
+stalled instead), so its mid-turn line is `[write]` where yours is `[bash]`;
+ids and hashes differ:
 
 ```text
+$ volli session peek d1fbfabf --lines 15
+d1fbfabf  working  last 3s  turn 1 depth 1  started by the user
+3s  user  Add GREETING.md with one friendly line. Commit it, push your branch with 'git push -u origin HEAD', then run 'volli sess…
+3s  assistant  [write]
+$ volli session answer d1fbfabf
+d1fbfabf  running  ticket  turns 1  Box demo
+It has said nothing yet.
+  … SSH dropped; a new SSH session later …
 $ volli session list --project Demo
-da2f9efc  chat  idle  last 1s  DE-1  anthropic/claude-sonnet-4-5 · medium  ~<$0.01  75  Box demo
-$ volli session answer da2f9efc
-da2f9efc  completed  ticket  turns 1  Box demo
+d1fbfabf  chat  idle  last 0s  DE-1  anthropic/claude-sonnet-4-5 · medium  ~<$0.01  75  Box demo
+$ volli session answer d1fbfabf
+d1fbfabf  completed  ticket  turns 1  Box demo
 …final message: Added GREETING.md, committed, pushed the branch and signalled done.
-$ sudo -u volli -H git -C /srv/volli/demo ls-remote origin 'volli/*'
-7ae4cc3067e94a9d63d049404c8b76cc39b97bdc	refs/heads/volli/DE-1-add-a-greeting
+$ volli ticket events DE-1
+…  worktree_changed  …  to.worktreePath=/var/lib/volli-hostd/.volli/worktrees/demo-583a96ec/DE-1-add-a-greeting  to.branch=volli/DE-1-add-a-greeting  …
 ```
+
+`ticket show … | jq '.ticket | {worktreePath, branch}'` prints those two
+values as `"worktreePath"` and `"branch"`; `null` for either means the
+Session never cut its worktree.
 
 Success is all of:
 
-- `session answer` says `completed`.
-- The branch `volli/DE-1-add-a-greeting` is on the remote (also on GitHub's
-  branch list), with a commit adding `GREETING.md` by "Volli on box".
-- The agent's `volli session done` worked: run *inside* the Session, it
-  reaches this host's socket and prints `<id>  done`. The signal is recorded in
-  the Session's ledger (the Linux smoke asserts it), but in M1 no CLI read
-  prints it back to you: look for it in the agent's final message, or in a
-  Ticket comment holding its todo list when it kept one.
+- Before you disconnected, `peek` said `working` and `answer` said `running`.
+- After you came back, `session answer` says `completed`.
+- The worktree's `HEAD` hash equals the remote's `volli/DE-1-add-a-greeting`
+  (also on GitHub's branch list), and that commit adds `GREETING.md` by
+  "Volli on box".
+- The `sqlite3` query prints the `done` signal.
 
-Record the result on VC-541.
+Record the result on VC-541: the run id you installed, the model, the Session
+id, the two `peek`/`answer` lines from before the disconnect, the `answer`
+line after, the pushed hash, and the `sqlite3` line.
 
 ## Troubleshooting
 
@@ -329,31 +507,37 @@ Record the result on VC-541.
 box$ sudo journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
 box$ sudo journalctl -u volli-hostd -o cat -f | jq -cR 'fromjson? | select(.level != "debug")'
 box$ systemctl status volli-hostd volli-hostd.socket
+box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .
 ```
 
-`VOLLI_HOSTD_LOG_LEVEL=debug` in a drop-in adds per-event lines.
+`VOLLI_HOSTD_LOG_LEVEL=debug` in a drop-in adds per-event lines. The `status`
+call must run as `volli` with `--data-dir`: the status file is in the private
+data directory.
 
 **CLI error codes.** Read the code, not the generic "next" line (it is
 written for the desktop app; on a box there is no `volli app launch`).
 
 | Code                  | On this box it means                                                                                                                                                                                                                                            |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_UNREACHABLE` (3) | The CLI could not talk to hostd. `VOLLI_SOCKET` is unset or wrong (`echo $VOLLI_SOCKET`), hostd is not running (`systemctl status volli-hostd`, `volli-hostd status`), or you are not in the `volli` group yet (`id`; log in again after `usermod`).                     |
+| `APP_UNREACHABLE` (3) | The CLI could not talk to hostd. `VOLLI_SOCKET` is unset or wrong (`echo $VOLLI_SOCKET`), hostd is not running (`systemctl status volli-hostd`, `sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd`), or you are not in the `volli` group yet (`id`; log in again after `usermod`). |
 | `WRONG_DOOR`          | The verb is not one the shell runs for this caller. For `session start` it means no operator token was sent: the token file is missing, or not `0600` and yours (the CLI says why on stderr), or `VOLLI_SESSION`/`VOLLI_SESSION_TOKEN` are set in your shell.        |
 | `FORBIDDEN_ACTOR`     | A write without a valid operator token: not issued, revoked, or not sent (see stderr). Reads still work.                                                                                                                                                          |
-| `DB_UNAVAILABLE`      | hostd is up but its database did not open (`refusing`). `volli-hostd status` carries the reason, for instance a database from a newer Volli after a downgrade.                                                                                                      |
+| `DB_UNAVAILABLE`      | hostd is up but its database did not open (`refusing`). `sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd` carries the reason, for instance a database from a newer Volli after a downgrade.                                                       |
 | `INVALID_REQUEST` on `project add` | The folder does not exist **for hostd**: under `/home` (hidden by `ProtectHome=yes`), or not readable by `volli`.                                                                                                                                     |
 
 **A Session that will not start.** A missing model or credential is a refusal
 naming it, not a silent fallback: check `volli model list` (is the provider
-`available`?) and the owner and mode of `auth.json` (`volli`, `600`).
+`available`?) and the owner and mode of `auth.json`
+(`sudo stat -c '%U %a' /var/lib/volli-hostd/.pi/agent/auth.json`: `volli 600`).
 
-**A push that failed** shows in `volli session peek <id>` or the answer. As
-`volli`: `sudo -u volli ssh -T git@github.com` (a deploy key answers with the
-repository's name), and the `push --dry-run` from step 6.
+**A push that failed** shows in `volli session peek <id>` or the answer. Rerun
+the three checks under "Check it pushes, without a prompt" in step 6. For a
+deploy key, `sudo -u volli -H ssh -T git@github.com` also answers with the
+repository's name.
 
-**Saved credentials** (`credentials` in `volli-hostd status`). None of these
-stop the board or secret-independent Sessions, such as this demo:
+**Saved credentials** (`credentials` in
+`sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd`). None of
+these stop the board or secret-independent Sessions, such as this demo:
 
 | State     | Meaning and fix                                                                                                                                                                                          |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -390,43 +574,98 @@ systemd will not restart until you fix it and `systemctl start` again.
 retention and maintenance loops desktop has (VC-618); they come to hostd with
 VC-627, together with the `volli-backup` bundle (VC-283, `docs/backup-bundle.md`)
 on this host. Until then, take a cold copy with hostd stopped, so SQLite's WAL
-is folded in:
+is folded in. It takes the data directory and the checkouts together, because
+each Ticket worktree is registered in its checkout's `.git`:
 
 ```sh
+box$ B=/root/volli-hostd-$(date +%Y%m%d-%H%M%S).tar.gz
 box$ sudo systemctl stop volli-hostd.socket volli-hostd
-box$ sudo tar -C /var/lib -czf /root/volli-hostd-$(date +%F).tar.gz volli-hostd
+box$ sudo tar -C / -czf "$B" var/lib/volli-hostd srv/volli
 box$ sudo systemctl start volli-hostd.socket volli-hostd
+box$ echo "$B"; sudo ls -l /root/        # keep the name
 ```
 
 Stop the socket too: while it listens, any `volli` call starts hostd again in
 the middle of the copy.
 
-It is as sensitive as the box: it holds the model sign-in, the push key and,
-at its default path, the secret key. It also holds the Ticket worktrees, so
-unpushed work is in it. Keep it root-only (`/root` is `0700`), and to restore,
-stop hostd and untar it back in place. The demo itself needs no backup.
+It is as sensitive as the box: it holds the model sign-in, the push
+credential and, at its default path, the secret key. It also holds the Ticket
+worktrees, so unpushed work is in it. Keep it root-only (`/root` is `0700`).
+The demo itself needs no backup.
+
+**To restore** a copy, stop both units, move the current state aside (never
+over it), unpack, start, and check:
+
+```sh
+box$ B=/root/volli-hostd-<YYYYmmdd-HHMMSS>.tar.gz             # the copy to restore
+box$ sudo tar -tzf "$B" > /dev/null && echo readable
+box$ sudo systemctl stop volli-hostd.socket volli-hostd
+box$ T=$(date +%Y%m%d-%H%M%S)
+box$ sudo mv /var/lib/volli-hostd /var/lib/volli-hostd.before-restore-$T
+box$ sudo mv /srv/volli /srv/volli.before-restore-$T
+box$ sudo tar -C / -xzf "$B"            # as root: owners and modes come back as saved
+box$ sudo systemctl start volli-hostd.socket volli-hostd
+box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict     # "serving"
+```
+
+The `.before-restore-*` folders are the state you replaced; delete them
+(`sudo rm -rf`) only once you are sure you do not want it back.
 
 ## Upgrades
 
 hostd migrates its database forward at boot, and a database from a newer Volli
 refuses to open in an older one (left untouched, state `refusing`). So take
-the cold copy above first, then:
+the cold copy above first, and keep the current install as the rollback.
+
+Download and copy the new build exactly as in step 2, into its own
+`~/volli-hostd-<run-id>` folder, then:
 
 ```sh
-box$ sha256sum -c volli-hostd-*-linux-x64.tar.gz.sha256
+box$ cd ~/volli-hostd-<new-run-id>
+box$ A=$(ls volli-hostd-*-linux-x64.tar.gz) && test -f "$A" && echo "$A"
+box$ sha256sum -c "$A.sha256"                                   # OK
+box$ volli-hostd --version                                      # the version you are leaving
+box$ P=/opt/volli-hostd.prev-$(date +%Y%m%d-%H%M%S)
 box$ sudo systemctl stop volli-hostd.socket volli-hostd
-box$ sudo rm -rf /opt/volli-hostd.old && sudo mv /opt/volli-hostd /opt/volli-hostd.old
-box$ sudo mkdir /opt/volli-hostd && sudo tar -xzf volli-hostd-*-linux-x64.tar.gz \
-       -C /opt/volli-hostd --strip-components=1 --no-same-owner
+box$ sudo mv /opt/volli-hostd "$P" && echo "rollback install: $P"
+box$ sudo mkdir /opt/volli-hostd
+box$ sudo tar -xzf "$A" -C /opt/volli-hostd --strip-components=1 --no-same-owner
+box$ sudo /opt/volli-hostd/bin/node /opt/volli-hostd/lib/probe-natives.cjs
 box$ sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
        /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
-box$ sudo systemctl daemon-reload && sudo systemctl restart volli-hostd.socket volli-hostd
+box$ sudo systemctl daemon-reload && sudo systemctl start volli-hostd.socket volli-hostd
+box$ volli-hostd --version
+box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict     # "serving"
+box$ cd
+```
+
+The `/usr/local/bin` links point into `/opt/volli-hostd`, so they follow the
+new install. Your drop-ins (`systemctl edit`) stay. Keep the
+`/opt/volli-hostd.prev-*` folder until the new version has served you for a
+while; remove older ones by name.
+
+**To roll back**, stop both units, set the new install aside (kept, not
+deleted), put the previous one back with its units, start it, and check. Only
+if the new version had already migrated the database does the old one refuse
+it; then restore the cold copy taken before the upgrade:
+
+```sh
+box$ P=/opt/volli-hostd.prev-<YYYYmmdd-HHMMSS>                 # the install to return to
+box$ sudo systemctl stop volli-hostd.socket volli-hostd
+box$ sudo mv /opt/volli-hostd /opt/volli-hostd.failed-$(date +%Y%m%d-%H%M%S)
+box$ sudo mv "$P" /opt/volli-hostd
+box$ sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
+       /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
+box$ sudo systemctl daemon-reload && sudo systemctl start volli-hostd.socket volli-hostd
+box$ volli-hostd --version                                      # the old version again
 box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict
 ```
 
-Your drop-ins (`systemctl edit`) stay. To roll back, put
-`/opt/volli-hostd.old` back and restore the cold copy if the new version had
-migrated the database.
+`"serving"` means the new version had not migrated the database: you are done.
+`"refusing"` means it had (the old version leaves a newer database untouched):
+follow **To restore** under [Backups](#backups) with the copy taken before the
+upgrade. It stops both units, sets the migrated state aside, unpacks the copy,
+starts hostd and checks `serving`.
 
 ## Running in the foreground
 
