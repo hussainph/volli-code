@@ -241,6 +241,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           secrets,
           env: options.env,
           version: options.version,
+          socketPath,
           options: options.runtime ?? {
             binDir: dirname(process.execPath),
             venue: { id: socketPath, kind: "remote" },
