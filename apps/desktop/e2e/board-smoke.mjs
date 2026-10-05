@@ -1041,9 +1041,26 @@ async function main() {
           .locator('[role="img"][aria-label^="Priority:"]')
           .getAttribute("aria-label");
 
+        // Check 11 just dismissed a submenu and its root. Radix retains them
+        // through exit animation; never reopen against those outgoing portals.
+        await page.waitForFunction(
+          () =>
+            document.querySelector(
+              '[data-slot="context-menu-content"], [data-slot="context-menu-sub-content"]',
+            ) === null,
+          null,
+          { timeout: 10_000 },
+        );
         await cardById(page, "VC-12").click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Priority", exact: true }).hover();
-        await page.getByRole("menuitem", { name: "High", exact: true }).click();
+        const rootMenu = page.locator('[data-slot="context-menu-content"][data-state="open"]');
+        // Click explicitly opens the submenu. A one-shot hover can miss its
+        // pointer-enter during portal/positioning readiness and never open High.
+        // Check 11 independently retains the hover and submenu-icon proof.
+        await rootMenu.getByRole("menuitem", { name: "Priority", exact: true }).click();
+        await page
+          .locator('[data-slot="context-menu-sub-content"][data-state="open"]')
+          .getByRole("menuitem", { name: "High", exact: true })
+          .click();
 
         // Read the actual projection, not a single count after a guessed sleep.
         // The real Board's pre-IPC commit is pinned by board-priority-projection

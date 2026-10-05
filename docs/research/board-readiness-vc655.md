@@ -31,6 +31,22 @@ proof runs even when the pre-reload wait fails. Removed the menu and reload
 sleeps in this check as well; Playwright's menu actions provide readiness.
 `mutationReadyMs` records observation time, not intrinsic mutation/render time.
 
+The first candidate head (`18bd5b929`) had a green full CI run and two
+first-attempt board passes, then workflow attempt 3 on
+[run 37343115579](https://github.com/hussainph/volli-code/actions/runs/37343115579)
+was retry-green with a **different** signature: the High menuitem never opened
+before a 30s click timeout, preceding the mutation and cascading into blocked
+later clicks. Both repaired 8.5 and the fresh-profile retry passed. The watcher
+stopped; that head is **not** acceptance evidence.
+
+The follow-up waits for check 11's outgoing context-menu portals to unmount,
+then explicitly clicks Priority in the new open root and High in its open
+submenu. Radix's trigger click opens synchronously, whereas pointer movement
+uses a cancellable hover timer. This avoids relying on a one-shot hover through
+portal/positioning readiness; check 11 retains its independent submenu-hover
+and icon proof. No sleep, forced action, mutation shortcut or assertion change.
+The precise failed hover event sequence was not captured.
+
 ### 8.5: multi-drag settle
 
 Downloaded `smoke-results-core-attempt-10` from the same VC-638 run. Its first
@@ -90,8 +106,9 @@ The final file passed **50/50 serial local invocations, 300/300 cases, no retrie
 - `pnpm install --frozen-lockfile --offline --ignore-scripts`
 - `pnpm -C apps/desktop run rebuild:native`
 - `pnpm run build`; `pnpm run ensure:electron`
-- `node apps/desktop/e2e/board-smoke.mjs`: **all checks passed**, one local run.
+- `node apps/desktop/e2e/board-smoke.mjs`: **all checks passed**, first local run.
   8.5 observed settle in 226ms; 11.5 observed High in 189ms, with persistence.
+  Repeated once after the submenu-readiness follow-up; all checks passed again.
 - `vp check`: formatting/lint passed.
 - `vp run --filter @volli/desktop typecheck`: all four configs passed.
 - From `apps/desktop`, `vp test run
