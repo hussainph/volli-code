@@ -96,6 +96,55 @@ function sweep(
 }
 
 describe("closeStaleAttachments", () => {
+  it("uses explicit legacy ownership for terminal close, structured reconcile and permission retirement", async () => {
+    const legacy = { id: "/run/old/volli.sock", kind: "remote" as const };
+    const target = recorder(
+      {
+        p: [
+          {
+            ...session(
+              "structured",
+              [attachment({ id: "pi-old", adapterId: "pi", venue: legacy })],
+              true,
+            ),
+            interactions: {
+              active: [{ id: "lost-permission", attachmentId: "pi-old", kind: "permission" }],
+            },
+          },
+          session("terminal", [attachment({ venue: legacy })]),
+          session("foreign", [
+            attachment({ id: "worker", venue: { id: "worker-uuid", kind: "remote" } }),
+          ]),
+        ],
+      },
+      undefined,
+      () => Promise.reject(new Error("lost sidecar")),
+    );
+    const onError = vi.fn();
+    let sequence = 0;
+    expect(
+      await closeStaleAttachments({
+        engine: target.engine,
+        venue: { id: "host-uuid", kind: "remote" },
+        ownsLegacyVenue: (venue) => venue.kind === "remote" && venue.id === legacy.id,
+        reconcile: target.reconcile,
+        projectIds: ["p"],
+        newId: () => `legacy-${++sequence}`,
+        now: () => 1_000,
+        onError,
+      }),
+    ).toBe(2);
+    expect(target.reconciled).toEqual([{ sessionId: "structured", attachmentId: "pi-old" }]);
+    expect(target.observed.map(({ kind, attachmentId }) => ({ kind, attachmentId }))).toEqual([
+      { kind: "interaction.cancelled", attachmentId: "pi-old" },
+      { kind: "attention.raised", attachmentId: "pi-old" },
+      { kind: "attachment.closed", attachmentId: "pi-old" },
+      { kind: "attachment.closed", attachmentId: "attachment-1" },
+    ]);
+    expect(target.observed[0]?.provenance.venue).toEqual(legacy);
+    expect(onError).toHaveBeenCalledExactlyOnceWith("pi-old", expect.any(Error));
+  });
+
   it("closes a stale local terminal attachment as an interrupted, system-provenanced fact", async () => {
     const target = recorder({ "project-1": [session("session-1", [attachment()], true)] });
 
