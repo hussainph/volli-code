@@ -1645,6 +1645,54 @@ describe("renderCliSuccess", () => {
   });
 });
 
+describe("renderCliSuccess — Session signals (VC-661)", () => {
+  for (const command of ["session.show", "session.answer"]) {
+    const data = {
+      id: "abcdef12",
+      session: "abcdef12",
+      status: "idle",
+      state: "completed",
+      title: "Ship it",
+      turns: 1,
+      answer: "Pushed.",
+    };
+    it(`${command} prints the signal and leaves JSON fields intact`, () => {
+      for (const signal of [
+        { kind: "done", reason: "pushed", at: 1_000 },
+        { kind: "blocked", reason: null, at: 2_000 },
+        { kind: "blocked", reason: "need\npermission\u001b[31m", at: 3_000 },
+      ]) {
+        const value = { ...data, signal };
+        const text = renderCliSuccess(command, value, { json: false });
+        const reason =
+          signal.reason?.replaceAll("\n", "\\x0a").replaceAll("\u001b", "\\x1b") ?? "-";
+        expect(text.endsWith(`signal  ${signal.kind} · ${reason} · ${signal.at}\n`)).toBe(true);
+        expect(JSON.parse(renderCliSuccess(command, value, { json: true }))).toEqual(value);
+      }
+    });
+    it(`${command} handles absent signals and missing answers`, () => {
+      for (const signal of [null, undefined]) {
+        const value = { ...data, signal, answer: null };
+        const text = renderCliSuccess(command, value, { json: false });
+        if (command === "session.show") expect(text.endsWith("signal  -\n")).toBe(true);
+        else expect(text).not.toContain("signal");
+        expect(JSON.parse(renderCliSuccess(command, value, { json: true }))).toEqual(
+          JSON.parse(JSON.stringify(value)),
+        );
+      }
+      const value = { ...data, answer: null, signal: { kind: "done", reason: "", at: 4_000 } };
+      expect(
+        renderCliSuccess(command, value, { json: false }).endsWith("signal  done ·  · 4000\n"),
+      ).toBe(true);
+      expect(
+        renderCliSuccess(command, { ...value, signal: {} }, { json: false }).endsWith(
+          "signal  - · - · -\n",
+        ),
+      ).toBe(true);
+    });
+  }
+});
+
 describe("renderCliSuccess — session.answer (VC-9)", () => {
   const options = { json: false };
 

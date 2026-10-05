@@ -583,6 +583,13 @@ function resumedByText(session: Record<string, unknown>): string | null {
     : null;
 }
 
+function sessionSignalLine(signal: unknown): string {
+  if (!isRecord(signal)) return "signal  -";
+  return `signal  ${[signal["kind"], signal["reason"], signal["at"]]
+    .map((value) => terminalSafeInline(value ?? "-"))
+    .join(" · ")}`;
+}
+
 function renderSessionShow(data: Record<string, unknown>): string | null {
   if (typeof data["id"] !== "string" || typeof data["status"] !== "string") return null;
   const lines = [
@@ -625,6 +632,7 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
   lines.push(
     `created  ${ageText(data["ageMs"])} ago`,
     `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
+    sessionSignalLine(data["signal"]),
   );
   return lines.join("\n");
 }
@@ -715,12 +723,14 @@ function renderSessionAnswer(data: Record<string, unknown>): string {
     ...(typeof data["title"] === "string" ? [terminalSafeInline(data["title"])] : []),
   ].join("  ");
   const answer = data["answer"];
+  const signalLines = isRecord(data["signal"]) ? [sessionSignalLine(data["signal"])] : [];
   if (typeof answer !== "string") {
     return [
       header,
       unreadable
         ? "Its last message could not be read from the transcript store."
         : "It has said nothing yet.",
+      ...signalLines,
     ].join("\n");
   }
   return [
@@ -729,6 +739,7 @@ function renderSessionAnswer(data: Record<string, unknown>): string {
       response: "session answer response",
       blocks: [{ label: "final message", text: answer }],
     }),
+    ...signalLines,
   ].join("\n");
 }
 

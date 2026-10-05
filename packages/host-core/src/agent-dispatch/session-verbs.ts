@@ -374,6 +374,14 @@ function publicStartedBy(
   }
 }
 
+/** Latest durable signal, not a turn outcome or the current attention state. */
+function publicSessionSignal(projection: SessionProjection | undefined) {
+  const signal = projection?.signal;
+  return signal == null
+    ? null
+    : { kind: signal.signal, reason: signal.reason, at: signal.occurredAt };
+}
+
 /** `volli session show` — metadata without spending a transcript read. */
 export async function sessionShowVerb(
   context: AgentCommandContext,
@@ -416,6 +424,7 @@ export async function sessionShowVerb(
           kind: terminal.ticketId === null ? "project" : "ticket",
           status: terminal.endedAt === null ? "running" : "exited",
           harness: effectiveHarnessId(terminal),
+          signal: publicSessionSignal(projection),
           startedBy: publicStartedBy(
             readSessionProvenance(options.db, {
               sessionId: terminal.id,
@@ -484,6 +493,7 @@ export async function sessionShowVerb(
       base,
       {
         role: record.role,
+        signal: publicSessionSignal(projection),
         waitingOn: record.waitingOn,
         interruptedReason: interruptedReason(record, projection),
         startedBy: publicStartedBy(provenance, true),
@@ -706,6 +716,7 @@ export async function sessionAnswerVerb(
       role: record.role,
       title: record.title,
       state: answer.state,
+      signal: publicSessionSignal(chat.projection),
       turns: answer.turns,
       unreadable: answer.unreadable,
       answer: answer.text,

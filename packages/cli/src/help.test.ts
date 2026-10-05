@@ -93,6 +93,16 @@ describe("renderHelp command detail", () => {
     );
   });
 
+  it("documents Session signal reads and their JSON timestamp", () => {
+    for (const verb of ["show", "answer"]) {
+      const detail = renderHelp(["session", verb]);
+      expect(detail).toContain("done/blocked signal");
+      expect(detail).toContain("signal: {kind, reason, at} or null");
+      expect(detail).toContain("Unix time in milliseconds");
+    }
+    expect(renderHelp(["session", "show"])).toContain("Reads need no operator token");
+  });
+
   it("advertises a signal rehearsal alongside its append-only warning", () => {
     const detail = renderHelp(["ticket", "signal"]);
 

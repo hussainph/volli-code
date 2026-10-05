@@ -86,7 +86,8 @@ box$ ldd --version | head -1        # glibc 2.39 on 24.04; the artifact needs 2.
 hostd brings its own Node; do not install one for it. `git` is what Sessions
 commit and push with (and `openssh-client` is how they push over SSH),
 `openssl` makes the optional secret key in step 4, `jq` reads the logs and
-JSON answers, and `sqlite3` reads the done signal in step 8.
+JSON answers, and `sqlite3` is the fallback read of the done signal in step 8
+(the CLI prints it; the database is only if the CLI ever cannot).
 
 **Optional: Tailscale, for SSH only.** If you would rather not expose port 22,
 install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`, then
@@ -450,9 +451,37 @@ box$ sudo -u volli -H git -C "$wt" rev-parse HEAD
 box$ sudo -u volli -H env GIT_TERMINAL_PROMPT=0 git -C "$wt" ls-remote origin "refs/heads/$br"   # the same hash
 ```
 
-**Check the done signal.** No CLI read prints it back in M1. It is recorded in
-the Session's ledger, in hostd's database, and read-only `sqlite3` as `volli`
-shows it (`<id>` is the short id; it is the start of the full one):
+**Check the done signal.** The Session's latest signal is printed by
+`session show` and `session answer` (`<id>` is the short id; it is the start
+of the full one). Signal read-back requires a build containing VC-661;
+older builds use the `sqlite3` fallback below.
+
+```sh
+box$ volli session show <id> | tail -1
+box$ volli session show <id> --json | jq .signal
+```
+
+The first prints the human line; the second prints the same signal as JSON,
+where `at` is when it was signalled, in milliseconds since the epoch:
+
+```text
+signal  done · pushed · 1791222139723
+```
+
+```json
+{
+  "kind": "done",
+  "reason": "pushed",
+  "at": 1791222139723
+}
+```
+
+A Session that has not signalled shows `signal  -`. The agent's view of the
+same thing is in its final message (`session answer`, which ends with the
+same `signal` line) and its last `[bash]` call, whose output was `<id>  done`.
+The signal is also in the Session's ledger in hostd's database, should you
+ever need it without the CLI — read-only `sqlite3` as `volli` (the CLI reads
+need only the `volli` group; the database needs `sudo`):
 
 ```sh
 box$ sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db \
@@ -464,9 +493,6 @@ It prints:
 ```text
 {"kind":"session.signaled","signal":"done","reason":"pushed"}
 ```
-
-The agent's view of the same thing is in its final message (`session answer`)
-and its last `[bash]` call, whose output was `<id>  done`.
 
 The dry run's answers, for comparison. Its kickoff had no pause (its tool
 stalled instead), so its mid-turn line is `[write]` where yours is `[bash]`;
@@ -501,11 +527,13 @@ Success is all of:
 - The worktree's `HEAD` hash equals the remote's `volli/DE-1-add-a-greeting`
   (also on GitHub's branch list), and that commit adds `GREETING.md` by
   "Volli on box".
-- The `sqlite3` query prints the `done` signal.
+- `volli session show <id>` ends with the `signal  done · pushed · <time>`
+  line, and `volli session show <id> --json | jq .signal` prints the same
+  signal with its `at` time.
 
 Record the result on VC-541: the run id you installed, the model, the Session
 id, the two `peek`/`answer` lines from before the disconnect, the `answer`
-line after, the pushed hash, and the `sqlite3` line.
+line after, the pushed hash, and the `signal` line from `session show`.
 
 ## Troubleshooting
 
