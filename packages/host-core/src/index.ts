@@ -31,7 +31,7 @@ import {
   type HostSessionPorts,
   type HostSessionServices,
 } from "./session-services";
-import { createHostLifecycle, type HostStopReport } from "./host-lifecycle";
+import { createHostLifecycle, type HostStopPolicy, type HostStopReport } from "./host-lifecycle";
 import { createDetachedWorkTracker, type DetachedWorkTracker } from "./detached-work";
 import { SecretStore } from "./secrets/store";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-key";
@@ -68,6 +68,8 @@ export interface HostRuntimeOwner {
 
 export interface HostCoreOptions {
   readonly dataDir: string;
+  /** Defaults to a full drain/close. Desktop preserves its process-exit quit behavior. */
+  readonly stopPolicy?: HostStopPolicy;
   readonly databasePath?: string;
   readonly onTransactionViolation: TransactionViolationHandler;
   readonly devDiagnostics: boolean;
@@ -136,7 +138,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     const failure = classifyDbOpenFailure(error);
     const message = describeDbOpenFailure(error, { dev: options.devDiagnostics });
     ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
-    const owner = lifecycleOwner(ports, {});
+    const owner = lifecycleOwner(ports, {}, options.stopPolicy);
     return {
       kind: "degraded",
       dataDir: options.dataDir,
@@ -167,18 +169,22 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
       join(dirname(dbPath), "session-secrets.enc"),
       options.secretKey ?? unavailableSecretKey,
     );
-  const owner = lifecycleOwner(ports, {
-    stopMaintenance: () => {
-      maintenance.stop();
-      ptyManager?.stopParkSweep();
+  const owner = lifecycleOwner(
+    ports,
+    {
+      stopMaintenance: () => {
+        maintenance.stop();
+        ptyManager?.stopParkSweep();
+      },
+      drainDetached: async () => {
+        await maintenance.settled();
+        await detachedWork.drain();
+      },
+      stopActivity: sessionServices.sessionActivityWatch.stop,
+      closeDatabase: () => checkpointAndCloseDatabase(db),
     },
-    drainDetached: async () => {
-      await maintenance.settled();
-      await detachedWork.drain();
-    },
-    stopActivity: sessionServices.sessionActivityWatch.stop,
-    closeDatabase: () => checkpointAndCloseDatabase(db),
-  });
+    options.stopPolicy,
+  );
   return {
     kind: "live",
     dataDir: options.dataDir,
@@ -239,32 +245,36 @@ function lifecycleOwner(
     stopActivity?(): void;
     closeDatabase?(): void;
   },
+  stopPolicy: HostStopPolicy | undefined,
 ): Pick<HostLifecycleOwner, "start" | "stop"> {
   let runtime: HostRuntimeOwner | undefined;
   let adopted = false;
-  const lifecycle = createHostLifecycle({
-    start: () => runtime?.start(),
-    stopProducers: () => runtime?.stopProducers(),
-    stopMaintenance: () => services.stopMaintenance?.(),
-    closeRuntime: async () => {
-      await runtime?.close();
+  const lifecycle = createHostLifecycle(
+    {
+      start: () => runtime?.start(),
+      stopProducers: () => runtime?.stopProducers(),
+      stopMaintenance: () => services.stopMaintenance?.(),
+      closeRuntime: async () => {
+        await runtime?.close();
+      },
+      closeSocket: async () => {
+        return await runtime?.closeSocket?.();
+      },
+      drainDetached: async () => {
+        try {
+          return await runtime?.drainRequests?.();
+        } finally {
+          // A transport refusal must not skip the host's own writer joins.
+          await services.drainDetached?.();
+        }
+      },
+      stopActivity: () => services.stopActivity?.(),
+      closeDatabase: () => services.closeDatabase?.(),
+      reportFailure: (step, error) =>
+        ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
     },
-    closeSocket: async () => {
-      return await runtime?.closeSocket?.();
-    },
-    drainDetached: async () => {
-      try {
-        return await runtime?.drainRequests?.();
-      } finally {
-        // A transport refusal must not skip the host's own writer joins.
-        await services.drainDetached?.();
-      }
-    },
-    stopActivity: () => services.stopActivity?.(),
-    closeDatabase: () => services.closeDatabase?.(),
-    reportFailure: (step, error) =>
-      ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
-  });
+    stopPolicy,
+  );
   return {
     start(owner) {
       if (!adopted) {

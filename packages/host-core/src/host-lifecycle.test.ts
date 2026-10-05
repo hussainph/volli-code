@@ -132,6 +132,28 @@ describe("host lifecycle start", () => {
 });
 
 describe("host lifecycle stop", () => {
+  it("desktop quit adds no start/detached joins or database close", async () => {
+    const boot = deferred();
+    const { ports, calls } = recordingPorts({
+      start: () => boot.promise,
+      drainDetached: () => new Promise(() => {}),
+    });
+    const host = createHostLifecycle(ports, "desktop-quit");
+    const started = host.start();
+    expect(await host.stop("quit")).toEqual({ reason: "quit", clean: true });
+    expect(calls).toEqual([
+      "stop-producers",
+      "stop-maintenance",
+      "close-runtime",
+      "close-socket",
+      "stop-activity",
+    ]);
+    expect(host.state()).toBe("stopped");
+    boot.resolve();
+    await started;
+    expect(host.state()).toBe("stopped");
+  });
+
   it("stops producers synchronously, in the stop call's own frame", () => {
     const { ports, calls } = recordingPorts({
       closeRuntime: () => new Promise(() => {}),
