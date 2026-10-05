@@ -5,8 +5,8 @@
  * parses them.
  *
  * Keys are typed: a key must be registered, live, in `@volli/shared`'s
- * app_state registry (VC-574), so a writer with an unregistered constant does
- * not compile.
+ * app_state registry (VC-574), so writers through app-state-repo with an
+ * unregistered constant do not compile.
  */
 import type Database from "better-sqlite3";
 import type { AppStateKey } from "@volli/shared";

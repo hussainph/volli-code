@@ -52,8 +52,8 @@ const HOST_CORE_KEYS: ReadonlyArray<
   [MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY, "host", "VC-572"],
   [COMPACTION_POLICY_APP_STATE_KEY, "host", "VC-572"],
   [CODE_MODE_POLICY_APP_STATE_KEY, "host", "VC-572"],
-  [AUTOMATIONS_ENABLED_KEY, "workspace", "VC-569"],
-  [AUTOMATION_SCHEDULE_CURSORS_KEY, "workspace", "VC-569"],
+  [AUTOMATIONS_ENABLED_KEY, "host", "VC-569"],
+  [AUTOMATION_SCHEDULE_CURSORS_KEY, "host", "VC-569"],
 ];
 
 describe("host-core app_state keys", () => {

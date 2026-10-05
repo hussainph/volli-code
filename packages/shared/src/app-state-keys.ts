@@ -269,18 +269,17 @@ const EXACT = {
       "Code Mode's switch and per-model pins, applied on the host (host-core session-runtime/model-access-preferences.ts).",
   },
 
-  // ── workspace ─────────────────────────────────────────────────────────────
   "volli:automations-enabled": {
-    placement: "workspace",
+    placement: "host",
     owner: "VC-569",
     reason:
-      "The projection of `automation.set-enabled` (host-core automations/enablement.ts). Its comment says it names a host; VC-574 rules it workspace state that a workspace move carries (M4), which VC-569 implements.",
+      "One host-wide row keyed by automation id; global Automations (null project_id) are host-level. VC-569 partitions per-workspace entries when workspace files exist (M4).",
   },
   "volli:automation-schedule-cursors": {
-    placement: "workspace",
+    placement: "host",
     owner: "VC-569",
     reason:
-      "Which due times the scheduler has seen pass (host-core automations/schedule-cursor.ts). Its comment says it is per host; VC-574 rules it workspace state that a workspace move carries (M4), which VC-569 implements.",
+      "One host-wide row keyed by automation id; global Automations (null project_id) are host-level. VC-569 partitions per-workspace entries when workspace files exist (M4).",
   },
 
   // ── retired ───────────────────────────────────────────────────────────────

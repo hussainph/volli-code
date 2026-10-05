@@ -74,7 +74,8 @@ export type ChannelPlacement =
 export type PlacedChannel = VolliIpcChannel | VolliIpcEvent | CursorOverlayChannel;
 
 /** Owner ruling 2026-10-05: a project's theme follows it to every device. */
-export const THEME_OWNER_RULING = "owner ruling 2026-10-05";
+export const THEME_OWNER_RULING =
+  "Owner ruling 2026-10-05: a project's theme follows the project to every device.";
 
 /**
  * VC-574 E2 / VC-564 D8: a read or write that spans workspaces has no single
@@ -892,9 +893,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
 
   // ---- VolliAutomationIpcContract ----------------------------------------
   "volli:automation-list": {
-    placement: "workspace",
+    placement: "host",
     owner: "VC-569",
-    reason: "The scheduler is host-owned.",
+    reason:
+      "Orchestrator ruling (VC-574 N1): reads a project's Automations plus every global Automation (null project_id), a mixed workspace/host-wide set. Validate projectId against the actor's workspace grant before reading workspace resources. " +
+      HOST_SCOPED,
   },
   "volli:automation-create": {
     placement: "workspace",
@@ -957,10 +960,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason: "Skipped-occurrence read.",
   },
   "volli:automation-enablement": {
-    placement: "workspace",
+    placement: "host",
     owner: "VC-569",
     reason:
-      "Which Automations are on, projected per host today (app_state volli:automations-enabled). VC-574 E10: workspace state, carried by a workspace move (M4).",
+      "Orchestrator ruling (VC-574 N1): no-argument read of the whole host-wide enablement set keyed by automation id, including global Automations (null project_id). Filter workspace entries by the actor's workspace grant before returning them. " +
+      HOST_SCOPED,
   },
   "volli:automation-set-enabled": {
     placement: "workspace",

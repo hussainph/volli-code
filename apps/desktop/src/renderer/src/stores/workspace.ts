@@ -76,8 +76,6 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
-
-export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { publishWorkspaceTabSelection } from "@renderer/lib/workspace-tab-selection";
 import {
@@ -104,6 +102,8 @@ import {
 } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
+
+export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
 
 /**
  * The per-workspace nav pages (NAV_ITEMS). `home` is the tabbed environment
