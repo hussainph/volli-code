@@ -51,6 +51,12 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { verifyMigrationBackup } from "./backup-integrity";
 import { BACKUP_RETENTION_LOG_PREFIX } from "./backup-retention";
+import { assertMigrationDiskSpace } from "./disk-preflight";
+import {
+  checkMigrationHistory,
+  describeMigrationHistory,
+  MIGRATION_HISTORY_LOG_PREFIX,
+} from "./migration-history";
 import { migrate, SCHEMA_HEAD } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
 import {
@@ -285,6 +291,25 @@ function preflight(
 }
 
 /**
+ * Compares the file's applied-migration history with this build's lock
+ * (VC-633) and logs one named line when another lineage migrated it. Never
+ * refuses and never throws: a diverged file still opens (see
+ * `migration-history.ts` for why), and a history that cannot be read is
+ * reported the same way rather than failing the boot.
+ */
+function warnOnDivergedHistory(db: Database.Database): void {
+  let summary: string;
+  try {
+    const report = checkMigrationHistory(db, SCHEMA_HEAD);
+    if (report.consistent) return;
+    summary = describeMigrationHistory(report);
+  } catch (error) {
+    summary = `could not be read: ${String(error)}`;
+  }
+  console.warn(`${MIGRATION_HISTORY_LOG_PREFIX}: ${summary}`);
+}
+
+/**
  * Opens (creating if absent) the Volli SQLite database at `dbPath`, applies
  * the pragmas migration 001 assumes — WAL journaling, foreign keys ON, a
  * busy timeout so a brief writer/reader overlap blocks instead of erroring,
@@ -301,7 +326,9 @@ function preflight(
  * schema head (`schema-compatibility.ts`): a newer, compatible file opens
  * with no migration and its `user_version` untouched, and a newer,
  * incompatible one throws `DatabaseFromNewerVersionError` with the file
- * byte-for-byte as it was.
+ * byte-for-byte as it was. The free-space preflight (`disk-preflight.ts`)
+ * runs at the same point, before the writable open, so an
+ * `InsufficientDiskSpaceError` also leaves the file and its WAL unchanged.
  *
  * Refuses while a swap's intent marker exists, so a crash mid-swap fails
  * boot closed rather than creating an empty first-run database at a path the
@@ -368,6 +395,13 @@ export function openVolliDb(
         `${BACKUP_RETENTION_LOG_PREFIX} The local database did not pass a full integrity check, so the unpublished safety copies beside it were kept: ${abandoned.join(", ")}. Recover from them if data is missing.`,
       );
     }
+    // The free-space preflight (VC-633), while nothing holds the file open for
+    // writing: a writable handle's close checkpoints the WAL into the db, so a
+    // refusal measured any later would no longer leave the file as it was.
+    // Asked only where the runner would take a safety copy (an existing file
+    // with migrations pending); it fails open when the disk cannot be measured.
+    const pendingFrom = compatibility?.schemaVersion ?? 0;
+    if (pendingFrom > 0 && pendingFrom < SCHEMA_HEAD) assertMigrationDiskSpace(dbPath);
     const db = new Database(dbPath);
     try {
       db.pragma("journal_mode = WAL");
@@ -392,7 +426,8 @@ export function openVolliDb(
           `[volli] database schema ${compatibility.schemaVersion} is newer than this build's ${SCHEMA_HEAD} and declares it compatible; opening without migrating.`,
         );
       }
-      const migrated = migrate(db, dbPath);
+      const migrated = migrate(db, dbPath, { diskChecked: true });
+      warnOnDivergedHistory(db);
       // Post-migration, so it sees the final schema. A bounded ANALYZE
       // (`analysis_limit` keeps each table's scan proportional — SQLite's own
       // recommendation for routine maintenance) keeps a migration from leaving

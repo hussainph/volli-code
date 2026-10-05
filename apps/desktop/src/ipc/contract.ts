@@ -1401,7 +1401,7 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 // ---- support metadata -------------------------------------------------------
 
 /**
- * The five facts a support report needs and the renderer cannot know (VC-293).
+ * The six facts a support report needs and the renderer cannot know (VC-293, VC-633).
  *
  * An ALLOWLIST, and written as a closed shape for that reason: every field is
  * named here, main assembles exactly these, and the report prints them. The
@@ -1424,6 +1424,12 @@ export interface SupportInfo {
   arch: string;
   /** SQLite's `PRAGMA user_version`. A report is unavailable when it cannot be read. */
   schemaVersion: number;
+  /**
+   * What the file's applied-migration history says against this build's lock
+   * (VC-633): one sentence, `consistent` or the versions another lineage ran.
+   * Version numbers and words only; never a row of data.
+   */
+  migrationHistory: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;
