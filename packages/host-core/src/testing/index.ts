@@ -11,6 +11,7 @@ export {
   FIXTURE_NATIVE_USAGE_EVENT_ID,
   type FixtureProfile,
 } from "../backup/test-fixture";
+export { beginDatabaseRecovery, recoveryPendingPath } from "../db/recovery-pending";
 export {
   openRawDb,
   openTestDb,

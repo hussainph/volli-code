@@ -153,6 +153,8 @@ export const TESTING = [
 export const PRIVATE = {
   "session-control/index.ts": ["createSqliteSessionLedger", "createCheckpointFailureReporter"],
   "session-control/sqlite-ledger.ts": ["createSqliteSessionLedger", "SqliteSessionLedger"],
+  // The database-file fence (VC-628): only `database-file.ts` sequences a swap.
+  "db/recovery-pending.ts": ["beginDatabaseRecovery", "recoveryPendingPath"],
 };
 
 const ROOT_OWN = "index.ts";

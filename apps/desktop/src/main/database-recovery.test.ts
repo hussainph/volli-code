@@ -63,14 +63,9 @@ vi.mock("electron", () => ({
 }));
 
 import * as database from "@volli/host-core/db";
-import {
-  migrate,
-  MIGRATIONS,
-  beginDatabaseRecovery,
-  recoveryPendingPath,
-  MIN_READER_VERSION_KEY,
-} from "@volli/host-core/db";
+import { migrate, MIGRATIONS, MIN_READER_VERSION_KEY } from "@volli/host-core/db";
 import { DatabaseRecovery, NO_CLEAN_BACKUP } from "@volli/host-core/maintenance";
+import { beginDatabaseRecovery, recoveryPendingPath } from "@volli/host-core/testing";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 
 let directory: string;
