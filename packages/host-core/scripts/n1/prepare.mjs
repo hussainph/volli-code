@@ -62,6 +62,16 @@ function install(tree, pkg) {
   throw new Error("Neither vp nor pnpm is on PATH");
 }
 
+/** A prepared tree's manifest, or null when this commit has not been prepared. */
+function readManifest(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function main() {
   const { values } = parseArgs({
     options: {
@@ -81,7 +91,8 @@ function main() {
   const tree = resolve(values.out, commit);
   const manifestPath = join(tree, "n1.json");
 
-  if (!existsSync(manifestPath)) {
+  let manifest = readManifest(manifestPath);
+  if (manifest === null) {
     rmSync(tree, { recursive: true, force: true });
     mkdirSync(tree, { recursive: true });
     const archive = spawnSync("git", ["archive", "--format=tar", commit], {
@@ -94,12 +105,10 @@ function main() {
     );
     if (!host) throw new Error(`${ref} has no host database modules the driver knows`);
     install(tree, host.pkg);
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify({ ref, commit, tree, hostSrc: host.hostSrc }, null, 2)}\n`,
-    );
+    manifest = { ref, commit, tree, hostSrc: host.hostSrc };
+    // Written last: its presence is what marks the tree complete.
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   console.log(`N-1 is ${manifest.ref} (${manifest.commit}), host sources at ${manifest.hostSrc}`);
   console.log(manifestPath);
 }
