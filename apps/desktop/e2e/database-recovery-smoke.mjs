@@ -163,7 +163,12 @@ async function closeRun(run) {
     traceClose(run.tracePath, "close-result", exit);
   } finally {
     await finishSampling();
-    if (run.tracePath && (!exit || exit.exit.code !== 0 || exit.closeFailures.length > 0))
+    if (
+      run.tracePath &&
+      (!exit ||
+        exit.exit.code !== 0 ||
+        !["graceful", "already-exited", "natural-after-close"].includes(exit.kind))
+    )
       console.error(
         `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
       );
@@ -266,7 +271,9 @@ async function screenshot(run, name) {
   await screenshotWithTrace(
     run,
     { path: join(scratch, `${name}.png`), timeout: 5000 },
-    traceShutdown ? join(scratch, `${run.label.replaceAll(" ", "-")}-screenshot.jsonl`) : null,
+    traceShutdown
+      ? join(scratch, `${run.label.replaceAll(" ", "-")}-${name}-screenshot.jsonl`)
+      : null,
     { sample: sampleNative },
   );
 }

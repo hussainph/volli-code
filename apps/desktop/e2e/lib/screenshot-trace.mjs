@@ -9,8 +9,9 @@
  * - A renderer probe: document readiness/visibility/font status plus short
  *   heading and body text, and whether `requestAnimationFrame` fires within a
  *   small budget. `rafFired: false` with a returned probe means page JS is
- *   alive but the frame pump stalled; a probe deadline means the renderer main
- *   thread (or the IPC to it) never answered at all.
+ *   alive but no frame callback was observed in the budget; this alone does not
+ *   identify a native compositor cause. A probe deadline means the renderer main
+ *   thread (or the IPC to it) did not answer within the budget.
  * - An Electron main probe: PID, process type and CPU, per-process app
  *   metrics, and every BrowserWindow/webContents' destroyed/visible/minimized/
  *   bounds/loading/crashed state.
@@ -197,7 +198,7 @@ function trackedRootEntry(output, rootPid) {
 }
 
 /**
- * @returns {Promise<{rootPid: number, descendants: {pid: number}[]} | null>}
+ * @returns {Promise<{rootPid: number, rootPresent: boolean, descendants: {pid: number}[]} | null>}
  *   the tracked tree for the sampler, or null when no snapshot was taken.
  */
 async function runProcessSnapshot(run, tracePath, { clock, psTimeoutMs, runPs }) {
@@ -215,12 +216,10 @@ async function runProcessSnapshot(run, tracePath, { clock, psTimeoutMs, runPs })
         maxBuffer: 2 * 1024 * 1024,
       }),
     );
+    const root = trackedRootEntry(stdout, rootPid);
     const descendants = descendantProcesses(stdout, rootPid).map(parseProcessLine);
-    traceClose(tracePath, "screenshot-process-snapshot", {
-      root: trackedRootEntry(stdout, rootPid),
-      descendants,
-    });
-    return { rootPid, descendants };
+    traceClose(tracePath, "screenshot-process-snapshot", { root, descendants });
+    return { rootPid, rootPresent: root !== null, descendants };
   } catch (error) {
     traceClose(tracePath, "screenshot-process-snapshot-failed", { error: error.message });
     return null;
@@ -228,6 +227,7 @@ async function runProcessSnapshot(run, tracePath, { clock, psTimeoutMs, runPs })
 }
 
 async function sampleTrackedProcesses(
+  child,
   tracePath,
   snapshot,
   { platform, runSample, sampleTimeoutMs },
@@ -238,6 +238,12 @@ async function sampleTrackedProcesses(
   }
   if (!snapshot) {
     traceClose(tracePath, "sample-failed", { error: "tracked process snapshot unavailable" });
+    return;
+  }
+  // Never attach by a stale PID after the tracked child exits. A missing root
+  // in the snapshot is not evidence of a live owned process either.
+  if (!snapshot.rootPresent || child?.exitCode != null || child?.signalCode != null) {
+    traceClose(tracePath, "screenshot-sample-skipped", { reason: "tracked child no longer live" });
     return;
   }
   const targets = [
@@ -259,8 +265,9 @@ async function sampleTrackedProcesses(
   );
 }
 
-async function collectFailureDiagnostics(run, options, tracePath, screenshotError, seams) {
+async function collectFailureDiagnostics(run, options, tracePath, screenshotError, seams, timing) {
   traceClose(tracePath, "screenshot-failed", {
+    ...timing,
     error: screenshotError instanceof Error ? screenshotError.message : String(screenshotError),
     options: safeJson(options),
   });
@@ -269,7 +276,7 @@ async function collectFailureDiagnostics(run, options, tracePath, screenshotErro
     runMainProbe(run, tracePath, seams),
     runProcessSnapshot(run, tracePath, seams),
   ]).then(([, , snapshot]) => snapshot);
-  if (seams.sample) await sampleTrackedProcesses(tracePath, trackedTree, seams);
+  if (seams.sample) await sampleTrackedProcesses(run.child, tracePath, trackedTree, seams);
 }
 
 /**
@@ -317,22 +324,35 @@ export async function screenshotWithTrace(
     sampleTimeoutMs = 60000,
   } = {},
 ) {
+  const captureStartedAt = Date.now();
   try {
     return await run.page.screenshot(options);
   } catch (error) {
+    const captureFailedAt = Date.now();
     if (tracePath) {
       try {
-        await collectFailureDiagnostics(run, options, tracePath, error, {
-          sample,
-          platform,
-          clock,
-          runPs,
-          runSample,
-          pageProbeTimeoutMs,
-          mainProbeTimeoutMs,
-          psTimeoutMs,
-          sampleTimeoutMs,
-        });
+        await collectFailureDiagnostics(
+          run,
+          options,
+          tracePath,
+          error,
+          {
+            sample,
+            platform,
+            clock,
+            runPs,
+            runSample,
+            pageProbeTimeoutMs,
+            mainProbeTimeoutMs,
+            psTimeoutMs,
+            sampleTimeoutMs,
+          },
+          {
+            captureStartedAt,
+            captureFailedAt,
+            captureElapsedMs: captureFailedAt - captureStartedAt,
+          },
+        );
       } catch (diagnosticError) {
         console.error(`screenshot diagnostics failed: ${diagnosticError.message}`);
       }

@@ -687,8 +687,6 @@ jobs:
       - name: Run core e2e and verify quiet native windows
         env:
           VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
-          # VC-638 diagnostic head only; remove before unchanged-head validation.
-          VOLLI_RECOVERY_SAMPLE: "1"
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier core --jobs 4
 
       - name: Upload core smoke attempts and native-window evidence

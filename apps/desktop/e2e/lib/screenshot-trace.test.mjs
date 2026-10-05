@@ -271,6 +271,13 @@ test("a failed screenshot records live probes, the tracked tree and the exact re
   assert.equal(entries[0].stage, "screenshot-failed");
   assert.equal(entries[0].error, SENTINEL.message);
   assert.deepEqual(entries[0].options, OPTIONS);
+  assert.ok(Number.isInteger(entries[0].captureStartedAt));
+  assert.ok(entries[0].captureFailedAt >= entries[0].captureStartedAt);
+  assert.equal(
+    entries[0].captureElapsedMs,
+    entries[0].captureFailedAt - entries[0].captureStartedAt,
+  );
+  assert.ok(entries[0].captureFailedAt <= entries[0].at);
 
   const page = entries.find(({ stage }) => stage === "screenshot-page-probe");
   assert.equal(page.rafFired, true);
@@ -451,6 +458,34 @@ test("a missing tracked child pid records the snapshot failure and samples nothi
     "tracked process snapshot unavailable",
   );
 });
+
+for (const state of ["exited", "missing-root"]) {
+  test(`native sampling skips ${state} tracked children rather than attaching by stale PID`, async (t) => {
+    const tracePath = await scratchTrace(t);
+    const { run } = failingRun({ pageEvaluate: async () => ({}), mainEvaluate: async () => ({}) });
+    if (state === "exited") run.child.exitCode = 0;
+    const output =
+      state === "missing-root"
+        ? PS_OUTPUT.split("\n")
+            .filter((line) => !/^\s*100\s/.test(line))
+            .join("\n")
+        : PS_OUTPUT;
+    await assert.rejects(
+      screenshotWithTrace(run, OPTIONS, tracePath, {
+        sample: true,
+        platform: "darwin",
+        runPs: async () => ({ stdout: output }),
+        runSample: unexpected("sample of stale PID"),
+      }),
+      assertExactRejection,
+    );
+    const entries = await readEntries(tracePath);
+    assert.equal(
+      entries.find(({ stage }) => stage === "screenshot-sample-skipped").reason,
+      "tracked child no longer live",
+    );
+  });
+}
 
 test("a failing trace write is swallowed and the exact rejection still surfaces", async (t) => {
   const errors = [];
