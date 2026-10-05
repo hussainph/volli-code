@@ -123,3 +123,111 @@ describe("launch-cached keychain wrapping", () => {
       expect(() => codec.decryptString(value)).toThrow();
   });
 });
+
+describe("a locked or denied keychain (VC-641)", () => {
+  function withStore(run: (path: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "volli-keychain-locked-"));
+    try {
+      const path = join(dir, "session-secrets.enc");
+      writeFileSync(path, Buffer.from(VSC1_STORE, "base64"), { mode: 0o600 });
+      run(path);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("locks stored secrets, keeps the file, and asks the keychain once until retried", () => {
+    withStore((path) => {
+      let unlocked = false;
+      const keychain = {
+        ...FIXTURE_KEYCHAIN,
+        decryptString: vi.fn((value: Buffer) => {
+          if (!unlocked) throw new Error("User canceled the keychain prompt for fixture-keychain:");
+          return FIXTURE_KEYCHAIN.decryptString(value);
+        }),
+        encryptString: vi.fn(FIXTURE_KEYCHAIN.encryptString),
+      };
+      const before = readFileSync(path);
+      const store = new SecretStore(path, keychainSecretCodec(keychain));
+      expect(store.status()).toEqual({
+        state: "locked",
+        reason: "unavailable",
+        unavailable: ["session-env"],
+      });
+      expect(store.list()).toEqual([]);
+      expect(store.environment("session-1", "project-fixture")).toEqual({});
+      expect(store.redact("sk_fixture_always")).toBe("sk_fixture_always");
+      expect(() => store.put({ name: "NEW", value: "new-value", scope: "always" })).toThrowError(
+        /^The keychain did not open the key to saved secrets/,
+      );
+      store.put({ name: "LIVE", value: "live", scope: "session", sessionId: "session-1" });
+      expect(store.environment("session-1", "project-fixture")).toEqual({ LIVE: "live" });
+      expect(keychain.decryptString).toHaveBeenCalledTimes(1);
+      expect(keychain.encryptString).not.toHaveBeenCalled();
+      expect(readFileSync(path).equals(before)).toBe(true);
+
+      unlocked = true;
+      expect(store.unlock().state).toBe("ready");
+      expect(store.environment("session-1", "project-fixture")).toEqual({
+        STRIPE_API_KEY: "sk_fixture_always",
+        DEPLOY_TOKEN: "fixture-project-token",
+        LIVE: "live",
+      });
+    });
+  });
+
+  it("locks without asking a keychain that is unavailable or plaintext-only", () => {
+    withStore((path) => {
+      for (const keychain of [
+        { ...FIXTURE_KEYCHAIN, isEncryptionAvailable: () => false, decryptString: vi.fn() },
+        {
+          ...FIXTURE_KEYCHAIN,
+          getSelectedStorageBackend: () => "basic_text",
+          decryptString: vi.fn(),
+        },
+      ]) {
+        expect(new SecretStore(path, keychainSecretCodec(keychain)).status()).toMatchObject({
+          state: "locked",
+          reason: "unavailable",
+        });
+        expect(() => keychainSecretCodec(keychain).decryptString(Buffer.alloc(64))).toThrow(
+          /^The keychain did not open/,
+        );
+        expect(keychain.decryptString).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  it("calls a file the keychain opened but that does not authenticate corrupt, and reseals under a fresh key after a reset", () => {
+    withStore((path) => {
+      const bytes = readFileSync(path);
+      bytes[bytes.length - 1]! ^= 1;
+      writeFileSync(path, bytes);
+      const keychain = {
+        ...FIXTURE_KEYCHAIN,
+        encryptString: vi.fn(FIXTURE_KEYCHAIN.encryptString),
+      };
+      const store = new SecretStore(path, keychainSecretCodec(keychain));
+      expect(store.status()).toEqual({
+        state: "corrupt",
+        reason: null,
+        unavailable: ["session-env"],
+      });
+      const { archive } = store.reset();
+      expect(readFileSync(join(path, "..", archive!)).equals(bytes)).toBe(true);
+      store.put({ name: "RE_ENTERED", value: "re-entered", scope: "always" });
+      // The damaged file's key was never cached: the new store is wrapped anew.
+      expect(keychain.encryptString).toHaveBeenCalledTimes(1);
+      expect(
+        new SecretStore(path, keychainSecretCodec(FIXTURE_KEYCHAIN)).environment("s", "p"),
+      ).toEqual({ RE_ENTERED: "re-entered" });
+    });
+  });
+
+  it("calls a wrapped key of the wrong size corrupt, not locked", () => {
+    const keychain = { ...FIXTURE_KEYCHAIN, decryptString: () => "c2hvcnQ=" };
+    expect(() =>
+      keychainSecretCodec(keychain).decryptString(Buffer.from(VSC1_ENVELOPE, "base64")),
+    ).toThrow("Invalid wrapped key.");
+  });
+});

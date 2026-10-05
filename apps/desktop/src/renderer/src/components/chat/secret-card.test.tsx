@@ -50,7 +50,12 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("api", api);
-  api.secrets.list.mockResolvedValue({ ok: true, requests: [], secrets: [] });
+  api.secrets.list.mockResolvedValue({
+    ok: true,
+    requests: [],
+    secrets: [],
+    credentials: { state: "empty", reason: null, unavailable: [] },
+  });
   api.secrets.submit.mockResolvedValue({ ok: true });
   api.secrets.decline.mockResolvedValue({ ok: true });
   host = document.createElement("div");

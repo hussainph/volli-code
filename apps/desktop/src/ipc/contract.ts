@@ -81,7 +81,12 @@ export type {
 } from "@volli/shared";
 
 import type { ExternalAppId } from "../external-app-ids";
-import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
+import type {
+  CredentialsResult,
+  SecretReplaceInput,
+  SecretSubmitInput,
+  SecretsResult,
+} from "./secrets";
 
 import type {
   WorktreeBranchListing,
@@ -2628,6 +2633,10 @@ export interface VolliSecretIpcContract {
   "volli:secret-decline": { args: [id: string]; result: Result };
   "volli:secret-revoke": { args: [id: string]; result: Result };
   "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
+  /** Tries locked stored secrets again (VC-641). */
+  "volli:secrets-unlock": { args: []; result: CredentialsResult };
+  /** Sets locked stored secrets aside, kept, and starts empty (VC-641). */
+  "volli:secrets-reset": { args: []; result: CredentialsResult };
 }
 
 export type SecretIpcChannel = keyof VolliSecretIpcContract;

@@ -2,15 +2,26 @@
 import * as React from "react";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import type { Project } from "@volli/shared";
-import type { SecretMetadata } from "../../../../../ipc/secrets";
+import type { CredentialStatus, SecretMetadata } from "../../../../../ipc/secrets";
 
 import { Empty, PrefSection, SectionAction } from "@renderer/components/settings/kit";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 
 export function SecretsPane({ project }: { project: Project }) {
   const [secrets, setSecrets] = React.useState<readonly SecretMetadata[]>([]);
+  const [credentials, setCredentials] = React.useState<CredentialStatus | null>(null);
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
   const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
 
@@ -18,12 +29,14 @@ export function SecretsPane({ project }: { project: Project }) {
     let current = true;
     setStatus("loading");
     setSecrets([]);
+    setCredentials(null);
     void (async () => {
       try {
         const result = await window.api.secrets.list(project.id);
         if (!current) return;
         if (!result.ok) throw new Error("Credential metadata unavailable");
         setSecrets(result.secrets);
+        setCredentials(result.credentials);
         setStatus("ready");
       } catch {
         if (!current) return;
@@ -42,6 +55,9 @@ export function SecretsPane({ project }: { project: Project }) {
       icon={KeyIcon}
       action={<SectionAction label="Refresh" onAct={refresh} />}
     >
+      {credentials !== null && LOCKED_LINE[credentials.state] !== undefined ? (
+        <LockedCredentials line={LOCKED_LINE[credentials.state]!} onChanged={refresh} />
+      ) : null}
       {status === "loading" ? (
         <Empty>Loading credentials…</Empty>
       ) : status === "error" ? (
@@ -52,6 +68,77 @@ export function SecretsPane({ project }: { project: Project }) {
         secrets.map((secret) => <SecretRow key={secret.id} secret={secret} onChanged={refresh} />)
       )}
     </PrefSection>
+  );
+}
+
+/** One line per state that keeps stored secrets out of use (VC-641). */
+const LOCKED_LINE: Partial<Record<CredentialStatus["state"], string>> = {
+  locked: "Saved secrets are locked.",
+  refused: "Saved secrets are refused: their key file is not private.",
+  corrupt: "Saved secrets can't be read.",
+};
+
+function LockedCredentials({ line, onChanged }: { line: string; onChanged: () => void }) {
+  const [busy, setBusy] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
+
+  async function act(kind: "unlock" | "reset"): Promise<void> {
+    setBusy(true);
+    try {
+      const result =
+        kind === "unlock" ? await window.api.secrets.unlock() : await window.api.secrets.reset();
+      if (!result.ok) throw new Error("Credential action failed");
+      if (kind === "unlock" && LOCKED_LINE[result.credentials.state] !== undefined) {
+        toastError("Saved secrets are still locked.");
+      }
+    } catch {
+      toastError(
+        kind === "unlock" ? "Couldn't unlock saved secrets." : "Couldn't reset saved secrets.",
+      );
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  return (
+    <div
+      data-slot="secret-credentials-status"
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-4"
+    >
+      <p className="text-ui">{line}</p>
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" disabled={busy} onClick={() => void act("unlock")}>
+          Try again
+        </Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
+          Reset…
+        </Button>
+      </div>
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset saved secrets?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Project and Always secrets are set aside, not deleted, and you enter them again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setConfirming(false);
+                void act("reset");
+              }}
+            >
+              Reset
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }
 

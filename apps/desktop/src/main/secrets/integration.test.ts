@@ -22,6 +22,7 @@ import { BackgroundShellHost } from "@volli/host-core/shell/background-shell-hos
 import { createAgentShellPort } from "@volli/host-core/shell/agent-port";
 import { SecretStore } from "@volli/host-core/secrets";
 import { SecretService } from "@volli/host-core/secrets/service";
+import { keychainSecretCodec } from "./codec";
 import { registerSecretIpc } from "./ipc";
 
 const { handlers } = vi.hoisted(() => ({
@@ -39,6 +40,30 @@ afterEach(() => {
   handlers.clear();
 });
 const sentinel = "person-secret-VC481-sentinel-1234";
+const storedSentinel = "stored-secret-VC641-sentinel-5678";
+
+/** A keychain that wraps, and then is locked: every unwrap is refused. */
+const openKeychain = {
+  isEncryptionAvailable: () => true,
+  encryptString: (value: string) => Buffer.from(`fixture-keychain:${value}`),
+  decryptString: (value: Buffer) => value.toString().slice("fixture-keychain:".length),
+};
+const lockedKeychain = {
+  ...openKeychain,
+  decryptString: (): string => {
+    throw new Error("User interaction is not allowed.");
+  },
+};
+
+/** Seals one Always secret with the open keychain; answers the sealed bytes. */
+function sealUnderLockedKeychain(path: string): Buffer {
+  new SecretStore(path, keychainSecretCodec(openKeychain)).put({
+    name: "STORED_TOKEN",
+    value: storedSentinel,
+    scope: "always",
+  });
+  return readFileSync(path);
+}
 const marker = "‹secret:STRIPE_API_KEY›";
 
 function toolResult(seen: Parameters<typeof secretFixtureProvider>[1], name: string) {
@@ -59,229 +84,262 @@ function scan(dir: string): string[] {
 }
 
 describe("secure credential through the real Pi / SQLite Session path", () => {
-  it("injects execute and shells, redacts reads, and keeps values out of transcript, events, ledger, logs and IPC results", async () => {
-    const root = mkdtempSync(join(process.cwd(), ".secret-integration-test-"));
-    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
-    const worktree = join(root, "worktree");
-    mkdirSync(worktree);
-    const ctx = openTestDb();
-    cleanups.push(ctx.cleanup);
-    const project = testProject({ id: "secret-project", path: worktree });
-    insertProject(ctx.db, project);
-    const service = new SecretService(
-      new SecretStore(join(root, "session-secrets.enc"), {
-        isEncryptionAvailable: () => false,
-        encryptString: () => {
-          throw new Error("unused");
-        },
-        decryptString: () => {
-          throw new Error("unused");
-        },
-      }),
-    );
-    const sender = { mainFrame: {} };
-    registerSecretIpc(service, (candidate) => candidate === sender);
-    const invoke = (channel: string, ...args: unknown[]) =>
-      handlers.get(channel)!({ sender, senderFrame: sender.mainFrame }, ...args);
-    const seen: Parameters<typeof secretFixtureProvider>[1] = [];
-    const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
-    const ledgerSpawns: unknown[] = [];
-    const shells = new BackgroundShellHost({
-      publishState: () => {},
-      publishRemoved: () => {},
-      settleMs: 100,
-      redactOutput: (text) => service.store.redact(text),
-      ledger: {
-        recordSpawn: (input) => {
-          ledgerSpawns.push(input);
-          return "spawn";
-        },
-        markExited: () => {},
-      },
-    });
-    let submitted: unknown;
-    const waitingSnapshots: unknown[] = [];
-    const host = createPiRuntimeHost({
-      sessionDataDir: join(root, "pi-sessions"),
-      models: secretFixtureProvider(
-        [
-          {
-            name: "request_secret",
-            args: { name: "STRIPE_API_KEY", purpose: "Run the test script" },
-          },
-          {
-            name: "bash",
-            args: {
-              command: `test "\${#STRIPE_API_KEY}" -eq ${sentinel.length} || exit 1; printf '%s\\n' "$STRIPE_API_KEY"; printf '%s' "$STRIPE_API_KEY" > receipt.txt`,
-            },
-          },
-          { name: "read", args: { path: "receipt.txt" } },
-          { name: "shell_start", args: { command: "printf '%s\\n' \"$STRIPE_API_KEY\"" } },
-          { text: "done" },
-        ],
-        seen,
-      ),
-      executionEnvFactory: async (workspace, identity) =>
-        refusingCredentialReads(
-          await piExecutionEnv(workspace, {
-            secretEnvironment: () => service.environment(identity.sessionId),
-          }),
-          workspace,
+  // `locked` (VC-641): stored secrets sealed by a keychain that is now locked
+  // or denied. Before VC-641 every redaction threw and withheld all output;
+  // now the Session runs on its Session-scoped secret and the stored one is
+  // neither injected nor leaked, nor its file touched.
+  it.each(["no", "locked"] as const)(
+    "injects execute and shells, redacts reads, and keeps values out of transcript, events, ledger, logs and IPC results (%s keychain)",
+    async (keychain) => {
+      const root = mkdtempSync(join(process.cwd(), ".secret-integration-test-"));
+      cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+      const worktree = join(root, "worktree");
+      mkdirSync(worktree);
+      const ctx = openTestDb();
+      cleanups.push(ctx.cleanup);
+      const project = testProject({ id: "secret-project", path: worktree });
+      insertProject(ctx.db, project);
+      const storePath = join(root, "session-secrets.enc");
+      const sealed = keychain === "locked" ? sealUnderLockedKeychain(storePath) : null;
+      const service = new SecretService(
+        new SecretStore(
+          storePath,
+          keychain === "locked"
+            ? keychainSecretCodec(lockedKeychain)
+            : {
+                isEncryptionAvailable: () => false,
+                encryptString: () => {
+                  throw new Error("unused");
+                },
+                decryptString: () => {
+                  throw new Error("unused");
+                },
+              },
         ),
-      resolveRuntimeContext: async (sessionId) => ({
-        role: "project",
-        location: "main-checkout",
-        authorityPolicy: DEFAULT_AUTHORITY_POLICY,
-        priorAuthorityDenials: 0,
-        projectId: project.id,
-        ticketId: null,
-        rootThreadId: sessionRootThreadId(sessionId),
-        brief: "Credential privacy fixture",
-        model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "off" },
-        toolSurface: [
-          "execute",
-          "read",
-          "shell_start",
-          "shell_output",
-          "shell_kill",
-          "request_secret",
-        ],
-        promptResources: [],
-      }),
-      resolveShellPort: (scope) =>
-        createAgentShellPort({
-          host: shells,
-          scope: { projectId: project.id, ticketId: null },
-          session: scope,
-          workspacePath: worktree,
-          identity: { sessionId: scope.sessionId, ticketDisplayId: null },
-          pathPrefixes: [],
-          secretEnvironment: () => service.environment(scope.sessionId),
-        }),
-      resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) => {
-        const port = service.port(
-          {
-            sessionId,
-            projectId,
-            sessionLabel: "Session fixture",
-            projectLabel: project.name,
+      );
+      const sender = { mainFrame: {} };
+      registerSecretIpc(service, (candidate) => candidate === sender);
+      const invoke = (channel: string, ...args: unknown[]) =>
+        handlers.get(channel)!({ sender, senderFrame: sender.mainFrame }, ...args);
+      const seen: Parameters<typeof secretFixtureProvider>[1] = [];
+      const logs = [
+        vi.spyOn(console, "log"),
+        vi.spyOn(console, "warn"),
+        vi.spyOn(console, "error"),
+      ];
+      const ledgerSpawns: unknown[] = [];
+      const shells = new BackgroundShellHost({
+        publishState: () => {},
+        publishRemoved: () => {},
+        settleMs: 100,
+        redactOutput: (text) => service.store.redact(text),
+        ledger: {
+          recordSpawn: (input) => {
+            ledgerSpawns.push(input);
+            return "spawn";
           },
-          {
-            ...wait,
-            opened: async (metadata) => {
-              await wait.opened(metadata);
-              const projection = await engine.getSession({ sessionId });
-              expect(projection).not.toBeNull();
-              expect(sessionAwaitsUser(projection!)).toBe(true);
-              expect(projection!.interactions.active).toHaveLength(1);
-              expect(scrubSessionInteraction(projection!.interactions.active[0]!)).toMatchObject({
-                title: "Credential requested",
-                credential: metadata,
-              });
-              waitingSnapshots.push(projection);
+          markExited: () => {},
+        },
+      });
+      let submitted: unknown;
+      const waitingSnapshots: unknown[] = [];
+      const host = createPiRuntimeHost({
+        sessionDataDir: join(root, "pi-sessions"),
+        models: secretFixtureProvider(
+          [
+            {
+              name: "request_secret",
+              args: { name: "STRIPE_API_KEY", purpose: "Run the test script" },
             },
-          },
-          allowInjection,
-        );
-        return {
-          ...port,
-          request: async (input, signal) => {
-            const waiting = port.request(input, signal);
-            const list = service.list();
-            if (!list.ok) throw new Error("No request metadata");
-            submitted = await invoke("volli:secret-submit", {
-              requestId: list.requests[0]!.id,
-              value: sentinel,
-              scope: "session",
-            });
-            return waiting;
-          },
-        };
-      },
-    });
-    const engine = createTestSessionEngine(ctx.db);
-    const runtime = createSessionRuntime({
-      engine,
-      clock: { now: Date.now },
-      ids: { next: () => randomUUID() },
-      executor: host.adapter,
-      artifacts: createInMemoryTranscriptArtifactStore(),
-      locations: {
-        resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
-        prepare: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
-        reaffirm: async () => undefined,
-      },
-    });
-    let sessionId: string | undefined;
-    try {
-      const created = await runtime.command({
-        commandId: "create",
-        command: {
-          kind: "session.create",
+            {
+              name: "bash",
+              args: {
+                command: `test "\${#STRIPE_API_KEY}" -eq ${sentinel.length} || exit 1; printf '%s\\n' "$STRIPE_API_KEY"; printf '%s' "$STRIPE_API_KEY" > receipt.txt`,
+              },
+            },
+            { name: "read", args: { path: "receipt.txt" } },
+            { name: "shell_start", args: { command: "printf '%s\\n' \"$STRIPE_API_KEY\"" } },
+            { text: "done" },
+          ],
+          seen,
+        ),
+        executionEnvFactory: async (workspace, identity) =>
+          refusingCredentialReads(
+            await piExecutionEnv(workspace, {
+              secretEnvironment: () => service.environment(identity.sessionId),
+            }),
+            workspace,
+          ),
+        resolveRuntimeContext: async (sessionId) => ({
+          role: "project",
+          location: "main-checkout",
+          authorityPolicy: DEFAULT_AUTHORITY_POLICY,
+          priorAuthorityDenials: 0,
           projectId: project.id,
           ticketId: null,
-          role: "project",
-          parentSessionId: null,
-          title: "Secret test",
+          rootThreadId: sessionRootThreadId(sessionId),
+          brief: "Credential privacy fixture",
+          model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "off" },
+          toolSurface: [
+            "execute",
+            "read",
+            "shell_start",
+            "shell_output",
+            "shell_kill",
+            "request_secret",
+          ],
+          promptResources: [],
+        }),
+        resolveShellPort: (scope) =>
+          createAgentShellPort({
+            host: shells,
+            scope: { projectId: project.id, ticketId: null },
+            session: scope,
+            workspacePath: worktree,
+            identity: { sessionId: scope.sessionId, ticketDisplayId: null },
+            pathPrefixes: [],
+            secretEnvironment: () => service.environment(scope.sessionId),
+          }),
+        resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) => {
+          const port = service.port(
+            {
+              sessionId,
+              projectId,
+              sessionLabel: "Session fixture",
+              projectLabel: project.name,
+            },
+            {
+              ...wait,
+              opened: async (metadata) => {
+                await wait.opened(metadata);
+                const projection = await engine.getSession({ sessionId });
+                expect(projection).not.toBeNull();
+                expect(sessionAwaitsUser(projection!)).toBe(true);
+                expect(projection!.interactions.active).toHaveLength(1);
+                expect(scrubSessionInteraction(projection!.interactions.active[0]!)).toMatchObject({
+                  title: "Credential requested",
+                  credential: metadata,
+                });
+                waitingSnapshots.push(projection);
+              },
+            },
+            allowInjection,
+          );
+          return {
+            ...port,
+            request: async (input, signal) => {
+              const waiting = port.request(input, signal);
+              const list = service.list();
+              if (!list.ok) throw new Error("No request metadata");
+              submitted = await invoke("volli:secret-submit", {
+                requestId: list.requests[0]!.id,
+                value: sentinel,
+                scope: "session",
+              });
+              return waiting;
+            },
+          };
         },
       });
-      sessionId = created.sessionId;
-      const attached = await runtime.command({
-        commandId: "attach",
-        sessionId,
-        command: { kind: "adapter.attach", continuity: "fresh" },
-      });
-      expect(attached.receipt?.status, JSON.stringify(attached)).toBe("accepted");
-      const sent = await runtime.command({
-        commandId: "message",
-        sessionId,
-        command: {
-          kind: "message.submit",
-          message: { id: "message", role: "user", parts: [{ type: "text", text: "Run fixture" }] },
+      const engine = createTestSessionEngine(ctx.db);
+      const runtime = createSessionRuntime({
+        engine,
+        clock: { now: Date.now },
+        ids: { next: () => randomUUID() },
+        executor: host.adapter,
+        artifacts: createInMemoryTranscriptArtifactStore(),
+        locations: {
+          resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
+          prepare: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
+          reaffirm: async () => undefined,
         },
       });
-      expect(sent.receipt?.status, JSON.stringify(sent)).toBe("accepted");
-      // A snapshot awaits the committed stream, not merely tool execution.
-      const snapshot = await runtime.snapshot({ sessionId });
-      const events = await engine.listEvents({ sessionId });
-      const rows = ctx.db.prepare("SELECT * FROM session_events").all();
-      const combined = JSON.stringify({
-        seen,
-        snapshot,
-        events,
-        rows,
-        ledgerSpawns,
-        submitted,
-        waitingSnapshots,
-        projection: invoke("volli:secrets-list"),
-        logs: logs.map((log) => log.mock.calls),
-      });
-      expect(submitted).toEqual({ ok: true });
-      expect(waitingSnapshots).toHaveLength(1);
-      expect(snapshot.projection.interactions.active).toEqual([]);
-      expect(sessionAwaitsUser(snapshot.projection)).toBe(false);
-      expect(events.filter((event) => event.payload.kind === "interaction.opened")).toHaveLength(1);
-      expect(events.filter((event) => event.payload.kind === "interaction.resolved")).toHaveLength(
-        1,
-      );
-      expect(combined).not.toContain(sentinel);
-      // Independently prove both coding tools ran successfully: a shell marker
-      // cannot hide a missing execute binding or a failed read of a missing file.
-      expect(readFileSync(join(worktree, "receipt.txt"), "utf8")).toBe(sentinel);
-      expect(toolResult(seen, "bash").content).toEqual([{ type: "text", text: `${marker}\n` }]);
-      expect(toolResult(seen, "read").content).toEqual([{ type: "text", text: marker }]);
-      expect(JSON.stringify(seen)).toContain("signed in");
-      expect(ledgerSpawns).toHaveLength(1);
-      expect(scan(join(root, "pi-sessions")).join("\n")).not.toContain(sentinel);
-      expect(shells.listAll()).not.toEqual([]);
-      expect(shells.tailOf(shells.listAll()[0]!.shellId)?.output).toContain(
-        "‹secret:STRIPE_API_KEY›",
-      );
-    } finally {
-      await runtime.close();
-      for (const log of logs) log.mockRestore();
-    }
-  });
+      let sessionId: string | undefined;
+      try {
+        const created = await runtime.command({
+          commandId: "create",
+          command: {
+            kind: "session.create",
+            projectId: project.id,
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: "Secret test",
+          },
+        });
+        sessionId = created.sessionId;
+        const attached = await runtime.command({
+          commandId: "attach",
+          sessionId,
+          command: { kind: "adapter.attach", continuity: "fresh" },
+        });
+        expect(attached.receipt?.status, JSON.stringify(attached)).toBe("accepted");
+        const sent = await runtime.command({
+          commandId: "message",
+          sessionId,
+          command: {
+            kind: "message.submit",
+            message: {
+              id: "message",
+              role: "user",
+              parts: [{ type: "text", text: "Run fixture" }],
+            },
+          },
+        });
+        expect(sent.receipt?.status, JSON.stringify(sent)).toBe("accepted");
+        // A snapshot awaits the committed stream, not merely tool execution.
+        const snapshot = await runtime.snapshot({ sessionId });
+        const events = await engine.listEvents({ sessionId });
+        const rows = ctx.db.prepare("SELECT * FROM session_events").all();
+        const combined = JSON.stringify({
+          seen,
+          snapshot,
+          events,
+          rows,
+          ledgerSpawns,
+          submitted,
+          waitingSnapshots,
+          projection: invoke("volli:secrets-list"),
+          logs: logs.map((log) => log.mock.calls),
+        });
+        expect(submitted).toEqual({ ok: true });
+        expect(waitingSnapshots).toHaveLength(1);
+        expect(snapshot.projection.interactions.active).toEqual([]);
+        expect(sessionAwaitsUser(snapshot.projection)).toBe(false);
+        expect(events.filter((event) => event.payload.kind === "interaction.opened")).toHaveLength(
+          1,
+        );
+        expect(
+          events.filter((event) => event.payload.kind === "interaction.resolved"),
+        ).toHaveLength(1);
+        expect(combined).not.toContain(sentinel);
+        // Independently prove both coding tools ran successfully: a shell marker
+        // cannot hide a missing execute binding or a failed read of a missing file.
+        expect(readFileSync(join(worktree, "receipt.txt"), "utf8")).toBe(sentinel);
+        expect(toolResult(seen, "bash").content).toEqual([{ type: "text", text: `${marker}\n` }]);
+        expect(toolResult(seen, "read").content).toEqual([{ type: "text", text: marker }]);
+        expect(JSON.stringify(seen)).toContain("signed in");
+        expect(ledgerSpawns).toHaveLength(1);
+        expect(scan(join(root, "pi-sessions")).join("\n")).not.toContain(sentinel);
+        expect(shells.listAll()).not.toEqual([]);
+        expect(shells.tailOf(shells.listAll()[0]!.shellId)?.output).toContain(
+          "‹secret:STRIPE_API_KEY›",
+        );
+        if (sealed !== null) {
+          expect(invoke("volli:secrets-list")).toMatchObject({
+            ok: true,
+            credentials: { state: "locked", reason: "unavailable" },
+          });
+          expect(combined).not.toContain(storedSentinel);
+          expect(scan(join(root, "pi-sessions")).join("\n")).not.toContain(storedSentinel);
+          expect(readFileSync(storePath).equals(sealed)).toBe(true);
+        }
+      } finally {
+        await runtime.close();
+        for (const log of logs) log.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { label: "new project Session", role: "project", requestSecret: true },
