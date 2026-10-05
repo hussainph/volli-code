@@ -1654,11 +1654,14 @@ export interface VolliWebAccessIpcContract {
     result: WebAccessResult;
   };
   /**
-   * Stores the Brave API key. The one inbound secret on this surface.
+   * Stores one keyed provider's API key. The one inbound secret on this surface.
    *
-   * It crosses once, is encrypted with the OS keychain, and is never echoed,
-   * returned, logged, or included in an error string. A machine that cannot
-   * encrypt refuses rather than storing it in the clear.
+   * It crosses once and is never echoed, returned, logged, or included in an
+   * error string. It is saved in the profile database, in the clear, which
+   * stays its one source of truth until the read switch (VC-644); a sealed
+   * copy follows (VC-643), and the answer's `sealing` says whether that copy
+   * is current ("saved; sealing pending" when it is not). Nothing here claims
+   * the key is encrypted.
    */
   "volli:web-access-set-key": {
     args: [provider: KeyedWebAccessProvider, key: string];

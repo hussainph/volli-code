@@ -32,11 +32,6 @@ import type {
   WebAccessSettingsView,
 } from "@volli/shared";
 import type { WebCredentialStore } from "./credential";
-import type {
-  WebCredentialMirror,
-  WebMirrorResult,
-  WebSealingPendingReason,
-} from "./credential-mirror";
 
 export type { KeyedWebAccessProvider, WebAccessProvider, WebAccessSettingsView };
 
@@ -97,44 +92,27 @@ export interface WebAccessSettingsOptions {
   db: Database.Database;
   /** One store per keyed provider. Total, so no lookup here can miss. */
   credentials: Readonly<Record<KeyedWebAccessProvider, WebCredentialStore>>;
-  /**
-   * The keys' sealed mirror (VC-643, step E), resealed after every save and
-   * clear. Absent: no host key backend, so sealing stays pending.
-   */
-  mirror?: WebCredentialMirror | null;
   now?: () => number;
 }
-
-/** Why a save's reseal is finished in the background rather than left pending. */
-const RESEAL_LATER: ReadonlySet<WebSealingPendingReason> = new Set<WebSealingPendingReason>([
-  "busy",
-  "key-pending",
-  "moved",
-]);
 
 export class WebAccessSettings {
   readonly #db: Database.Database;
   readonly #credentials: Readonly<Record<KeyedWebAccessProvider, WebCredentialStore>>;
-  readonly #mirror: WebCredentialMirror | null;
   readonly #now: () => number;
 
   constructor(options: WebAccessSettingsOptions) {
     this.#db = options.db;
     this.#credentials = options.credentials;
-    this.#mirror = options.mirror ?? null;
     this.#now = options.now ?? Date.now;
   }
 
   /** The renderer's whole picture. */
   view(): WebAccessSettingsView {
     const row = this.#row();
-    const keys = { brave: this.#credentials.brave.state(), exa: this.#credentials.exa.state() };
-    const held = keys.brave === "present" || keys.exa === "present";
     return {
       provider: readProvider(row.provider),
       searxngUrl: row.searxng_url,
-      keys,
-      sealing: this.#mirror?.sealing() ?? (held ? "pending" : "none"),
+      keys: { brave: this.#credentials.brave.state(), exa: this.#credentials.exa.state() },
     };
   }
 
@@ -168,60 +146,16 @@ export class WebAccessSettings {
     return this.view();
   }
 
-  /**
-   * Store one provider's key. Refuses an empty paste rather than recording one.
-   *
-   * The key is committed to the profile database first, which is the save;
-   * then its sealed mirror is resealed (step E). A reseal that cannot happen
-   * now does not undo or fail the save: the view answers `sealing: "pending"`,
-   * "saved; sealing pending", and the mirror is rebuilt later.
-   */
+  /** Store one provider's key. Refuses an empty paste rather than recording one. */
   saveKey(provider: KeyedWebAccessProvider, key: string): WebAccessSettingsView {
     this.#credentials[provider].save(key);
-    this.#reseal();
     return this.view();
   }
 
-  /**
-   * Forget one provider's key. The provider choice, and the other key, are left alone.
-   * Like a save: the database first, then the mirror, which drops the key.
-   */
+  /** Forget one provider's key. The provider choice, and the other key, are left alone. */
   clearKey(provider: KeyedWebAccessProvider): WebAccessSettingsView {
     this.#credentials[provider].clear();
-    this.#reseal();
     return this.view();
-  }
-
-  /**
-   * Reconciles the keys' sealed mirror from the database, as every launch
-   * does (step E): asynchronous, retried while another process holds the
-   * credential lock, never rejecting. `null` with no mirror wired.
-   */
-  reconcileSealing(): Promise<WebMirrorResult | null> {
-    return this.#mirror === null ? Promise.resolve(null) : this.#mirror.reconcileSoon();
-  }
-
-  /**
-   * Stops sealing for the rest of this launch (an accepted quit): see
-   * {@link WebCredentialMirror.stop}. Saves and clears still commit to the
-   * database; nothing reseals after this.
-   */
-  stopSealing(): void {
-    this.#mirror?.stop();
-  }
-
-  /**
-   * One attempt now, never a wait on another process or the keychain (this
-   * runs on Electron's main thread). A busy lock, a key the keychain has not
-   * given yet, or a source that moved while sealing is finished in the
-   * background: a person saved or cleared, so the keychain may be asked.
-   */
-  #reseal(): void {
-    if (this.#mirror === null) return;
-    const result = this.#mirror.reconcile();
-    if (result.sealing === "pending" && RESEAL_LATER.has(result.reason)) {
-      void this.#mirror.reconcileSoon({ person: true });
-    }
   }
 
   /**
