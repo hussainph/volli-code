@@ -659,9 +659,7 @@ describe("M1 headless smoke (VC-563)", () => {
           },
         },
       },
-      {
-        tool: { name: "bash", args: { command: "volli session done --reason 'Greeting pushed'" } },
-      },
+      { tool: { name: "bash", args: { command: "volli session done --reason pushed" } } },
       { text: "Pushed the greeting and signalled done." },
     ]);
     const dataDir = join(root, "data");
@@ -814,7 +812,7 @@ describe("M1 headless smoke (VC-563)", () => {
     expect(signal.intent).toEqual({
       kind: "session.signal",
       signal: "done",
-      reason: "Greeting pushed",
+      reason: "pushed",
     });
     expect(receipts.get(signal.id)).toMatchObject({
       status: "completed",
@@ -823,7 +821,7 @@ describe("M1 headless smoke (VC-563)", () => {
     expect(ledger).toContainEqual({
       kind: "session.signaled",
       signal: "done",
-      reason: "Greeting pushed",
+      reason: "pushed",
     });
     expect(ledger.filter((event) => event.kind === "turn.started")).toHaveLength(1);
     expect(ledger.filter((event) => event.kind === "turn.completed")).toHaveLength(1);
@@ -833,6 +831,53 @@ describe("M1 headless smoke (VC-563)", () => {
       attachment: { venue: hostdVenue(live(host).database.db) },
     });
     expect(hostdVenue(live(host).database.db).kind).toBe("remote");
+
+    // VC-661: the operator reads the latest signal back over the CLI, in both
+    // formats, without an operator token — reads need only the socket; only
+    // writes ask for the operator. Nothing sends a token here: the variable
+    // is absent and no token file exists under this fixture HOME.
+    const readEnv = {
+      PATH: cliEnv.PATH,
+      HOME: cliEnv.HOME,
+      VOLLI_SOCKET: cliEnv.VOLLI_SOCKET,
+    };
+    const cliReadJson = async (...argv: string[]) =>
+      JSON.parse(
+        (await exec(process.execPath, [cliBundle, ...argv, "--json"], { cwd: root, env: readEnv }))
+          .stdout,
+      );
+    const cliReadHuman = async (...argv: string[]) =>
+      (await exec(process.execPath, [cliBundle, ...argv], { cwd: root, env: readEnv })).stdout;
+    const shownJson = await cliReadJson("session", "show", started.session);
+    expect(shownJson.signal).toMatchObject({
+      kind: "done",
+      reason: "pushed",
+      at: expect.any(Number),
+      ageMs: expect.any(Number),
+    });
+    const signalEvent = (
+      await live(host).sessionEngine.listEvents({ sessionId: started.sessionId })
+    ).find((event) => event.payload.kind === "session.signaled")!;
+    expect(shownJson.signal.at).toBe(signalEvent.occurredAt);
+    const answeredJson = await cliReadJson("session", "answer", started.session);
+    expect(answeredJson.signal).toMatchObject({
+      kind: "done",
+      reason: "pushed",
+      at: shownJson.signal.at,
+      ageMs: expect.any(Number),
+    });
+    expect(shownJson.signal.ageMs).toBeGreaterThanOrEqual(0);
+    expect(answeredJson.signal.ageMs).toBeGreaterThanOrEqual(shownJson.signal.ageMs);
+    const signalLine = /signal  done · \d+[smh] ago/;
+    const shownHuman = await cliReadHuman("session", "show", started.session);
+    const answeredHuman = await cliReadHuman("session", "answer", started.session);
+    expect(shownHuman).toMatch(signalLine);
+    expect(answeredHuman).toMatch(signalLine);
+    expect(shownHuman).toContain("signal reason:\n  | pushed\n");
+    expect(answeredHuman).toContain("signal reason:\n  | pushed\n");
+    console.log(`VC-661 session show --json .signal: ${JSON.stringify(shownJson.signal)}`);
+    console.log(`VC-661 session show (human):\n${shownHuman.trimEnd()}`);
+    console.log(`VC-661 session answer (human):\n${answeredHuman.trimEnd()}`);
     console.log(
       "VC-563 M1 smoke: CLI registration, Ticket worktree, push to the bare remote, in-Session done signal, fresh-CLI answer",
     );
