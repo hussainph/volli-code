@@ -60,6 +60,7 @@ import {
   openSync,
   readSync,
   rmSync,
+  statSync,
   type Stats,
   writeSync,
 } from "node:fs";
@@ -86,6 +87,10 @@ const MAX_KEY_FILE_BYTES = 1024;
 /** Durable: changing it makes every sealed store read as sealed under another key. */
 const KEY_ID_LABEL = "volli-secret-key-id:v1\0";
 const KEY_LINE = /^[A-Za-z0-9+/]{43}=$/;
+/** Starting over keeps the sealed file (VC-641): it is set aside, never deleted. */
+const START_OVER =
+  "To start over without them, run `volli-hostd credentials reset`, which sets " +
+  `${SECRET_STORE_FILE_NAME} aside, and enter the secrets again.`;
 
 /**
  * Where a headless host keeps its key: `VOLLI_SECRET_KEY_FILE` when set, else
@@ -125,6 +130,9 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
   };
   return {
     isEncryptionAvailable: () => true,
+    probe() {
+      inspectSecretKeyFile(path);
+    },
     encryptString(value) {
       if (key === undefined) adopt(readKey(path) ?? createKey(path));
       const header = Buffer.concat([MAGIC, id!]);
@@ -139,8 +147,7 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
         throw new SecretKeyUnavailableError(
           "other-adapter",
           "The saved secrets were sealed by the macOS keychain, and this host seals " +
-            "with a key file, so it cannot open them. Delete " +
-            `${SECRET_STORE_FILE_NAME} beside the database and enter the secrets again.`,
+            `with a key file, so it cannot open them. ${START_OVER}`,
         );
       }
       if (
@@ -149,7 +156,9 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
       ) {
         throw new Error("Invalid secret storage.");
       }
-      if (key === undefined) {
+      let candidate = key;
+      let candidateId = id;
+      if (candidate === undefined) {
         // Opening never creates: a missing key is a refusal, never a new key.
         const loaded = readKey(path);
         if (loaded === null) {
@@ -157,20 +166,23 @@ export function fileSecretKey(options: FileSecretKeyOptions): SecretKeyPort {
             "missing",
             `Saved secrets exist, but their key file ${path} is missing. Put the key ` +
               "file back (mode 0600) to open them. Volli will not make a new key while " +
-              `they exist: to start over, delete ${SECRET_STORE_FILE_NAME} beside the ` +
-              "database and enter the secrets again.",
+              `they exist. ${START_OVER}`,
           );
         }
-        adopt(loaded);
+        candidate = loaded;
+        candidateId = keyId(loaded);
       }
-      if (!timingSafeEqual(value.subarray(MAGIC.length, HEADER_BYTES), id!)) {
+      if (!timingSafeEqual(value.subarray(MAGIC.length, HEADER_BYTES), candidateId!)) {
+        // A key that is not this store's is never adopted, so putting the
+        // right one back opens on the next try in this process too.
+        if (candidate !== key) candidate.fill(0);
         throw new SecretKeyUnavailableError(
           "wrong-key",
           `The key file ${path} is not the key the saved secrets were sealed with. ` +
-            "Put the original key file back, or delete " +
-            `${SECRET_STORE_FILE_NAME} beside the database and enter the secrets again.`,
+            `Put the original key file back. ${START_OVER}`,
         );
       }
+      adopt(candidate);
       const ivAt = HEADER_BYTES;
       const tagAt = ivAt + IV_BYTES;
       const decipher = createDecipheriv("aes-256-gcm", key!, value.subarray(ivAt, tagAt));
@@ -212,6 +224,7 @@ function readKey(path: string): Buffer | null {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return null;
+    if (errorCode(error) === "EACCES") classifyDenied(path);
     throw unreadable(path, error);
   }
   try {
@@ -237,6 +250,23 @@ function readKey(path: string): Buffer | null {
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * An open the kernel denied says nothing about why. A key another user owns
+ * (mode 0600, so this user cannot read it) or one that denies its owner but
+ * grants others (0044) is unsafe, not lost: tell it from the file's metadata
+ * alone, never its bytes. `stat`, like the open, follows a symlink. A key this
+ * user owns with no access for anyone (0000) falls through to `unreadable`.
+ */
+function classifyDenied(path: string): void {
+  let stat: Stats;
+  try {
+    stat = statSync(path);
+  } catch {
+    return;
+  }
+  refuseShared(path, stat);
 }
 
 /** ssh's rule for a private key: only its owner may have any access to it. */

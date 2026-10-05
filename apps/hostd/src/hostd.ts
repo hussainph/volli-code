@@ -14,7 +14,9 @@
  * 2. **Another host.** Refused when another process holds the data
  *    directory's instance lock (`instance-lock.ts`), whatever its `--socket`:
  *    two hosts must never open one database. The lock is held until stop.
- * 3. **Secrets, eagerly** (`secrets.ts`).
+ * 3. **Secrets, eagerly** (`secrets.ts`). Never a refusal (VC-641): a lost,
+ *    wrong or unsafe key, or a damaged store, boots with credentials
+ *    `locked`, `refused` or `corrupt` in the status file.
  * 4. **The agent socket**, before the database, so a CLI request during
  *    migrations waits for boot rather than being refused at connect. A live
  *    listener on the same path refuses this host.
@@ -50,7 +52,7 @@ import { acquireInstanceLock } from "./instance-lock";
 import type { HostdLogger } from "./log";
 import { openOperators } from "./operators";
 import { headlessPorts } from "./ports";
-import { openHeadlessSecrets, type HeadlessSecrets } from "./secrets";
+import { logCredentials, openHeadlessSecrets, type HeadlessSecrets } from "./secrets";
 import {
   writeStatus,
   type HostdCapabilities,
@@ -121,6 +123,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
   let state: HostdState = "starting";
   let database: HostdDatabaseStatus | null = null;
   let capabilities = UNAVAILABLE;
+  let credentials: HostdStatus["credentials"] = null;
   const snapshot = (): HostdStatus => ({
     v: 1,
     state,
@@ -132,6 +135,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     socketPath,
     database,
     capabilities,
+    credentials,
   });
   const publish = (next: HostdState): void => {
     state = next;
@@ -151,7 +155,8 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
 
   async function boot(): Promise<RunningHostd> {
     const secrets = openHeadlessSecrets(dataDir, options.env);
-    logger.info("secrets ready", { keyPath: secrets.keyPath, key: secrets.key });
+    credentials = secrets.status;
+    logCredentials(secrets, logger);
     // The person's credential (VC-623): judged now, so an operators file the
     // service account could write refuses boot rather than minting people.
     const operators = openOperators({

@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "../ipc/secrets";
+import type {
+  CredentialsResult,
+  SecretReplaceInput,
+  SecretSubmitInput,
+  SecretsResult,
+} from "../ipc/secrets";
 // Type-only imports ONLY, from BOTH sources below: the pack config keeps main
 // and preload dependency-disjoint (see CAUTION in vite.config.ts) — a runtime
 // import from @volli/shared here could split a shared chunk out of preload.cjs.
@@ -540,6 +545,8 @@ const api = {
     decline: (id: string): Promise<Result> => invoke("volli:secret-decline", id),
     revoke: (id: string): Promise<Result> => invoke("volli:secret-revoke", id),
     replace: (input: SecretReplaceInput): Promise<Result> => invoke("volli:secret-replace", input),
+    unlock: (): Promise<CredentialsResult> => invoke("volli:secrets-unlock"),
+    reset: (): Promise<CredentialsResult> => invoke("volli:secrets-reset"),
   },
   mcp: {
     list: (input: McpProjectInput): Promise<McpServersResult> => invoke("volli:mcp-list", input),
