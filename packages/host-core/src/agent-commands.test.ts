@@ -3167,7 +3167,73 @@ describe("agent command service", () => {
         provenance: PROVENANCE,
         turnId: "turn-1",
       });
-      expect(await answer()).toMatchObject({ ok: true, data: { state: "completed" } });
+      expect(await answer()).toMatchObject({
+        ok: true,
+        data: { state: "completed", signal: null },
+      });
+      const show = () =>
+        service.execute({
+          v: 1,
+          cmd: "session.show",
+          args: { id: shortId },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+        });
+      expect(await show()).toMatchObject({ ok: true, data: { signal: null } });
+      for (const [kind, reason] of [
+        ["done", "pushed"],
+        ["blocked", null],
+      ] as const) {
+        const submitted = await sessionEngine.submit({
+          commandId: `signal-${kind}`,
+          sessionId,
+          intent: { kind: "session.signal", signal: kind, reason },
+          provenance: PROVENANCE,
+        });
+        expect(submitted.receipt?.status).toBe("completed");
+        const signal = (await sessionEngine.getSession({ sessionId }))!.signal!;
+        const expected = {
+          kind,
+          reason,
+          at: signal.occurredAt,
+          ageMs: Math.max(0, PEEK_AT - signal.occurredAt),
+        };
+        expect(await show()).toMatchObject({ ok: true, data: { signal: expected } });
+        expect(await answer()).toMatchObject({
+          ok: true,
+          data: { state: "completed", signal: expected },
+        });
+      }
+      // A reader whose clock precedes the durable signal cannot report a negative age.
+      const behind = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        sessionEngine,
+        now: () => 0,
+      });
+      for (const cmd of ["session.show", "session.answer"] as const) {
+        expect(
+          await behind.execute({
+            v: 1,
+            cmd,
+            args: { id: shortId },
+            ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+          }),
+        ).toMatchObject({ ok: true, data: { signal: { kind: "blocked", ageMs: 0 } } });
+      }
+      // A fresh reader still gets the last signal from durable projections.
+      const restarted = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        sessionEngine: createTestSessionEngine(ctx.db),
+      });
+      expect(
+        await restarted.execute({
+          v: 1,
+          cmd: "session.show",
+          args: { id: shortId },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+        }),
+      ).toMatchObject({ ok: true, data: { signal: { kind: "blocked", reason: null } } });
       // The same handle rules as a peek.
       expect(
         await service.execute({
@@ -3208,6 +3274,14 @@ describe("agent command service", () => {
       testSession("project-one", "ticket-one", { id: sessionId, cwd: "/repo/volli" }),
     );
 
+    const show = () =>
+      service.execute({
+        v: 1,
+        cmd: "session.show",
+        args: { id: "abcdef12" },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+      });
+    expect(await show()).toMatchObject({ ok: true, data: { signal: null } });
     const blocked = await service.execute({
       v: 1,
       cmd: "session.blocked",
@@ -3237,12 +3311,19 @@ describe("agent command service", () => {
     });
     expect((events as { data: { events: unknown[] } }).data.events).toHaveLength(1);
     expect(JSON.stringify(events)).not.toContain(sessionId);
-    expect((await createTestSessionEngine(ctx.db).getSession({ sessionId }))?.signal).toMatchObject(
-      {
-        signal: "blocked",
-        reason: "Waiting for credentials",
+    const signal = (await createTestSessionEngine(ctx.db).getSession({ sessionId }))!.signal!;
+    expect(signal).toMatchObject({ signal: "blocked", reason: "Waiting for credentials" });
+    expect(await show()).toMatchObject({
+      ok: true,
+      data: {
+        signal: {
+          kind: "blocked",
+          reason: "Waiting for credentials",
+          at: signal.occurredAt,
+          ageMs: Math.max(0, timestamp - 1 - signal.occurredAt),
+        },
       },
-    );
+    });
     expect(mutations).toEqual([
       { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
     ]);
