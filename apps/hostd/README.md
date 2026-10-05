@@ -290,7 +290,7 @@ fields. `console.*` from host-core is routed through the same logger.
 carries a key, a secret or a request payload.
 
 ```sh
-journalctl -u volli-hostd -o cat | jq -r '[.ts, .level, .msg] | @tsv'
+journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
 ```
 
 ## Packaging
@@ -471,12 +471,12 @@ is gone for good), set them aside and start over, with hostd stopped and the
 unit's `VOLLI_SECRET_KEY_FILE` in the environment:
 
 ```sh
-sudo systemctl stop volli-hostd
+sudo systemctl stop volli-hostd.socket volli-hostd   # the socket too, or a CLI call restarts it
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd          # says what it found
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd --yes    # sets it aside
-sudo systemctl start volli-hostd
+sudo systemctl start volli-hostd.socket volli-hostd
 ```
 
 It refuses a data directory boot would refuse (another user's, or writable by

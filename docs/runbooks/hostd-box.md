@@ -185,8 +185,8 @@ box$ sudo install -o volli -g volli -m 600 auth.json /var/lib/volli-hostd/.pi/ag
 mac$ rm -P auth.json
 ```
 
-No restart is needed: Pi reads the file when a Session asks. Check it once you
-hold an operator token (step 7):
+No restart is needed: Pi reads the file when a Session asks. Check it once
+`VOLLI_SOCKET` is set (step 7; reads need only the group):
 
 ```sh
 box$ volli model list | head -20        # your provider: "available", with its models
@@ -197,9 +197,10 @@ box$ volli model list | head -20        # your provider: "available", with its m
 The agent commits and pushes as `volli`, with `volli`'s git identity and key.
 
 ```sh
-box$ sudo -u volli git config --global user.name "Volli on box"
-box$ sudo -u volli git config --global user.email "you+volli-box@example.com"
-box$ sudo -u volli ssh-keygen -t ed25519 -N "" -C "volli@box" -f /var/lib/volli-hostd/.ssh/id_ed25519
+box$ sudo -u volli -H git config --global user.name "Volli on box"
+box$ sudo -u volli -H git config --global user.email "you+volli-box@example.com"
+box$ sudo -u volli -H install -d -m 700 /var/lib/volli-hostd/.ssh
+box$ sudo -u volli -H ssh-keygen -t ed25519 -N "" -C "volli@box" -f /var/lib/volli-hostd/.ssh/id_ed25519
 box$ sudo cat /var/lib/volli-hostd/.ssh/id_ed25519.pub
 ```
 
@@ -211,9 +212,9 @@ Then clone it, as `volli`, into `/srv/volli`:
 
 ```sh
 box$ sudo install -d -o volli -g volli -m 750 /srv/volli
-box$ sudo -u volli env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" \
+box$ sudo -u volli -H env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" \
        git clone git@github.com:<you>/<test-repo>.git /srv/volli/<test-repo>
-box$ sudo -u volli git -C /srv/volli/<test-repo> push --dry-run origin HEAD   # must not ask for anything
+box$ sudo -u volli -H git -C /srv/volli/<test-repo> push --dry-run origin HEAD   # must not ask for anything
 ```
 
 The clone records GitHub's host key in `volli`'s `known_hosts`, so the agent's
@@ -224,11 +225,11 @@ Contents read and write, clone `https://github.com/<you>/<test-repo>.git`, and
 store it for `volli` only:
 
 ```sh
-box$ sudo -u volli git config --global credential.helper store
-box$ sudo -u volli sh -c 'umask 077; printf "https://x-access-token:%s@github.com\n" "<token>" > ~/.git-credentials'
+box$ sudo -u volli -H git config --global credential.helper store
+box$ sudo -u volli -H sh -c 'umask 077; printf "https://x-access-token:%s@github.com\n" "<token>" > ~/.git-credentials'
 ```
 
-Use `sudo -u volli git -C /srv/volli/<test-repo> …` whenever you look at the
+Use `sudo -u volli -H git -C /srv/volli/<test-repo> …` whenever you look at the
 checkout yourself: as `alice`, git refuses a repository another user owns
 ("dubious ownership").
 
@@ -244,7 +245,9 @@ box$ echo 'export VOLLI_SOCKET=/run/volli-hostd.sock' >> ~/.bashrc && . ~/.bashr
 box$ volli project list            # reads work for anyone in the group
 ```
 
-The token is in `~/.config/volli/operator-token` (`0600`, yours). The CLI
+The token is in `~/.config/volli/operator-token` (`0600`, yours). hostd reads
+the operators file on every request that carries a token, so no restart is
+needed; its boot line `no operators file` only means none existed yet. The CLI
 sends it only to a socket root owns, which `/run/volli-hostd.sock` is.
 `sudo volli-hostd operator-token --revoke alice` revokes it from the next
 request.
@@ -284,22 +287,37 @@ the CLI only ever asked and returned.
 **Come back** a few minutes later with a new SSH session:
 
 ```sh
-box$ volli session list                 # the Session, now idle
+box$ volli session list --project Demo  # the Session, now idle
 box$ volli session answer <id>          # state: completed, and the agent's final message
-box$ volli session show <id>            # who started it, model, cost, latest turn
+box$ volli session peek <id> --lines 30 # the turn: [write], [bash] … and the final message
+box$ volli session show <id>            # who started it, model, cost
 box$ volli ticket events DE-1           # created, session_started, worktree_changed
-box$ volli ticket show DE-1             # worktreePath and branch volli/DE-1-add-a-greeting
-box$ sudo -u volli git -C /srv/volli/<test-repo> ls-remote origin 'volli/*'   # the pushed branch
+box$ volli ticket show DE-1 --json | jq '{worktreePath, branch}'
+box$ sudo -u volli -H git -C /srv/volli/<test-repo> ls-remote origin 'volli/*'   # the pushed branch
+```
+
+The dry run's answers, for comparison (the Session id differs):
+
+```text
+$ volli session list --project Demo
+da2f9efc  chat  idle  last 1s  DE-1  anthropic/claude-sonnet-4-5 · medium  ~<$0.01  75  Box demo
+$ volli session answer da2f9efc
+da2f9efc  completed  ticket  turns 1  Box demo
+…final message: Added GREETING.md, committed, pushed the branch and signalled done.
+$ sudo -u volli -H git -C /srv/volli/demo ls-remote origin 'volli/*'
+7ae4cc3067e94a9d63d049404c8b76cc39b97bdc	refs/heads/volli/DE-1-add-a-greeting
 ```
 
 Success is all of:
 
 - `session answer` says `completed`.
-- `session show` and the Session's history carry the **done** signal with the
-  reason the agent gave (that came from `volli session done` run *inside* the
-  Session, reaching this host's socket).
 - The branch `volli/DE-1-add-a-greeting` is on the remote (also on GitHub's
-  branch list), with a commit adding `GREETING.md`.
+  branch list), with a commit adding `GREETING.md` by "Volli on box".
+- The agent's `volli session done` worked: run *inside* the Session, it
+  reaches this host's socket and prints `<id>  done`. The signal is recorded in
+  the Session's ledger (the Linux smoke asserts it), but in M1 no CLI read
+  prints it back to you: look for it in the agent's final message, or in a
+  Ticket comment holding its todo list when it kept one.
 
 Record the result on VC-541.
 
@@ -308,8 +326,8 @@ Record the result on VC-541.
 **Logs** are one JSON object per line:
 
 ```sh
-box$ journalctl -u volli-hostd -o cat | jq -r '[.ts, .level, .msg] | @tsv'
-box$ journalctl -u volli-hostd -o cat -f | jq -c 'select(.level != "debug")'
+box$ sudo journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
+box$ sudo journalctl -u volli-hostd -o cat -f | jq -cR 'fromjson? | select(.level != "debug")'
 box$ systemctl status volli-hostd volli-hostd.socket
 ```
 
@@ -350,12 +368,12 @@ the stored secrets aside and start over, with hostd stopped and the unit's
 `VOLLI_SECRET_KEY_FILE` in the environment (omit it if you never set one):
 
 ```sh
-box$ sudo systemctl stop volli-hostd
+box$ sudo systemctl stop volli-hostd.socket volli-hostd
 box$ sudo -u volli env VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key \
        volli-hostd credentials reset --data-dir /var/lib/volli-hostd          # says what it found
 box$ sudo -u volli env VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key \
        volli-hostd credentials reset --data-dir /var/lib/volli-hostd --yes    # sets it aside
-box$ sudo systemctl start volli-hostd
+box$ sudo systemctl start volli-hostd.socket volli-hostd
 ```
 
 It moves the store aside (never deletes it) and prints the `mv` that undoes
@@ -375,10 +393,13 @@ on this host. Until then, take a cold copy with hostd stopped, so SQLite's WAL
 is folded in:
 
 ```sh
-box$ sudo systemctl stop volli-hostd
+box$ sudo systemctl stop volli-hostd.socket volli-hostd
 box$ sudo tar -C /var/lib -czf /root/volli-hostd-$(date +%F).tar.gz volli-hostd
-box$ sudo systemctl start volli-hostd
+box$ sudo systemctl start volli-hostd.socket volli-hostd
 ```
+
+Stop the socket too: while it listens, any `volli` call starts hostd again in
+the middle of the copy.
 
 It is as sensitive as the box: it holds the model sign-in, the push key and,
 at its default path, the secret key. It also holds the Ticket worktrees, so
@@ -393,7 +414,7 @@ the cold copy above first, then:
 
 ```sh
 box$ sha256sum -c volli-hostd-*-linux-x64.tar.gz.sha256
-box$ sudo systemctl stop volli-hostd
+box$ sudo systemctl stop volli-hostd.socket volli-hostd
 box$ sudo rm -rf /opt/volli-hostd.old && sudo mv /opt/volli-hostd /opt/volli-hostd.old
 box$ sudo mkdir /opt/volli-hostd && sudo tar -xzf volli-hostd-*-linux-x64.tar.gz \
        -C /opt/volli-hostd --strip-components=1 --no-same-owner
@@ -411,7 +432,10 @@ migrated the database.
 
 For a quick look without systemd (it is not the supported layout: hostd runs
 as you, so your operator token does not separate you from its Sessions), run
-it under `umask 077`, or `volli.db` is created world-readable:
+it under `umask 077`, or `volli.db` is created world-readable. Steps 1–3, 5
+(your own `~/.pi/agent/auth.json`) and 7 still apply: you need the `volli`
+group even here, because hostd, now running as you, reads
+`/etc/volli-hostd-operators` (`root:volli 0640`) to accept your token.
 
 ```sh
 box$ (umask 077 && volli-hostd --data-dir ~/volli-hostd-data)

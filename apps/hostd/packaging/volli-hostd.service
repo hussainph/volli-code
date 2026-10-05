@@ -9,7 +9,7 @@
 #     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
 #   sudo install -m 644 volli-hostd.service volli-hostd.socket /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
-#   journalctl -u volli-hostd -o cat | jq .
+#   journalctl -u volli-hostd -o cat | jq -R 'fromjson?'
 #
 # An operator (a person, never the service account) writes over SSH with a
 # token root issues, and reaches the socket through the service's group:
