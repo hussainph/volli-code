@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
+import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -125,6 +125,16 @@ export function createAgentCommandService(
       // Engine. That is what lets the `hook` hot path be judged without paying
       // for the identity resolution its table entry deliberately skips.
       const door = doorActor(request, verifyToken, options.verifyOperatorToken);
+      if (request.cmd === "session.start" && door.kind !== "operator") {
+        return {
+          v: 1,
+          ok: false,
+          error: makeAgentError(
+            "WRONG_DOOR",
+            "Agents start Sessions through the named session_start tool. This CLI door requires a verified hostd operator token.",
+          ),
+        };
+      }
       const projects = listProjects(options.db);
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or

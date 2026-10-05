@@ -352,7 +352,24 @@ export async function runCli(
     dependencies.stderr(bareHelpText());
     return 2;
   }
-  const parsed = parseCliArgs(argv);
+  let parsed = parseCliArgs(argv);
+  let startOperator: Awaited<ReturnType<typeof operatorTokenFor>> | undefined;
+  if (
+    !parsed.ok &&
+    parsed.code === "WRONG_DOOR" &&
+    parsed.verb !== undefined &&
+    verbEntry(parsed.verb)?.operatorCli === true &&
+    dependencies.env["VOLLI_SOCKET"] !== undefined
+  ) {
+    startOperator = await operatorTokenFor(
+      dependencies.env,
+      dependencies.readOperatorToken ?? (async () => null),
+      async () => (await dependencies.socketPathFault?.(dependencies.env["VOLLI_SOCKET"]!)) ?? null,
+    );
+    if (startOperator.warning !== undefined) dependencies.stderr(startOperator.warning);
+    if (startOperator.token !== undefined)
+      parsed = parseCliArgs(argv, undefined, { operator: true });
+  }
   if (!parsed.ok) return renderParseRefusal(parsed, argv, dependencies);
   if (parsed.invocation.command === "help") {
     const runtime = await readHelpRuntime(dependencies);
@@ -423,11 +440,13 @@ export async function runCli(
     // The person's credential on a headless host (VC-623). Never beside a
     // Session's environment: `operatorTokenFor` returns nothing there without
     // reading anything, so an agent's request is byte-for-byte what it was.
-    const operator = await operatorTokenFor(
-      dependencies.env,
-      dependencies.readOperatorToken ?? (async () => null),
-      async () => (await dependencies.socketPathFault?.(socketPath)) ?? null,
-    );
+    const operator =
+      startOperator ??
+      (await operatorTokenFor(
+        dependencies.env,
+        dependencies.readOperatorToken ?? (async () => null),
+        async () => (await dependencies.socketPathFault?.(socketPath)) ?? null,
+      ));
     if (operator.warning !== undefined) dependencies.stderr(operator.warning);
     const request: AgentRequest = {
       v: 1,

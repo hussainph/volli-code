@@ -980,9 +980,12 @@ describe("registry ↔ argv mechanics", () => {
 
   // Mechanics for a verb that is on no agent surface would be a route to
   // something the registry does not publish anywhere.
-  it("holds mechanics only for verbs carrying a cli access mode", () => {
+  it("holds mechanics only for CLI verbs or the person-only operator door", () => {
     for (const { key } of mechanicsEntries) {
-      expect(verbEntry(key)!.accessModes, key).toContain("cli");
+      expect(
+        verbEntry(key)!.accessModes.includes("cli") || verbEntry(key)!.operatorCli === true,
+        key,
+      ).toBe(true);
     }
   });
 
@@ -998,7 +1001,6 @@ describe("registry ↔ argv mechanics", () => {
     );
     expect(missing).toEqual([
       "ticket.archive",
-      "session.start",
       "hook",
       "help",
       "ticket.await",
@@ -1074,5 +1076,22 @@ describe("cost", () => {
     expect(parseCliArgs(["cost", "--ticket", "VC-1", "--project", "VC"])).toMatchObject({
       ok: true,
     });
+  });
+});
+
+it("opens session start argv only with explicit operator parsing", () => {
+  expect(parseCliArgs(["session", "start", "VC-1"]).ok).toBe(false);
+  expect(
+    parseCliArgs(
+      ["session", "start", "VC-1", "--model", "scripted/test", "--reasoning", "off", "-m", "hello"],
+      undefined,
+      { operator: true },
+    ),
+  ).toMatchObject({
+    ok: true,
+    invocation: {
+      command: "session.start",
+      args: { id: "VC-1", model: "scripted/test", reasoning: "off", message: "hello" },
+    },
   });
 });

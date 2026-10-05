@@ -771,7 +771,7 @@ async function recordSessionSignal(
         id: "terminal",
         detail: { sessionOrigin: { kind: "session", sessionId: envSession.id } },
       },
-      venue: { id: "local", kind: "local" },
+      venue: options.venue ?? { id: "local", kind: "local" },
     },
   });
   if (submitted.receipt?.status !== "completed") {

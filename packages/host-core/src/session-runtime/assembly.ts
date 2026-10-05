@@ -414,6 +414,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
+          venue,
           db: dbHandle.db,
           events: options.hostPorts.events,
           dataDir,

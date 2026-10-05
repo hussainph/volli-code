@@ -93,7 +93,6 @@ export function createRuntimeContextResolver(options: {
   const { db, sessionEngine, mcpDispatch } = options;
   return async (sessionId) => {
     await options.waitForBirth(sessionId);
-    if (sessionEngine === null) return null;
     const projection = await sessionEngine.getSession({ sessionId });
     const attaching = projection?.session;
     if (!attaching || projection.modelSelection === null) return null;
@@ -120,6 +119,7 @@ export function createRuntimeContextResolver(options: {
       // no new grant here. Applying today's role default would be a hot
       // privilege edit to an existing Session; the fail-closed empty
       // list leaves only the Role bundle it could honestly have held.
+      mcpTools = mcpDispatch.forNewSession(options.toolSurface()!.resolveMcp?.(project.id) ?? []);
       toolSurface = toolSurfaceTools(
         await sessionEngine.getOrRecordSessionInput({
           sessionId,
@@ -132,13 +132,13 @@ export function createRuntimeContextResolver(options: {
               .resolve(attaching.role, [])
               .filter((tool) => tool !== "codemode"),
             mcpManagementNames: "server",
+            ...(mcpTools.length === 0 ? {} : { mcpTools }),
           },
           provenance,
         }),
       );
-      // A legacy Session is not retroactively granted today's MCP
-      // settings; the newly recorded backfill is deliberately empty.
-      mcpTools = [];
+      // The legacy attach freezes the current MCP selection once, just like
+      // the role bundle, and subsequent attaches reuse that durable record.
     }
     const shared = {
       projectId: project.id,

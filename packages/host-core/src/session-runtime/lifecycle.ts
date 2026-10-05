@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import { errorMessage, type SessionProjection } from "@volli/shared";
+import { errorMessage, type SessionProjection, type SessionExecutionVenue } from "@volli/shared";
 import type { HostCore, HostCorePorts } from "../index";
 import { listProjects } from "../db/projects-repo";
 import { listScheduledResumeSessionIds } from "../db/scheduled-resume-repo";
@@ -31,6 +31,14 @@ export class SessionRuntimeClosingError extends Error {
 }
 
 const recoveredServices = Symbol("recovered Session services");
+const issuedProofs = new WeakSet<object>();
+/** Runtime guard: a structural cast or copied symbol is not a recovery proof. */
+export function readRecoveredSessionServices<Services>(
+  ready: RecoveredSessionServices<Services>,
+): Services {
+  if (!issuedProofs.has(ready)) throw new Error("The Session services have no recovery proof.");
+  return ready.services;
+}
 /** Only the lifecycle can issue this proof that boot recovery has finished. */
 export interface RecoveredSessionServices<Services> {
   readonly [recoveredServices]: true;
@@ -48,6 +56,7 @@ export interface SessionRuntimeLifecycle<Services> {
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
+  venue?: SessionExecutionVenue;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */
@@ -90,6 +99,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const watchdog =
     runtime !== null && sessionEngine !== null && suspendClock !== null
       ? createSessionWatchdog({
+          ...(options.venue === undefined ? {} : { venue: options.venue }),
           listBindings: () => runtime.openNativeBindings(),
           suspendedMsWithin: suspendClock.suspendedMsWithin,
           projection: async (sessionId) => (await runtime.projection({ sessionId })).projection,
@@ -144,6 +154,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       try {
         await closeStaleAttachments({
           engine: sessionEngine,
+          ...(options.venue === undefined ? {} : { venue: options.venue }),
           shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null
@@ -206,7 +217,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       ports.power.on("resume", wake);
     }
     const services = options.services();
-    return {
+    const proof: RecoveredSessionServices<Services> = {
       [recoveredServices]: true,
       get services() {
         // Close can win after ready resolves but before a host's continuation
@@ -215,6 +226,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         return services;
       },
     };
+    issuedProofs.add(proof);
+    return proof;
   }
   function ready(): Promise<RecoveredSessionServices<Services>> {
     if (closing)

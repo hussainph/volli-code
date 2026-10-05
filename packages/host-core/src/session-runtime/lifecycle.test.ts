@@ -498,3 +498,20 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await owner.close();
   });
 });
+
+it("passes the host venue into recovery and watchdog and rejects cast/copied proofs", async () => {
+  const f = fixture();
+  const venue = { id: "headless", kind: "remote" as const };
+  const owner = createSessionRuntimeLifecycle({ ...f.options, venue });
+  const ready = await owner.ready();
+  const { readRecoveredSessionServices } = await import("./lifecycle");
+  expect(readRecoveredSessionServices(ready)).toBe(ready.services);
+  expect(() => readRecoveredSessionServices({ services: ready.services } as typeof ready)).toThrow(
+    "no recovery proof",
+  );
+  expect(() => readRecoveredSessionServices({ ...ready })).toThrow("no recovery proof");
+  expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].venue).toBe(venue);
+  expect(vi.mocked(control.createSessionWatchdog).mock.lastCall![0].venue).toBe(venue);
+  await owner.close();
+  expect(() => readRecoveredSessionServices(ready)).toThrow("closing");
+});

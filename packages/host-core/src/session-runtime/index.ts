@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ObservabilitySink } from "@volli/shared";
+import type { ObservabilitySink, SessionExecutionVenue } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
@@ -15,6 +15,7 @@ import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 export interface DesktopSessionRuntimeOptions {
   db: Database.Database;
+  venue?: SessionExecutionVenue;
   events: HostEventBus;
   dataDir: string;
   transcriptDirectory: string;
@@ -54,7 +55,10 @@ export function createDesktopSessionRuntime(
     locations: createDesktopSessionLocationResolver(
       options.db,
       { events: options.events },
-      { dataDir: options.dataDir },
+      {
+        dataDir: options.dataDir,
+        ...(options.venue === undefined ? {} : { venue: options.venue }),
+      },
     ),
     clock: { now },
     ids: { next: () => nextId() },

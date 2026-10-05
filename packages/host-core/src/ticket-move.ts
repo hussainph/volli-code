@@ -53,6 +53,9 @@ export function trimFinishedTicketInBackground(
   ticketId: string,
   projectId: string | undefined,
 ): void {
+  // A committed Done move still succeeds, but missing activity evidence can
+  // never authorize the detached destructive act.
+  if (typeof ports.busySites !== "function") return;
   // Start now, do not put a filesystem walk on the board reply's critical path.
   void trimFinishedWorktree(ports, ticketId)
     .then((outcome) => {

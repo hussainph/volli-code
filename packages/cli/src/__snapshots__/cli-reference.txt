@@ -560,7 +560,7 @@ Effects:
 - Does not: The calling Session is not paused: it is told about the started Session through later notices, not by waiting.
 
 Notes:
-- Runs in the app: attended-only, never headless; the board does not move.
+- The person may start over a headless host socket with an operator token. Agents use the named tool; the board does not move.
 - Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.
 - An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.
 - A tier names a kind of work (fast, deep, visual, ticket, global) and resolves to the model configured for it in Settings; a tier and a model are alternatives.

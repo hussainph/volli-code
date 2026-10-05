@@ -62,6 +62,24 @@ function ticketSession(projectId: string, ticketId: string): Session {
 }
 
 describe("desktop Session location resolver", () => {
+  it("uses the host venue for resolution and preparation", async () => {
+    testDb = openTestDb();
+    const project = testProject({ id: "p", path: "/repo" });
+    insertProject(testDb.db, project);
+    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, {
+      ...options,
+      venue: { id: "hostd", kind: "remote" },
+    });
+    const session = { ...ticketSession("p", "unused"), role: "project" as const, ticketId: null };
+    expect(await resolver.resolve(session)).toEqual({
+      directory: "/repo",
+      venue: { id: "hostd", kind: "remote" },
+    });
+    expect(await resolver.prepare!(session)).toEqual({
+      directory: "/repo",
+      venue: { id: "hostd", kind: "remote" },
+    });
+  });
   it("routes Board Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
