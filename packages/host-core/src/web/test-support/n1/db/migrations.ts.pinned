@@ -16,7 +16,6 @@
  */
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
-import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
@@ -2767,11 +2766,6 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 58,
     name: "cloud identity — host, workspace epochs, workers, checkout leases, devices (VC-550)",
     sql: CLOUD_IDENTITY_MIGRATION,
-  },
-  {
-    version: 59,
-    name: "web credential source revision and sealed mirror receipt — step E (VC-643)",
-    sql: WEB_CREDENTIAL_SOURCE_MIGRATION,
   },
 ];
 

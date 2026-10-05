@@ -7,7 +7,12 @@ import { SecretKeyUnavailableError } from "../ports/secret-key";
 import { SealedStoreNewerError, SealedStoreUnreadableError } from "./credential-state";
 import { CredentialLock, CredentialLockBusyError } from "./credential-lock";
 import { SealedFileChangedError } from "./durable-file";
-import { SealedDocument, SealedStoreCorruptError, type SealedCodec } from "./sealed-document";
+import {
+  SealedDocument,
+  SealedFileUnverifiedError,
+  SealedStoreCorruptError,
+  type SealedCodec,
+} from "./sealed-document";
 
 let dir: string;
 let path: string;
@@ -146,6 +151,67 @@ describe("SealedDocument", () => {
     expect(() => document.update(() => ["a"])).toThrow(/^Could not persist encrypted secrets\.$/);
     expect(readFileSync(path, "utf8")).toBe('sealed:["a"]');
     expect(new SealedDocument(path, codec(), lock).read()).toEqual(["a"]);
+  });
+
+  it("reads a published file back under the same lock and lets the caller judge it", () => {
+    const toy = codec();
+    const document = new SealedDocument(path, toy, lock);
+    const seen: string[][] = [];
+    expect(
+      document.update(
+        () => ["a"],
+        (reopened) => seen.push(reopened),
+      ).written,
+    ).toBe(true);
+    // Opened from disk again, not the document handed to the seal.
+    expect(seen).toEqual([["a"]]);
+    expect(toy.opens).toBe(1);
+    // Nothing written, nothing verified.
+    document.update(
+      () => null,
+      () => seen.push(["never"]),
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("is unverified, never sealed, when the published file does not read back as meant", () => {
+    const toy = codec();
+    const document = new SealedDocument(path, toy, lock);
+    expect(() =>
+      document.update(
+        () => ["a"],
+        () => {
+          throw new Error(`mismatch at ${dir}`);
+        },
+      ),
+    ).toThrow(/^Saved credentials were written, but did not read back as written\.$/);
+    // A file that does not open, or vanished, after publish.
+    const garbling = new SealedDocument(
+      path,
+      { ...codec(), seal: () => Buffer.from("junk") },
+      lock,
+    );
+    expect(() =>
+      garbling.update(
+        () => ["b"],
+        () => {},
+      ),
+    ).toThrow(SealedFileUnverifiedError);
+    const vanishing = new SealedDocument(path, codec(), lock, {
+      step: (at) => {
+        if (at === "directory-synced") rmSync(path);
+      },
+    });
+    writeFileSync(path, 'sealed:["c"]');
+    expect(() =>
+      vanishing.update(
+        () => ["d"],
+        () => {},
+      ),
+    ).toThrow(SealedFileUnverifiedError);
+    // Forgotten: the next change reads the disk before writing.
+    writeFileSync(path, 'sealed:["e"]');
+    expect(vanishing.read()).toEqual(["e"]);
   });
 
   it("fails a read while this process already holds the lock", () => {

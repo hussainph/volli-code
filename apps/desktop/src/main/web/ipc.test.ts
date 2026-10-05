@@ -62,6 +62,7 @@ describe("the Web Access door", () => {
         provider: "off",
         searxngUrl: null,
         keys: { brave: "absent", exa: "absent" },
+        sealing: "none",
       },
     });
   });

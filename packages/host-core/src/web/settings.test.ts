@@ -68,7 +68,15 @@ describe("WebAccessSettings defaults", () => {
       provider: "off",
       searxngUrl: null,
       keys: { brave: "absent", exa: "absent" },
+      sealing: "none",
     });
+  });
+
+  it("says a saved key is pending sealing when this host has no mirror, never sealed", () => {
+    settings.saveKey("brave", KEY);
+    expect(settings.view().sealing).toBe("pending");
+    settings.clearKey("brave");
+    expect(settings.view().sealing).toBe("none");
   });
 
   it("resolves to nothing configured, so a Session is offered no web at all", () => {

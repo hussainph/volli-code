@@ -114,8 +114,15 @@ import {
   type RuntimeAssemblyOptions,
 } from "@volli/host-core/session-runtime/assembly";
 import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
+import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  keychainCredentialKeyring,
+  SecretStore,
+} from "@volli/host-core/secrets";
+import { describeWebSealing } from "@volli/host-core/web/credential-mirror";
+import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { keychainSecretCodec } from "./secrets/codec";
-import { SecretStore } from "@volli/host-core/secrets";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { retiresSessionSecrets } from "@volli/host-core/secrets/lifetime";
 import { registerSecretIpc } from "./secrets/ipc";
@@ -732,13 +739,24 @@ const appStartup = app.whenReady().then(async () => {
     observeScheduledResume: (projection) => observeScheduledResume(projection),
   };
   let ptyManagerRef: PtyManager | undefined;
+  // Capture-only wrapper: successful keychain use is observed by all host-owned secrets.
+  const keychainUse = observeKeychainUse(safeStorage);
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
-    secretKey: keychainSecretCodec(safeStorage),
+    secretKey: keychainSecretCodec(keychainUse.keychain),
+    webKeySealing: {
+      keyring: keychainCredentialKeyring({
+        path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+        keychain: safeStorage,
+        inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
+      }),
+      mayUnlockUnattended: keychainUse.used,
+      onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
+    },
     terminal: () => ({
       host: {
         events: hostPorts.events,
@@ -906,8 +924,11 @@ const appStartup = app.whenReady().then(async () => {
   // runs here, ahead of the stores, so no Session and no Settings open can see
   // a key half-moved. Counts only in the log: how many rows moved is not a fact
   // about any key.
+  // Whether this launch has used the keychain successfully yet (VC-643): the
+  // web keys' unattended launch reconcile may fetch its own key only then.
   if (dbHandle.ok) {
     const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
+    if (moved.carried > 0) keychainUse.markUsed();
     if (moved.carried + moved.dropped + moved.deferred > 0) {
       console.info(
         `[volli] web search keys out of the OS keychain: ${moved.carried} carried, ` +
@@ -929,7 +950,7 @@ const appStartup = app.whenReady().then(async () => {
     liveHost?.secretStore ??
       new SecretStore(
         join(dirname(dbPath), "session-secrets.enc"),
-        keychainSecretCodec(safeStorage),
+        keychainSecretCodec(keychainUse.keychain),
       ),
   );
   sessionWakeBus?.subscribe(({ event }) => {
@@ -975,7 +996,11 @@ const appStartup = app.whenReady().then(async () => {
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
+  // Web search keys' sealed mirror (VC-643): host-owned with the keyring
+  // captured above. Unattended reconcile waits for first paint and successful
+  // keychain use; accepted quit stops it without awaiting keychain work.
   const webAccess = liveHost?.runtimeServices.webAccess ?? null;
+  const webSealing = webSealingLifecycle(webAccess);
   /** The cursor overlay is a desktop-only port, constructed beside the window. */
   let cursorOverlayRef: CursorOverlay | null = null;
   // Agent observability (VC-119): the opt-in export switch, and the sink the
@@ -1436,6 +1461,7 @@ const appStartup = app.whenReady().then(async () => {
         },
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
+        stopBackgroundWork: () => webSealing.stop(),
         reportFailure: (error) =>
           console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
       }),
@@ -2070,6 +2096,12 @@ const appStartup = app.whenReady().then(async () => {
     void loginPathBootstrap.applyInteractive().catch((error) => {
       console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
     });
+    // Web search keys' sealed mirror (VC-643): rebuilt from the database on
+    // every launch, deletes included. Like the repack above, it waits out
+    // first paint and boot. Cancelled, with anything it started, the moment a
+    // quit is accepted (`stopBackgroundWork` above). Never rejects; the
+    // outcome is logged above.
+    webSealing.afterFirstPaint();
   });
 
   // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching

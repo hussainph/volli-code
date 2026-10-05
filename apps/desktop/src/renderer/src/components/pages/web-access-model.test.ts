@@ -8,6 +8,7 @@ function view(overrides: Partial<WebAccessSettingsView> = {}): WebAccessSettings
     provider: "off",
     searxngUrl: null,
     keys: { brave: "absent", exa: "absent" },
+    sealing: "none",
     ...overrides,
   };
 }
