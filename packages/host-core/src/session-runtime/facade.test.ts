@@ -185,9 +185,21 @@ describe("lifted Session facade and recovered agent staging", () => {
     expect(f.watch.dispose).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
 
+    expect(agents.recoveryDelegationsFor()).toBeNull();
+    expect(f.agentServices.createToolDoor.mock.lastCall![1].watches!()).toBeNull();
+    expect(f.agentServices.createToolDoor.mock.lastCall![1].delegate!()).toBeNull();
+
     const idle = await fixture();
-    stage(idle).stop();
+    const idleAgents = stage(idle);
+    idleAgents.toolDoor(idle.ready);
+    const idlePorts = idle.agentServices.createToolDoor.mock.lastCall![1];
+    idleAgents.stop();
+    // An in-flight tool must not lazily create fresh subscriptions after stop.
+    expect(idlePorts.watches!()).toBeNull();
+    expect(idlePorts.delegate!()).toBeNull();
+    expect(idleAgents.recoveryDelegationsFor()).toBeNull();
     expect(idle.watch.dispose).not.toHaveBeenCalled();
+    expect(idle.agentServices.createWatches).toHaveBeenCalledOnce();
   });
 
   it("requires recovery proof at every public composition door", () => {

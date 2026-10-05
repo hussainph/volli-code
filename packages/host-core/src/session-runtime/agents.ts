@@ -49,6 +49,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   let unsubscribeDelegations: (() => void) | undefined;
   let stopped = false;
   const delegationsFor = (): Delegations | null => {
+    if (stopped) return null;
     if (delegations !== null) return delegations;
     if (
       sessions === null ||
@@ -90,6 +91,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   };
   let watches: Watches | null = null;
   const watchesFor = (): Watches | null => {
+    if (stopped) return null;
     if (watches !== null) return watches;
     if (
       liveHost === undefined ||
