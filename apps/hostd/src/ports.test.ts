@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
-import { NO_POWER_EVENTS } from "@volli/host-core";
+import { NO_POWER_EVENTS } from "@volli/host-core/ports";
 
 import type { HostdLogger } from "./log";
 import { headlessPorts } from "./ports";

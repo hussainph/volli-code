@@ -16,13 +16,13 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import {
   BRAVE_SEARCH_KEY_SECRET,
   EXA_SEARCH_KEY_SECRET,
   WebCredentialStore,
-} from "@volli/host-core/web/credential";
-import { WebAccessSettings } from "@volli/host-core/web/settings";
+  WebAccessSettings,
+} from "@volli/host-core/integrations";
 import { registerWebAccessIpcHandlers } from "./ipc";
 
 const KEY = "BSA-super-secret-brave-key-42";

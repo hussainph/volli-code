@@ -42,7 +42,6 @@ import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-ke
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import { blobsRoot } from "./blob-store";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
-export * from "./ports";
 export type { DbOpenFailure } from "./db-open-failure";
 export {
   logTransactionViolation,

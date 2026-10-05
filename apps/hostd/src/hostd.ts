@@ -51,8 +51,11 @@ import {
   type HostCore,
   type HostCorePorts,
 } from "@volli/host-core";
-import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
-import { createHostAgentCommands } from "@volli/host-core/agent-services";
+import {
+  createAgentSocketLifecycle,
+  startAgentSocket,
+  createHostAgentCommands,
+} from "@volli/host-core/agents";
 
 import {
   createHeadlessSessionRuntime,

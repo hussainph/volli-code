@@ -35,10 +35,10 @@ import {
   getFirstPaintHint,
   getGlobalAppearance,
   getGlobalCanvas,
-} from "@volli/host-core/db/theme-repo";
-import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+  getProjectById,
+  insertProject,
+} from "@volli/host-core/db";
+import { openTestDb, testProject, type TestDb } from "@volli/host-core/testing";
 
 let ctx: TestDb;
 let userDataDir: string;

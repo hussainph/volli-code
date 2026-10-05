@@ -29,10 +29,7 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import {
-  ModelAccessSignInService,
-  type SignInOwner,
-} from "@volli/host-core/model-access/sign-in-service";
+import { ModelAccessSignInService, type SignInOwner } from "@volli/host-core/session-runtime";
 
 const SIGN_IN_EVENT = "volli:model-access-sign-in" satisfies VolliIpcEvent;
 

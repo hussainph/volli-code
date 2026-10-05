@@ -50,16 +50,22 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createTestSessionEngine } from "./test-session-engine";
+import {
+  createTestSessionEngine,
+  openTestDb,
+  testProject,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/testing";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
-import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
-import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
-import { createHostMaintenance } from "@volli/host-core/maintenance-services";
-import { worktreeDeps } from "@volli/host-core/worktree-runtime";
-import { HEADLESS_ATTENTION } from "@volli/host-core";
+import { insertProject, getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db";
+import {
+  resetOrphanScanForTest,
+  resetRetentionWatcherForTest,
+  createHostMaintenance,
+} from "@volli/host-core/maintenance";
+import { worktreeDeps } from "@volli/host-core/worktree";
+import { HEADLESS_ATTENTION } from "@volli/host-core/ports";
 
 const fakeEvent = { sender: {} };
 

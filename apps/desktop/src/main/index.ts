@@ -50,10 +50,35 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
 } from "../ipc/contract";
-import type { HarnessUninstallResult, ManagedConflict } from "@volli/host-core/harness-install";
-import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
-import { desktopCodeMode } from "@volli/host-core/codemode/dev-config";
-import { codeModeSandboxAssets } from "@volli/host-core/codemode/sandbox-assets";
+import {
+  type HarnessUninstallResult,
+  type ManagedConflict,
+  createHostAgentCommands,
+  acquireVolliAppProfile,
+  ensureVolliCliShim,
+  volliRuntimePaths,
+  decideRegisteredHarnesses,
+  scanHarnessManifests,
+  trustedHarnessAdapters,
+  createHostAgentSocket,
+  cleanupLegacyGlobalCliLink,
+  detectHarnesses,
+  ensureUserBinOnPath,
+  ensureUserCliLink,
+  installHarnessSkills,
+  removeUserBinPathBlock,
+  removeUserCliLinkIfOurs,
+  resolveOnPath,
+  uninstallAllHarnessSkills,
+  userCliLinkPath,
+} from "@volli/host-core/agents";
+import {
+  desktopMcpDispatch,
+  desktopCodeMode,
+  codeModeSandboxAssets,
+  AgentObservability,
+  describeWebSealing,
+} from "@volli/host-core/integrations";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -73,7 +98,15 @@ import {
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
-} from "@volli/host-core/quiet-windows";
+  createDatabaseRecovery,
+  SpawnLedger,
+  startOrphanScan,
+  createLoginPathBootstrap,
+  ADOPTION_PROBE,
+  loginShellPath,
+  probeLoginShellPath,
+  resetLoginShellPathCache,
+} from "@volli/host-core/maintenance";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import {
@@ -85,65 +118,42 @@ import {
   isLiveHost,
 } from "@volli/host-core";
 import { createElectronClientCapabilities } from "./client-capabilities";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import { getTicket } from "@volli/host-core/db/tickets-repo";
+import {
+  getProjectById,
+  getTicket,
+  listRegisteredHarnesses,
+  getFirstPaintHint,
+  getGlobalAppearance,
+  getGlobalCanvas,
+  getAllAppState,
+  setAppState,
+  getBlob,
+} from "@volli/host-core/db";
+import {
+  createSessionConcurrencyEnvReader,
+  type SessionConcurrencyEnvReader,
+  createSessionTokenRegistry,
+} from "@volli/host-core/sessions";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
-import { repackLegacyTranscriptArtifacts } from "@volli/host-core/session-runtime";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
-import type { OpenNativeBinding } from "@volli/session-engine";
-import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
-import { createDatabaseRecovery } from "@volli/host-core/maintenance-services";
-import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
-import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
-import { ModelAccessSignInService } from "@volli/host-core/model-access/sign-in-service";
-import { createHostFileServices } from "@volli/host-core/file-services";
-import { createHostAgentCommands } from "@volli/host-core/agent-services";
-import { registerModelAccessIpcHandlers } from "./model-access/ipc";
-import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
-import { installationId } from "./installation-id";
-import { registerWebAccessIpcHandlers } from "./web/ipc";
-import { registerDecisionModelIpcHandlers } from "./decision/ipc";
-import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
-import { AgentObservability } from "@volli/host-core/observability/settings";
-import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import {
+  repackLegacyTranscriptArtifacts,
+  ModelAccessSignInService,
   createRuntimeAssembly,
   type RuntimeAssemblyOptions,
-} from "@volli/host-core/session-runtime/assembly";
-import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
-import {
-  CREDENTIAL_INVENTORY_FILE_NAME,
-  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
-  keychainCredentialKeyring,
-  SecretStore,
-} from "@volli/host-core/secrets";
-import { describeWebSealing } from "@volli/host-core/web/credential-mirror";
-import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
-import { keychainSecretCodec } from "./secrets/codec";
-import { SecretService } from "@volli/host-core/secrets/service";
-import { retiresSessionSecrets } from "@volli/host-core/secrets/lifetime";
-import { registerSecretIpc } from "./secrets/ipc";
-import { createConnectivityPort } from "@volli/host-core/session-runtime/connectivity";
-import {
+  createRuntimeContextResolver,
+  createConnectivityPort,
   createSessionRuntimeLifecycle,
   SessionRuntimeClosingError,
   type RecoveredSessionServices,
-} from "@volli/host-core/session-runtime/lifecycle";
-import { createRuntimeAutomations } from "@volli/host-core/session-runtime/automations";
-import {
+  createRuntimeAutomations,
   recoveredSessionClientPorts,
   recoveredSessionCommandPorts,
   createRuntimeSessionFacade,
   recoveredRuntimeSessionServices,
   recoveredSessionAutomationPorts,
   type RuntimeSessionFacade,
-} from "@volli/host-core/session-runtime/facade";
-import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
-import { registerAutomationIpcHandlers } from "./automations/ipc";
-import {
+  createTicketSessionDelegationStore,
   assertDefaultModelAvailable,
   readCodeModePolicy,
   readCompactionPolicy,
@@ -156,7 +166,39 @@ import {
   writeHiddenModels,
   writeModelAccessDefault,
   writeModelPickerView,
-} from "@volli/host-core/session-runtime/model-access-preferences";
+  buildSessionEnvReport,
+  BackgroundShellHost,
+  type BackgroundShellNotice,
+  createAttachmentIdentities,
+} from "@volli/host-core/session-runtime";
+import type { OpenNativeBinding } from "@volli/session-engine";
+import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
+import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
+import {
+  createHostFileServices,
+  collectUnlinkedBlobs,
+  blobProtocolResponse,
+  blobsRoot,
+} from "@volli/host-core/files";
+import { registerModelAccessIpcHandlers } from "./model-access/ipc";
+import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
+import { installationId } from "./installation-id";
+import { registerWebAccessIpcHandlers } from "./web/ipc";
+import { registerDecisionModelIpcHandlers } from "./decision/ipc";
+import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
+import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
+import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  keychainCredentialKeyring,
+  SecretStore,
+  SecretService,
+  retiresSessionSecrets,
+} from "@volli/host-core/secrets";
+import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
+import { keychainSecretCodec } from "./secrets/codec";
+import { registerSecretIpc } from "./secrets/ipc";
+import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
@@ -168,21 +210,15 @@ import {
   readExperiments,
   setExperiment,
 } from "./experiments";
-import { listRegisteredHarnesses } from "@volli/host-core/db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandlers } from "./pty";
 import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
-import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty/manager";
+import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty";
 import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
-import {
-  getFirstPaintHint,
-  getGlobalAppearance,
-  getGlobalCanvas,
-} from "@volli/host-core/db/theme-repo";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
 import {
@@ -191,60 +227,27 @@ import {
   broadcastUpdateState,
   windowEventBus,
 } from "./broadcast";
-import { subscribeTicketWake } from "@volli/host-core/ticket-wake";
-import { startOrphanScan } from "@volli/host-core/orphan-scan";
+import { subscribeTicketWake } from "@volli/host-core/board";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
+  type AgentSiteReleaseReport,
+  orphanCleanupEngine,
 } from "@volli/host-core/worktree";
-import type { AgentSiteReleaseReport } from "@volli/host-core/worktree";
-import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
-import {
-  acquireVolliAppProfile,
-  ensureVolliCliShim,
-  volliRuntimePaths,
-} from "@volli/host-core/agent-runtime";
-import {
-  decideRegisteredHarnesses,
-  scanHarnessManifests,
-  trustedHarnessAdapters,
-} from "@volli/host-core/harness-registry";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
 import { installSmokeBootCapture } from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
-import { createHostAgentSocket } from "@volli/host-core/agent-services";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
-import { createLoginPathBootstrap } from "@volli/host-core/login-path-adoption";
-import {
-  ADOPTION_PROBE,
-  loginShellPath,
-  probeLoginShellPath,
-  resetLoginShellPathCache,
-} from "@volli/host-core/login-shell-path";
-import { buildSessionEnvReport } from "@volli/host-core/session-env";
 import { systemPathIssues as readSystemPathIssues } from "./system-path-diagnostics";
-import {
-  cleanupLegacyGlobalCliLink,
-  detectHarnesses,
-  ensureUserBinOnPath,
-  ensureUserCliLink,
-  installHarnessSkills,
-  removeUserBinPathBlock,
-  removeUserCliLinkIfOurs,
-  resolveOnPath,
-  uninstallAllHarnessSkills,
-  userCliLinkPath,
-} from "@volli/host-core/agent-tools";
 import { registerCliIpcHandlers } from "./cli-ipc";
 import { registerSupportIpcHandlers } from "./support-info";
 import { probeCliDoctor } from "./cli-doctor";
 import { readCliStatus } from "./cli-status";
-import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
 import {
   readAllowPrerelease,
   readUpdateChannel,
@@ -259,31 +262,26 @@ import {
   PACKAGED_RENDERER_SCHEME,
   resolvePackagedRendererAsset,
 } from "./app-protocol";
-import { collectUnlinkedBlobs } from "@volli/host-core/blob-collect";
-import { blobProtocolResponse } from "@volli/host-core/blob-protocol";
-import { blobsRoot } from "@volli/host-core/blob-store";
-import { getBlob } from "@volli/host-core/db/blobs-repo";
-import { BROWSER_DEFAULT_BOUNDS } from "@volli/host-core/browser/backend";
+import {
+  BROWSER_DEFAULT_BOUNDS,
+  browserAgentPort,
+  browserPictureDisk,
+  browserPicturesRoot,
+  BrowserPictureStore,
+  browserTraceDisk,
+  browserTracesRoot,
+  BrowserTraceStore,
+} from "@volli/host-core/browser";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
-import {
-  BackgroundShellHost,
-  type BackgroundShellNotice,
-} from "@volli/host-core/shell/background-shell-host";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
-import { createAttachmentIdentities } from "@volli/host-core/session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
-import { browserAgentPort } from "@volli/host-core/browser/agent-port";
 import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
   createCursorOverlay,
   type CursorOverlay,
 } from "./browser/cursor-overlay";
-import { browserPictureDisk, browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
-import { BrowserPictureStore } from "@volli/host-core/browser/picture-store";
-import { browserTraceDisk, browserTracesRoot } from "@volli/host-core/browser/trace-disk";
-import { BrowserTraceStore } from "@volli/host-core/browser/trace-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 

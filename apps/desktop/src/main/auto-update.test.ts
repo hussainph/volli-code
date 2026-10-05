@@ -10,8 +10,8 @@ import {
   UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY,
   type AutoUpdaterLike,
 } from "./auto-update";
-import { setAppState } from "@volli/host-core/db/app-state-repo";
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { setAppState } from "@volli/host-core/db";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 
 const INITIAL_DELAY_MS = 30_000;
 const INTERVAL_MS = 4 * 60 * 60 * 1000;

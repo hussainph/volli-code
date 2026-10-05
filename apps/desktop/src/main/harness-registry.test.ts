@@ -13,17 +13,12 @@ import {
   recordHarnessDelivery,
   scanHarnessManifests,
   trustedHarnessAdapters,
-} from "@volli/host-core/harness-registry";
-import type {
-  HarnessManifestScan,
-  ScannedHarnessManifest,
-} from "@volli/host-core/harness-registry";
+  type HarnessManifestScan,
+  type ScannedHarnessManifest,
+} from "@volli/host-core/agents";
 import { ensureHarnessRuntime } from "./harness-runtime";
-import {
-  getRegisteredHarness,
-  recordHarnessTrust,
-} from "@volli/host-core/db/harness-registry-repo";
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { getRegisteredHarness, recordHarnessTrust } from "@volli/host-core/db";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 
 let root: string;
 let fixture: TestDb;

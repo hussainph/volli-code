@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
-import type { SecretService } from "@volli/host-core/secrets/service";
+import type { SecretService } from "@volli/host-core/secrets";
 import type { VolliInvokeContract } from "../../ipc/contract";
 
 function record(raw: unknown): Record<string, unknown> {

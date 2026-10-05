@@ -17,19 +17,13 @@ import {
   BrowserTabLimitError,
   browserSessionPartition,
   isAllowedBrowserUrl,
-} from "@volli/host-core/browser/backend";
-import {
   BrowserPictureStore,
   type BrowserPictureRecord,
-} from "@volli/host-core/browser/picture-store";
-import {
   BROWSER_CONSOLE_MAX_CHARS,
   BROWSER_TITLE_MAX_CHARS,
-} from "@volli/host-core/browser/tab-registry";
-import {
   BrowserTraceStore,
   type BrowserTraceStepInput,
-} from "@volli/host-core/browser/trace-store";
+} from "@volli/host-core/browser";
 
 import { BROWSER_START_URL } from "../../browser-start-page";
 import {

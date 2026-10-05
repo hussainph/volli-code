@@ -24,11 +24,7 @@
  * Copy stays gated until all six required facts can be read.
  */
 import type Database from "better-sqlite3";
-import {
-  checkMigrationHistory,
-  describeMigrationHistory,
-} from "@volli/host-core/db/migration-history";
-import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
+import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
 import type { SupportInfo } from "../ipc/contract";
 import { readUpdateChannel } from "./auto-update";

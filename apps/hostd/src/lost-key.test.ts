@@ -22,10 +22,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import Database from "better-sqlite3";
 import type { AgentResponse } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
+import { insertProject, insertTicket } from "@volli/host-core/db";
+import { testProject, testSession, testTicket, insertSession } from "@volli/host-core/testing";
 import {
   SECRET_KEY_FILE_ENV,
   SECRET_KEY_FILE_NAME,

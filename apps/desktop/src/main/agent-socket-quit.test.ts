@@ -3,7 +3,7 @@ import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createAgentSocketLifecycle } from "@volli/host-core/agent-socket";
+import { createAgentSocketLifecycle } from "@volli/host-core/agents";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
 
 describe("agent socket app quit", () => {

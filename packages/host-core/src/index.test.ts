@@ -4,15 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  ClientCapabilityUnavailableError,
   createHostCore,
   defaultDatabasePath,
-  HEADLESS_ATTENTION,
   isLiveHost,
-  NO_POWER_EVENTS,
   logTransactionViolation,
   throwTransactionViolation,
 } from "./index";
+import { ClientCapabilityUnavailableError, HEADLESS_ATTENTION, NO_POWER_EVENTS } from "./ports";
 import type {
   DegradedHostCore,
   HostCore,

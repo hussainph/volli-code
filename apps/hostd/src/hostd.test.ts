@@ -21,13 +21,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import { insertProject, SCHEMA_HEAD, MIN_READER_VERSION_KEY } from "@volli/host-core/db";
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
-import type { DetachedWorkPort } from "@volli/host-core/detached-work";
-import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
+import type { DetachedWorkPort } from "@volli/host-core/board";
+import { resetRetentionWatcherForTest } from "@volli/host-core/maintenance";
 
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
@@ -74,8 +72,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-vi.mock("@volli/host-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core")>();
+vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../packages/host-core/src/index")>();
   return {
     ...actual,
     createHostCore: (...args: Parameters<typeof actual.createHostCore>) => {
@@ -104,8 +102,9 @@ vi.mock("@volli/host-core", async (importOriginal) => {
   };
 });
 
-vi.mock("@volli/host-core/agent-services", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/agent-services")>();
+vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/host-core/src/agent-services")>();
   return {
     ...actual,
     createHostAgentCommands: (
@@ -135,8 +134,9 @@ vi.mock("./status", async (importOriginal) => {
   };
 });
 
-vi.mock("@volli/host-core/agent-socket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/agent-socket")>();
+vi.mock("../../../packages/host-core/src/agent-socket", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/host-core/src/agent-socket")>();
   return {
     ...actual,
     startAgentSocket: async (

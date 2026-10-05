@@ -17,7 +17,8 @@
 import { format } from "node:util";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
-import { HEADLESS_ATTENTION, NO_POWER_EVENTS, type HostCorePorts } from "@volli/host-core";
+import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
+import type { HostCorePorts } from "@volli/host-core";
 
 import type { HostdLogger } from "./log";
 

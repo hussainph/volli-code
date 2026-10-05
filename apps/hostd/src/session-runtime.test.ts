@@ -2,8 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
-import type { RuntimeAssemblyOptions } from "@volli/host-core/session-runtime/assembly";
-import type { BackgroundShellHostDependencies } from "@volli/host-core/shell/background-shell-host";
+import type {
+  RuntimeAssemblyOptions,
+  BackgroundShellHostDependencies,
+} from "@volli/host-core/session-runtime";
 
 const seam = vi.hoisted(() => ({
   assembly: vi.fn(),
@@ -27,26 +29,28 @@ const seam = vi.hoisted(() => ({
   observability: { start: vi.fn(), shutdown: vi.fn() },
 }));
 vi.mock("@volli/agent-runtime", () => ({ piOwnedModelAccess: seam.modelAccess }));
-vi.mock("@volli/host-core/db/projects-repo", () => ({ getProjectById: seam.project }));
-vi.mock("@volli/host-core/db/tickets-repo", () => ({ getTicket: seam.ticket }));
-vi.mock("@volli/host-core/secrets/service", () => ({
+vi.mock("../../../packages/host-core/src/db/projects-repo", () => ({
+  getProjectById: seam.project,
+}));
+vi.mock("../../../packages/host-core/src/db/tickets-repo", () => ({ getTicket: seam.ticket }));
+vi.mock("../../../packages/host-core/src/secrets/service", () => ({
   SecretService: class {
     constructor(public store: unknown) {}
   },
 }));
-vi.mock("@volli/host-core/observability/settings", () => ({
+vi.mock("../../../packages/host-core/src/observability/settings", () => ({
   AgentObservability: class {
     start = seam.observability.start;
     shutdown = seam.observability.shutdown;
   },
 }));
-vi.mock("@volli/host-core/session-tokens", () => ({
+vi.mock("../../../packages/host-core/src/session-tokens", () => ({
   createSessionTokenRegistry: () => seam.tokens,
 }));
-vi.mock("@volli/host-core/session-concurrency", () => ({
+vi.mock("../../../packages/host-core/src/session-concurrency", () => ({
   createSessionConcurrencyEnvReader: seam.concurrency,
 }));
-vi.mock("@volli/host-core/shell/background-shell-host", () => ({
+vi.mock("../../../packages/host-core/src/shell/background-shell-host", () => ({
   BackgroundShellHost: class {
     constructor(options: BackgroundShellHostDependencies) {
       seam.shellOptions = options;
@@ -55,47 +59,47 @@ vi.mock("@volli/host-core/shell/background-shell-host", () => ({
     close = seam.shells.close;
   },
 }));
-vi.mock("@volli/host-core/mcp/dispatch-policy", () => ({
+vi.mock("../../../packages/host-core/src/mcp/dispatch-policy", () => ({
   desktopMcpDispatch: ({ log }: { log(message: string): void }) => {
     log("mcp");
     return {};
   },
 }));
-vi.mock("@volli/host-core/codemode/dev-config", () => ({
+vi.mock("../../../packages/host-core/src/codemode/dev-config", () => ({
   desktopCodeMode: ({ log, policy }: { log(message: string): void; policy(): unknown }) => {
     log("codemode");
     policy();
     return {};
   },
 }));
-vi.mock("@volli/host-core/session-runtime/model-access-preferences", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/model-access-preferences", () => ({
   readCodeModePolicy: () => ({}),
 }));
-vi.mock("@volli/host-core/session-runtime/attachment-identity", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/attachment-identity", () => ({
   createAttachmentIdentities: seam.identities,
 }));
-vi.mock("@volli/host-core/session-runtime/assembly", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/assembly", () => ({
   createRuntimeAssembly: seam.assembly,
 }));
-vi.mock("@volli/host-core/session-runtime/context", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/context", () => ({
   createRuntimeContextResolver: seam.context,
 }));
-vi.mock("@volli/host-core/session-runtime/automations", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/automations", () => ({
   createRuntimeAutomations: seam.automations,
 }));
-vi.mock("@volli/host-core/session-runtime/delegation-store", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/delegation-store", () => ({
   createTicketSessionDelegationStore: () => ({}),
 }));
-vi.mock("@volli/host-core/session-runtime/facade", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/facade", () => ({
   createRuntimeSessionFacade: seam.facade,
   recoveredRuntimeSessionServices: seam.recovered,
   recoveredSessionCommandPorts: seam.commands,
   recoveredSessionAutomationPorts: seam.automationPorts,
 }));
-vi.mock("@volli/host-core/session-runtime/lifecycle", () => ({
+vi.mock("../../../packages/host-core/src/session-runtime/lifecycle", () => ({
   createSessionRuntimeLifecycle: seam.lifecycle,
 }));
-vi.mock("@volli/host-core/worktree/agent-sites", () => ({
+vi.mock("../../../packages/host-core/src/worktree/agent-sites", () => ({
   agentSitesWithin: seam.sites,
   releaseAgentSites: seam.release,
 }));

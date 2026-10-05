@@ -59,7 +59,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import {
+  MIN_READER_VERSION_KEY,
+  recordAutomationRun,
+  recordSessionStartedOnce,
+  readSessionProvenance,
+  readSessionUnread,
+  recordMcpOperation,
+  insertProject,
+  getProjectById,
+} from "@volli/host-core/db";
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
@@ -68,8 +77,10 @@ const { detectAsync, detectSync } = vi.hoisted(() => ({
   detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
-vi.mock("@volli/host-core/project-base-branch", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@volli/host-core/project-base-branch")>()),
+vi.mock("../../../../packages/host-core/src/project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../../packages/host-core/src/project-base-branch")
+  >()),
   detectProjectBaseBranchAsync: detectAsync,
   detectProjectBaseBranch: detectSync,
 }));
@@ -134,7 +145,7 @@ vi.mock("electron", () => ({
 // shell out; `worktree-runtime`'s `worktreeDeps` stays real (it just builds a
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
-vi.mock("@volli/host-core/worktree", async () => ({
+vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   // The rail reads. Mocked so the coalescing/dedup assertions below can count
@@ -158,24 +169,24 @@ vi.mock("@volli/host-core/worktree", async () => ({
   // NOT mocked: the cleanup command core and its SQLite ledger are what the
   // channel's receipts and durable history come from, and a stand-in would
   // answer a different question than the one production asks (VC-284 S1).
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-engine")>(
-    "@volli/host-core/worktree/cleanup-engine",
-  )),
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-ledger")>(
-    "@volli/host-core/worktree/cleanup-ledger",
-  )),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-engine")
+  >("../../../../packages/host-core/src/worktree/cleanup-engine")),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-ledger")
+  >("../../../../packages/host-core/src/worktree/cleanup-ledger")),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/activity")>(
-    "@volli/host-core/worktree/activity",
+  ...(await vi.importActual<typeof import("../../../../packages/host-core/src/worktree/activity")>(
+    "../../../../packages/host-core/src/worktree/activity",
   )),
   // NOT mocked either: the deletion lease is the serialization the manual
   // delete and the cleanup share (VC-284 review C4), and a stand-in would let
   // this channel claim a lease discipline it does not have.
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/deletion-lease")>(
-    "@volli/host-core/worktree/deletion-lease",
-  )),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/deletion-lease")
+  >("../../../../packages/host-core/src/worktree/deletion-lease")),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
@@ -221,23 +232,20 @@ vi.mock("@volli/host-core/worktree", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { watchSessionActivity } from "@volli/host-core/session-control";
-import { createTestSessionEngine } from "./test-session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { recordAutomationRun } from "@volli/host-core/db/automations-repo";
-import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { readSessionUnread } from "@volli/host-core/db/session-read-repo";
-import { recordMcpOperation } from "@volli/host-core/db/mcp-operations-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
-import { worktreesHome } from "@volli/host-core/worktree-runtime";
-import { projectContainerName } from "@volli/host-core/worktree/containers";
+import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
+  createTestSessionEngine,
+  insertSession,
+  openTestDb,
+  testProject,
+  testSession,
+  type TestDb,
+} from "@volli/host-core/testing";
+import { resetOrphanScanForTest } from "@volli/host-core/maintenance";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
+import {
+  worktreesHome,
+  projectContainerName,
   archiveAndClean,
   cleanupOrphans,
   commitTicketRemaining,
@@ -256,15 +264,16 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-} from "@volli/host-core/worktree";
-import { resetWorktreeSnapshotsForTest } from "@volli/host-core/worktree/snapshot";
-import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
-import {
+  resetWorktreeSnapshotsForTest,
+  orphanCleanupEngine,
   acquireDeletionLease,
   resetDeletionLeasesForTest,
-} from "@volli/host-core/worktree/deletion-lease";
-import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
-import { subscribeTicketWake, type TicketWake } from "@volli/host-core/ticket-wake";
+} from "@volli/host-core/worktree";
+import {
+  updateTicketFieldsCommand,
+  subscribeTicketWake,
+  type TicketWake,
+} from "@volli/host-core/board";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   MAX_INLINE_IMAGE_BYTES,

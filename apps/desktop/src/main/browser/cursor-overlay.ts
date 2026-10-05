@@ -57,8 +57,7 @@ import {
   type CursorOverlayState,
   type SessionCursorGesture,
 } from "../../ipc/cursor-contract";
-import type { BrowserHoldEvent } from "@volli/host-core/browser/backend";
-import type { TabCursorDriver, TabCursorGesture } from "@volli/host-core/browser/cdp-controller";
+import type { BrowserHoldEvent, TabCursorDriver, TabCursorGesture } from "@volli/host-core/browser";
 
 /**
  * The overlay's own in-memory partition: no `persist:`, nothing shared with

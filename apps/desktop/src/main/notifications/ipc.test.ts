@@ -24,7 +24,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
 import { registerNotificationIpcHandlers } from "./ipc";
 

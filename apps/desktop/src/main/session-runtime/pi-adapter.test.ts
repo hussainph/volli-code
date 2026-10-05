@@ -2,14 +2,24 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
-import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
-import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
-import { SecretService } from "@volli/host-core/secrets/service";
-import { SecretStore } from "@volli/host-core/secrets";
+import {
+  createSqliteSessionLedger,
+  openRawDb,
+  openTestDb,
+  testProject,
+} from "@volli/host-core/testing";
+import {
+  createFileTranscriptArtifactStore,
+  closeStaleAttachments,
+  createPiNativeAdapter,
+  createPiRuntimeHost,
+  PI_ADAPTER_ID,
+  type PiAdapterOptions,
+  type PiRuntimeContext,
+} from "@volli/host-core/session-runtime";
+import { SecretService, SecretStore } from "@volli/host-core/secrets";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openRawDb, openTestDb, testProject } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "@volli/host-core/db";
 import type {
   BindingHandle,
   HarnessCommand,
@@ -48,14 +58,6 @@ import {
   type UtilityCompletionResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-
-import {
-  createPiNativeAdapter,
-  createPiRuntimeHost,
-  PI_ADAPTER_ID,
-  type PiAdapterOptions,
-  type PiRuntimeContext,
-} from "@volli/host-core/session-runtime/pi-adapter";
 
 const SESSION_ID = "session-1";
 const ATTACHMENT_ID = "attachment-1";
