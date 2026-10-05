@@ -12,6 +12,7 @@ import { openRawDb, openTestDb, testProject, type TestDb } from "./db/test-helpe
 import { getTicketRow, listTicketsByProject, updateTicketFields } from "./db/tickets-repo";
 import { createSqliteSessionLedger } from "./session-control/sqlite-ledger";
 import { archiveTicketCommand, createTicketCommand } from "./ticket-commands";
+import { createDetachedWorkTracker } from "./detached-work";
 import { executeTicketMove, type TicketMovePorts } from "./ticket-move";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import * as worktree from "./worktree";
@@ -556,6 +557,123 @@ describe("actor-based Doing notification policy", () => {
       expect(statusEvents("target")).toHaveLength(2);
     },
   );
+});
+
+/** Runs every queued continuation; one turn of the event loop, not a timer. */
+function settleQueue(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+describe("shutdown drain of the detached Done trim (VC-627)", () => {
+  it("holds a drain while the trim is pending, without holding the reply", async () => {
+    ticket("target");
+    const tracker = createDetachedWorkTracker({ reportFailure: vi.fn() });
+    ports.detachedWork = tracker;
+    const events: string[] = [];
+    vi.mocked(ports.onMutation!).mockImplementation((change) => {
+      events.push(`published ${change.kind}`);
+    });
+    const pending = deferred<TrimFinishOutcome>();
+    const trim = vi.spyOn(worktree, "trimFinishedWorktree").mockReturnValue(pending.promise);
+    const reply = executeTicketMove(
+      ports,
+      { projectId: PROJECT, ticketId: "target", toStatus: "done" },
+      context(),
+    );
+    expect(reply).not.toBeInstanceOf(Promise);
+    expect(trim).toHaveBeenCalledExactlyOnceWith(ports, "target");
+    expect(tracker.pending).toBe(1);
+    const drained = tracker.drain().then(() => void events.push("drained"));
+    await settleQueue();
+    expect(events).toEqual(["published ticket"]);
+    pending.resolve({
+      kind: "trimmed",
+      report: { worktreePath: "/mock", removed: [], kept: [], totalBytes: 0, dryRun: false },
+    });
+    await drained;
+    expect(events).toEqual(["published ticket", "published worktree", "drained"]);
+    expect(tracker.pending).toBe(0);
+  });
+
+  it("drains through the real trim's event write, so the database can close after it", async () => {
+    const root = seedGitWorktree();
+    ticket("target");
+    updateTicketFields(
+      ctx.db,
+      "target",
+      { worktreePath: root, branch: "main", baseBranch: "main" },
+      2,
+    );
+    const tracker = createDetachedWorkTracker({ reportFailure: vi.fn() });
+    ports.detachedWork = tracker;
+    const trimmedEvents = () =>
+      listTicketEvents(ctx.db, "target").filter(
+        (event) => event.payload.kind === "worktree_trimmed",
+      );
+    const events: string[] = [];
+    vi.mocked(ports.onMutation!).mockImplementation((change) => {
+      events.push(`published ${change.kind} (${trimmedEvents().length} trim events)`);
+    });
+    executeTicketMove(
+      ports,
+      { projectId: PROJECT, ticketId: "target", toStatus: "done" },
+      context(),
+    );
+    expect(trimmedEvents()).toEqual([]);
+    await tracker.drain();
+    events.push(`drained (${trimmedEvents().length} trim events)`);
+    expect(events).toEqual([
+      "published ticket (0 trim events)",
+      "published worktree (1 trim events)",
+      "drained (1 trim events)",
+    ]);
+    expect(existsSync(join(root, "node_modules"))).toBe(false);
+    // The host closes the database once the drain resolves; nothing is left to write.
+    expect(tracker.pending).toBe(0);
+    ctx.db.close();
+    expect(ctx.db.open).toBe(false);
+  });
+
+  it("drains through a failed trim's own log, and the tracker reports nothing extra", async () => {
+    ticket("target");
+    const reportFailure = vi.fn();
+    const tracker = createDetachedWorkTracker({ reportFailure });
+    ports.detachedWork = tracker;
+    const events: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...line: unknown[]) => {
+      events.push(line.join(" "));
+    });
+    const pending = deferred<TrimFinishOutcome>();
+    vi.spyOn(worktree, "trimFinishedWorktree").mockReturnValue(pending.promise);
+    executeTicketMove(
+      ports,
+      { projectId: PROJECT, ticketId: "target", toStatus: "done" },
+      context(),
+    );
+    const drained = tracker.drain().then(() => void events.push("drained"));
+    await settleQueue();
+    expect(events).toEqual([]);
+    pending.reject(new Error("trim failed"));
+    await drained;
+    expect(events).toEqual([
+      "[volli] could not trim the worktree of target: trim failed",
+      "drained",
+    ]);
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("enrols nothing when no trim may start", async () => {
+    ticket("target");
+    delete ports.busySites;
+    const tracker = createDetachedWorkTracker();
+    ports.detachedWork = tracker;
+    await executeTicketMove(
+      ports,
+      { projectId: PROJECT, ticketId: "target", toStatus: "done" },
+      context(),
+    );
+    expect(tracker.pending).toBe(0);
+  });
 });
 
 function seedGitWorktree(): string {

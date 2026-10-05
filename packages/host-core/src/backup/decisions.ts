@@ -28,6 +28,7 @@
 
 import {
   CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
   CREDENTIAL_LOCK_FILE_NAME,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,
@@ -385,6 +386,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Credentials. A backup must never carry them, encrypted or not.",
   },
   {
+    table: "web_credential_source",
+    decision: "exclude",
+    reason:
+      "The web keys' source lineage and revision (VC-643): status about `secrets`, which no bundle carries. A restore starts a new lineage, so no mirror sealed for the old database can pass for current.",
+  },
+  {
+    table: "web_credential_mirror",
+    decision: "exclude",
+    reason:
+      "The receipt of the last sealed web-key mirror (VC-643): expendable status about a credential file that never travels; rebuilt from `secrets` on the next boot.",
+  },
+  {
     table: "legacy_safe_storage_secrets",
     decision: "exclude",
     reason: "Credential ciphertext bound to this machine's safeStorage key.",
@@ -610,6 +623,14 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "The typed sealed credential inventory (VC-642) and anything a reset set aside; credentials never travel in backups.",
+  },
+  {
+    // Desktop's keychain-wrapped data key for the typed inventory (VC-643):
+    // useless without the keychain, and still never carried.
+    area: `${CREDENTIAL_KEYCHAIN_KEY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "The keychain-wrapped key to the typed credential inventory (VC-643); a backup never carries what opens a credential.",
   },
   {
     area: CREDENTIAL_LOCK_FILE_NAME,

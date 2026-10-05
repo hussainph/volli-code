@@ -27,6 +27,7 @@ import type {
 import type { TicketWake } from "./ticket-wake";
 import { createWatches } from "./watches";
 import type { WatchesPorts } from "./watches";
+import { createDetachedWorkTracker, type DetachedWorkPort } from "./detached-work";
 
 const WATCHER = "aaaaaaaa-0000-0000-0000-000000000000";
 const TARGET = "bbbbbbbb-0000-0000-0000-000000000000";
@@ -61,6 +62,8 @@ function harness(
     answers?: Record<string, string>;
     /** `subscribe` replays an attachment that opened after the projection read. */
     raceOpened?: boolean;
+    detachedWork?: DetachedWorkPort;
+    delivery?: Promise<void>;
   } = {},
 ) {
   const sessionListeners = new Set<SessionWakeListener>();
@@ -75,6 +78,7 @@ function harness(
   let releases = 0;
   let ids = 0;
   const ports: WatchesPorts = {
+    detachedWork: options.detachedWork,
     subscribeSessionWake: (listener) => {
       sessionListeners.add(listener);
       return () => sessionListeners.delete(listener);
@@ -88,13 +92,16 @@ function harness(
         commands.push(request);
         return { receipt: null } as never;
       },
-      projection: async () => ({
-        projection: {
-          stopped: null,
-          liveExecutor: live ? ({ id: "attachment" } as never) : null,
-        } as unknown as SessionProjection,
-        throughSequence: 0,
-      }),
+      projection: async () => {
+        await options.delivery;
+        return {
+          projection: {
+            stopped: null,
+            liveExecutor: live ? ({ id: "attachment" } as never) : null,
+          } as unknown as SessionProjection,
+          throughSequence: 0,
+        };
+      },
       subscribe: async (_input, listener) => {
         const onEmission = listener as (emission: SessionStreamEmission) => void;
         streamListeners.push(onEmission);
@@ -678,6 +685,26 @@ describe("delivery", () => {
     expect(h.listenerCount()).toBe(0);
     expect(h.timers.every((timer) => timer.cleared)).toBe(true);
   });
+});
+
+it("joins a ledger read already started by a watch timer even after disposal", async () => {
+  const delivery = Promise.withResolvers<void>();
+  const tracker = createDetachedWorkTracker();
+  const h = harness({ detachedWork: tracker, delivery: delivery.promise });
+  watchTarget(h);
+  h.session(TARGET, 1, { kind: "session.signaled", signal: "done", reason: null });
+  await h.flush();
+  h.watches.dispose();
+  expect(tracker.pending).toBe(1);
+  let drained = false;
+  const drain = tracker.drain().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  delivery.resolve();
+  await drain;
+  expect(drained).toBe(true);
 });
 
 it("notices carry provider interruption facts and quote untrusted provider prose", async () => {

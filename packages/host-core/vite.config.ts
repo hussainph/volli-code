@@ -15,6 +15,13 @@ export default defineConfig({
       // in desktop's gate until this package covers every registry branch.
       include: [
         "src/index.ts",
+        // One lifecycle, its maintenance loops and detached-work join (VC-627).
+        "src/host-lifecycle.ts",
+        "src/host-shutdown.ts",
+        "src/maintenance-services.ts",
+        "src/detached-work.ts",
+        "src/automation-services.ts",
+        "src/agent-services.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",
         "src/blob-collect.ts",
@@ -122,6 +129,14 @@ export default defineConfig({
         // branch decides whether a revoked secret is injected, a value is
         // scrubbed, or a locked store is sealed over.
         "src/secrets/store.ts",
+        // Step E for the web search keys (VC-643): desktop's keychain-wrapped
+        // keyring, the sealed mirror reconciled from `secrets`, and the
+        // migration that counts every write to it. A branch wrong here is a
+        // cleared key kept in the mirror, a save reported sealed that is not,
+        // or a key made over credentials a locked keychain still opens.
+        "src/secrets/keychain-keyring.ts",
+        "src/web/credential-mirror.ts",
+        "src/db/web-credential-migration.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a

@@ -178,20 +178,42 @@ export function registerAcceptedQuitCoordinator(options: {
   lifecycle: AcceptedQuitLifecycle;
   shutdownNativeSessions(): Promise<void>;
   shutdownAgentSocket(): Promise<void>;
+  /**
+   * Called once, synchronously, the moment a quit is accepted and before any
+   * drain starts: background work that must not START during teardown stops
+   * here (VC-643: the web keys' launch reconcile, its busy retries and any
+   * keychain fetch). It must not wait on anything; a throw is reported and
+   * the quit goes on unchanged.
+   */
+  stopBackgroundWork?(): void;
   shutdownDeadlineMs?: number;
   reportFailure(error: unknown): void;
+  /** Former synchronous quit listeners, called in their original order. */
+  prepareQuit?(event: { preventDefault(): void }): void;
 }): void {
   let shutdownInFlight = false;
   options.lifecycle.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
     event.preventDefault();
-    if (shutdownInFlight) return;
+    if (shutdownInFlight) {
+      options.prepareQuit?.(event);
+      return;
+    }
     // This coordinator may register before the synchronous destructive-work
     // gates so it can cover startup. Hold the quit now, then let every listener
     // for this event record its verdict before interpreting it as accepted.
     void Promise.resolve().then(() => {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
+      try {
+        options.stopBackgroundWork?.();
+      } catch (error) {
+        try {
+          options.reportFailure(error);
+        } catch {
+          // A reporter that throws cannot hold the quit open either.
+        }
+      }
       const exitAfterCheckpoint = () => {
         // app.exit destroys native windows synchronously. VC-536 captured
         // macOS compositor teardown waiting on synchronous Viz IPC while
@@ -207,5 +229,9 @@ export function registerAcceptedQuitCoordinator(options: {
         reportFailure: options.reportFailure,
       }).then(exitAfterCheckpoint, exitAfterCheckpoint);
     });
+    // Queue the checkpoint before calling the former synchronous listeners:
+    // even a throwing dialog/producer cannot strand a prevented quit. Their
+    // refusal still lands synchronously before this microtask interprets it.
+    options.prepareQuit?.(event);
   });
 }

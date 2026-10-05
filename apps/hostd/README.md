@@ -26,8 +26,10 @@ VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 Writes over the socket need an authenticated Session, or the person: an
 operator at the host's shell holding a token root issued
 ([Operators](#operators)). That is how a fresh host's board gets its first
-project (`volli project add`). Backup, retention, recovery and the maintenance loops move into host-core in
-VC-618; hostd wires them once they land.
+project (`volli project add`). Migration rollback backups and backup retention
+use the shared database open path; backup bundles remain explicit operations,
+not a periodic scheduler. Retention and automatic-reap enablement for hostd
+lands separately from the lifecycle restructuring (VC-627).
 
 ## Ports
 
@@ -263,14 +265,15 @@ The host protocol (VC-564) carries the same facts to remote clients.
 `SIGTERM` or `SIGINT`:
 
 1. Status `stopping`.
-2. Refuse new commands, stop Automation/resume/watchdog producers and durable
+2. Refuse new commands, stop maintenance timers, Automation/resume/watchdog producers and durable
    notice delivery; drain the shared Session runtime and background shells,
    then the MCP backstop and observability flush. Shell admission closes at
    drain, and every kill joins before SQLite closes.
 3. Close the agent socket, waiting up to its 10 s request timeout for requests
    in flight, then wait up to 10 s for any execution still running. One that
    outlives that is abandoned and logged, and the stop is not clean.
-4. Stop the Session activity watch's flush timer.
+4. Join detached Done-trims and in-flight retention/reap operations; stop the
+   Session activity watch's flush timer.
 5. `PRAGMA wal_checkpoint(TRUNCATE)`, then close the database. The WAL is
    folded in and removed.
 6. Release the instance lock; status `stopped`; exit 0, or 1 if anything did

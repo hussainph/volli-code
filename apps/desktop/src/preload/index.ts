@@ -919,8 +919,11 @@ const api = {
     ): Promise<WebAccessResult> => invoke("volli:web-access-set-provider", provider, searxngUrl),
     /**
      * Stores one provider's key. The one outbound secret in the app after
-     * sign-in, and one-way: main encrypts it with the OS keychain and it is
-     * never read back, echoed, or put in an error string.
+     * sign-in, and one-way: it is never read back, echoed, or put in an error
+     * string. Main saves it in the profile database, in the clear (its one
+     * source of truth until VC-644), then reseals a copy (VC-643); the
+     * answer's `sealing` says whether that copy is current. Nothing here
+     * claims the key is encrypted.
      */
     setKey: (provider: KeyedWebAccessProvider, key: string): Promise<WebAccessResult> =>
       invoke("volli:web-access-set-key", provider, key),

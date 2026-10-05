@@ -6,13 +6,34 @@ import { openTestDb, type TestDb } from "./db/test-helpers";
 import { clientCapabilities } from "./ports";
 import { createHostRuntimeServices } from "./runtime-services";
 import { createDesktopDecisions } from "./decision/desktop";
+import { McpSettingsService } from "./mcp/settings";
+import { McpOAuthBroker } from "./mcp/oauth";
+import { WebAccessSettings } from "./web/settings";
+import { existsSync } from "node:fs";
+import { CredentialLock } from "./secrets/credential-lock";
+import { fileCredentialKeyring } from "./secrets/file-key";
 
 const { ownedModelAccess } = vi.hoisted(() => ({ ownedModelAccess: vi.fn() }));
 vi.mock("@volli/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@volli/agent-runtime")>()),
   piOwnedModelAccess: ownedModelAccess,
 }));
-vi.mock("./decision/desktop", () => ({ createDesktopDecisions: vi.fn(() => ({})) }));
+const { brokerOptions } = vi.hoisted(() => ({
+  brokerOptions: [] as { store: unknown; openExternal: (url: string) => Promise<void> }[],
+}));
+vi.mock("./mcp/oauth", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./mcp/oauth")>();
+  class RecordingBroker extends original.McpOAuthBroker {
+    constructor(options: ConstructorParameters<typeof original.McpOAuthBroker>[0]) {
+      brokerOptions.push(options);
+      super(options);
+    }
+  }
+  return { ...original, McpOAuthBroker: RecordingBroker };
+});
+vi.mock("./decision/desktop", () => ({
+  createDesktopDecisions: vi.fn(() => ({ decision: true })),
+}));
 
 let testDb: TestDb | undefined;
 afterEach(() => {
@@ -26,61 +47,122 @@ const modelAccess = {
   models: {},
   catalogReady: Promise.resolve(),
 } as PiModelAccess;
+const usage: SessionUsage = {
+  cause: "decision",
+  providerId: "fixture",
+  modelId: "fixture",
+  inputTokens: 1,
+  outputTokens: 2,
+  cacheReadTokens: null,
+  cacheWriteTokens: null,
+  costUsd: null,
+  costBasis: "unavailable",
+};
 
-function options() {
-  if (testDb === undefined) throw new Error("test database not opened");
-  return { dbPath: testDb.dbPath };
+function open(): TestDb {
+  testDb = openTestDb();
+  return testDb;
 }
 
-describe("staged host runtime services", () => {
-  it("does no eager model access and leaves database-backed services degraded", () => {
-    const services = createHostRuntimeServices(null, null, ports, { dbPath: "/profile/volli.db" });
-    expect(ownedModelAccess).not.toHaveBeenCalled();
-    expect(services.createModelAccess()).toBeNull();
-    expect(services.createDecisions(modelAccess)).toBeNull();
-    expect(services.createWebAccess()).toBeNull();
-    const mcp = services.createMcp();
-    expect(mcp.settings).toBeNull();
-    expect(mcp.credentials.path).toBe("/profile/mcp-credentials.json");
-    expect(ownedModelAccess).not.toHaveBeenCalled();
-  });
+function engine(observe = vi.fn(async () => undefined)): SessionEngine {
+  return { observe } as unknown as SessionEngine;
+}
 
-  it("builds MCP and Web Access against the host database, beside an overridden database path", () => {
-    testDb = openTestDb();
-    const services = createHostRuntimeServices(testDb.db, null, ports, options());
-    expect(ownedModelAccess).not.toHaveBeenCalled();
+describe("live host runtime services", () => {
+  it("builds model access, decisions, MCP and Web Access once, against the host database", () => {
+    const { db, dbPath } = open();
     ownedModelAccess.mockReturnValue(modelAccess);
-    expect(services.createModelAccess()).toBe(modelAccess);
+    const services = createHostRuntimeServices(db, engine(), ports, { dbPath });
+
     expect(ownedModelAccess).toHaveBeenCalledTimes(1);
-    expect(services.createDecisions(null)).toBeNull();
-    const mcp = services.createMcp();
-    expect(mcp.settings).not.toBeNull();
-    expect(mcp.credentials.path).toBe(testDb.dbPath.replace(/[^/]+$/, "mcp-credentials.json"));
-    expect(services.createWebAccess()).not.toBeNull();
+    expect(services.modelAccess).toBe(modelAccess);
+    expect(createDesktopDecisions).toHaveBeenCalledTimes(1);
+    expect(createDesktopDecisions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        db,
+        models: modelAccess.models,
+        catalogReady: modelAccess.catalogReady,
+      }),
+    );
+    expect(services.decisions).toBe(vi.mocked(createDesktopDecisions).mock.results[0]!.value);
+    expect(services.mcp).toBeInstanceOf(McpSettingsService);
+    // MCP credentials live beside the database, wherever the host put it.
+    expect(services.mcp.credentials).toHaveProperty(
+      "path",
+      dbPath.replace(/[^/]+$/, "mcp-credentials.json"),
+    );
+    expect(services.webAccess).toBeInstanceOf(WebAccessSettings);
+    expect(Object.keys(services).toSorted()).toEqual([
+      "decisions",
+      "mcp",
+      "modelAccess",
+      "webAccess",
+    ]);
   });
 
-  it("bills decision usage through the host's one Session engine", async () => {
-    testDb = openTestDb();
-    const observe = vi.fn(async () => undefined);
-    const services = createHostRuntimeServices(
-      testDb.db,
-      { observe } as unknown as SessionEngine,
-      ports,
-      options(),
+  it("uses the host's model access instead of constructing Pi's own", () => {
+    const { db, dbPath } = open();
+    const supplied = { models: {}, catalogReady: Promise.resolve() } as PiModelAccess;
+    const services = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      modelAccess: supplied,
+    });
+    expect(ownedModelAccess).not.toHaveBeenCalled();
+    expect(services.modelAccess).toBe(supplied);
+    expect(createDesktopDecisions).toHaveBeenCalledWith(
+      expect.objectContaining({ models: supplied.models, catalogReady: supplied.catalogReady }),
     );
-    services.createDecisions(modelAccess);
+  });
+
+  it("seals Web Access keys beside the database with the host's keyring (VC-643)", async () => {
+    const { db, dbPath } = open();
+    const results: unknown[] = [];
+    const dir = dbPath.replace(/[^/]+$/, "");
+    const services = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      modelAccess,
+      webKeySealing: {
+        keyring: fileCredentialKeyring({ path: `${dir}session-secrets.key` }),
+        mayUnlockUnattended: () => false,
+        onResult: (result) => results.push(result),
+      },
+    });
+    const web = services.webAccess;
+    expect(web.saveKey("exa", "exa-runtime-services-key").sealing).toBe("sealed");
+    expect(existsSync(`${dir}host-credentials.enc`)).toBe(true);
+    expect(await web.reconcileSealing()).toMatchObject({ sealing: "sealed", written: false });
+    expect(results).toHaveLength(2);
+    // No keyring: legacy mode, honestly pending.
+    const bare = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      modelAccess,
+      webKeySealing: { keyring: null },
+    }).webAccess;
+    expect(await bare.reconcileSealing()).toEqual({ sealing: "pending", reason: "no-keyring" });
+    new CredentialLock(`${dir}host-credentials.lock`).close();
+  });
+
+  it("routes MCP sign-in pages through the host's client capability", async () => {
+    const { db, dbPath } = open();
+    const openExternal = vi.fn(() => Promise.resolve());
+    const services = createHostRuntimeServices(
+      db,
+      engine(),
+      { client: { ...clientCapabilities(undefined), openExternal } },
+      { dbPath, modelAccess },
+    );
+    const broker = brokerOptions.at(-1)!;
+    expect(services.mcp.oauth).toBeInstanceOf(McpOAuthBroker);
+    expect(broker.store).toBe(services.mcp.credentials);
+    await broker.openExternal("https://auth.example/authorize");
+    expect(openExternal).toHaveBeenCalledWith("https://auth.example/authorize");
+  });
+
+  it("bills decision usage through the host's one Session engine at the local venue by default", async () => {
+    const { db, dbPath } = open();
+    const observe = vi.fn(async () => undefined);
+    createHostRuntimeServices(db, engine(observe), ports, { dbPath, modelAccess });
     const input = vi.mocked(createDesktopDecisions).mock.calls[0]![0];
-    const usage: SessionUsage = {
-      cause: "decision",
-      providerId: "fixture",
-      modelId: "fixture",
-      inputTokens: 1,
-      outputTokens: 2,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      costUsd: null,
-      costBasis: "unavailable",
-    };
     await input.recordUsage("session", usage, "agent.classify");
     expect(observe).toHaveBeenCalledWith({
       id: expect.stringMatching(/^usage:decision:/),
@@ -95,35 +177,27 @@ describe("staged host runtime services", () => {
       turnId: null,
       usage,
     });
+    // Every decision is its own bill.
+    await input.recordUsage("session", usage, "agent.classify");
+    const ids = observe.mock.calls.map((call) => (call as unknown as [{ id: string }])[0].id);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("records the host-supplied decision venue", async () => {
-    testDb = openTestDb();
+    const { db, dbPath } = open();
     const observe = vi.fn(async () => undefined);
-    const services = createHostRuntimeServices(
-      testDb.db,
-      { observe } as unknown as SessionEngine,
-      ports,
-      options(),
-    );
-    services.createDecisions(modelAccess, { id: "cloud-host", kind: "remote" });
+    createHostRuntimeServices(db, engine(observe), ports, {
+      dbPath,
+      modelAccess,
+      venue: { id: "cloud-host", kind: "remote" },
+    });
     await vi
       .mocked(createDesktopDecisions)
-      .mock.calls[0]![0].recordUsage("s", {} as SessionUsage, "agent.classify");
+      .mock.calls[0]![0].recordUsage("s", usage, "agent.classify");
     expect(observe).toHaveBeenCalledWith(
       expect.objectContaining({
         provenance: expect.objectContaining({ venue: { id: "cloud-host", kind: "remote" } }),
       }),
     );
-  });
-
-  it("keeps the decision metering no-op when no engine is available", async () => {
-    testDb = openTestDb();
-    const services = createHostRuntimeServices(testDb.db, null, ports, options());
-    services.createDecisions(modelAccess);
-    const input = vi.mocked(createDesktopDecisions).mock.calls[0]![0];
-    await expect(
-      input.recordUsage("session", {} as SessionUsage, "agent.classify"),
-    ).resolves.toBeUndefined();
   });
 });

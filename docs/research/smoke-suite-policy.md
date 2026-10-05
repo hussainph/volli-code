@@ -15,7 +15,7 @@ VC-522 established **47 gating smokes**, down from 51 active gates (74 files). V
 | Degraded DB / last-clean restore / fresh launch | database-recovery |
 | Live tokens, appearance, inheritance, persistence | canvas-theming |
 
-The other 42 probes gate desktop PRs in three rest shards, including all four restored probes above. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the serial terminal probe still runs exclusively after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
+The other 42 probes gate desktop PRs in three rest shards, including all four restored probes above. That includes composer-draft, chat-provisional, interrupt-resume, worktree-cli, automation arming/schedule/provenance/notifications, browser navigation/headless/capture/trace, and the repaired contrast smoke. The coarse prose/website path exemption is unchanged. Core and rest run alongside each other; the `SERIAL` set—`terminal-smoke.mjs`, VC-635's quit probe `database-newer-version-smoke.mjs`, and `database-recovery-smoke.mjs`—runs one probe at a time after its lane's concurrent work drains. `--tier boot` is a compatibility alias for `--tier core`.
 
 No sole core journey is quarantined based on historical flakes. Board and theming exceed the screening threshold but stay gating; DB recovery's sample is too small. The existing DB shutdown-grace fix remains; graceful-exit assertions are not weakened.
 

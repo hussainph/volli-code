@@ -1,4 +1,5 @@
 /** Headless ports over the same assembly, facade, recovery and drain desktop uses. */
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,11 +9,13 @@ import {
 } from "@volli/agent-runtime";
 import {
   displayTicketId,
+  errorMessage,
   VOLLI_SOCKET_ENV,
   type SessionExecutionVenue,
   type TicketMovedNotice,
 } from "@volli/shared";
-import type { HostCore, HostCorePorts } from "@volli/host-core";
+import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
+import type { RetentionReclaimSeams } from "@volli/host-core/retention-runtime";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
 import { getTicket } from "@volli/host-core/db/tickets-repo";
 import { SecretService } from "@volli/host-core/secrets/service";
@@ -35,8 +38,9 @@ import {
   recoveredRuntimeSessionServices,
 } from "@volli/host-core/session-runtime/facade";
 import { createSessionRuntimeLifecycle } from "@volli/host-core/session-runtime/lifecycle";
-import { agentSitesWithin } from "@volli/host-core/worktree/agent-sites";
+import { agentSitesWithin, releaseAgentSites } from "@volli/host-core/worktree/agent-sites";
 import type { BusyWorktreeSites, BusyWorktreeSite } from "@volli/host-core/worktree/activity";
+import type { AgentSiteRuntime } from "@volli/host-core/worktree/agent-sites";
 import type { HeadlessSecrets } from "./secrets";
 
 export interface HeadlessRuntimeOptions {
@@ -47,9 +51,35 @@ export interface HeadlessRuntimeOptions {
   modelAccess?: PiModelAccess;
 }
 
+function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {
+  return env["HOME"] || homedir();
+}
+
+/**
+ * The host's model access, built when host-core's runtime services are first
+ * read. A service account's Pi auth lives where its own environment says
+ * (`PI_CODING_AGENT_DIR`, else `$HOME/.pi/agent`), never the machine user's.
+ */
+export function headlessModelAccess(
+  env: Readonly<Record<string, string | undefined>>,
+  options: Pick<HeadlessRuntimeOptions, "modelAccess">,
+): PiModelAccess {
+  return (
+    options.modelAccess ??
+    piOwnedModelAccess({
+      agentDir: env["PI_CODING_AGENT_DIR"] || join(headlessHomeDir(env), ".pi", "agent"),
+    })
+  );
+}
+
+/** A worktree question asked before boot recovery finished. */
+function notReady(): Error {
+  return new Error("The headless Session runtime is not ready.");
+}
+
 /** Synchronous ownership first; ready() is the only public ledger-consuming door. */
 export function createHeadlessSessionRuntime(input: {
-  host: HostCore;
+  host: LiveHostCore;
   version: string;
   ports: HostCorePorts;
   secrets: HeadlessSecrets;
@@ -59,18 +89,11 @@ export function createHeadlessSessionRuntime(input: {
   options: HeadlessRuntimeOptions;
 }) {
   const { host, ports, env, options } = input;
-  if (!host.database.ok || host.sessionEngine === null)
-    throw new Error("The Session database is unavailable.");
   const db = host.database.db;
   const sessionEngine = host.sessionEngine;
-  const homeDir = env["HOME"] || homedir();
-  const modelAccess =
-    options.modelAccess ??
-    piOwnedModelAccess({
-      agentDir: env["PI_CODING_AGENT_DIR"] || join(homeDir, ".pi", "agent"),
-    });
-  const decisions = host.runtimeServices.createDecisions(modelAccess, options.venue);
-  const mcpSettings = host.runtimeServices.createMcp().settings;
+  const homeDir = headlessHomeDir(env);
+  // One lazy module: its model access is `headlessModelAccess`, handed to host-core.
+  const { modelAccess, decisions, mcp: mcpSettings, webAccess } = host.runtimeServices;
   const mcpDispatch = desktopMcpDispatch({
     env,
     packaged: true,
@@ -97,7 +120,7 @@ export function createHeadlessSessionRuntime(input: {
   });
   const observability = new AgentObservability({ db, serviceVersion: input.version });
   const shells = new BackgroundShellHost({
-    ledger: host.maintenance.createSpawnLedger(),
+    ledger: host.maintenance.spawnLedger,
     redactOutput: (text) => secrets.store.redact(text),
     redactNoticeOutput: (text) => secrets.store.redactPartial(text),
     onNotice: (notice) => lifecycle.relayShellNotice(notice),
@@ -116,7 +139,7 @@ export function createHeadlessSessionRuntime(input: {
     hostPorts: ports,
     modelAccess,
     decisions,
-    webAccess: host.runtimeServices.createWebAccess(),
+    webAccess,
     mcpSettings,
     mcpDispatch,
     codeMode,
@@ -160,7 +183,8 @@ export function createHeadlessSessionRuntime(input: {
     },
   });
   const automations = createRuntimeAutomations({
-    host,
+    host: { database: host.database, dataDir: host.dataDir },
+    events: ports.events,
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir,
     log: ports.log,
@@ -193,18 +217,59 @@ export function createHeadlessSessionRuntime(input: {
     delegation,
     delegationsFor: agents.recoveryDelegationsFor,
     services: () => facade,
-    stopProducers: () => automations.stop(),
+    stopProducers: () => {
+      automations.stop();
+      agents.stop();
+    },
     installQuitHold: () => {},
   });
   observability.start();
+  /** Set once recovery has finished; until then every worktree question refuses. */
+  let recovered: { busyWorktreeSites: BusyWorktreeSites; runtime: AgentSiteRuntime } | undefined;
+  /**
+   * The retention reclaim's seams (VC-113). Fail closed: before recovery
+   * there is no answer to "is this worktree busy", so the question throws and
+   * the automatic reclaim and trim skip rather than delete.
+   */
+  const reclaim: Required<RetentionReclaimSeams> = {
+    busyWorktreeSites: async (target) => {
+      if (recovered === undefined) throw notReady();
+      return recovered.busyWorktreeSites(target);
+    },
+    releaseAgentSites: async (directory) => {
+      if (recovered === undefined) throw notReady();
+      return releaseAgentSites(recovered.runtime, directory, {
+        newCommandId: randomUUID,
+        onError: (sessionId, error) =>
+          ports.log.error(
+            `[volli] could not release Session ${sessionId} from ${directory}:`,
+            errorMessage(error),
+          ),
+      });
+    },
+  };
   return {
-    close: lifecycle.close,
+    close: async () => {
+      try {
+        await lifecycle.close();
+      } finally {
+        await automations.settled();
+      }
+    },
+    /** The scheduler and armed Runs: the host lifecycle's synchronous first step. */
+    stopProducers: () => {
+      automations.stop();
+      agents.stop();
+    },
+    /** Sessions holding a live attachment token, read on every orphan scan. */
+    liveSessionIds: () => tokens.liveSessionIds(),
+    reclaim,
     openNativeBindings: () => assembly.sessionRuntime?.openNativeBindings() ?? [],
     observeScheduledResume: lifecycle.observeScheduledResume,
     async ready() {
       const ready = await lifecycle.ready();
-      const services = recoveredRuntimeSessionServices(ready);
-      if (services.sessions === null || services.runtime === null)
+      const { sessions, runtime } = recoveredRuntimeSessionServices(ready);
+      if (sessions === null || runtime === null)
         throw new Error("The headless Session runtime is unavailable.");
       automations.start(recoveredSessionAutomationPorts(ready));
       agents.toolDoor(ready);
@@ -214,25 +279,27 @@ export function createHeadlessSessionRuntime(input: {
         const sites: BusyWorktreeSite[] = shells
           .liveCwds()
           .map((directory) => ({ directory, surface: "terminal" }));
-        for (const binding of agentSitesWithin(services.runtime!, target)) {
+        for (const binding of agentSitesWithin(runtime, target)) {
           // An unreadable Session refuses automatic trim; no fail-open deletion.
-          if (
-            (await services.runtime!.projection({ sessionId: binding.sessionId })).projection
-              .turnActive
-          ) {
+          if ((await runtime.projection({ sessionId: binding.sessionId })).projection.turnActive) {
             sites.push({ directory: binding.directory, surface: "agent" });
           }
         }
         return sites;
       };
+      recovered = { busyWorktreeSites, runtime };
       return {
         ...recoveredSessionCommandPorts(ready),
         venue: options.venue,
         verifySessionToken: tokens.verify,
         busyWorktreeSites,
-        automationsAvailable: automations.runner !== null,
-        onDeliberateMove: (notice: TicketMovedNotice) =>
-          automations.pendingArmedRuns?.noteDeliberateMove(notice),
+        automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
+        onDeliberateMove: (notice: TicketMovedNotice) => {
+          if (automations.kind === "live") {
+            const execution = automations.execution;
+            if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
+          }
+        },
       };
     },
   };

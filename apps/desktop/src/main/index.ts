@@ -82,6 +82,7 @@ import {
   logTransactionViolation,
   throwTransactionViolation,
   type HostCorePorts,
+  isLiveHost,
 } from "@volli/host-core";
 import { createElectronClientCapabilities } from "./client-capabilities";
 import { getProjectById } from "@volli/host-core/db/projects-repo";
@@ -94,6 +95,12 @@ import { repackLegacyTranscriptArtifacts } from "@volli/host-core/session-runtim
 import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
 import type { OpenNativeBinding } from "@volli/session-engine";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
+import { createDatabaseRecovery } from "@volli/host-core/maintenance-services";
+import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
+import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
+import { ModelAccessSignInService } from "@volli/host-core/model-access/sign-in-service";
+import { createHostFileServices } from "@volli/host-core/file-services";
+import { createHostAgentCommands } from "@volli/host-core/agent-services";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { installationId } from "./installation-id";
@@ -107,7 +114,14 @@ import {
   type RuntimeAssemblyOptions,
 } from "@volli/host-core/session-runtime/assembly";
 import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
-import { SecretStore } from "@volli/host-core/secrets";
+import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  keychainCredentialKeyring,
+  SecretStore,
+} from "@volli/host-core/secrets";
+import { describeWebSealing } from "@volli/host-core/web/credential-mirror";
+import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "@volli/host-core/secrets/service";
 import { retiresSessionSecrets } from "@volli/host-core/secrets/lifetime";
@@ -158,7 +172,8 @@ import { listRegisteredHarnesses } from "@volli/host-core/db/harness-registry-re
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
-import { confirmDestructiveClose, registerTerminalIpcHandlers } from "./pty";
+import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandlers } from "./pty";
+import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
 import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty/manager";
 import { registerThemeIpcHandlers } from "./theme-ipc";
@@ -357,6 +372,7 @@ if (ownsAppProfile) {
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
 
 function noScheduledResumeObserver(): void {}
+function noQuitAction(): void {}
 
 function noOpenNativeBindings(): readonly OpenNativeBinding[] {
   return [];
@@ -722,18 +738,56 @@ const appStartup = app.whenReady().then(async () => {
     listOpenNativeBindings: () => listOpenNativeBindings(),
     observeScheduledResume: (projection) => observeScheduledResume(projection),
   };
+  let ptyManagerRef: PtyManager | undefined;
+  // Capture-only wrapper: successful keychain use is observed by all host-owned secrets.
+  const keychainUse = observeKeychainUse(safeStorage);
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
+    stopPolicy: "desktop-quit",
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
+    secretKey: keychainSecretCodec(keychainUse.keychain),
+    webKeySealing: {
+      keyring: keychainCredentialKeyring({
+        path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+        keychain: safeStorage,
+        inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
+      }),
+      mayUnlockUnattended: keychainUse.used,
+      onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
+    },
+    terminal: () => ({
+      host: {
+        events: hostPorts.events,
+        worktreeDeps: () => {
+          if (liveHost === undefined) throw new Error("The database is unavailable.");
+          return liveHost.worktreeDeps;
+        },
+        ensureHarnessWorkspaceFiles,
+      },
+      agentRuntime,
+      concurrencyEnvReader,
+    }),
+    processReaders: {
+      liveSessionIds: () => sessionTokens.liveSessionIds(),
+      openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+    },
+    reclaim: {
+      busyWorktreeSites: (target) => busyWorktreeSites(target),
+      releaseAgentSites: (target) => releaseAgentSites(target),
+    },
   });
+  const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
-    recovery: hostCore.maintenance.createDatabaseRecovery(),
+    recovery: createDatabaseRecovery({ dbPath, dataDir: app.getPath("userData") }),
     degraded: !dbHandle.ok,
     // A database from a newer Volli gets its own recovery screen (VC-602).
-    fault: hostCore.databaseFailure?.kind === "newer-version" ? "newer-version" : "unreadable",
+    fault:
+      !isLiveHost(hostCore) && hostCore.databaseFailure.kind === "newer-version"
+        ? "newer-version"
+        : "unreadable",
     restart: () => {
       // Let the IPC reply paint success before restarting the entire service
       // graph; degraded handlers must not be replaced with partially live ones.
@@ -748,7 +802,9 @@ const appStartup = app.whenReady().then(async () => {
   installExperimentalSettings(
     new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"]),
   );
-  const { sessionWakeBus, sessionReadWatch, sessionEngine } = hostCore;
+  const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
+  const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
+  const sessionEngine = liveHost?.sessionEngine ?? null;
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
@@ -853,14 +909,14 @@ const appStartup = app.whenReady().then(async () => {
   // cross-process and already survives the `pi` CLI writing alongside us, but
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
-  const piModelAccess = hostCore.runtimeServices.createModelAccess();
+  const piModelAccess = liveHost?.runtimeServices.modelAccess ?? null;
   // Decision models (VC-478): the host decision service every feature that
   // asks a classifier goes through, the `classify` tool's per-Session port,
   // and the Settings owner. Built over the same Pi collection as chat, so a
   // cloud classifier's key is the one a person signed in with under Model
   // Access. Its usage is billed into the Session it was asked for, as
   // `usage.recorded` with cause `decision` and the purpose in the provenance.
-  const desktopDecisions = hostCore.runtimeServices.createDecisions(piModelAccess);
+  const desktopDecisions = liveHost?.runtimeServices.decisions ?? null;
   // Web Access: the BYO search provider, and the one credential Volli stores
   // itself. Before anything can read one, the keys that predate migration 023
   // are carried out of `safeStorage` — the app's one remaining keychain call,
@@ -868,8 +924,11 @@ const appStartup = app.whenReady().then(async () => {
   // runs here, ahead of the stores, so no Session and no Settings open can see
   // a key half-moved. Counts only in the log: how many rows moved is not a fact
   // about any key.
+  // Whether this launch has used the keychain successfully yet (VC-643): the
+  // web keys' unattended launch reconcile may fetch its own key only then.
   if (dbHandle.ok) {
     const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
+    if (moved.carried > 0) keychainUse.markUsed();
     if (moved.carried + moved.dropped + moved.deferred > 0) {
       console.info(
         `[volli] web search keys out of the OS keychain: ${moved.carried} carried, ` +
@@ -888,7 +947,11 @@ const appStartup = app.whenReady().then(async () => {
   // Lazy: no keychain access until a stored secret is used or a person saves one.
   // Session-only storage never needs the keychain. No plaintext fallback.
   const secrets = new SecretService(
-    new SecretStore(join(dirname(dbPath), "session-secrets.enc"), keychainSecretCodec(safeStorage)),
+    liveHost?.secretStore ??
+      new SecretStore(
+        join(dirname(dbPath), "session-secrets.enc"),
+        keychainSecretCodec(keychainUse.keychain),
+      ),
   );
   sessionWakeBus?.subscribe(({ event }) => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
@@ -903,7 +966,7 @@ const appStartup = app.whenReady().then(async () => {
     expected.hash = "";
     return actual.href === expected.href;
   });
-  const { settings: mcpSettings } = hostCore.runtimeServices.createMcp();
+  const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // How MCP calls are dispatched and bounded (VC-454): the developer-only
   // parallel-read opt-in, read once from an unpackaged build's environment
   // (no setting, no UI), and one per-server bound every Session shares.
@@ -933,7 +996,11 @@ const appStartup = app.whenReady().then(async () => {
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
-  const webAccess = hostCore.runtimeServices.createWebAccess();
+  // Web search keys' sealed mirror (VC-643): host-owned with the keyring
+  // captured above. Unattended reconcile waits for first paint and successful
+  // keychain use; accepted quit stops it without awaiting keychain work.
+  const webAccess = liveHost?.runtimeServices.webAccess ?? null;
+  const webSealing = webSealingLifecycle(webAccess);
   /** The cursor overlay is a desktop-only port, constructed beside the window. */
   let cursorOverlayRef: CursorOverlay | null = null;
   // Agent observability (VC-119): the opt-in export switch, and the sink the
@@ -953,7 +1020,7 @@ const appStartup = app.whenReady().then(async () => {
    * without guessing from its command line. One instance, shared by every
    * spawn door, and a no-op when the database never opened.
    */
-  const spawnLedger = hostCore.maintenance.createSpawnLedger();
+  const spawnLedger = liveHost?.maintenance.spawnLedger ?? new SpawnLedger(null);
   /**
    * The one place both halves of the session-token seam are known (VC-163).
    *
@@ -1162,6 +1229,7 @@ const appStartup = app.whenReady().then(async () => {
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   const runtimeAutomations = createRuntimeAutomations({
     host: hostCore,
+    events: hostPorts.events,
     piRuntimeHost,
     homeDir: fsDeps.homeDir,
     log: console,
@@ -1252,7 +1320,11 @@ const appStartup = app.whenReady().then(async () => {
               : async (input) => {
                   const attached = await rpcSessions.attach(input);
                   if (attached.state === "ready") {
-                    await runtimeAutomations.runner?.resumeDeliveryForSession(input.sessionId);
+                    if (runtimeAutomations.kind === "live") {
+                      const execution = runtimeAutomations.execution;
+                      if (execution.kind === "ready")
+                        await execution.runner.resumeDeliveryForSession(input.sessionId);
+                    }
                   }
                   return attached;
                 },
@@ -1287,7 +1359,7 @@ const appStartup = app.whenReady().then(async () => {
   registerModelAccessIpcHandlers(
     piModelAccess === null
       ? null
-      : hostCore.runtimeServices.createSignIn({
+      : new ModelAccessSignInService({
           // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
           pi: piSignIn(piModelAccess.models, {
             deviceId: () => {
@@ -1353,6 +1425,20 @@ const appStartup = app.whenReady().then(async () => {
       notifications.reportActiveTarget(window.id, args[0]);
     },
   );
+  let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
+  let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
+  let abortRepack = noQuitAction;
+  let hostClosing = false;
+  const prepareHostQuit = (event: { preventDefault(): void }) => {
+    // Preserve the former listener order, including the two unconditional
+    // stops on a refused attempt. Only the quit trigger is registered.
+    prepareDesktopQuit(event, {
+      stopAutomations: runtimeAutomations.stop,
+      unsavedQuit,
+      terminalQuit,
+      abortRepack,
+    });
+  };
   const runtimeLifecycle = createSessionRuntimeLifecycle({
     host: hostCore,
     ports: hostPorts,
@@ -1362,21 +1448,42 @@ const appStartup = app.whenReady().then(async () => {
     delegation: sessionDelegation,
     delegationsFor: runtimeSessionAgents.recoveryDelegationsFor,
     services: () => preparedSessionFacade,
-    stopProducers: () => runtimeAutomations.stop(),
-    installQuitHold: (close) =>
+    stopProducers: () => {
+      hostClosing = true;
+      runtimeAutomations.stop();
+      runtimeSessionAgents.stop();
+    },
+    installQuitHold: () =>
       registerAcceptedQuitCoordinator({
         lifecycle: app,
-        shutdownNativeSessions: close,
-        shutdownAgentSocket,
+        shutdownNativeSessions: async () => {
+          await hostCore.stop("quit");
+        },
+        shutdownAgentSocket: async () => {},
+        prepareQuit: (event) => prepareHostQuit(event),
+        stopBackgroundWork: () => webSealing.stop(),
         reportFailure: (error) =>
           console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
       }),
   });
   observeScheduledResume = runtimeLifecycle.observeScheduledResume;
   relayShellNotice = runtimeLifecycle.relayShellNotice;
-  const readyRuntimeServices = await runtimeLifecycle.ready();
-  sessionRpc = createSessionRpc(readyRuntimeServices);
-  runtimeSessionAgents.toolDoor(readyRuntimeServices);
+  const desktopRuntime = createDesktopHostRuntime({
+    host: hostCore,
+    lifecycle: runtimeLifecycle,
+    bindReady: (ready) => {
+      sessionRpc = createSessionRpc(ready);
+      runtimeSessionAgents.toolDoor(ready);
+    },
+    stopProducers: () => {
+      hostClosing = true;
+      runtimeAutomations.stop();
+      runtimeSessionAgents.stop();
+      ptyManagerRef?.stopParkSweep();
+    },
+    closeSocket: shutdownAgentSocket,
+  });
+  const readyRuntimeServices = await desktopRuntime.start();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
   // so leaves an unlinked Blob whenever a draft is thrown away. Housekeeping, so
@@ -1436,10 +1543,8 @@ const appStartup = app.whenReady().then(async () => {
   // #67). Registered after the db opens because the chain read needs the
   // resolved mode, which lives in `app_state`.
   registerGhosttyConfigIpc(fsDeps, currentAppearance);
-  // Assigned once registerTerminalIpcHandlers runs below; the worktree
-  // remove/orphan-delete guards read it lazily (only at invoke time, long after
-  // boot) to refuse touching a directory a live session still runs in.
-  let ptyManagerRef: PtyManager | undefined;
+  // The terminal ref declared before host construction is filled below.
+  // Worktree guards read it lazily, after boot.
   // The ONE interrupt entry both choke points (renderer `volli:ticket-move`
   // IPC, socket `ticket.move`) inject: Escs the ticket's live agent sessions
   // and, when any were actually interrupted, announces it to every window
@@ -1551,6 +1656,9 @@ const appStartup = app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     ...recoveredSessionClientPorts(readyRuntimeServices),
     listOpenNativeBindings,
+    ...(liveHost === undefined
+      ? {}
+      : { detachedWork: liveHost.detachedWork, maintenance: liveHost.maintenance }),
     busyWorktreeSites,
     releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
@@ -1558,7 +1666,12 @@ const appStartup = app.whenReady().then(async () => {
     interruptTicketSessions: interruptTicketSessionsAnnounced,
     // Renderer moves now reach main's one durable armed-column arrival owner,
     // carrying an Option-drag choice when that gesture supplied one.
-    onDeliberateMove: (notice) => runtimeAutomations.pendingArmedRuns?.noteDeliberateMove(notice),
+    onDeliberateMove: (notice) => {
+      if (runtimeAutomations.kind === "live") {
+        const execution = runtimeAutomations.execution;
+        if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
+      }
+    },
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -1576,14 +1689,7 @@ const appStartup = app.whenReady().then(async () => {
   // the answer — and the terminal manager is reached through the ref the
   // worktree guards already use, because this registration runs before it
   // exists.
-  const orphanProcesses = hostCore.maintenance.createOrphanProcesses({
-    ledger: spawnLedger,
-    // A writing caller is live exactly while its attachment token is valid,
-    // which is the same fact `volli doctor` reports as the Session check.
-    liveSessionIds: () => sessionTokens.liveSessionIds(),
-    // A terminal tab standing in a worktree is a person looking at it.
-    openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
-  });
+  const orphanProcesses = liveHost?.maintenance.orphanProcesses ?? null;
   registerOrphanProcessIpcHandlers(dbHandle, orphanProcesses);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
@@ -1594,7 +1700,7 @@ const appStartup = app.whenReady().then(async () => {
       globalCommandsDir: join(fsDeps.userDataDir, "commands"),
       globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
     },
-    hostCore.fileServices,
+    liveHost?.fileServices ?? createHostFileServices(hostPorts),
   );
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the
@@ -1620,13 +1726,14 @@ const appStartup = app.whenReady().then(async () => {
   );
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
   runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
-  app.on("before-quit", () => runtimeAutomations.stop());
+  const automationExecution =
+    runtimeAutomations.kind === "live" ? runtimeAutomations.execution : { kind: "idle" as const };
   registerAutomationIpcHandlers(dbHandle, {
-    service: runtimeAutomations.service,
-    runner: runtimeAutomations.runner,
-    ...(runtimeAutomations.pendingArmedRuns === null
+    service: runtimeAutomations.kind === "live" ? runtimeAutomations.service : null,
+    runner: automationExecution.kind === "ready" ? automationExecution.runner : null,
+    ...(automationExecution.kind === "idle"
       ? {}
-      : { pendingArmedRuns: runtimeAutomations.pendingArmedRuns }),
+      : { pendingArmedRuns: automationExecution.pendingArmedRuns }),
   });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
@@ -1769,7 +1876,7 @@ const appStartup = app.whenReady().then(async () => {
   // the quit path that cannot be recovered afterwards. The accepted-quit
   // coordinator registered above only holds the event synchronously; it defers
   // teardown until this gate and the terminal gate have recorded their verdict.
-  app.on("before-quit", (event) => {
+  unsavedQuit = (event) => {
     if (quitAlreadyRefused(event)) return;
     // An accepted update install already carried the unsaved-drafts warning in
     // its own dialog (VC-59's one-prompt decision) — asking again here would
@@ -1781,7 +1888,7 @@ const appStartup = app.whenReady().then(async () => {
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
     if (step === "confirm" && !confirmDiscardUnsaved(names, "Quit")) refuseQuit(event);
-  });
+  };
 
   // The terminal door takes the same reader the structured door uses (VC-403):
   // one question about one machine, asked once.
@@ -1790,8 +1897,13 @@ const appStartup = app.whenReady().then(async () => {
     sessionEngine,
     agentRuntime,
     concurrencyEnvReader,
+    {
+      ...(liveHost?.terminals.kind === "available" ? { manager: liveHost.terminals.manager } : {}),
+      registerQuitGate: false,
+    },
   );
   ptyManagerRef = ptyManager;
+  terminalQuit = (event) => prepareTerminalQuit(ptyManager, event);
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them
@@ -1932,14 +2044,15 @@ const appStartup = app.whenReady().then(async () => {
   });
   const mainWindow = createOwnedWindow();
   const transcriptRepackAbort = new AbortController();
-  app.on("before-quit", () => transcriptRepackAbort.abort());
+  abortRepack = () => transcriptRepackAbort.abort();
   mainWindow.webContents.once("did-finish-load", () => {
     // Transcript repack is migration-by-sibling rather than an in-place
     // rewrite. Give first paint five seconds of quiet, then process only small
     // batches with a pause between them. Every individual failure is kept for
     // the next launch, with its legacy bytes untouched.
     const repackDelay = setTimeout(() => {
-      void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
+      if (hostClosing) return;
+      const repack = repackLegacyTranscriptArtifacts(transcriptArtifacts, {
         batchSize: 25,
         signal: transcriptRepackAbort.signal,
         shouldBackOff: async () => {
@@ -1964,6 +2077,7 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[transcript-repack] scan failed:", errorMessage(error));
         });
+      liveHost?.detachedWork.track(repack);
     }, 5_000);
     repackDelay.unref();
 
@@ -1982,6 +2096,12 @@ const appStartup = app.whenReady().then(async () => {
     void loginPathBootstrap.applyInteractive().catch((error) => {
       console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
     });
+    // Web search keys' sealed mirror (VC-643): rebuilt from the database on
+    // every launch, deletes included. Like the repack above, it waits out
+    // first paint and boot. Cancelled, with anything it started, the moment a
+    // quit is accepted (`stopBackgroundWork` above). Never rejects; the
+    // outcome is logged above.
+    webSealing.afterFirstPaint();
   });
 
   // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching
@@ -1996,15 +2116,16 @@ const appStartup = app.whenReady().then(async () => {
   // The reconcile beside it closes the other half: a cleanup the app did not
   // live long enough to finish is stamped interrupted here, so Storage can show
   // what completed and what was never attempted instead of re-offering both.
-  if (dbHandle.ok) {
-    const db = dbHandle.db;
+  if (liveHost !== undefined) {
+    const db = liveHost.database.db;
     mainWindow.webContents.once("did-finish-load", () => {
       // Each announced-but-unsettled item is asked of git and disk before the
       // run is stamped, so an already-removed folder is recorded as removed
       // rather than described as work nobody attempted (review C3). Read-only,
       // and never fatal to a launch.
-      void reconcileInterruptedCleanups({
-        worktree: hostCore.worktrees.deps(db),
+      if (hostClosing) return;
+      const reconcile = reconcileInterruptedCleanups({
+        worktree: liveHost.worktreeDeps,
         engine: orphanCleanupEngine(db),
       })
         .then((runs) => {
@@ -2018,7 +2139,8 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] cleanup history unreadable:", errorMessage(error));
         });
-      startOrphanScan(hostCore.worktrees.deps(db), { busyWorktreeSites })
+      liveHost.detachedWork.track(reconcile);
+      const scan = startOrphanScan(liveHost.worktreeDeps, { busyWorktreeSites })
         .then((report) => {
           console.log(
             `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
@@ -2027,6 +2149,7 @@ const appStartup = app.whenReady().then(async () => {
         .catch((error) => {
           console.error("[worktree] scan failed:", errorMessage(error));
         });
+      liveHost.detachedWork.track(scan);
     });
 
     // Retention merge-watch (CONCEPT #16, issue #76): the background 60s poll of
@@ -2037,20 +2160,11 @@ const appStartup = app.whenReady().then(async () => {
     // The reclaim seams (VC-113) are handed over here because this is the only
     // scope that can answer them — the same two the destructive IPC guards use,
     // so an automatic removal refuses everything a manual one would.
-    const retention = hostCore.maintenance.retention(db, {
-      busyWorktreeSites,
-      releaseAgentSites,
-    });
-    mainWindow.webContents.once("did-finish-load", () => retention.start());
-    app.on("browser-window-focus", () => retention.triggerNow());
-
-    // The opt-in automatic reap (VC-341), on the same after-first-paint terms.
-    // With the setting off — the default — a tick reads one `app_state` row and
-    // stops, so a machine that never turns this on pays nothing for it.
-    if (orphanProcesses !== null) {
-      const autoReap = hostCore.maintenance.createAutoReapWatch(orphanProcesses);
-      mainWindow.webContents.once("did-finish-load", () => autoReap.start());
-    }
+    // Construct the shared retention watch at its former boot point; both
+    // maintenance loops still start only after the first window paints.
+    void liveHost.maintenance.retention;
+    mainWindow.webContents.once("did-finish-load", () => liveHost.maintenance.start());
+    app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
   }
 
   // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
@@ -2448,99 +2562,109 @@ const appStartup = app.whenReady().then(async () => {
   });
 
   try {
-    const execute = dbHandle.ok
-      ? hostCore.agentServices.createCommands({
-          db: dbHandle.db,
-          appVersion: app.getVersion(),
-          // The verifying half of the same registry the attachments mint from.
-          // Without it every socket caller is unauthenticated by default, which
-          // is the fail-closed direction (VC-163).
-          verifySessionToken: sessionTokens.verify,
-          observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
-          ...recoveredSessionCommandPorts(readyRuntimeServices),
-          // Backward-move interrupt (issue #78): a socket `ticket.move` that
-          // leaves the active columns Esc's the ticket's live agent sessions,
-          // announced via toast exactly like the renderer's own move path.
-          busyWorktreeSites,
-          interruptTicketSessions: interruptTicketSessionsAnnounced,
-          // An explicit `volli ticket move` is the other Deliberate-move door.
-          // It reaches the same one main-owned pending arrival as renderer IPC;
-          // no renderer has to exist for the timer to fire.
-          onDeliberateMove: (notice) =>
-            runtimeAutomations.pendingArmedRuns?.noteDeliberateMove(notice),
-          // The `env` block `volli identify` prints (VC-94): the PATH main
-          // adopted, its latest non-interactive provenance, the measured tools
-          // resolved against it (and which of them this workspace implies),
-          // and the workspace dependency state. It awaits
-          // the one current pass — boot normally, a fresh pass after repair —
-          // so the report never describes a PATH from before adoption finished
-          // and is read at CALL time, never captured.
-          sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
-          // What `volli doctor` cannot see from inside the shell it runs in.
-          // Read at CALL time, never captured: the wrappers are regenerated
-          // after this service is constructed, and again by `--fix`.
-          doctorFacts: async () => ({
-            binDir: runtimePaths.binDir,
-            wrappers: Object.fromEntries(
-              [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>())].map(
-                ([, wrapperPath]) => [basename(wrapperPath), wrapperPath],
+    const execute =
+      liveHost !== undefined
+        ? createHostAgentCommands(hostPorts, {
+            db: liveHost.database.db,
+            detachedWork: liveHost.detachedWork,
+            appVersion: app.getVersion(),
+            // The verifying half of the same registry the attachments mint from.
+            // Without it every socket caller is unauthenticated by default, which
+            // is the fail-closed direction (VC-163).
+            verifySessionToken: sessionTokens.verify,
+            observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
+            ...recoveredSessionCommandPorts(readyRuntimeServices),
+            // Backward-move interrupt (issue #78): a socket `ticket.move` that
+            // leaves the active columns Esc's the ticket's live agent sessions,
+            // announced via toast exactly like the renderer's own move path.
+            busyWorktreeSites,
+            interruptTicketSessions: interruptTicketSessionsAnnounced,
+            // An explicit `volli ticket move` is the other Deliberate-move door.
+            // It reaches the same one main-owned pending arrival as renderer IPC;
+            // no renderer has to exist for the timer to fire.
+            onDeliberateMove: (notice) => {
+              if (runtimeAutomations.kind === "live") {
+                const execution = runtimeAutomations.execution;
+                if (execution.kind !== "idle")
+                  execution.pendingArmedRuns.noteDeliberateMove(notice);
+              }
+            },
+            // The `env` block `volli identify` prints (VC-94): the PATH main
+            // adopted, its latest non-interactive provenance, the measured tools
+            // resolved against it (and which of them this workspace implies),
+            // and the workspace dependency state. It awaits
+            // the one current pass — boot normally, a fresh pass after repair —
+            // so the report never describes a PATH from before adoption finished
+            // and is read at CALL time, never captured.
+            sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
+            // What `volli doctor` cannot see from inside the shell it runs in.
+            // Read at CALL time, never captured: the wrappers are regenerated
+            // after this service is constructed, and again by `--fix`.
+            doctorFacts: async () => ({
+              binDir: runtimePaths.binDir,
+              wrappers: Object.fromEntries(
+                [...(agentRuntime.wrapperPaths ?? new Map<HarnessId, string>())].map(
+                  ([, wrapperPath]) => [basename(wrapperPath), wrapperPath],
+                ),
               ),
-            ),
-            refused: harnessRuntimeRefused.map(({ command, resolvedPath, reason }) => ({
-              command,
-              resolvedPath,
-              reason,
-            })),
-            shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
-            shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
-            // Resolved through the real filesystem: `volli doctor` compares this
-            // byte-for-byte against what a CLI process's own PATH walk found,
-            // which follows the `~/.local/bin/volli` symlink main installs (or
-            // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
-            // it actually points at. An unresolved comparison would call a
-            // correct install "another Volli install owns the link".
-            shimPath: await realpath(shimPath).catch(() => shimPath),
-            // A writing caller is live exactly while its attachment token is
-            // valid at the socket door. PTY membership excludes structured
-            // attachments, so it cannot answer this diagnostic truthfully.
-            liveSessionIds: sessionTokens.liveSessionIds(),
-            reporting: dbHandle.ok
-              ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
-                  harnessId: record.slug,
-                  declared: record.declaredEvents.length,
-                  verified: record.verifiedEvents.length,
-                }))
-              : [],
-            // Conflicts are discovered by running the installer, which `doctor`
-            // deliberately does not do: a diagnostic must not write to the
-            // user's dotfiles as a side effect of being asked a question.
-            skillConflicts: [],
-            // The orphan process count (VC-341). Read from the latest sweep
-            // when it is recent enough to still be true, and swept afresh
-            // otherwise: `doctor` may cost a `ps` and an `lsof`, but two
-            // doctors in a row must not cost two. A launch with no sweep
-            // leaves this undefined, which the check reports as unknown
-            // rather than as a healthy zero.
-            ...(orphanProcesses === null
-              ? {}
-              : {
-                  orphanProcesses: await orphanProcesses
-                    .freshInventory()
-                    .then((inventory) => ({
-                      total: inventory.candidates.length,
-                      reapable: inventory.reapableCount,
-                    }))
-                    .catch(() => undefined),
-                }),
-          }),
-          doctorRepair: repairSessionEnvironment,
-        }).execute
-      : async () =>
-          ({
-            v: 1,
-            ok: false,
-            error: makeAgentError("DB_UNAVAILABLE", dbHandle.error),
-          }) as const;
+              refused: harnessRuntimeRefused.map(({ command, resolvedPath, reason }) => ({
+                command,
+                resolvedPath,
+                reason,
+              })),
+              shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
+              shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
+              // Resolved through the real filesystem: `volli doctor` compares this
+              // byte-for-byte against what a CLI process's own PATH walk found,
+              // which follows the `~/.local/bin/volli` symlink main installs (or
+              // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
+              // it actually points at. An unresolved comparison would call a
+              // correct install "another Volli install owns the link".
+              shimPath: await realpath(shimPath).catch(() => shimPath),
+              // A writing caller is live exactly while its attachment token is
+              // valid at the socket door. PTY membership excludes structured
+              // attachments, so it cannot answer this diagnostic truthfully.
+              liveSessionIds: sessionTokens.liveSessionIds(),
+              reporting: dbHandle.ok
+                ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
+                    harnessId: record.slug,
+                    declared: record.declaredEvents.length,
+                    verified: record.verifiedEvents.length,
+                  }))
+                : [],
+              // Conflicts are discovered by running the installer, which `doctor`
+              // deliberately does not do: a diagnostic must not write to the
+              // user's dotfiles as a side effect of being asked a question.
+              skillConflicts: [],
+              // The orphan process count (VC-341). Read from the latest sweep
+              // when it is recent enough to still be true, and swept afresh
+              // otherwise: `doctor` may cost a `ps` and an `lsof`, but two
+              // doctors in a row must not cost two. A launch with no sweep
+              // leaves this undefined, which the check reports as unknown
+              // rather than as a healthy zero.
+              ...(orphanProcesses === null
+                ? {}
+                : {
+                    orphanProcesses: await orphanProcesses
+                      .freshInventory()
+                      .then((inventory) => ({
+                        total: inventory.candidates.length,
+                        reapable: inventory.reapableCount,
+                      }))
+                      .catch(() => undefined),
+                  }),
+            }),
+            doctorRepair: repairSessionEnvironment,
+          }).execute
+        : async () =>
+            ({
+              v: 1,
+              ok: false,
+              error: makeAgentError(
+                "DB_UNAVAILABLE",
+                hostCore.database.ok ? "The database is unavailable." : hostCore.database.error,
+              ),
+            }) as const;
     await agentSocket.start({
       socketPath: runtimePaths.socketPath,
       execute,

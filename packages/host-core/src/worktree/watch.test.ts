@@ -883,3 +883,123 @@ describe("pollRetention — trim-on-finish backfill (VC-340)", () => {
     expect(existsSync(join(wt, "node_modules"))).toBe(true);
   });
 });
+
+describe("RetentionWatcher — settled(): stop, then drain before the database closes (VC-627)", () => {
+  const config = { intervalMs: 1000, maxBackoffMs: 60_000 };
+
+  it("settles at once with no poll in flight, and is safe to ask repeatedly and concurrently", async () => {
+    const { deps } = makeDeps(() => ({ stdout: "" }));
+    const watcher = new RetentionWatcher(deps, config);
+    await expect(watcher.settled()).resolves.toBeUndefined();
+    await expect(Promise.all([watcher.settled(), watcher.settled()])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("stop() during a poll leaves it running; settled() waits for its write, and nothing touches the closed database after", async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      seedProject();
+      seedTicket({ prUrl: "https://x/pull/7" });
+      const events: string[] = [];
+      const gate = deferred<{ stdout: string; stderr: string }>();
+      let netCalls = 0;
+      const net: RunNet = async () => {
+        netCalls += 1;
+        events.push("gh pr view");
+        return gate.promise;
+      };
+      const watcher = new RetentionWatcher(
+        {
+          db: ctx.db,
+          net,
+          now: () => 1000,
+          notify: (request) => events.push(`notify ${request.producer}`),
+        },
+        config,
+      );
+
+      watcher.start();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(events).toEqual(["gh pr view"]);
+
+      watcher.stop();
+      const drained = watcher.settled().then(() => events.push("settled"));
+      await vi.advanceTimersByTimeAsync(0);
+      // The poll is suspended on `gh`: the drain must not be over yet.
+      expect(events).toEqual(["gh pr view"]);
+
+      gate.resolve({ stdout: prView({ state: "MERGED" }).stdout, stderr: "" });
+      await drained;
+      // The in-flight poll's merge write landed BEFORE the drain ended.
+      expect(events).toEqual(["gh pr view", "notify pull-request-merged", "settled"]);
+      expect(
+        listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "pr_merged"),
+      ).toHaveLength(1);
+
+      // The host closes the database now. Stopped and drained, the watch has
+      // no timer left to poll it: a poll here would throw into console.error.
+      ctx.db.close();
+      await vi.advanceTimersByTimeAsync(10 * config.maxBackoffMs);
+      expect(netCalls).toBe(1);
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a trigger mid-poll is still dropped, and settled() waits only for the one poll", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    const events: string[] = [];
+    const gate = deferred<{ stdout: string; stderr: string }>();
+    const net: RunNet = async () => {
+      events.push("gh pr view");
+      return gate.promise;
+    };
+    const watcher = new RetentionWatcher(
+      {
+        db: ctx.db,
+        net,
+        now: () => 1000,
+        notify: () => {},
+        onChange: () => events.push("changed"),
+      },
+      config,
+    );
+
+    watcher.triggerNow();
+    await vi.waitFor(() => expect(events).toEqual(["gh pr view"]));
+    // Dropped, exactly as before: the in-flight run owns the next schedule.
+    watcher.triggerNow();
+    const drained = watcher.settled().then(() => events.push("settled"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["gh pr view"]);
+
+    gate.resolve({ stdout: prView().stdout, stderr: "" });
+    await drained;
+    expect(events).toEqual(["gh pr view", "changed", "settled"]);
+    watcher.stop();
+  });
+
+  it("settles even when a whole cycle fails, keeping the existing log line", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { deps } = makeDeps(() => ({ stdout: "" }));
+      const watcher = new RetentionWatcher(deps, config);
+      await watcher.settled();
+      // A closed database makes the whole cycle throw: the existing defensive
+      // log still reports it, and the drain neither hangs nor rejects.
+      ctx.db.close();
+      watcher.triggerNow();
+      await expect(watcher.settled()).resolves.toBeUndefined();
+      expect(errors).toHaveBeenCalledWith("[retention] poll cycle failed:", expect.any(Error));
+      await expect(watcher.settled()).resolves.toBeUndefined();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});

@@ -14,10 +14,11 @@ export {
   type SecretKeyPort,
   type SecretKeyRefusal,
 } from "../ports/secret-key";
-export type {
-  CredentialKey,
-  CredentialKeyBackend,
-  CredentialKeyring,
+export {
+  CredentialKeyPendingError,
+  type CredentialKey,
+  type CredentialKeyBackend,
+  type CredentialKeyring,
 } from "../ports/credential-keyring";
 export {
   CREDENTIAL_FAMILIES,
@@ -53,11 +54,17 @@ export {
   type ChangeOptions,
   type CredentialRecord,
   type CredentialRecordMetadata,
+  type MirrorEntry,
+  type MirrorOutcome,
+  type MirrorReceipt,
+  type MirrorSnapshot,
   type SealedInventoryOptions,
   type SealedInventoryReset,
 } from "./inventory";
 export {
+  isSealedOpenFailure,
   SealedDocument,
+  SealedFileUnverifiedError,
   SealedStoreCorruptError,
   type SealedCodec,
   type SealedDocumentOptions,
@@ -90,6 +97,12 @@ export {
   secretKeyFilePath,
   type FileSecretKeyOptions,
 } from "./file-key";
+export {
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  keychainCredentialKeyring,
+  type CredentialKeychain,
+  type KeychainCredentialKeyringOptions,
+} from "./keychain-keyring";
 export { pendingNoticeSecretStart } from "./pending-notice-secret";
 export type { SecretWaitPublisher } from "./wait-publisher";
 export {

@@ -418,24 +418,40 @@ describe("BackgroundShellHost", () => {
   });
 
   it("joins live and already-disposed processes, rejects new starts, and closes only once", async () => {
-    const exited: string[] = [];
+    // One event-ordered ledger: each row's exit and the close settling land in
+    // the order they happened, so the assertion is on ordering, not on a sleep.
+    const events: string[] = [];
+    let rows = 0;
     const { host } = harness({
-      killGraceMs: 150,
-      ledger: { recordSpawn: () => "row", markExited: (id) => exited.push(id) },
+      killGraceMs: 300,
+      ledger: {
+        recordSpawn: () => `row-${++rows}`,
+        markExited: (id) => events.push(`exit:${id}`),
+      },
     });
     await start(host, "exit 0");
     expect(host.liveCwds()).toEqual([]);
-    const active = await start(host, "trap '' TERM; sleep 30");
+    // Different termination characteristics, on purpose. The live shell dies on
+    // the first SIGTERM; the disposed one ignores it (the trap's ignored
+    // disposition is inherited by `sleep`, so the whole group ignores TERM) and
+    // only exits on the SIGKILL a full grace later. A close that joined only the
+    // attachment-owned shells map would settle on the live shell's prompt exit,
+    // before the disposed process's exit row — so the disposed row must precede
+    // the close in the ledger.
+    const active = await start(host, "sleep 30");
     const disposing = await start(host, "trap '' TERM; sleep 30", other);
     expect(host.liveCwds()).toHaveLength(2);
     host.disposeSession(other.sessionId);
     // Forgetting an attachment must not hide a still-live process from trim or drain.
     expect(host.liveCwds()).toHaveLength(2);
     const close = host.close();
+    void close.then(() => events.push("close"));
     expect(host.close()).toBe(close);
     await expect(start(host, "sleep 30")).rejects.toMatchObject({ rule: "shell.closing" });
     await close;
-    expect(exited).toEqual(["row", "row", "row"]);
+    // Let the ledger's own `close` continuation run before reading it.
+    await Promise.resolve();
+    expect(events).toEqual(["exit:row-1", "exit:row-2", "exit:row-3", "close"]);
     expect(host.liveCwds()).toEqual([]);
     expect(host.listAll()).toEqual([]);
     expect(() => process.kill(active.pid, 0)).toThrow();

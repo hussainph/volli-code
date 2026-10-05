@@ -366,6 +366,7 @@ export async function ticketMoveVerb(
         onDeliberateMove: options.onDeliberateMove,
         onMutation: options.onMutation,
         notify: options.notify,
+        detachedWork: options.detachedWork,
       },
       { projectId: resolved.project.id, ticketId: resolved.ticket.id, toStatus: to },
       { now: now(), actor },

@@ -16,11 +16,31 @@ export interface Child {
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
 
+export interface ChildOptions {
+  /** Another child script (absolute path); default `credential-child.ts`. */
+  readonly script?: string;
+  /**
+   * Node's `--experimental-transform-types`, for a child whose imports reach
+   * TypeScript that type stripping alone cannot run (agent-runtime's
+   * parameter properties). VC-643's web-key children need it.
+   */
+  readonly transformTypes?: boolean;
+  /** `--import`ed instead of the default resolve hooks (absolute URL). */
+  readonly hooks?: string;
+}
+
 /** Starts the child with one command. */
-export function startChild(command: Record<string, unknown>): Child {
+export function startChild(command: Record<string, unknown>, options: ChildOptions = {}): Child {
   const child = spawn(
     process.execPath,
-    ["--disable-warning=ExperimentalWarning", "--import", HOOKS, CHILD, JSON.stringify(command)],
+    [
+      "--disable-warning=ExperimentalWarning",
+      ...(options.transformTypes === true ? ["--experimental-transform-types"] : []),
+      "--import",
+      options.hooks ?? HOOKS,
+      options.script ?? CHILD,
+      JSON.stringify(command),
+    ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   let stderr = "";
@@ -51,8 +71,11 @@ export function startChild(command: Record<string, unknown>): Child {
 }
 
 /** Runs the child to completion and answers its first line. */
-export async function runChild(command: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const child = startChild(command);
+export async function runChild(
+  command: Record<string, unknown>,
+  options: ChildOptions = {},
+): Promise<Record<string, unknown>> {
+  const child = startChild(command, options);
   const answer = await child.next();
   const { code } = await child.exited;
   if (code !== 0) throw new Error(`child exited ${code}`);
