@@ -363,6 +363,29 @@ until its remaining desktop dependencies move.
     head and carries only this build's columns, so a newer build can restore
     it and migrate it up. Bundles never carry the floor; a restore's
     migrations derive it.
+- **Applied-migration history (VC-633, migration 060).** `migration_history`
+  records each version the file ran with its `migrations.lock.json`
+  fingerprint, in the transaction that applied it. Versions run before 060
+  are backfilled with no fingerprint. Every open compares the history with
+  this build's lock (`src/db/migration-history.ts`). If another lineage ran a
+  different migration under a number this build ships, or stamped a version
+  past 060 without recording it, the open **warns and never refuses**: one
+  `[volli] migration history` log line, and a `Migration history:` line in
+  About's support report. It needs no floor raise, because older builds never
+  apply a migration to a newer file, so they can't leave it wrong. Bundles
+  don't carry it; a restore's migrations write the new file's own.
+- **Free space before a migration (VC-633).** `migrate` checks `statfs` on the
+  database's directory before the safety copy: twice the database (WAL
+  included) plus 64 MiB. It refuses with `InsufficientDiskSpaceError`, which
+  names what it needs and what is free, before anything is written
+  (`src/db/disk-preflight.ts`). `openVolliDb` measures before it opens a
+  writable handle, so a refusal at startup leaves the db and its WAL
+  byte-identical. Only a measurement that worked can refuse: when `statfs`
+  fails (ENOSYS, EIO, an unsupported filesystem) it logs one warning and the
+  migration goes ahead. The budget assumes `temp_store = MEMORY`, which
+  startup and a restore's staging handle both set; with file-backed temp
+  storage VACUUM needs a third copy on disk. A box's rollback is to that safety copy:
+  [hostd README](../../apps/hostd/README.md#upgrading-and-rolling-back).
 - **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by

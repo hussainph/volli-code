@@ -17,6 +17,13 @@
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
+import {
+  LOCKED_FINGERPRINTS,
+  MIGRATION_HISTORY_MIGRATION,
+  recordAppliedMigrations,
+  type MigrationFingerprints,
+} from "./migration-history";
+import { assertMigrationDiskSpace, type DiskProbe } from "./disk-preflight";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
@@ -2778,6 +2785,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "web credential source revision and sealed mirror receipt — step E (VC-643)",
     sql: WEB_CREDENTIAL_SOURCE_MIGRATION,
   },
+  {
+    version: 60,
+    name: "migration history — each applied version with its lock fingerprint (VC-633)",
+    sql: MIGRATION_HISTORY_MIGRATION,
+  },
 ];
 
 /**
@@ -3330,6 +3342,20 @@ export interface MigrateOptions {
   toVersion?: number;
   /** Tests only: a migration list other than {@link MIGRATIONS}. */
   migrations?: readonly Migration[];
+  /**
+   * Tests only: the fingerprints recorded in `migration_history`. Defaults to
+   * this build's lock, or to none for a test's own migration list, whose
+   * versions the lock does not describe.
+   */
+  fingerprints?: MigrationFingerprints;
+  /** Tests only: the disk the free-space preflight reads. */
+  disk?: DiskProbe;
+  /**
+   * The caller already ran the free-space preflight, before it opened its
+   * writable handle (`openVolliDb`), so a refusal there left the file and its
+   * WAL byte-identical. The runner does not measure a second time.
+   */
+  diskChecked?: boolean;
 }
 
 /**
@@ -3362,6 +3388,11 @@ export function migrate(
   // Only an already-populated database needs a safety copy — a fresh
   // `user_version = 0` db has nothing pre-migration to protect.
   if (currentVersion > 0) {
+    // Before anything is written: the safety copy and the rewrite after it
+    // need about twice the database free, and running out halfway names
+    // neither the cause nor the remedy (VC-633). It fails open: only a
+    // measurement that worked and shows too little room refuses.
+    if (options.diskChecked !== true) assertMigrationDiskSpace(dbPath, options.disk);
     try {
       assertDatabaseIntegrity(db);
     } catch (error) {
@@ -3389,6 +3420,15 @@ export function migrate(
         raiseMinReaderVersion(db, migration.version, Date.now());
       }
     }
+
+    // The history of what ran, in the same transaction as the schema change
+    // it records (VC-633). A no-op until migration 060 has created it.
+    recordAppliedMigrations(
+      db,
+      pending.map((migration) => migration.version),
+      options.fingerprints ?? (options.migrations === undefined ? LOCKED_FINGERPRINTS : {}),
+      Date.now(),
+    );
 
     const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
     if (foreignKeyViolations.length > 0) {

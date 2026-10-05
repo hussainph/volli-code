@@ -1,7 +1,8 @@
 /**
- * The five facts a support report needs and only main can answer (VC-293):
+ * The six facts a support report needs and only main can answer (VC-293):
  * which build is running, which release line it follows, which OS and
- * architecture it runs on, and what schema version its database is at.
+ * architecture it runs on, what schema version its database is at, and
+ * whether the migrations that file ran are the ones this build ships (VC-633).
  *
  * Every one of them lives somewhere the renderer cannot reach — the app
  * version is Electron's, the channel is a row in `app_state`, the schema
@@ -11,17 +12,23 @@
  *
  * AN ALLOWLIST, NOT A DUMP. The report is text a person pastes into a public
  * issue, so this module is written so that widening it takes an edit here and
- * a new test: it names five fields, reads one pragma and one `app_state` key,
- * and imports nothing that could reach the secrets table, the credential
- * store, or the environment. `collectSupportInfo` is separate from the handler
+ * a new test: it names six fields, reads one pragma, one `app_state` key and
+ * the version/fingerprint columns of `migration_history`, and imports nothing
+ * that could reach the secrets table, the credential store, or the
+ * environment. `collectSupportInfo` is separate from the handler
  * for that reason — the guarantee is testable without an IPC round trip, and
  * its test asserts the exact statements this module issues.
  *
  * The handler remains available when the database did not open, but it returns
  * an unavailable result instead of presenting a partial report as complete.
- * Copy stays gated until all five required facts can be read.
+ * Copy stays gated until all six required facts can be read.
  */
 import type Database from "better-sqlite3";
+import {
+  checkMigrationHistory,
+  describeMigrationHistory,
+} from "@volli/host-core/db/migration-history";
+import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
 
 import type { SupportInfo } from "../ipc/contract";
 import { readUpdateChannel } from "./auto-update";
@@ -60,6 +67,7 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
     platform: deps.platform,
     arch: deps.arch,
     schemaVersion: schemaVersion(db),
+    migrationHistory: describeMigrationHistory(checkMigrationHistory(db, SCHEMA_HEAD)),
   };
 }
 

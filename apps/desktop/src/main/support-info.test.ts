@@ -27,7 +27,14 @@ import {
 } from "./support-info";
 
 /** Every field the support report is allowed to learn from main — nothing else may appear. */
-const ALLOWLIST = ["appVersion", "arch", "channel", "platform", "schemaVersion"];
+const ALLOWLIST = [
+  "appVersion",
+  "arch",
+  "channel",
+  "migrationHistory",
+  "platform",
+  "schemaVersion",
+];
 
 let fixture: TestDb | null = null;
 
@@ -87,6 +94,17 @@ describe("collectSupportInfo", () => {
     expect(info.schemaVersion).toBeGreaterThan(0);
   });
 
+  it("says whether the migrations the file ran are the ones this build ships (VC-633)", () => {
+    const db = testDb();
+    expect(collectSupportInfo(deps({ database: () => db })).migrationHistory).toBe("consistent");
+    db.prepare("UPDATE migration_history SET fingerprint = ? WHERE version = 1").run(
+      "f".repeat(64),
+    );
+    expect(collectSupportInfo(deps({ database: () => db })).migrationHistory).toMatch(
+      /^diverged: this database ran a different migration than this build at 1\./,
+    );
+  });
+
   it("defaults a profile that never chose a line to stable", () => {
     expect(collectSupportInfo(deps({ database: () => testDb() })).channel).toBe("stable");
   });
@@ -140,8 +158,12 @@ describe("collectSupportInfo", () => {
 
     collectSupportInfo(deps({ database: () => watched }));
 
-    expect(pragmas).toEqual(["user_version"]);
-    expect(statements).toEqual(["SELECT value FROM app_state WHERE key = ?"]);
+    expect(pragmas).toEqual(["user_version", "user_version"]);
+    expect(statements).toEqual([
+      "SELECT value FROM app_state WHERE key = ?",
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_history'",
+      "SELECT version, fingerprint, origin FROM migration_history ORDER BY version",
+    ]);
     for (const sql of statements) {
       expect(sql.toLowerCase()).not.toContain("secret");
     }
