@@ -91,6 +91,11 @@ export default defineConfig({
         // and another user, a lost key or a silent re-key, and none of it shows
         // anywhere until it is wrong.
         "src/secrets/file-key.ts",
+        // Credential status (VC-641): which key failures lock credentials,
+        // which refuse an unsafe key, and the reset that sets a sealed file
+        // aside rather than deleting it. A branch read wrong here bricks a
+        // host or overwrites what a lost key still opens.
+        "src/secrets/credential-state.ts",
         // The terminal supervisor's process-tree signalling (moved from
         // desktop's gate with its test, VC-560), and the output pipeline that
         // carries the stream contract's flow control and attach resync: a

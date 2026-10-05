@@ -12,7 +12,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import { isSecretKeyUnavailable, type SecretKeyPort } from "../ports/secret-key";
+import {
+  isSecretKeyUnavailable,
+  SecretKeyUnavailableError,
+  type SecretKeyPort,
+} from "../ports/secret-key";
+import {
+  archiveSealedStore,
+  CREDENTIALS_EMPTY,
+  CREDENTIALS_READY,
+  credentialStatusFor,
+  credentialsUnavailable,
+  SealedStoreUnreadableError,
+  type CredentialStatus,
+  type SealedStoreArchive,
+} from "./credential-state";
 import { pendingNoticeSecretStart } from "./pending-notice-secret";
 
 import {
@@ -166,16 +180,37 @@ function sameSlot(left: SecretMetadata, right: SecretMetadata): boolean {
   );
 }
 
+/** What {@link SecretStore.reset} did. */
+export interface SecretStoreReset {
+  /** The sealed file's new name beside it, or `null` when there was none. */
+  readonly archive: string | null;
+  /**
+   * Whether the move was synced to disk. `false`: it happened, but a power
+   * cut could leave the store under its old name too. Tell the person.
+   */
+  readonly synced: boolean;
+  readonly status: CredentialStatus;
+}
+
 /**
  * Main-process-only credential owner. Scope is explicit person intent supplied
  * by the caller; this class never infers or widens it. Session values and the
  * redaction history live only for this store's lifetime (one application launch).
  * Persistent mutations commit on disk before changing the in-memory view.
+ *
+ * A sealed file this store cannot open never throws from a read (VC-641,
+ * `credential-state.ts`): listing, availability, injection and redaction
+ * carry on with the Session-scoped values in memory, and {@link status} says
+ * why stored ones are missing. Persistent saves are refused with the original
+ * refusal until {@link unlock} or {@link reset}. The failure is remembered, so
+ * a locked keychain is asked once, not by every read.
  */
 export class SecretStore {
   readonly #path: string;
   readonly #codec: SecretKeyPort;
   #persistent: SecretRecord[] | null = null;
+  #status: CredentialStatus | null = null;
+  #failure: Error | null = null;
   #sessions: SecretRecord[] = [];
   readonly #history = new Map<string, string>();
 
@@ -191,7 +226,7 @@ export class SecretStore {
   /** Replaces the same name in the same scope, retaining its stable id. */
   put(input: SecretInput): SecretMetadata {
     validate(input);
-    const records = input.scope === "session" ? this.#sessions : this.#load();
+    const records = input.scope === "session" ? this.#sessions : this.#writable();
     const record: SecretRecord = {
       id: randomUUID(),
       name: input.name,
@@ -214,7 +249,7 @@ export class SecretStore {
 
   /** Omit the filter to manage all scopes; a project filter includes global secrets. */
   list(projectId?: string): SecretMetadata[] {
-    return [...this.#load(), ...this.#sessions]
+    return [...this.#readable(), ...this.#sessions]
       .filter(
         (item) =>
           projectId === undefined || item.scope === "always" || item.projectId === projectId,
@@ -227,7 +262,8 @@ export class SecretStore {
       this.#sessions = this.#sessions.filter((item) => item.id !== id);
       return;
     }
-    const records = this.#load();
+    // A locked store lists no stored id, so there is nothing of it to revoke.
+    const records = this.#readable();
     if (records.some((item) => item.id === id)) {
       this.#persist(records.filter((item) => item.id !== id));
     }
@@ -239,7 +275,7 @@ export class SecretStore {
   }
 
   #select(sessionId: string, projectId: string): Map<string, SecretRecord> {
-    const persistent = this.#load();
+    const persistent = this.#readable();
     const selected = new Map<string, SecretRecord>();
     for (const scope of ["always", "project", "session"] as const) {
       for (const item of [...persistent, ...this.#sessions]) {
@@ -258,7 +294,7 @@ export class SecretStore {
   /** Nearest scope wins: session > project > always. Only injected values count as used. */
   environment(sessionId: string, projectId: string): Record<string, string> {
     const selected = this.#select(sessionId, projectId);
-    const persistent = this.#load();
+    const persistent = this.#readable();
     const used = new Set([...selected.values()].map((item) => item.id));
     const at = Date.now();
     if (persistent.some((item) => used.has(item.id))) {
@@ -276,7 +312,7 @@ export class SecretStore {
 
   /** Includes revoked/replaced values that may remain in process output this launch. */
   hasValues(): boolean {
-    this.#load();
+    this.#readable();
     return this.#history.size > 0;
   }
 
@@ -291,7 +327,7 @@ export class SecretStore {
   }
 
   #redact(text: string, partial: boolean): string {
-    this.#load();
+    this.#readable();
     if (text.length === 0 || (!partial && this.#history.size === 0)) return text;
     // Match source text only. A large stored credential must not become a
     // native regex (which can exceed the engine's compilation bound).
@@ -361,28 +397,125 @@ export class SecretStore {
     this.#sessions = this.#sessions.filter((item) => item.sessionId !== sessionId);
   }
 
+  /**
+   * Where stored credentials stand, settling it now if nothing has asked yet.
+   * Metadata only: no value, key byte or path.
+   */
+  status(): CredentialStatus {
+    this.#open();
+    return this.#status!;
+  }
+
+  /**
+   * The refusal sentence behind a `locked` or `refused` key, for an
+   * operator's log: it names the fix and may name the key file's path, never
+   * a key byte or a secret. `null` otherwise, a corrupt store included.
+   */
+  problem(): string | null {
+    this.#open();
+    return isSecretKeyUnavailable(this.#failure) ? this.#failure.message : null;
+  }
+
+  /**
+   * Tries a locked, refused or corrupt store again: after the key was put
+   * back, the keychain unlocked or the mode fixed. A store that opened is
+   * left as it is.
+   */
+  unlock(): CredentialStatus {
+    if (this.#failure !== null) {
+      this.#failure = null;
+      this.#status = null;
+    }
+    return this.status();
+  }
+
+  /**
+   * Gives up stored credentials this store cannot open: the sealed file is
+   * moved aside (kept, never deleted; see `archiveSealedStore`) and the store
+   * starts empty, ready for the secrets to be entered again. Only for
+   * `locked` or `corrupt`: open stored credentials are revoked instead, and a
+   * `refused` key configuration is fixed instead, since moving a store that
+   * key may well open would not help. Person or local-admin intent only.
+   */
+  reset(now: Date = new Date()): SecretStoreReset {
+    const status = this.status();
+    if (status.state === "refused") {
+      throw new Error(
+        "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+      );
+    }
+    if (!credentialsUnavailable(status)) {
+      throw new Error("Saved secrets are not locked, so there is nothing to reset.");
+    }
+    let archived: SealedStoreArchive | null;
+    try {
+      archived = archiveSealedStore(this.#path, now);
+    } catch {
+      // Never a path or a filesystem error's text.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error("Could not set the saved secrets aside.");
+    }
+    this.#failure = null;
+    this.#status = null;
+    return {
+      archive: archived?.name ?? null,
+      synced: archived?.synced ?? true,
+      status: this.status(),
+    };
+  }
+
   #requireEncryption(): void {
     if (!this.#codec.isEncryptionAvailable()) throw new Error("Secret encryption is unavailable.");
   }
 
-  #load(): SecretRecord[] {
+  /** Stored records for a read: none while they are unavailable. */
+  #readable(): SecretRecord[] {
+    return this.#open() ?? [];
+  }
+
+  /** Stored records to change: a locked store refuses with the reason it is locked. */
+  #writable(): SecretRecord[] {
+    const records = this.#open();
+    if (records === null) throw this.#failure!;
+    return records;
+  }
+
+  /** Settles the status once per unlock; `null` while stored credentials are unavailable. */
+  #open(): SecretRecord[] | null {
     if (this.#persistent !== null) return this.#persistent;
+    if (this.#failure !== null) return null;
+    try {
+      this.#codec.probe?.();
+      const records = this.#load();
+      this.#persistent = records ?? [];
+      this.#status = records === null ? CREDENTIALS_EMPTY : CREDENTIALS_READY;
+      return this.#persistent;
+    } catch (error) {
+      this.#failure = error as Error;
+      this.#status = credentialStatusFor(error);
+      return null;
+    }
+  }
+
+  /** The sealed records, `null` when there is no sealed file, or a sanitized throw. */
+  #load(): SecretRecord[] | null {
     let fd: number;
     try {
       fd = openSync(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.#persistent = [];
-        return this.#persistent;
-      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       // Credential storage errors must not retain paths, values, or a nested cause.
-      // eslint-disable-next-line preserve-caught-error
-      throw new Error("Could not read secret storage.");
+      throw new SealedStoreUnreadableError();
     }
     try {
       if (!fstatSync(fd).isFile()) throw new Error();
       fchmodSync(fd, 0o600);
-      this.#requireEncryption();
+      if (!this.#codec.isEncryptionAvailable()) {
+        throw new SecretKeyUnavailableError(
+          "unavailable",
+          "Secret encryption is unavailable here, so saved secrets stay locked.",
+        );
+      }
       const parsed: unknown = JSON.parse(this.#codec.decryptString(readFileSync(fd)));
       if (parsed === null || typeof parsed !== "object") throw new Error();
       const file = parsed as { version?: unknown; secrets?: unknown };
@@ -414,7 +547,6 @@ export class SecretStore {
           lastUsedAt: item.lastUsedAt,
         });
       }
-      this.#persistent = records;
       for (const item of records) this.#history.set(item.value, item.name);
       return records;
     } catch (error) {
@@ -470,6 +602,7 @@ export class SecretStore {
       }
     }
     this.#persistent = records;
+    this.#status = CREDENTIALS_READY;
     // Some filesystems cannot sync directories. The file itself is already synced.
     try {
       const directory = openSync(dirname(this.#path), "r");

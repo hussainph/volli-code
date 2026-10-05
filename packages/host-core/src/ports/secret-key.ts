@@ -21,6 +21,10 @@
  * secrets were sealed with — is a {@link SecretKeyUnavailableError}. The store
  * lets that one error through with its message, which names the fix and never
  * a key byte; every other failure stays the store's generic sentence.
+ *
+ * The store turns these refusals into its credential status (VC-641,
+ * `secrets/credential-state.ts`): a refusal locks or refuses credentials, it
+ * never stops a host from booting.
  */
 
 /** Seals and opens the secret store's file. Electron's `safeStorage` has this shape. */
@@ -31,6 +35,13 @@ export interface SecretKeyPort {
   encryptString(value: string): Buffer;
   /** Opens what {@link encryptString} sealed, or throws. */
   decryptString(value: Buffer): string;
+  /**
+   * Checks an existing key now, without creating one or touching the sealed
+   * file, and throws the {@link SecretKeyUnavailableError} a later seal or
+   * open would. Optional: the keychain adapter has nothing to check until
+   * secrets exist, and must not touch the keychain before then.
+   */
+  probe?(): void;
 }
 
 /** Why a secret key could not be used. Each one has a fix a person can make. */
@@ -56,6 +67,11 @@ export type SecretKeyRefusal =
   | "wrong-key"
   /** The secrets were sealed by a different adapter (the macOS keychain). */
   | "other-adapter"
+  /**
+   * The key backend cannot open the key now: the OS keychain is locked,
+   * denied access, unavailable, or no longer holds the key.
+   */
+  | "unavailable"
   /** `VOLLI_SECRET_KEY_FILE` is not an absolute path. */
   | "relative-path";
 

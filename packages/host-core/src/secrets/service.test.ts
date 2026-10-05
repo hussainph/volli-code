@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { VERB_REGISTRY } from "@volli/shared";
@@ -163,5 +163,46 @@ describe("person-only secret request service", () => {
     expect(JSON.stringify(service.list())).not.toContain(sentinel);
     service.decline(list.requests[0]!.id);
     expect(await waiting).toBe("declined");
+  });
+  it("reports locked stored secrets and lets a person retry or reset them (VC-641)", async () => {
+    const { service, store, port } = setup();
+    const dir = dirs.at(-1)!;
+    writeFileSync(join(dir, "session-secrets.enc"), "sealed elsewhere");
+    const list = service.list();
+    expect(list).toMatchObject({
+      ok: true,
+      secrets: [],
+      credentials: { state: "locked", reason: "unavailable", unavailable: ["session-env"] },
+    });
+    // Asking for a secret still reaches the person; Session storage still works.
+    const waiting = port.request(input, new AbortController().signal);
+    const open = service.list();
+    if (!open.ok) throw new Error("missing list");
+    expect(() => service.submit(open.requests[0]!.id, sentinel, "always")).toThrow();
+    await service.submit(open.requests[0]!.id, sentinel, "session");
+    expect(await waiting).toBe("signed in");
+    expect(service.environment("s")).toEqual({ [input.name]: sentinel });
+
+    expect(service.unlock()).toEqual({ ok: true, credentials: store.status() });
+    expect(service.reset()).toEqual({
+      ok: true,
+      credentials: { state: "empty", reason: null, unavailable: [] },
+    });
+    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
+    expect(service.environment("s")).toEqual({ [input.name]: sentinel });
+  });
+  it("warns when a reset could not be synced to disk, and still reports it done", () => {
+    const { service, store } = setup();
+    const status = { state: "empty", reason: null, unavailable: [] } as const;
+    vi.spyOn(store, "reset").mockReturnValue({ archive: "a", synced: false, status });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(service.reset()).toEqual({ ok: true, credentials: status });
+      expect(warn).toHaveBeenCalledWith(
+        "[volli] saved secrets were set aside, but the directory could not be synced",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

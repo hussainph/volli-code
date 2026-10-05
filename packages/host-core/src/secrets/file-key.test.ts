@@ -18,6 +18,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +43,9 @@ const faults = vi.hoisted(() => ({
   link: null as ((from: string, to: string) => void) | null,
   read: null as (() => number) | null,
   openDirectory: null as (() => number) | null,
+  /** Answers EACCES for the key file's open, as for a key another user owns. */
+  denyKey: null as string | null,
+  statFails: false,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -51,10 +55,18 @@ vi.mock("node:fs", async (importOriginal) => {
     linkSync: (from: string, to: string) => (faults.link ?? actual.linkSync)(from, to),
     readSync: (...args: Parameters<typeof actual.readSync>) =>
       faults.read === null ? actual.readSync(...args) : faults.read(),
-    openSync: (...args: Parameters<typeof actual.openSync>) =>
-      faults.openDirectory !== null && args[1] === "r"
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (faults.denyKey !== null && args[0] === faults.denyKey) {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+      return faults.openDirectory !== null && args[1] === "r"
         ? faults.openDirectory()
-        : actual.openSync(...args),
+        : actual.openSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      if (faults.statFails) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return actual.statSync(...args);
+    },
   };
 });
 
@@ -81,6 +93,8 @@ afterEach(() => {
   faults.link = null;
   faults.read = null;
   faults.openDirectory = null;
+  faults.denyKey = null;
+  faults.statFails = false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   chmodSync(dataDir, 0o700);
@@ -126,6 +140,15 @@ function expectRefused(
   expect(error.reason).toBe(reason);
   expect(error.message).toMatch(says);
   return error;
+}
+
+/**
+ * Opens the store as a host does (VC-641): reads carry on without stored
+ * secrets, and a persistent save throws the refusal that locked them.
+ */
+function opening(store: SecretStore): void {
+  expect(store.list()).toEqual([]);
+  store.put({ name: "PROBE", value: "probe-value", scope: "always" });
 }
 
 /** One descriptor for both facts, so the mode read is the mode of the bytes read. */
@@ -269,7 +292,7 @@ describe("a key file other users could read", () => {
     const before = readFileSync(storePath);
     chmodSync(keyPath, mode);
     const error = expectRefused(
-      () => relaunch().list(),
+      () => opening(relaunch()),
       "too-open",
       `Permissions ${octal} on the secret key file ${keyPath} are too open: other users on this machine could read it, so Volli will not use it. Run: chmod 600 ${keyPath}`,
     );
@@ -298,7 +321,7 @@ describe("a key file other users could read", () => {
     const owner = statSync(keyPath).uid;
     vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
     expectRefused(
-      () => relaunch().list(),
+      () => opening(relaunch()),
       "wrong-owner",
       `The secret key file ${keyPath} belongs to uid ${owner}, not to the user Volli runs as (uid ${owner + 1}), so Volli will not use it. Run: chown ${owner + 1} ${keyPath}`,
     );
@@ -313,19 +336,24 @@ describe("a missing, different or foreign key", () => {
 
     const store = relaunch();
     const error = expectRefused(
-      () => store.list(),
+      () => opening(store),
       "missing",
-      `Saved secrets exist, but their key file ${keyPath} is missing. Put the key file back (mode 0600) to open them. Volli will not make a new key while they exist: to start over, delete ${SECRET_STORE_FILE_NAME} beside the database and enter the secrets again.`,
+      `Saved secrets exist, but their key file ${keyPath} is missing. Put the key file back (mode 0600) to open them. Volli will not make a new key while they exist. To start over without them, run \`volli-hostd credentials reset\`, which sets ${SECRET_STORE_FILE_NAME} aside, and enter the secrets again.`,
     );
     expect(error.message).not.toContain("sk_headless");
-    // Saving, injecting and redacting all need the inventory open first.
+    // Saving is refused; injecting and redacting carry on without stored values.
     expectRefused(
       () => store.put({ name: "NEW", value: "new-value", scope: "always" }),
       "missing",
       /is missing/,
     );
-    expectRefused(() => store.environment("s1", "project-a"), "missing", /is missing/);
-    expectRefused(() => store.redact("text"), "missing", /is missing/);
+    expect(store.environment("s1", "project-a")).toEqual({});
+    expect(store.redact("text")).toBe("text");
+    expect(store.status()).toEqual({
+      state: "locked",
+      reason: "missing",
+      unavailable: ["session-env"],
+    });
     expect(existsSync(keyPath)).toBe(false);
     expect(readFileSync(storePath).equals(before)).toBe(true);
   });
@@ -338,9 +366,9 @@ describe("a missing, different or foreign key", () => {
 
     const store = relaunch();
     const error = expectRefused(
-      () => store.list(),
+      () => opening(store),
       "wrong-key",
-      `The key file ${keyPath} is not the key the saved secrets were sealed with. Put the original key file back, or delete ${SECRET_STORE_FILE_NAME} beside the database and enter the secrets again.`,
+      `The key file ${keyPath} is not the key the saved secrets were sealed with. Put the original key file back. To start over without them, run \`volli-hostd credentials reset\`, which sets ${SECRET_STORE_FILE_NAME} aside, and enter the secrets again.`,
     );
     expect(error.message).not.toContain(other);
     expectRefused(
@@ -366,9 +394,9 @@ describe("a missing, different or foreign key", () => {
 
     const store = relaunch();
     expectRefused(
-      () => store.list(),
+      () => opening(store),
       "other-adapter",
-      `The saved secrets were sealed by the macOS keychain, and this host seals with a key file, so it cannot open them. Delete ${SECRET_STORE_FILE_NAME} beside the database and enter the secrets again.`,
+      `The saved secrets were sealed by the macOS keychain, and this host seals with a key file, so it cannot open them. To start over without them, run \`volli-hostd credentials reset\`, which sets ${SECRET_STORE_FILE_NAME} aside, and enter the secrets again.`,
     );
     expectRefused(
       () => store.put({ name: "NEW", value: "v", scope: "always" }),
@@ -378,8 +406,8 @@ describe("a missing, different or foreign key", () => {
     expect(existsSync(keyPath)).toBe(false);
     expect(readFileSync(storePath).equals(keychainSealed)).toBe(true);
 
-    // The documented recovery: remove the file, enter the secrets again.
-    rmSync(storePath);
+    // The documented recovery: set the file aside, enter the secrets again.
+    expect(store.reset().status.state).toBe("empty");
     saveTwo(relaunch());
     expect(relaunch().list()).toHaveLength(2);
   });
@@ -396,7 +424,15 @@ describe("a missing, different or foreign key", () => {
     ];
     for (const bytes of cases) {
       writeFileSync(storePath, bytes, { mode: 0o600 });
-      expect(() => relaunch().list()).toThrow(new Error("Could not decrypt secret storage."));
+      const store = relaunch();
+      expect(store.list()).toEqual([]);
+      expect(store.status()).toEqual({
+        state: "corrupt",
+        reason: null,
+        unavailable: ["session-env"],
+      });
+      expect(() => opening(store)).toThrow(new Error("Could not decrypt secret storage."));
+      expect(readFileSync(storePath).equals(bytes)).toBe(true);
     }
   });
 });
@@ -435,7 +471,7 @@ describe("a key file Volli cannot use", () => {
     saveTwo(relaunch());
     chmodSync(keyPath, 0o000);
     expectRefused(
-      () => relaunch().list(),
+      () => opening(relaunch()),
       "unreadable",
       `Volli could not read or create the secret key file ${keyPath} (EACCES). The user Volli runs as must be able to read it, and to write its directory the first time.`,
     );
@@ -446,7 +482,7 @@ describe("a key file Volli cannot use", () => {
     faults.read = () => {
       throw Object.assign(new Error("io"), { code: "EIO" });
     };
-    expectRefused(() => relaunch().list(), "unreadable", /\(EIO\)/);
+    expectRefused(() => opening(relaunch()), "unreadable", /\(EIO\)/);
   });
 
   it.skipIf(ROOT)("refuses to create a key where it may not write", () => {
@@ -503,5 +539,160 @@ describe("inspecting a key file at boot", () => {
     expectRefused(() => inspectSecretKeyFile(keyPath), "malformed", /does not hold a key/);
     chmodSync(keyPath, 0o644);
     expectRefused(() => inspectSecretKeyFile(keyPath), "too-open", /chmod 600/);
+  });
+});
+
+describe("a lost or damaged key never bricks the store (VC-641)", () => {
+  it("reports each condition as locked, refused or corrupt, leaving the sealed file alone", () => {
+    saveTwo(relaunch());
+    const sealed = readFileSync(storePath);
+    const key = readFileSync(keyPath);
+    const statusAfter = (prepare: () => void) => {
+      writeFileSync(keyPath, key, { mode: 0o600 });
+      chmodSync(keyPath, 0o600);
+      writeFileSync(storePath, sealed, { mode: 0o600 });
+      prepare();
+      const before = readFileSync(storePath);
+      const status = relaunch().status();
+      expect(readFileSync(storePath).equals(before)).toBe(true);
+      return status;
+    };
+    expect(statusAfter(() => {})).toEqual({ state: "ready", reason: null, unavailable: [] });
+    expect(statusAfter(() => rmSync(keyPath))).toMatchObject({
+      state: "locked",
+      reason: "missing",
+    });
+    expect(
+      statusAfter(() =>
+        writeFileSync(keyPath, `${Buffer.alloc(32, 4).toString("base64")}\n`, { mode: 0o600 }),
+      ),
+    ).toMatchObject({ state: "locked", reason: "wrong-key" });
+    expect(statusAfter(() => writeFileSync(keyPath, "garbage\n"))).toMatchObject({
+      state: "locked",
+      reason: "malformed",
+    });
+    expect(statusAfter(() => chmodSync(keyPath, 0o644))).toMatchObject({
+      state: "refused",
+      reason: "too-open",
+    });
+    expect(
+      statusAfter(() => writeFileSync(storePath, Buffer.from("VSF1 but not sealed at all"))),
+    ).toMatchObject({ state: "corrupt", reason: null });
+    // No key file was created over a lost one.
+    statusAfter(() => rmSync(keyPath));
+    expect(existsSync(keyPath)).toBe(false);
+  });
+
+  it("refuses an unsafe key with no secrets yet, before anything is sealed under it", () => {
+    writeFileSync(keyPath, `${Buffer.alloc(32, 1).toString("base64")}\n`, { mode: 0o600 });
+    chmodSync(keyPath, 0o640);
+    const store = relaunch();
+    expect(store.status()).toEqual({
+      state: "refused",
+      reason: "too-open",
+      unavailable: ["session-env"],
+    });
+    expectRefused(() => saveTwo(store), "too-open", /chmod 600/);
+    expect(existsSync(storePath)).toBe(false);
+  });
+
+  it("opens in the same process once the original key is back", () => {
+    saveTwo(relaunch());
+    const original = readFileSync(keyPath);
+    writeFileSync(keyPath, `${Buffer.alloc(32, 5).toString("base64")}\n`, { mode: 0o600 });
+    const store = relaunch();
+    expect(store.status().reason).toBe("wrong-key");
+    // Nothing changes until someone asks again.
+    writeFileSync(keyPath, original, { mode: 0o600 });
+    expect(store.status().reason).toBe("wrong-key");
+    expect(store.unlock()).toEqual({ state: "ready", reason: null, unavailable: [] });
+    expect(store.environment("s1", "project-a")).toEqual({
+      STRIPE_API_KEY: "sk_headless_always",
+      DEPLOY_TOKEN: "headless-project-token",
+    });
+  });
+
+  it("resets a lost key: the sealed file is kept aside, and a new key seals new secrets", () => {
+    saveTwo(relaunch());
+    const sealed = readFileSync(storePath);
+    rmSync(keyPath);
+    const store = relaunch();
+    expect(store.status().reason).toBe("missing");
+    const { archive, status, synced } = store.reset(new Date("2026-10-05T01:02:03.456Z"));
+    expect(status).toEqual({ state: "empty", reason: null, unavailable: [] });
+    expect(synced).toBe(true);
+    expect(archive).toMatch(/^session-secrets\.enc\.locked-20261005T010203Z-[0-9a-f]{8}$/);
+    expect(readFileSync(join(dataDir, archive!)).equals(sealed)).toBe(true);
+    expect(existsSync(storePath)).toBe(false);
+
+    store.put({ name: "RE_ENTERED", value: "re-entered-value", scope: "always" });
+    expect(existsSync(keyPath)).toBe(true);
+    expect(relaunch().environment("s", "p")).toEqual({ RE_ENTERED: "re-entered-value" });
+    // The archive is still the old bytes, sealed under the old key.
+    expect(readFileSync(join(dataDir, archive!)).equals(sealed)).toBe(true);
+  });
+
+  it("resets a wrong key by sealing what is entered next under the key that is there", () => {
+    saveTwo(relaunch());
+    const other = `${Buffer.alloc(32, 6).toString("base64")}\n`;
+    writeFileSync(keyPath, other, { mode: 0o600 });
+    const store = relaunch();
+    expect(store.reset().status.state).toBe("empty");
+    store.put({ name: "RE_ENTERED", value: "v", scope: "always" });
+    expect(readFileSync(keyPath, "utf8")).toBe(other);
+    expect(relaunch().status().state).toBe("ready");
+  });
+
+  it("will not reset an unsafe key's store: the fix is the file's mode", () => {
+    saveTwo(relaunch());
+    const sealed = readFileSync(storePath);
+    chmodSync(keyPath, 0o644);
+    const store = relaunch();
+    expect(() => store.reset()).toThrow(
+      "Saved secrets are refused because the key configuration is unsafe. Fix it; a reset cannot.",
+    );
+    expect(readFileSync(storePath).equals(sealed)).toBe(true);
+    chmodSync(keyPath, 0o600);
+    expect(store.unlock().state).toBe("ready");
+  });
+
+  it("calls a 0600 key another user owns refused, not lost, without reading it", () => {
+    saveTwo(relaunch());
+    const owner = statSync(keyPath).uid;
+    // The service user cannot open another user's 0600 file: EACCES, then
+    // the file's metadata says why.
+    faults.denyKey = keyPath;
+    vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
+    const store = relaunch();
+    expect(store.status()).toEqual({
+      state: "refused",
+      reason: "wrong-owner",
+      unavailable: ["session-env"],
+    });
+    expect(store.problem()).toBe(
+      `The secret key file ${keyPath} belongs to uid ${owner}, not to the user Volli runs as (uid ${owner + 1}), so Volli will not use it. Run: chown ${owner + 1} ${keyPath}`,
+    );
+  });
+
+  it("calls a key path it cannot open for another reason unreadable", () => {
+    saveTwo(relaunch());
+    rmSync(keyPath);
+    symlinkSync(keyPath, keyPath);
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
+  });
+
+  it("keeps a denied key it cannot even stat unreadable", () => {
+    saveTwo(relaunch());
+    faults.denyKey = keyPath;
+    faults.statFails = true;
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
+  });
+
+  it.skipIf(ROOT)("calls a key that denies its owner but grants others too open", () => {
+    saveTwo(relaunch());
+    chmodSync(keyPath, 0o044);
+    expect(relaunch().status()).toMatchObject({ state: "refused", reason: "too-open" });
+    chmodSync(keyPath, 0o000);
+    expect(relaunch().status()).toMatchObject({ state: "locked", reason: "unreadable" });
   });
 });

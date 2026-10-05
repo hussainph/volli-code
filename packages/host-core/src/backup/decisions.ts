@@ -586,7 +586,9 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
   {
     area: `${SECRET_STORE_FILE_NAME}*`,
     decision: "exclude",
-    reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
+    // Includes a credential reset's `.locked-<time>-<random>` archive (VC-641).
+    reason:
+      "Machine-bound secret ciphertext (VC-481), and any sealed store a reset set aside (VC-641); credentials never travel in backups.",
   },
   {
     // A headless host's key (VC-559). A bundle that carried it would carry the

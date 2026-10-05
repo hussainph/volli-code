@@ -1,14 +1,31 @@
 import { randomUUID } from "node:crypto";
 import type { SecretMetadata, SecretRequestMetadata, SecretScope } from "@volli/shared";
-import { isSecretName, type SecretStore, type SecretWaitPublisher } from "./index";
-export type { SecretWaitPublisher } from "./index";
+import {
+  isSecretName,
+  type CredentialStatus,
+  type SecretStore,
+  type SecretWaitPublisher,
+} from "./index";
+export type { CredentialStatus, SecretWaitPublisher } from "./index";
 
 /**
  * The person-only credential door's answer, moved with the service from
  * `apps/desktop/src/ipc/secrets.ts`; the desktop IPC contract re-exports it.
+ * `credentials` says whether stored secrets opened (VC-641): while they are
+ * locked, `secrets` holds only the Session-scoped ones in memory.
  */
 export type SecretsResult =
-  | { ok: true; requests: readonly SecretRequestMetadata[]; secrets: readonly SecretMetadata[] }
+  | {
+      ok: true;
+      requests: readonly SecretRequestMetadata[];
+      secrets: readonly SecretMetadata[];
+      credentials: CredentialStatus;
+    }
+  | { ok: false; error: string };
+
+/** The door's answer to an unlock or a reset (VC-641). */
+export type CredentialsResult =
+  | { ok: true; credentials: CredentialStatus }
   | { ok: false; error: string };
 
 interface SecretOwner {
@@ -124,7 +141,23 @@ export class SecretService {
         .map(({ metadata }) => Object.assign({}, metadata))
         .filter((m) => projectId === undefined || m.projectId === projectId),
       secrets: this.store.list(projectId),
+      credentials: this.store.status(),
     };
+  }
+
+  /** Tries locked stored secrets again; a person's explicit action. */
+  unlock(): CredentialsResult {
+    return { ok: true, credentials: this.store.unlock() };
+  }
+
+  /** Sets locked stored secrets aside and starts empty; a person's explicit, confirmed action. */
+  reset(): CredentialsResult {
+    const { status, synced } = this.store.reset();
+    if (!synced) {
+      // The move happened; only its durability across a power cut is unknown.
+      console.warn("[volli] saved secrets were set aside, but the directory could not be synced");
+    }
+    return { ok: true, credentials: status };
   }
 
   submit(requestId: string, value: string, scope: SecretScope): Promise<void> {

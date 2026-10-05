@@ -82,6 +82,20 @@ describe("volli-hostd's arguments", () => {
     });
   });
 
+  it("resets credentials for a data directory, confirmed only by --yes", () => {
+    expect(parseHostdArgs(["credentials", "reset", "--data-dir", "d"], CWD)).toEqual({
+      kind: "credentials-reset",
+      dataDir: "/srv/d",
+      confirmed: false,
+    });
+    expect(parseHostdArgs(["credentials", "reset", "--data-dir", "/d", "--yes"], CWD)).toEqual({
+      kind: "credentials-reset",
+      dataDir: "/d",
+      confirmed: true,
+    });
+    expect(USAGE).toContain("volli-hostd credentials reset --data-dir <dir> [--yes]");
+  });
+
   it("answers help and version before anything else", () => {
     expect(parseHostdArgs(["--help"], CWD)).toEqual({ kind: "help" });
     expect(parseHostdArgs(["-h", "status"], CWD)).toEqual({ kind: "help" });
@@ -115,5 +129,20 @@ describe("volli-hostd's arguments", () => {
     );
     expect(refusal(["operator-token", "extra", "--for", "a"])).toBe("Unknown argument: extra");
     expect(refusal(["--port", "80"])).toMatch(/Unknown option '--port'/);
+    expect(refusal(["credentials", "--data-dir", "/d"])).toBe(
+      "credentials needs an action: reset.",
+    );
+    expect(refusal(["credentials", "wipe", "--data-dir", "/d"])).toBe("Unknown argument: wipe");
+    expect(refusal(["credentials", "reset", "now", "--data-dir", "/d"])).toBe(
+      "Unknown argument: now",
+    );
+    expect(refusal(["credentials", "reset"])).toBe("--data-dir <dir> is required.");
+    expect(refusal(["credentials", "reset", "--data-dir", "/d", "--socket", "s"])).toBe(
+      "credentials reset takes --data-dir and --yes only.",
+    );
+    expect(refusal(["--data-dir", "/d", "--yes"])).toBe("--yes belongs to credentials reset.");
+    expect(refusal(["status", "--data-dir", "/d", "--yes"])).toBe(
+      "--yes belongs to credentials reset.",
+    );
   });
 });

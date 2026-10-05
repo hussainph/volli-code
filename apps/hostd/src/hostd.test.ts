@@ -245,7 +245,7 @@ describe("booting against an empty data directory", () => {
       },
     });
     expect(readStatus(dataDir)).toMatchObject({ state: "serving", socketPath });
-    expect(host.secrets.key).toBe("absent");
+    expect(host.status().credentials).toEqual({ state: "empty", reason: null, unavailable: [] });
     expect(log.info).toHaveBeenCalledWith("serving", expect.objectContaining({ socketPath }));
 
     expect(await ask(socketPath, "project.list")).toMatchObject({
@@ -558,13 +558,20 @@ describe("boot refusals", () => {
     expect(error.message).toMatch(/^Could not open the agent socket .*missing\/volli\.sock: /);
   });
 
-  it("refuses a bad secret key before it opens the socket or the database", async () => {
-    const error = await refused({ env: { [SECRET_KEY_FILE_ENV]: "relative.key" } });
-    expect(error.reason).toBe("secret-key");
-    expect(existsSync(join(root, "data", "volli.sock"))).toBe(false);
-    expect(existsSync(join(root, "data", "volli.db"))).toBe(false);
-    // The refusal let go of the instance lock.
-    expect((await boot()).status().state).toBe("serving");
+  it("boots with a bad secret key and reports it, never throws (VC-641)", async () => {
+    const log = logger();
+    const host = await boot({ env: { [SECRET_KEY_FILE_ENV]: "relative.key" } }, log);
+    expect(host.status()).toMatchObject({
+      state: "serving",
+      capabilities: { board: "available" },
+      credentials: { state: "refused", reason: "relative-path", unavailable: ["session-env"] },
+    });
+    expect(readStatus(join(root, "data"))).toMatchObject({ credentials: { state: "refused" } });
+    expect(log.warn).toHaveBeenCalledWith(
+      "serving without saved credentials",
+      expect.objectContaining({ fix: expect.stringMatching(/must be an absolute path/) }),
+    );
+    expect(await ask(join(root, "data", "volli.sock"), "project.list")).toMatchObject({ ok: true });
   });
 
   it("closes the socket when boot fails after opening it", async () => {

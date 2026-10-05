@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SecretStore } from "@volli/host-core/secrets";
@@ -147,5 +147,35 @@ describe("dedicated credential IPC", () => {
     expect(await invoke("volli:secret-decline", pending.requests[0]!.id)).toEqual({ ok: true });
     expect(await next).toBe("declined");
     expect(invoke("volli:secrets-list", 1)).toMatchObject({ ok: false });
+  });
+  it("lets the person retry or reset locked stored secrets, and nothing else (VC-641)", () => {
+    // Nothing is locked: a reset is refused, generically.
+    expect(setup().invoke("volli:secrets-reset")).toEqual({
+      ok: false,
+      error: "Could not update the secret. Retry or choose Session storage.",
+    });
+    const { invoke } = setup();
+    const dir = directories.at(-1)!;
+    writeFileSync(join(dir, "session-secrets.enc"), "sealed by a keychain that is locked");
+    expect(invoke("volli:secrets-list", "p")).toMatchObject({
+      ok: true,
+      secrets: [],
+      credentials: { state: "locked", reason: "unavailable" },
+    });
+    expect(invoke("volli:secrets-unlock")).toMatchObject({
+      ok: true,
+      credentials: { state: "locked" },
+    });
+    const foreign = handlers.get("volli:secrets-reset")!({
+      sender: { mainFrame: {} },
+      senderFrame: {},
+    });
+    expect(foreign).toMatchObject({ ok: false });
+    expect(readdirSync(dir)).toEqual(["session-secrets.enc"]);
+    expect(invoke("volli:secrets-reset")).toEqual({
+      ok: true,
+      credentials: { state: "empty", reason: null, unavailable: [] },
+    });
+    expect(readdirSync(dir)).toEqual([expect.stringMatching(/^session-secrets\.enc\.locked-/)]);
   });
 });
