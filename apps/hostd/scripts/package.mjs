@@ -33,9 +33,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +87,7 @@ run("pnpm", ["--filter", "@volli/hostd", "--filter", "@volli/cli", "run", "build
 cpSync(join(APP, "dist"), join(stage, "lib", "hostd"), { recursive: true });
 copyFileSync(join(ROOT, "packages", "cli", "dist", "volli.cjs"), join(stage, "lib", "volli.cjs"));
 copyFileSync(join(HERE, "probe-natives.cjs"), join(stage, "lib", "probe-natives.cjs"));
+copyFileSync(join(HERE, "probe-codemode.mjs"), join(stage, "lib", "probe-codemode.mjs"));
 
 // 2. The externals, from the lockfile, flat so lib/hostd/hostd.cjs resolves them.
 // Install scripts run: node-pty has no Linux prebuild and compiles here.
@@ -123,6 +126,21 @@ for (const native of ["better-sqlite3", "node-pty"]) {
     if (!ours) rmSync(join(prebuilds, entry), { recursive: true, force: true });
   }
 }
+
+// Code Mode executes in a worker with an ES-module loader. Ship its published
+// files and QuickJS together; the host half stays bundled, but neither this
+// worker nor its bare quickjs-wasi import can be an in-bundle chunk.
+const runtimePackage = join(ROOT, "packages", "agent-runtime");
+const sandboxRoot = realpathSync(
+  join(runtimePackage, "node_modules", "@earendil-works", "pi-codemode"),
+);
+const quickjsRoot = dirname(
+  createRequire(join(sandboxRoot, "package.json")).resolve("quickjs-wasi/quickjs.wasm"),
+);
+cpSync(sandboxRoot, join(stage, "lib", "node_modules", "@earendil-works", "pi-codemode"), {
+  recursive: true,
+});
+cpSync(quickjsRoot, join(stage, "lib", "node_modules", "quickjs-wasi"), { recursive: true });
 
 // 3. Node itself, and the launchers.
 copyFileSync(process.execPath, join(stage, "bin", "node"));
@@ -182,6 +200,7 @@ writeFileSync(
 
 // 5. Prove the natives load under the shipped Node before anything is archived.
 run(join(stage, "bin", "node"), [join(stage, "lib", "probe-natives.cjs")]);
+run(join(stage, "bin", "node"), [join(stage, "lib", "probe-codemode.mjs")]);
 
 // 6. The archive and its checksum.
 const archive = join(out, `${name}.tar.gz`);

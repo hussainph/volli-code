@@ -137,9 +137,13 @@ The boot sweep stops at async boundaries during shutdown, preserving unswept
 bindings for the next launch rather than interpreting cancellation as lost
 sidecars. Automation assembly joins the protected 100% coverage gate.
 
-Runtime-context/brief resolution and the remaining pre-execution staging are
-still desktop-owned; they need one bounded lift before hostd can compose the
-whole runtime without copying it. Hostd does not run Sessions yet.
+`session-runtime/context` now resolves attach-time briefs and frozen inputs for
+both hosts. Desktop and hostd use the same staged assembly, facade, agents,
+Automations and lifecycle constructors; their adapters supply host-owned ports
+and pre-execution hooks, not separate executor implementations. Desktop keeps
+its migration/browser/quit ordering; hostd supplies headless capabilities,
+explicit service PATH, remote venue, packaged sandbox assets and real busy-site
+evidence. hostd runs Sessions and Automations only after recovered readiness.
 
 `host.runtimeServices` holds staged constructors for model access, decisions,
 MCP, Web Access and model sign-in. Desktop invokes them in its original boot
