@@ -192,6 +192,115 @@ async function fixture(
 }
 
 describe("Linux CLI scripted-provider proof (VC-622)", () => {
+  it.each(["same", "moved"] as const)(
+    "recovers pre-UUID socket-path attachments after upgrade with a %s socket",
+    async (socket) => {
+      const f = await fixture();
+      const originalSocket = f.host.status().socketPath;
+      const legacyVenue = { id: originalSocket, kind: "remote" as const };
+      const workerVenue = { id: "12926fc7-0d26-4f1b-aad9-19acd3ecb55c", kind: "remote" as const };
+      const seeded: Array<{ sessionId: string; attachmentId: string; adapterId: string }> = [];
+      for (const [name, adapterId, venue] of [
+        ["legacy-terminal", "terminal", legacyVenue],
+        ["legacy-pi", "pi", legacyVenue],
+        ["worker", "terminal", workerVenue],
+      ] as const) {
+        const provenance = {
+          source: { kind: "system" as const, id: "hostd", detail: null },
+          venue,
+        };
+        const created = await f.core.sessionEngine.createSession({
+          commandId: `${name}-create`,
+          projectId: "p",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: name,
+          provenance,
+        });
+        const sessionId = created.session.id;
+        const attachmentId = `${name}-attachment`;
+        await f.core.sessionEngine.observe({
+          id: `${name}-attach`,
+          kind: "attachment.opened",
+          sessionId,
+          occurredAt: Date.now(),
+          provenance,
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId,
+            venue,
+            continuity: "fresh",
+            native: null,
+            authority: null,
+          },
+        });
+        if (adapterId === "pi") {
+          await f.core.sessionEngine.observe({
+            id: `${name}-turn`,
+            kind: "turn.started",
+            sessionId,
+            attachmentId,
+            turnId: "lost-turn",
+            occurredAt: Date.now(),
+            provenance,
+          });
+          await f.core.sessionEngine.observe({
+            id: `${name}-permission`,
+            kind: "interaction.opened",
+            sessionId,
+            occurredAt: Date.now(),
+            provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue },
+            interaction: {
+              id: "lost-permission",
+              attachmentId,
+              kind: "permission",
+              title: "Allow?",
+              detail: null,
+              options: [],
+              multiple: false,
+              native: { id: "lost-prompt", detail: null },
+            },
+          });
+        }
+        seeded.push({ sessionId, attachmentId, adapterId });
+      }
+      // A real pre-UUID data directory has not minted a host id yet.
+      f.core.database.db.prepare("DELETE FROM host_identity").run();
+      const rebooted = await f.restart(socket === "moved" ? `${originalSocket}.moved` : undefined);
+      const recovered = live(rebooted);
+      expect(rebooted.status().socketPath).toBe(
+        socket === "same" ? originalSocket : `${originalSocket}.moved`,
+      );
+      expect(hostdVenue(recovered.database.db).id).not.toBe(originalSocket);
+      for (const { sessionId, attachmentId, adapterId } of seeded) {
+        const projection = await recovered.sessionEngine.getSession({ sessionId });
+        const worker = attachmentId === "worker-attachment";
+        expect(projection!.attachments).toEqual([
+          expect.objectContaining({
+            id: attachmentId,
+            status: worker ? "open" : "closed",
+            venue: worker ? workerVenue : legacyVenue,
+          }),
+        ]);
+        if (adapterId === "pi") {
+          expect(projection!.turnActive).toBe(false);
+          expect(projection!.interactions.active).toEqual([]);
+          const events = await recovered.sessionEngine.listEvents({ sessionId });
+          expect(events.map(({ payload }) => payload)).toContainEqual(
+            expect.objectContaining({
+              kind: "interaction.cancelled",
+              interactionId: "lost-permission",
+              reason: "abandoned",
+            }),
+          );
+        }
+      }
+    },
+    20_000,
+  );
+
   it("recovers its own durable attachment when the agent socket moves", async () => {
     const f = await fixture();
     const originalSocket = f.host.status().socketPath;

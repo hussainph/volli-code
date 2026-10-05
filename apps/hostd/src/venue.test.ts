@@ -16,7 +16,13 @@ import {
   createSessionEngine,
   type SessionEngine,
 } from "../../../packages/session-engine/src/index";
-import { ensureHostId, HOSTD_VENUE_KIND, hostdVenue, readHostId } from "./venue";
+import {
+  ensureHostId,
+  HOSTD_VENUE_KIND,
+  hostdVenue,
+  ownsLegacyHostdVenue,
+  readHostId,
+} from "./venue";
 
 const HOST_ID = "6f1c2b8e-4d3a-4f6b-9c2d-1e0f3a4b5c6d";
 const dbs: TestDb[] = [];
@@ -35,6 +41,14 @@ function identityRows(db: Database.Database) {
 }
 
 describe("hostd's host id", () => {
+  it("owns legacy remote socket paths, never UUID workers or desktop venues", () => {
+    expect(ownsLegacyHostdVenue({ id: "/run/old/volli.sock", kind: "remote" })).toBe(true);
+    expect(ownsLegacyHostdVenue({ id: HOST_ID, kind: "remote" })).toBe(false);
+    expect(ownsLegacyHostdVenue({ id: "future-worker", kind: "remote" })).toBe(false);
+    expect(ownsLegacyHostdVenue({ id: "/run/old/volli.sock", kind: "local" })).toBe(false);
+    expect(ownsLegacyHostdVenue({ id: "local", kind: "local" })).toBe(false);
+  });
+
   it("mints a UUID v4 once on first use and never rewrites it", () => {
     const db = migrated();
     expect(readHostId(db)).toBeNull();

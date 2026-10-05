@@ -12,14 +12,17 @@
  *
  * The id is a UUID v4 from `randomUUID()`, never derived from a hostname,
  * PID, address or path. It survives restarts and socket moves; it is
- * excluded from backups, so a restored profile is a new host (and recovers
- * nothing a previous host left open, by design). A stored value that is not
+ * excluded from backups, so a restored profile is a new host. Legacy socket
+ * venues are recovered on upgrade, but UUID venues from a restored backup need
+ * explicit prior-host identity metadata (not present in today's bundles).
+ * A stored value that is not
  * a UUID v4 fails closed rather than being reused or replaced.
  *
  * Desktop keeps `{ id: "local", kind: "local" }`; nothing here runs there.
  * The kind stays `remote`, as before: only the id changes.
  */
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
@@ -30,6 +33,16 @@ import { withTransaction } from "@volli/host-core/db/transaction-gate";
 export const HOSTD_VENUE_KIND = "remote" satisfies SessionExecutionVenue["kind"];
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * Pre-UUID hostd recorded resolved socket paths as remote venue ids. The data
+ * directory's instance lock guarantees one hostd owns those lost processes,
+ * even if --socket moved. Claim paths only, never another host/worker UUID or
+ * a local desktop venue. This seam is boot recovery only, not live authority.
+ */
+export function ownsLegacyHostdVenue(venue: SessionExecutionVenue): boolean {
+  return venue.kind === HOSTD_VENUE_KIND && isAbsolute(venue.id);
+}
 
 /** How a first boot allocates the host id; tests pin both. */
 export interface HostIdMint {
