@@ -44,6 +44,7 @@ function fixture(observeTerminal = false) {
     nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
   });
   const service = createAgentCommandService({
+    busyWorktreeSites: async () => [],
     db: db.db,
     appVersion: "test",
     sessionEngine: engine,

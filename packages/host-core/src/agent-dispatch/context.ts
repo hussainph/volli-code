@@ -182,7 +182,7 @@ export interface AgentCommandServiceOptions {
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
   /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
-  busyWorktreeSites?: BusyWorktreeSites;
+  busyWorktreeSites: BusyWorktreeSites;
   /**
    * Interrupts every live agent attachment of a ticket after a committed
    * backward move. Its command and receipt are Session evidence; Esc leaves

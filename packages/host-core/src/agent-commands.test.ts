@@ -168,7 +168,10 @@ function asSession(
 
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
-  options: Omit<AgentCommandServiceOptions, "sessionEngine"> & { sessionEngine?: SessionEngine },
+  options: Omit<AgentCommandServiceOptions, "sessionEngine" | "busyWorktreeSites"> & {
+    sessionEngine?: SessionEngine;
+    busyWorktreeSites?: AgentCommandServiceOptions["busyWorktreeSites"];
+  },
 ) {
   // The acting Session has to EXIST for the door to resolve it: a valid token
   // naming a Session the Engine cannot find is an error, not an actor. Seeded
@@ -182,6 +185,7 @@ function createAgentCommandService(
   }
   return createAgentCommandServiceBase({
     ...options,
+    busyWorktreeSites: options.busyWorktreeSites ?? (async () => []),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
   });

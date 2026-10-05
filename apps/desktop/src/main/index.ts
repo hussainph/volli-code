@@ -36,20 +36,12 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   resolveShell,
   roleImpliedByTicket,
-  shortSessionId,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
-import type {
-  CodeModeSurface,
-  PromptResource,
-  SessionEnvRepair,
-  SessionEvent,
-  SessionInput,
-  SessionToolId,
-} from "@volli/shared";
+import type { SessionEnvRepair } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type {
   BrowserTabStateEvent,
@@ -113,17 +105,8 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import {
   createRuntimeAssembly,
   type RuntimeAssemblyOptions,
-  recordedToolSurface,
-  recordedMcpTools,
 } from "@volli/host-core/session-runtime/assembly";
-import type { PiRuntimeContext } from "@volli/host-core/session-runtime/pi-adapter";
-import { sessionRootThreadId } from "@volli/session-engine";
-import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import {
-  composeProjectBrief,
-  composeSubagentBrief,
-  composeTicketBrief,
-} from "@volli/host-core/agent-commands";
+import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
 import { SecretStore } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./secrets/codec";
 import { SecretService } from "@volli/host-core/secrets/service";
@@ -135,12 +118,13 @@ import {
   SessionRuntimeClosingError,
   type RecoveredSessionServices,
 } from "@volli/host-core/session-runtime/lifecycle";
-import { createRuntimeSessionAgents } from "@volli/host-core/session-runtime/agents";
 import { createRuntimeAutomations } from "@volli/host-core/session-runtime/automations";
 import {
   recoveredSessionClientPorts,
   recoveredSessionCommandPorts,
   createRuntimeSessionFacade,
+  recoveredRuntimeSessionServices,
+  recoveredSessionAutomationPorts,
   type RuntimeSessionFacade,
 } from "@volli/host-core/session-runtime/facade";
 import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
@@ -400,69 +384,6 @@ function isInternalNavigation(target: string): boolean {
     host: PACKAGED_RENDERER_HOST,
     pathname: "/index.html",
   });
-}
-
-/**
- * The recorded brief's text. `getOrRecordSessionInput` is keyed by the input's
- * kind, so a `runtime-brief` request can only ever answer with a
- * `runtime-brief` record — any other kind here is ledger corruption, and the
- * throw fails this attach loudly instead of briefing the Session on nothing.
- */
-function briefText(input: SessionInput): string {
-  if (input.kind !== "runtime-brief") {
-    throw new Error(`Recorded runtime brief has kind ${input.kind}`);
-  }
-  return input.text;
-}
-
-/**
- * The attach-time prompt resources this Session durably recorded, or none.
- * One record per Session at most — `getOrRecordSessionInput` is kind-keyed —
- * so the first hit is the whole answer.
- */
-function recordedPromptResources(events: readonly SessionEvent[]): readonly PromptResource[] {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "prompt-resources"
-    ) {
-      return event.payload.input.resources;
-    }
-  }
-  return [];
-}
-
-/** The MCP-management wire spelling frozen beside the canonical verb keys. */
-function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.mcpManagementNames;
-    }
-  }
-  return undefined;
-}
-
-/** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
-function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.codeMode;
-    }
-  }
-  return undefined;
-}
-
-function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
-  if (input.kind !== "tool-surface") {
-    throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
-  }
-  return input.tools;
 }
 
 function publishBackgroundShellEvent(event: BackgroundShellStateEvent): void {
@@ -1211,7 +1132,7 @@ const appStartup = app.whenReady().then(async () => {
       return door(caller, request, signal, budgetAsk);
     },
   };
-  const assembledRuntime =
+  const assembledRuntime: ReturnType<typeof createRuntimeAssembly> =
     dbHandle.ok &&
     piModelAccess !== null &&
     sessionDelegation !== null &&
@@ -1219,145 +1140,14 @@ const appStartup = app.whenReady().then(async () => {
     sessionEngine !== null
       ? createRuntimeAssembly({
           ...runtimeInputs,
-          resolveRuntimeContext: async (sessionId): Promise<PiRuntimeContext | null> => {
-            await preparedSessionFacade.sessions?.waitForBirth?.(sessionId);
-            if (sessionEngine === null) return null;
-            const projection = await sessionEngine.getSession({ sessionId });
-            const attaching = projection?.session;
-            if (!attaching || projection.modelSelection === null) return null;
-            const project = getProjectById(dbHandle.db, attaching.projectId);
-            if (!project) return null;
-            const provenance = {
-              source: { kind: "system", id: "pi-runtime", detail: null },
-              venue: { id: "local", kind: "local" },
-            } as const;
-            const events = await sessionEngine.listEvents({ sessionId });
-            let toolSurface = recordedToolSurface(events);
-            // Frozen parallel-read marks, narrowed to today's developer
-            // allowlist (VC-454): a tool taken off it stops overlapping.
-            let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
-            let mcpManagementNames = recordedMcpManagementNames(events);
-            const codeModeSurface = recordedCodeMode(events);
-            if (toolSurface === null) {
-              mcpManagementNames = "server";
-              // Legacy backfill: the first attach under VC-164 freezes whatever
-              // this Session can honestly bind now. Every later attach reads
-              // the record and Settings can no longer recompose membership.
-              //
-              // A legacy Session has no durable birth-grant record, so it gets
-              // no new grant here. Applying today's role default would be a hot
-              // privilege edit to an existing Session; the fail-closed empty
-              // list leaves only the Role bundle it could honestly have held.
-              toolSurface = toolSurfaceTools(
-                await sessionEngine.getOrRecordSessionInput({
-                  sessionId,
-                  input: {
-                    kind: "tool-surface",
-                    // Nor is it born into Code Mode: that is a birth record
-                    // with routes, and a backfill has none to freeze.
-                    tools: sessionToolSurface!
-                      .resolve(attaching.role, [])
-                      .filter((tool) => tool !== "codemode"),
-                    mcpManagementNames: "server",
-                  },
-                  provenance,
-                }),
-              );
-              // A legacy Session is not retroactively granted today's MCP
-              // settings; the newly recorded backfill is deliberately empty.
-              mcpTools = [];
-            }
-            const shared = {
-              projectId: project.id,
-              rootThreadId: sessionRootThreadId(sessionId),
-              model: projection.modelSelection,
-              toolSurface,
-              ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
-              ...(mcpTools.length === 0 ? {} : { mcpTools }),
-              ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
-              // The skills this Session was started with, as recorded ahead of
-              // its first attachment (`SessionSkillPorts`). Read from the
-              // durable record on EVERY attach — never from disk — so a
-              // restart-recovery re-attach composes the same system prompt the
-              // first attach did, whatever `.agents/skills/` says today.
-              promptResources: recordedPromptResources(events),
-            };
-            // The Role is the Session's own statement (VC-9), never read off
-            // the Ticket: a subagent may carry its parent's Ticket, and a
-            // Ticket Session whose Ticket was deleted is still not a project
-            // one. Each Role briefs on what its Role means.
-            //
-            // A subagent's Ticket, when it has one, is read the way any
-            // other Session's is; an orphaned one briefs on the checkout. The
-            // parent is the Session's own ledger fact, never a host table's.
-            const ticket =
-              attaching.ticketId === null
-                ? null
-                : (getTicket(dbHandle.db, attaching.ticketId) ?? null);
-            if (attaching.role === "subagent") {
-              const parentSessionId = attaching.parentSessionId;
-              if (parentSessionId === null) return null;
-              const subagentTicket = ticket && ticket.projectId === project.id ? ticket : null;
-              const parent = await sessionEngine.getSession({ sessionId: parentSessionId });
-              const brief = await sessionEngine.getOrRecordSessionInput({
-                sessionId,
-                input: {
-                  kind: "runtime-brief",
-                  text: composeSubagentBrief({
-                    project,
-                    parent: {
-                      handle: shortSessionId(parentSessionId),
-                      title: parent?.session.title ?? null,
-                    },
-                    ticket: subagentTicket,
-                  }),
-                },
-                provenance,
-              });
-              return {
-                ...shared,
-                role: "subagent",
-                ticketId: subagentTicket?.id ?? null,
-                parentSessionId,
-                brief: briefText(brief),
-              };
-            }
-            if (attaching.role === "project" || attaching.ticketId === null) {
-              // A ticketless Session briefs on the project root it already
-              // runs in. A Ticket Session orphaned by a Ticket delete lands
-              // here too, attaching as the only thing it can still be.
-              const brief = await sessionEngine.getOrRecordSessionInput({
-                sessionId,
-                input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
-                provenance,
-              });
-              return {
-                ...shared,
-                role: "project",
-                ticketId: null,
-                brief: briefText(brief),
-              };
-            }
-            if (ticket === null || ticket.projectId !== project.id) return null;
-            const brief = await sessionEngine.getOrRecordSessionInput({
-              sessionId,
-              input: {
-                kind: "runtime-brief",
-                text: composeTicketBrief({
-                  project,
-                  ticket,
-                  attachments: listMaterializableLinks(dbHandle.db, null, ticket.id),
-                }),
-              },
-              provenance,
-            });
-            return {
-              ...shared,
-              role: "ticket",
-              ticketId: ticket.id,
-              brief: briefText(brief),
-            };
-          },
+          resolveRuntimeContext: createRuntimeContextResolver({
+            db: dbHandle.db,
+            sessionEngine,
+            venue: runtimeInputs.venue,
+            mcpDispatch,
+            waitForBirth: (sessionId) => preparedSessionFacade.waitForBirth(sessionId),
+            toolSurface: () => sessionToolSurface,
+          }),
         })
       : createRuntimeAssembly({ ...runtimeInputs, resolveRuntimeContext: async () => null });
   const {
@@ -1387,7 +1177,7 @@ const appStartup = app.whenReady().then(async () => {
   });
   let sessionRpc: ReturnType<typeof registerSessionRpcIpcHandlers> | null = null;
   const createSessionRpc = (ready: RecoveredSessionServices<RuntimeSessionFacade>) => {
-    const { runtime: rpcRuntime, sessions: rpcSessions } = ready.services;
+    const { runtime: rpcRuntime, sessions: rpcSessions } = recoveredRuntimeSessionServices(ready);
     return rpcRuntime === null
       ? null
       : registerSessionRpcIpcHandlers({
@@ -1468,9 +1258,8 @@ const appStartup = app.whenReady().then(async () => {
                 },
         });
   };
-  const runtimeSessionAgents = createRuntimeSessionAgents({
+  const runtimeSessionAgents = preparedSessionFacade.agents({
     host: hostCore,
-    facade: preparedSessionFacade,
     delegation: sessionDelegation,
     automations: runtimeAutomations,
     mcpSettings,
@@ -1830,7 +1619,7 @@ const appStartup = app.whenReady().then(async () => {
     },
   );
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
-  runtimeAutomations.start(readyRuntimeServices);
+  runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
   app.on("before-quit", () => runtimeAutomations.stop());
   registerAutomationIpcHandlers(dbHandle, {
     service: runtimeAutomations.service,

@@ -50,6 +50,10 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
+  // JS callers must fail closed too; the type alone cannot guard a missing supplier.
+  if (typeof options.busyWorktreeSites !== "function") {
+    throw new Error("The busy-worktree supplier is required.");
+  }
   const now = options.now ?? Date.now;
   /**
    * The newest fire-time main has ingested per session — the same watermark the
