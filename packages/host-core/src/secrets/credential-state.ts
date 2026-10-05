@@ -46,53 +46,17 @@ import { closeSync, fsyncSync, linkSync, openSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { CredentialKeyPendingError } from "../ports/credential-keyring";
+import type { CredentialKind, CredentialStatus } from "@volli/shared";
+
 import { isSecretKeyUnavailable, type SecretKeyRefusal } from "../ports/secret-key";
-import type { CredentialFamily } from "./credential-families";
 
-export type CredentialState = "ready" | "empty" | "locked" | "refused" | "corrupt";
-
-/**
- * The kinds of credential a host keeps sealed under its key: the typed
- * inventory's families (`credential-families.ts`). The legacy Session store
- * gates `session-env` alone.
- */
-export type CredentialKind = CredentialFamily;
-
-/**
- * Why credentials are `locked` or `refused`: the key's refusal,
- * `store-unreadable` when the sealed file itself cannot be opened for reading,
- * or `newer-format` when it opened and a newer Volli wrote it (VC-642): this
- * build leaves it alone rather than rewrite a schema it does not know.
- */
-export type CredentialReason =
-  | SecretKeyRefusal
-  | "store-unreadable"
-  | "newer-format"
-  /**
-   * Another Volli process held the credential lock at that instant (VC-642).
-   * Transient: reported for that one read, never remembered, never reset.
-   */
-  | "busy"
-  /**
-   * The key comes from an asynchronous backend (desktop's keychain, VC-643)
-   * and has not been fetched yet this launch. Transient, like `busy`: never
-   * remembered, never reset; fetching it is the way out.
-   */
-  | "key-pending"
-  /**
-   * The credential lock file cannot be used: a symlink, not a regular file,
-   * another user's, or not lockable (VC-642). The store it guards may be
-   * perfectly good, so it is fixed (moved aside), never reset.
-   */
-  | "lock-unusable";
-
-export interface CredentialStatus {
-  readonly state: CredentialState;
-  /** Why credentials are `locked` or `refused`; `null` otherwise. */
-  readonly reason: CredentialReason | null;
-  /** What this state makes unavailable. Empty when `ready` or `empty`. */
-  readonly unavailable: readonly CredentialKind[];
-}
+/** What a client is told about stored credentials (`@volli/shared`, VC-632). */
+export type {
+  CredentialKind,
+  CredentialReason,
+  CredentialState,
+  CredentialStatus,
+} from "@volli/shared";
 
 /** Every kind sealed under the key today. */
 export const SEALED_CREDENTIAL_KINDS: readonly CredentialKind[] = ["session-env"];

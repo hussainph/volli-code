@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { SecretMetadata, SecretRequestMetadata, SecretScope } from "@volli/shared";
+import type {
+  CredentialsResult,
+  SecretRequestMetadata,
+  SecretScope,
+  SecretsResult,
+} from "@volli/shared";
 import {
   CredentialLockBusyError,
   isSecretName,
@@ -9,26 +14,8 @@ import {
   type SecretWaitPublisher,
 } from "./index";
 export type { CredentialStatus, SecretWaitPublisher } from "./index";
-
-/**
- * The person-only credential door's answer, moved with the service from
- * `apps/desktop/src/ipc/secrets.ts`; the desktop IPC contract re-exports it.
- * `credentials` says whether stored secrets opened (VC-641): while they are
- * locked, `secrets` holds only the Session-scoped ones in memory.
- */
-export type SecretsResult =
-  | {
-      ok: true;
-      requests: readonly SecretRequestMetadata[];
-      secrets: readonly SecretMetadata[];
-      credentials: CredentialStatus;
-    }
-  | { ok: false; error: string };
-
-/** The door's answer to an unlock or a reset (VC-641). */
-export type CredentialsResult =
-  | { ok: true; credentials: CredentialStatus }
-  | { ok: false; error: string };
+/** The credential door's answers are client wire vocabulary (`@volli/shared`, VC-632). */
+export type { CredentialsResult, SecretsResult } from "@volli/shared";
 
 interface SecretOwner {
   sessionId: string;

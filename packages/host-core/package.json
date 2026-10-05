@@ -177,10 +177,6 @@
       "types": "./src/volli-fs.ts",
       "import": "./src/volli-fs.ts"
     },
-    "./file-types": {
-      "types": "./src/file-types.ts",
-      "import": "./src/file-types.ts"
-    },
     "./file-services": {
       "types": "./src/file-services.ts",
       "import": "./src/file-services.ts"
