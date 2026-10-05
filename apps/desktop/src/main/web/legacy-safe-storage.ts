@@ -1,5 +1,5 @@
 /**
- * The last time Volli ever asks the OS keychain for anything.
+ * The last time Volli asks the OS keychain about the pre-023 web key ciphertext.
  *
  * Until migration 023 the Brave and Exa keys were `safeStorage` ciphertext, and
  * that ciphertext is openable by exactly one party: the same machine, through
@@ -8,11 +8,13 @@
  * `legacy_safe_storage_secrets` for this module, which opens what it can, writes
  * it the new way, and empties the table.
  *
- * **This is the only file in the app that imports `safeStorage`, and it is a
- * leftover rather than a dependency.** It runs once per profile — a `SELECT`
- * against an empty table on every launch after that, and never a keychain call.
- * That is the whole point of the exercise: the prompt this module may raise once
- * is the prompt that used to appear on every Session attach.
+ * **This module is a leftover rather than a dependency.** It runs once per
+ * profile — a `SELECT` against an empty table on every launch after that, and
+ * never a keychain call. That is the whole point of the exercise: the prompt
+ * this module may raise once is the prompt that used to appear on every Session
+ * attach. (It is no longer the app's only keychain use: persistent Session
+ * secrets (VC-481) and the web keys' sealed mirror (VC-643) each unwrap a data
+ * key lazily, at most once per launch, never per attach.)
  *
  * **A row is never asked about twice.** If `decryptString` fails — a profile
  * carried to another machine, an item replaced underneath it, a person clicking

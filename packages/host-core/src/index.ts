@@ -12,7 +12,11 @@ import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
 import type { PowerPort } from "./ports/power";
 import type { TrashPort } from "./ports/trash";
 import { createHostFileServices, type HostFileServices } from "./file-services";
-import { createHostRuntimeServices, type HostRuntimeServices } from "./runtime-services";
+import {
+  createHostRuntimeServices,
+  type HostRuntimeServices,
+  type WebKeySealingOptions,
+} from "./runtime-services";
 import {
   createHostMaintenance,
   checkpointAndCloseDatabase,
@@ -77,6 +81,7 @@ export interface HostCoreOptions {
   readonly reclaim?: RetentionReclaimSeams;
   /** Lazy so model/catalog construction keeps the host's former boot point. */
   readonly modelAccess?: () => PiModelAccess;
+  readonly webKeySealing?: WebKeySealingOptions;
   readonly venue?: (db: Database.Database) => SessionExecutionVenue;
   readonly secretStore?: SecretStore;
   readonly secretKey?: SecretKeyPort;
@@ -221,6 +226,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         {
           dbPath,
           ...(options.modelAccess === undefined ? {} : { modelAccess: options.modelAccess() }),
+          ...(options.webKeySealing === undefined ? {} : { webKeySealing: options.webKeySealing }),
           ...(options.venue === undefined ? {} : { venue: options.venue(db) }),
         },
       ));

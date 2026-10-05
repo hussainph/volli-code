@@ -14,11 +14,12 @@
  * not proof of anything, and never an epoch. An id the keyring does not hold
  * is "unavailable", never "empty".
  *
- * Today one backend exists: `file`, the headless key file
- * (`fileCredentialKeyring` in `@volli/host-core/secrets`). A keychain-wrapped
- * keyring for desktop is added when the first desktop family moves in; its
- * header byte is reserved now so its envelopes are told apart rather than
- * mistaken for corrupt ones.
+ * Two backends exist: `file`, the headless key file (`fileCredentialKeyring`
+ * in `@volli/host-core/secrets`), and `keychain`, desktop's random key wrapped
+ * by the OS keychain (`keychainCredentialKeyring`, VC-643), which arrived with
+ * the first desktop family, the web search keys' sealed mirror. Each has its
+ * own header byte, so one's envelopes are told apart from the other's rather
+ * than mistaken for corrupt ones.
  */
 /** Where a keyring keeps its keys. Each has a byte in the envelope header. */
 export type CredentialKeyBackend = "file" | "keychain";
@@ -45,4 +46,32 @@ export interface CredentialKeyring {
   resolve(id: string): Buffer;
   /** The key new seals use, made the first time when the backend has none. */
   active(): CredentialKey;
+  /**
+   * For a backend whose key is fetched asynchronously (desktop's keychain,
+   * VC-643): {@link resolve} and {@link active} never ask that backend
+   * themselves. They answer from what this fetched, and until it has they
+   * throw {@link CredentialKeyPendingError}. Fetches the key the wrapped file
+   * holds, or wraps a new one when there is none to fetch and one may be made.
+   * Never rejects: a refusal is remembered for the launch, and {@link resolve}
+   * and {@link active} then throw what it was, without asking again.
+   *
+   * `signal` abandons it: no backend call starts once it has aborted, and
+   * nothing it fetched afterwards is kept. A caller that must not wait (an
+   * accepted quit) stops awaiting at the abort rather than when the backend
+   * answers. Absent: the backend answers synchronously and needs no fetch.
+   */
+  unlock?(options?: { signal?: AbortSignal }): Promise<void>;
+}
+
+/**
+ * The key has not been fetched from an asynchronous backend yet: call
+ * {@link CredentialKeyring.unlock} first. Not a fault, and never remembered:
+ * nothing about the key or the sealed file is known to be wrong.
+ */
+export class CredentialKeyPendingError extends Error {
+  readonly code = "credential-key-pending";
+  constructor() {
+    super("The key to saved credentials has not been fetched yet.");
+    this.name = "CredentialKeyPendingError";
+  }
 }

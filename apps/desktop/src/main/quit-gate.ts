@@ -178,6 +178,14 @@ export function registerAcceptedQuitCoordinator(options: {
   lifecycle: AcceptedQuitLifecycle;
   shutdownNativeSessions(): Promise<void>;
   shutdownAgentSocket(): Promise<void>;
+  /**
+   * Called once, synchronously, the moment a quit is accepted and before any
+   * drain starts: background work that must not START during teardown stops
+   * here (VC-643: the web keys' launch reconcile, its busy retries and any
+   * keychain fetch). It must not wait on anything; a throw is reported and
+   * the quit goes on unchanged.
+   */
+  stopBackgroundWork?(): void;
   shutdownDeadlineMs?: number;
   reportFailure(error: unknown): void;
   /** Former synchronous quit listeners, called in their original order. */
@@ -197,6 +205,15 @@ export function registerAcceptedQuitCoordinator(options: {
     void Promise.resolve().then(() => {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
+      try {
+        options.stopBackgroundWork?.();
+      } catch (error) {
+        try {
+          options.reportFailure(error);
+        } catch {
+          // A reporter that throws cannot hold the quit open either.
+        }
+      }
       const exitAfterCheckpoint = () => {
         // app.exit destroys native windows synchronously. VC-536 captured
         // macOS compositor teardown waiting on synchronous Viz IPC while
