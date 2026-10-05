@@ -214,10 +214,14 @@ Desktop still starts maintenance after first paint and triggers retention on
 focus; hostd readiness enablement lands separately. The retention watch is shared per database
 with IPC, retaining dismissal state and read-only behavior without reclaim seams.
 
-`host.stop` disarms producers/maintenance, joins runtime and socket drains
-(concurrent on desktop, sequential on hostd), in-flight maintenance and detached
-Done-trims, then stops activity and checkpoints/closes SQLite. Deadlines stay
-at the process edge: desktop 15 s with Immediate native exit; hostd 30 s.
+`host.stop` has one interface and two policies. Both disarm producers/maintenance,
+join the existing runtime and socket drains (concurrent on desktop, sequential on
+hostd), and stop the activity timer. The default `drain-and-close` policy also
+joins in-flight start, maintenance and detached Done-trims, then checkpoints and
+closes SQLite. Desktop explicitly selects `desktop-quit`: no new writer joins,
+background-shell close, Automation settlement, checkpoint or DB close; process
+exit retains main's historical behavior. Deadlines stay at the process edge:
+desktop 15 s with Immediate native exit; hostd 30 s.
 Migration rollback backups and backup retention run through the shared database
 open/migration path. There is no periodic backup-bundle scheduler.
 
