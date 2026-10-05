@@ -115,7 +115,8 @@ const steps = {
       const engine = createSessionEngine({
         ledger: createSqliteSessionLedger(db),
         clock: { now: () => NOW },
-        ids: { next: (kind) => `n1-${kind}-${++next}` },
+        // Ledger ids are unique across the whole file: scope them to this Session.
+        ids: { next: (kind) => `${step.sessionId}-${kind}-${++next}` },
       });
       const created = await engine.createSession({
         commandId: `n1-command-${step.sessionId}`,
