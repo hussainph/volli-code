@@ -125,7 +125,7 @@ export function createAgentCommandService(
       // Engine. That is what lets the `hook` hot path be judged without paying
       // for the identity resolution its table entry deliberately skips.
       const door = doorActor(request, verifyToken, options.verifyOperatorToken);
-      if (request.cmd === "session.start" && door.kind !== "operator") {
+      if (verbEntry(request.cmd)?.operatorCli === true && door.kind !== "operator") {
         return {
           v: 1,
           ok: false,

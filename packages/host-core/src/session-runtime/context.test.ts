@@ -113,7 +113,18 @@ describe("shared attach context", () => {
 function inputEvent(input: unknown) {
   return { payload: { kind: "session.input.recorded", input } };
 }
-it("freezes legacy MCP tools once and reuses them instead of today's selection", async () => {
+it("never retroactively grants today's MCP selection to a legacy Session", async () => {
+  const f = fixture();
+  f.surface.resolveMcp.mockReturnValue([{ serverId: "server", name: "read" }]);
+  expect(await f.context("s")).not.toHaveProperty("mcpTools");
+  const frozen = f.getOrRecordSessionInput.mock.calls[0]![0].input;
+  expect(frozen).toMatchObject({ kind: "tool-surface", tools: ["read"] });
+  expect(frozen).not.toHaveProperty("mcpTools");
+  f.listEvents.mockResolvedValue([inputEvent(frozen)]);
+  expect(await f.context("s")).not.toHaveProperty("mcpTools");
+  expect(f.surface.resolveMcp).not.toHaveBeenCalled();
+});
+it("binds the durable winner when another first attach already recorded the surface", async () => {
   const f = fixture();
   const tool = {
     serverId: "server",
@@ -121,13 +132,20 @@ it("freezes legacy MCP tools once and reuses them instead of today's selection",
     description: "reader",
     inputSchema: { type: "object" },
   };
-  f.surface.resolveMcp.mockReturnValue([tool]);
-  expect(await f.context("s")).toMatchObject({ mcpTools: [expect.objectContaining(tool)] });
-  const frozen = f.getOrRecordSessionInput.mock.calls[0]![0].input;
-  expect(frozen).toMatchObject({ kind: "tool-surface", mcpTools: [expect.objectContaining(tool)] });
-  f.listEvents.mockResolvedValue([inputEvent(frozen)]);
-  f.surface.resolveMcp.mockClear();
-  expect(await f.context("s")).toMatchObject({ mcpTools: [expect.objectContaining(tool)] });
+  const frozen = {
+    kind: "tool-surface",
+    tools: ["write"],
+    mcpTools: [tool],
+    codeMode: { marker: "winner" },
+  };
+  f.getOrRecordSessionInput.mockImplementation(async ({ input }) =>
+    input.kind === "tool-surface" ? frozen : input,
+  );
+  expect(await f.context("s")).toMatchObject({
+    toolSurface: ["write"],
+    mcpTools: [expect.objectContaining(tool)],
+    codeMode: { marker: "winner" },
+  });
   expect(f.surface.resolveMcp).not.toHaveBeenCalled();
 });
 it("cannot backfill an in-flight birth: the barrier must actually wait", async () => {

@@ -93,6 +93,10 @@ describe("operator Session start admission", () => {
     { reasoning: "no" },
     { title: 42 },
     { message: false },
+    { title: "" },
+    { title: "   " },
+    { message: "" },
+    { message: " \n " },
   ])("rejects malformed input before birth: %j", async (args) => {
     const f = fixture();
     expect(

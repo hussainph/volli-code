@@ -39,6 +39,22 @@ export function readRecoveredSessionServices<Services>(
   if (!issuedProofs.has(ready)) throw new Error("The Session services have no recovery proof.");
   return ready.services;
 }
+/** Derive a port view only from an issued proof; every later read retains its revocation. */
+export function mapRecoveredSessionServices<Source, Services>(
+  ready: RecoveredSessionServices<Source>,
+  map: (services: Source) => Services,
+): RecoveredSessionServices<Services> {
+  readRecoveredSessionServices(ready);
+  const proof: RecoveredSessionServices<Services> = {
+    [recoveredServices]: true,
+    get services() {
+      return map(readRecoveredSessionServices(ready));
+    },
+  };
+  issuedProofs.add(proof);
+  return proof;
+}
+
 /** Only the lifecycle can issue this proof that boot recovery has finished. */
 export interface RecoveredSessionServices<Services> {
   readonly [recoveredServices]: true;

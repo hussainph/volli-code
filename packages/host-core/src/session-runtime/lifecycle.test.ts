@@ -504,8 +504,13 @@ it("passes the host venue into recovery and watchdog and rejects cast/copied pro
   const venue = { id: "headless", kind: "remote" as const };
   const owner = createSessionRuntimeLifecycle({ ...f.options, venue });
   const ready = await owner.ready();
-  const { readRecoveredSessionServices } = await import("./lifecycle");
+  const { readRecoveredSessionServices, mapRecoveredSessionServices } = await import("./lifecycle");
   expect(readRecoveredSessionServices(ready)).toBe(ready.services);
+  const view = mapRecoveredSessionServices(ready, (services) => ({ held: services }));
+  expect(readRecoveredSessionServices(view).held).toBe(ready.services);
+  expect(() => mapRecoveredSessionServices({ ...ready }, (services) => services)).toThrow(
+    "no recovery proof",
+  );
   expect(() => readRecoveredSessionServices({ services: ready.services } as typeof ready)).toThrow(
     "no recovery proof",
   );
@@ -514,4 +519,5 @@ it("passes the host venue into recovery and watchdog and rejects cast/copied pro
   expect(vi.mocked(control.createSessionWatchdog).mock.lastCall![0].venue).toBe(venue);
   await owner.close();
   expect(() => readRecoveredSessionServices(ready)).toThrow("closing");
+  expect(() => readRecoveredSessionServices(view)).toThrow("closing");
 });
