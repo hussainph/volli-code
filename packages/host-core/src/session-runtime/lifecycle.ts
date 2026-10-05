@@ -74,6 +74,8 @@ export interface SessionRuntimeLifecycle<Services> {
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
   venue?: SessionExecutionVenue;
+  /** Upgrade-only ownership supplied by the host, not the executor. */
+  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */
@@ -177,6 +179,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         await closeStaleAttachments({
           engine: sessionEngine,
           ...(options.venue === undefined ? {} : { venue: options.venue }),
+          ...(options.ownsLegacyVenue === undefined
+            ? {}
+            : { ownsLegacyVenue: options.ownsLegacyVenue }),
           shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null
