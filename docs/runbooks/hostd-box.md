@@ -205,12 +205,14 @@ box$ (umask 077 && openssl rand -base64 32 > key)          # private from its fi
 box$ sudo install -d -o volli -g volli -m 700 /etc/volli-hostd
 box$ sudo install -o volli -g volli -m 600 key /etc/volli-hostd/session-secrets.key
 box$ shred -u key
-box$ sudo systemctl edit volli-hostd       # add the two lines below, save
-[Service]
-Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key
+box$ sudo install -d -m 755 /etc/systemd/system/volli-hostd.service.d
+box$ printf '[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key\n' \
+       | sudo tee /etc/systemd/system/volli-hostd.service.d/secret-key.conf
 ```
 
-A drop-in survives upgrades that replace the unit file. Owner `volli` and mode
+That drop-in is what `sudo systemctl edit volli-hostd` would write, without
+the editor (which discards text outside its marked section). A drop-in
+survives upgrades that replace the unit file. Owner `volli` and mode
 `600` are not optional: hostd refuses a key another user owns or that group or
 others can read (`refused`), and so does not use `LoadCredential=`.
 
@@ -219,12 +221,13 @@ Start it:
 ```sh
 box$ sudo systemctl daemon-reload
 box$ sudo systemctl enable --now volli-hostd.socket volli-hostd
-box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq '{verdict, detail, state: .status.state, capabilities: .status.capabilities, credentials: .status.credentials}'
+box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq '{verdict, detail, state: .status.state, capabilities: .status.capabilities, credentials: .status.credentials.state}'
+box$ systemctl show -p Environment volli-hostd    # lists VOLLI_SECRET_KEY_FILE=… if you made the key file
 ```
 
 Success is `"verdict": "serving"` with `board`, `sessions` and `automations`
 `available` (terminals and browser are `unavailable` in M1), and credentials
-`empty` (or `ready`). `"verdict": "not-serving"` with `"detail": "starting"` only
+`"empty"` (or `"ready"`). `"verdict": "not-serving"` with `"detail": "starting"` only
 means it is still booting: run it again a few seconds later.
 
 ## 5. Sign in to a model provider
@@ -454,6 +457,11 @@ shows it (`<id>` is the short id; it is the start of the full one):
 ```sh
 box$ sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db \
        "SELECT payload FROM session_events WHERE session_id LIKE '<id>%' AND json_extract(payload, '\$.kind') = 'session.signaled'"
+```
+
+It prints:
+
+```text
 {"kind":"session.signaled","signal":"done","reason":"pushed"}
 ```
 
@@ -506,7 +514,7 @@ line after, the pushed hash, and the `sqlite3` line.
 ```sh
 box$ sudo journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
 box$ sudo journalctl -u volli-hostd -o cat -f | jq -cR 'fromjson? | select(.level != "debug")'
-box$ systemctl status volli-hostd volli-hostd.socket
+box$ sudo systemctl status --no-pager volli-hostd volli-hostd.socket
 box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .
 ```
 
@@ -519,7 +527,7 @@ written for the desktop app; on a box there is no `volli app launch`).
 
 | Code                  | On this box it means                                                                                                                                                                                                                                            |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_UNREACHABLE` (3) | The CLI could not talk to hostd. `VOLLI_SOCKET` is unset or wrong (`echo $VOLLI_SOCKET`), hostd is not running (`systemctl status volli-hostd`, `sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd`), or you are not in the `volli` group yet (`id`; log in again after `usermod`). |
+| `APP_UNREACHABLE` (3) | The CLI could not talk to hostd. `VOLLI_SOCKET` is unset or wrong (`echo $VOLLI_SOCKET`), hostd is not running (`sudo systemctl status volli-hostd`, `sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd`), or you are not in the `volli` group yet (`id`; log in again after `usermod`). |
 | `WRONG_DOOR`          | The verb is not one the shell runs for this caller. For `session start` it means no operator token was sent: the token file is missing, or not `0600` and yours (the CLI says why on stderr), or `VOLLI_SESSION`/`VOLLI_SESSION_TOKEN` are set in your shell.        |
 | `FORBIDDEN_ACTOR`     | A write without a valid operator token: not issued, revoked, or not sent (see stderr). Reads still work.                                                                                                                                                          |
 | `DB_UNAVAILABLE`      | hostd is up but its database did not open (`refusing`). `sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd` carries the reason, for instance a database from a newer Volli after a downgrade.                                                       |
@@ -563,7 +571,7 @@ box$ sudo systemctl start volli-hostd.socket volli-hostd
 It moves the store aside (never deletes it) and prints the `mv` that undoes
 it. `refused` cannot be reset: fix the key file instead.
 
-**Exit 78** in `systemctl status`: a boot refusal (data directory another user
+**Exit 78** in `sudo systemctl status volli-hostd`: a boot refusal (data directory another user
 owns or can write, another hostd on the same data directory, an unsafe
 operators file). The first error line in the journal names it and the fix;
 systemd will not restart until you fix it and `systemctl start` again.
@@ -605,7 +613,7 @@ box$ sudo mv /var/lib/volli-hostd /var/lib/volli-hostd.before-restore-$T
 box$ sudo mv /srv/volli /srv/volli.before-restore-$T
 box$ sudo tar -C / -xzf "$B"            # as root: owners and modes come back as saved
 box$ sudo systemctl start volli-hostd.socket volli-hostd
-box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict     # "serving"
+box$ sleep 5; sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq -r '.verdict, (.detail // empty)'   # serving
 ```
 
 The `.before-restore-*` folders are the state you replaced; delete them
@@ -635,12 +643,12 @@ box$ sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
        /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
 box$ sudo systemctl daemon-reload && sudo systemctl start volli-hostd.socket volli-hostd
 box$ volli-hostd --version
-box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict     # "serving"
+box$ sleep 5; sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq -r '.verdict, (.detail // empty)'   # serving
 box$ cd
 ```
 
 The `/usr/local/bin` links point into `/opt/volli-hostd`, so they follow the
-new install. Your drop-ins (`systemctl edit`) stay. Keep the
+new install. Your drop-ins in `/etc/systemd/system/volli-hostd.service.d/` stay. Keep the
 `/opt/volli-hostd.prev-*` folder until the new version has served you for a
 while; remove older ones by name.
 
@@ -658,11 +666,12 @@ box$ sudo install -m 644 /opt/volli-hostd/share/systemd/volli-hostd.service \
        /opt/volli-hostd/share/systemd/volli-hostd.socket /etc/systemd/system/
 box$ sudo systemctl daemon-reload && sudo systemctl start volli-hostd.socket volli-hostd
 box$ volli-hostd --version                                      # the old version again
-box$ sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq .verdict
+box$ sleep 5; sudo -u volli volli-hostd status --data-dir /var/lib/volli-hostd | jq -r '.verdict, (.detail // empty)'
 ```
 
-`"serving"` means the new version had not migrated the database: you are done.
-`"refusing"` means it had (the old version leaves a newer database untouched):
+`not-serving` with `starting` only means it is still booting: run the last
+line again. `serving` means the new version had not migrated the database: you are done.
+`refusing` means it had (the old version leaves a newer database untouched):
 follow **To restore** under [Backups](#backups) with the copy taken before the
 upgrade. It stops both units, sets the migrated state aside, unpacks the copy,
 starts hostd and checks `serving`.
@@ -677,7 +686,12 @@ group even here, because hostd, now running as you, reads
 `/etc/volli-hostd-operators` (`root:volli 0640`) to accept your token.
 
 ```sh
-box$ (umask 077 && volli-hostd --data-dir ~/volli-hostd-data)
+box$ (umask 077 && volli-hostd --data-dir ~/volli-hostd-data)      # runs until Ctrl-C
+```
+
+In a second `ssh box`:
+
+```sh
 box$ VOLLI_SOCKET=~/volli-hostd-data/volli.sock volli project list
 ```
 
