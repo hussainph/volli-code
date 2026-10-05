@@ -235,6 +235,41 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     await until(() => ledger.exited.has(0), "the shell to exit after its window closed");
   });
 
+  it("delivers a large final output and UTF-8 tail before exit", async () => {
+    const owner = makeClient("owner");
+    const sessionId = await start(owner);
+    const publish = owner.sink.publish.bind(owner.sink);
+    owner.sink.publish = (topic, payload) => {
+      publish(topic, payload);
+      if (topic === "terminal-data") {
+        const data = payload as TerminalDataEvent;
+        // Model a consuming client, after the pipeline has accounted its send.
+        queueMicrotask(() => manager.ack(owner.sink, sessionId, data.data.length));
+      }
+    };
+    manager.write(
+      owner.sink,
+      sessionId,
+      "printf '%0200000d' 0; printf '\\342\\230\\203-%s\\n' $((4+4)); exit 3\r",
+    );
+    await until(
+      () => owner.events.some((event) => event.topic === "terminal-exit"),
+      "the exit event",
+    );
+    const exitIndex = owner.events.findIndex((event) => event.topic === "terminal-exit");
+    const output = owner.events
+      .slice(0, exitIndex)
+      .filter((event) => event.topic === "terminal-data")
+      .map((event) => (event.payload as TerminalDataEvent).data)
+      .join("");
+    expect(output).toContain("0".repeat(200_000));
+    expect(output).toContain("☃-8");
+    expect(owner.events[exitIndex]?.payload).toEqual({ sessionId, exitCode: 3 });
+    expect(owner.events.slice(exitIndex + 1).some((event) => event.topic === "terminal-data")).toBe(
+      false,
+    );
+  });
+
   it("delivers the shell's exit to the attached client after its final output", async () => {
     const owner = makeClient("owner");
     const sessionId = await start(owner);
