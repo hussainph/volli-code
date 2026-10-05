@@ -546,6 +546,78 @@ jobs:
           --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
           test:coverage --maxWorkers=$(nproc)
 
+  # N-1 compatibility (VC-633). A previous build, run from its own shipped
+  # sources, against a profile THIS build migrated to its head: it must write
+  # to the profile if the head's migrations are compatible (and this build must
+  # then read what it left), or refuse it byte-identically if they raised the
+  # floor. That is the author rule above MIGRATIONS in
+  # packages/host-core/src/db/migrations.ts, checked against a real older
+  # build instead of only the author's word. Two N-1s, in parallel:
+  #   - release: the newest vX.Y.Z tag, the build external users run and drop
+  #     back to. Also holds the release policy: no floor raise may land while
+  #     that release predates the downgrade guard (VC-602), since it could
+  #     not refuse it.
+  #   - base: the PR's base (the build that knows nothing of this change),
+  #     or the previous main on a push.
+  # Each N-1 is extracted with `git archive` and installs its own lockfile
+  # (scripts/n1/prepare.mjs), so neither its code nor its dependencies come
+  # from this checkout. fetch-depth 0 brings the tags and the base commit.
+  n1-compat:
+    name: N-1 compatibility (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [release, base]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Prepare N-1
+        id: prepare
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$LANE" == "release" ]]; then
+            args=(--release)
+          else
+            case "$EVENT" in
+              pull_request) base="$PR_BASE" ;;
+              push) base="$PUSH_BEFORE" ;;
+              *) base="" ;;
+            esac
+            # A new branch's push has no `before`; fall back to the first parent.
+            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git rev-parse HEAD^1)"; fi
+            args=(--ref "$base")
+          fi
+          node packages/host-core/scripts/n1/prepare.mjs "${args[@]}" --out "$RUNNER_TEMP/n1" | tee "$RUNNER_TEMP/n1-prepare.log"
+          manifest="$(tail -n 1 "$RUNNER_TEMP/n1-prepare.log")"
+          test -f "$manifest"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          head -n -1 "$RUNNER_TEMP/n1-prepare.log" | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run N-1 against this build's head
+        working-directory: packages/host-core
+        env:
+          VOLLI_N1_MANIFEST: ${{ steps.prepare.outputs.manifest }}
+        run: vp test run src/db/n1-compatibility.test.ts --maxWorkers=$(nproc)
+
   # The Linux host image, then the hostd artifact built inside it (VC-562):
   # Node = .nvmrc and bookworm's glibc, natives compiled there, then booted
   # from the archive alone against an empty data directory, driven by the
@@ -774,6 +846,7 @@ jobs:
         test-desktop,
         coverage-desktop,
         test-packages,
+        n1-compat,
         host-container,
         smoke-boot,
         smoke-rest,
@@ -793,6 +866,7 @@ jobs:
           TEST_DESKTOP: ${{ needs.test-desktop.result }}
           COVERAGE_DESKTOP: ${{ needs.coverage-desktop.result }}
           TEST_PACKAGES: ${{ needs.test-packages.result }}
+          N1_COMPAT: ${{ needs.n1-compat.result }}
           HOST_CONTAINER: ${{ needs.host-container.result }}
           SMOKE_BOOT: ${{ needs.smoke-boot.result }}
           SMOKE_REST: ${{ needs.smoke-rest.result }}
@@ -833,6 +907,7 @@ jobs:
           expect "Test (desktop shards)" "$TEST_DESKTOP" success
           expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
           expect "Test (packages)" "$TEST_PACKAGES" success
+          expect "N-1 compatibility" "$N1_COMPAT" success
           expect "Build (host container)" "$HOST_CONTAINER" "$container"
           expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
           expect "Smoke (shards)" "$SMOKE_REST" "$rest"

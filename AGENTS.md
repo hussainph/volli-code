@@ -79,6 +79,8 @@ packages must provide `test:coverage`. `Check + Build` enforces zero Electron
 imports across all packages and hostd, including transitive relative imports.
 `Build (host container)` is path-filtered and required by `CI gate` when selected;
 it also builds the hostd linux-x64 artifact in that image and boots it.
+`N-1 compatibility (release|base)` runs the latest `vX.Y.Z` release and the PR's
+base against a head-migrated profile (VC-633, `packages/host-core/README.md`).
 Host development image, native ABI isolation and inventory commands:
 `docs/development/host-linux.md`.
 

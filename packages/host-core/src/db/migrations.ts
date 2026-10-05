@@ -2461,6 +2461,11 @@ END;
  * writer's rows flowing into the new shape, and the contract step that drops
  * the old shape is the one that raises the floor.
  *
+ * CI checks your answer against a real older build (VC-633,
+ * `n1-compatibility.test.ts`): the latest release and the PR's base must
+ * write to a profile migrated to head, or refuse it byte-identically when you
+ * raised the floor. Its writes are a sample, not a proof; the rule is yours.
+ *
  * When unsure, raise it: a refusal names itself and the remedy, while a wrong
  * "compatible" corrupts silently. `app_state` and its
  * `volli:min-reader-version` key are permanent; no migration may remove them.

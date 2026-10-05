@@ -13,7 +13,14 @@ const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf
 const jobs = workflow.jobs;
 const gate = jobs.gate.steps.find((step) => step.id === "require-lanes");
 const filter = jobs.changes.steps.find((step) => step.id === "filter");
-const required = ["changes", "check", "test-desktop", "coverage-desktop", "test-packages"];
+const required = [
+  "changes",
+  "check",
+  "test-desktop",
+  "coverage-desktop",
+  "test-packages",
+  "n1-compat",
+];
 const conditional = ["host-container", "smoke-boot", "smoke-rest"];
 
 function results(event = "pull_request", desktop = "true", host = "true") {
@@ -26,6 +33,7 @@ function results(event = "pull_request", desktop = "true", host = "true") {
     TEST_DESKTOP: "success",
     COVERAGE_DESKTOP: "success",
     TEST_PACKAGES: "success",
+    N1_COMPAT: "success",
     HOST_CONTAINER: host === "true" ? "success" : "skipped",
     SMOKE_BOOT: desktop === "true" ? "success" : "skipped",
     SMOKE_REST: desktop === "true" && event === "pull_request" ? "success" : "skipped",
@@ -244,4 +252,14 @@ test("workspace globs discover a newly added host package and require its covera
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+});
+
+test("N-1 compatibility runs the release and the base, from full history", () => {
+  const job = jobs["n1-compat"];
+  assert.deepEqual(job.strategy.matrix.lane, ["release", "base"]);
+  assert.equal(job.strategy["fail-fast"], false);
+  assert.equal(job.steps.find((step) => step.name === "Checkout").with["fetch-depth"], 0);
+  const run = job.steps.at(-1).run;
+  assert.ok(run.includes("src/db/n1-compatibility.test.ts"));
+  assert.equal(job.steps.at(-1).env.VOLLI_N1_MANIFEST, "${{ steps.prepare.outputs.manifest }}");
 });
