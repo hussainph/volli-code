@@ -5,9 +5,9 @@
  * database, the async `gh`/git network runner, the wall clock, the one
  * notification delivery path for its three alerts (VC-295), and
  * the event bus so every client re-hydrates when the
- * watch's observed state moves. Held as ONE singleton so `data-ipc.ts` (the
- * retention IPC handlers) and `index.ts` (start/stop + on-focus trigger) drive the same
- * watch — the transient observation/notify-dedup/dismissal state is meaningless
+ * watch's observed state moves. Held once PER DATABASE so `data-ipc.ts` (the
+ * retention IPC handlers) and host maintenance (start/stop + focus) drive the same
+ * watch without holding another host's handle — transient observation/notify-dedup/dismissal state is meaningless
  * if each entrypoint built its own.
  */
 import type Database from "better-sqlite3";
@@ -22,6 +22,7 @@ import {
   type WorktreeDeps,
 } from "./worktree";
 
+let watchers = new WeakMap<Database.Database, RetentionWatcher>();
 let watcher: RetentionWatcher | null = null;
 
 /**
@@ -51,9 +52,9 @@ function trimSeams(
 }
 
 /**
- * The retention watch singleton, built lazily against `db`. The first caller
- * (index.ts on boot, or the first retention IPC) constructs it; everyone after
- * shares it. Timing is env-overridable through {@link retentionConfigFromEnv}.
+ * The retention watch, built lazily against `db`. The first caller for this
+ * database (host maintenance on boot, or the first retention IPC) constructs
+ * it; every later caller for that database shares it. Timing is env-overridable through {@link retentionConfigFromEnv}.
  */
 export function getRetentionWatcher(
   db: Database.Database,
@@ -61,7 +62,9 @@ export function getRetentionWatcher(
   worktree: () => WorktreeDeps,
   reclaimSeams?: RetentionReclaimSeams,
 ): RetentionWatcher {
-  watcher ??= new RetentionWatcher(
+  const existing = watchers.get(db);
+  if (existing !== undefined) return existing;
+  watcher = new RetentionWatcher(
     {
       db,
       net: runNet,
@@ -84,6 +87,7 @@ export function getRetentionWatcher(
     },
     retentionConfigFromEnv(process.env),
   );
+  watchers.set(db, watcher);
   return watcher;
 }
 
@@ -91,4 +95,5 @@ export function getRetentionWatcher(
 export function resetRetentionWatcherForTest(): void {
   watcher?.stop();
   watcher = null;
+  watchers = new WeakMap();
 }

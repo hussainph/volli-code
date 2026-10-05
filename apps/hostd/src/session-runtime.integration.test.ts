@@ -1,6 +1,6 @@
 /** Real hostd, Pi, SQLite and socket; only the provider wire is scripted. */
 import { execFile, execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -23,6 +23,10 @@ import {
 import { insertProject } from "@volli/host-core/db/projects-repo";
 import { insertTicket } from "@volli/host-core/db/tickets-repo";
 import { listRunsForTicket } from "@volli/host-core/db/automations-repo";
+import { createAutomationEngine } from "@volli/host-core/automations/engine";
+import { SqliteAutomationLedger } from "@volli/host-core/automations/sqlite-ledger";
+import { isLiveHost, type LiveHostCore } from "@volli/host-core";
+import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
 import {
   fileSecretKey,
   SecretStore,
@@ -32,16 +36,32 @@ import {
 import { testProject, testTicket } from "@volli/host-core/db/test-helpers";
 import { startHostd, type RunningHostd } from "./hostd";
 
+/** The live host a fixture booted; every proof here needs its database. */
+function live(running: RunningHostd): LiveHostCore {
+  if (!isLiveHost(running.host)) throw new Error(running.host.database.error);
+  return running.host;
+}
+
 const exec = promisify(execFile);
 const repo = resolve(import.meta.dirname, "../../..");
 const cliBundle = join(repo, "packages/cli/dist/volli.cjs");
 const roots: string[] = [];
 const hosts: RunningHostd[] = [];
-beforeAll(() =>
-  execFileSync("pnpm", ["--filter", "@volli/cli", "build"], { cwd: repo, stdio: "pipe" }),
+// Building the fixture is not a Session/quit deadline. Keep the compiler
+// bounded, but allow shared-machine contention before timing runtime proofs.
+beforeAll(
+  () =>
+    execFileSync("pnpm", ["--filter", "@volli/cli", "build"], {
+      cwd: repo,
+      stdio: "pipe",
+      timeout: 60_000,
+    }),
+  65_000,
 );
 afterEach(async () => {
   for (const host of hosts.splice(0)) await host.stop("test done");
+  // The retention watch is a process singleton; each host here is a new process's.
+  resetRetentionWatcherForTest();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 async function fixture(
@@ -140,13 +160,10 @@ async function fixture(
     });
   const host = await launch();
   hosts.push(host);
-  if (!host.host.database.ok) throw new Error(host.host.database.error);
-  insertProject(
-    host.host.database.db,
-    testProject({ id: "p", path: directory, ticketPrefix: "VC" }),
-  );
+  const core = live(host);
+  insertProject(core.database.db, testProject({ id: "p", path: directory, ticketPrefix: "VC" }));
   insertTicket(
-    host.host.database.db,
+    core.database.db,
     testTicket("p", { id: "t", ticketNumber: 1, usesWorktree: false }),
   );
   const cli = async (...argv: string[]) =>
@@ -169,14 +186,14 @@ async function fixture(
     hosts.push(recovered);
     return recovered;
   };
-  return { host, script, cli, directory, restart };
+  return { host, core, script, cli, directory, restart };
 }
 
 describe("Linux CLI scripted-provider proof (VC-622)", () => {
   it("starts over the built CLI, runs a real tool, completes and exposes its answer", async () => {
     const f = await fixture();
     const completed = Promise.withResolvers<void>();
-    const unsubscribe = f.host.host.sessionWakeBus!.subscribe(({ event }) => {
+    const unsubscribe = f.core.sessionWakeBus.subscribe(({ event }) => {
       if (event.payload.kind === "turn.completed") completed.resolve();
     });
     try {
@@ -195,7 +212,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       );
       expect(started.state).toBe("ready");
       await completed.promise;
-      const projection = await f.host.host.sessionEngine!.getSession({
+      const projection = await f.core.sessionEngine.getSession({
         sessionId: started.sessionId,
       });
       expect(projection!.lastTurnOutcome).toBe("completed");
@@ -212,7 +229,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
         browser: "unavailable",
         terminals: "unavailable",
       });
-      const events = await f.host.host.sessionEngine!.listEvents({ sessionId: started.sessionId });
+      const events = await f.core.sessionEngine.listEvents({ sessionId: started.sessionId });
       const surface = events.find(
         ({ payload }) =>
           payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
@@ -231,7 +248,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       expect(await f.cli("session", "answer", started.session)).toMatchObject({
         state: "completed",
       });
-      const restored = await rebooted.host.sessionEngine!.getSession({
+      const restored = await live(rebooted).sessionEngine.getSession({
         sessionId: started.sessionId,
       });
       expect(restored!.session.title).toBe("Permanent proof");
@@ -275,9 +292,13 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       { text: "Armed Automation completed" },
       { text: "Armed Automation completed" },
     ]);
-    if (!f.host.host.database.ok) throw new Error("No database");
-    const db = f.host.host.database.db;
-    const engine = f.host.host.automations.createEngine()!;
+    const db = f.core.database.db;
+    // The board's own CRUD door is the desktop's; the ledger is what the runner reads.
+    const engine = createAutomationEngine({
+      ledger: new SqliteAutomationLedger(db),
+      now: Date.now,
+      nextId: randomUUID,
+    });
     const created = await engine.create({
       commandId: "create",
       projectId: "p",
@@ -308,15 +329,14 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
         const run = listRunsForTicket(db, "t")[0];
         expect(run).toBeDefined();
         expect(
-          (await f.host.host.sessionEngine!.getSession({ sessionId: run!.sessionId }))!
-            .lastTurnOutcome,
+          (await f.core.sessionEngine.getSession({ sessionId: run!.sessionId }))!.lastTurnOutcome,
         ).toBe("completed");
       },
       { timeout: 10_000 },
     );
     const run = listRunsForTicket(db, "t")[0]!;
     expect(
-      (await f.host.host.sessionEngine!.getSession({ sessionId: run.sessionId }))!.latestTurnOrigin,
+      (await f.core.sessionEngine.getSession({ sessionId: run.sessionId }))!.latestTurnOrigin,
     ).toMatchObject({ kind: "automation", automationName: "CLI armed proof" });
     expect(await f.cli("session", "answer", shortSessionId(run.sessionId))).toMatchObject({
       state: "completed",
@@ -347,11 +367,10 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       ],
       true,
     );
-    if (!f.host.host.database.ok) throw new Error("No database");
     // A neighbouring finished ticket shares the checkout. Moving it must not
     // interrupt the working Session and thereby hide the activity being judged.
     insertTicket(
-      f.host.host.database.db,
+      f.core.database.db,
       testTicket("p", {
         id: "trim",
         ticketNumber: 2,
@@ -377,12 +396,20 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
     );
     await vi.waitFor(() => expect(existsSync(join(f.directory, "active"))).toBe(true));
     expect(
-      (await f.host.host.sessionEngine!.getSession({ sessionId: started.sessionId }))!.turnActive,
+      (await f.core.sessionEngine.getSession({ sessionId: started.sessionId }))!.turnActive,
     ).toBe(true);
     const moveTrim = (status: string) => f.cli("ticket", "move", "VC-2", "--to", status);
-    await moveTrim("done");
-    // Allow the detached trim to finish while the gated turn remains active.
-    await new Promise((settle) => setTimeout(settle, 100));
+    // Every Done move enrols exactly one detached trim with the host, before
+    // its reply; awaiting that enrolment is awaiting the trim's own verdict.
+    const trims = vi.spyOn(f.core.detachedWork, "track");
+    const finishTrim = async () => {
+      const enrolled = trims.mock.calls.length;
+      await moveTrim("done");
+      expect(trims).toHaveBeenCalledTimes(enrolled + 1);
+      await trims.mock.calls[enrolled]![0];
+    };
+    await finishTrim();
+    // The trim has settled while the gated turn remains active.
     expect(readFileSync(dependency, "utf8")).toBe("keep while busy");
     writeFileSync(join(f.directory, "release"), "");
     await vi.waitFor(
@@ -393,16 +420,16 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
     const pid = Number(readFileSync(join(f.directory, "shell.pid"), "utf8"));
     expect(() => process.kill(pid, 0)).not.toThrow();
     expect(
-      (await f.host.host.sessionEngine!.getSession({ sessionId: started.sessionId }))!.turnActive,
+      (await f.core.sessionEngine.getSession({ sessionId: started.sessionId }))!.turnActive,
     ).toBe(false);
     await moveTrim("todo");
-    await moveTrim("done");
-    await new Promise((settle) => setTimeout(settle, 100));
+    await finishTrim();
+    // Settled with the shell alive between turns: still refused.
     expect(existsSync(dependency)).toBe(true);
     writeFileSync(join(f.directory, "release-shell"), "");
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
     await moveTrim("todo");
-    await moveTrim("done");
-    await vi.waitFor(() => expect(existsSync(dependency)).toBe(false));
+    await finishTrim();
+    expect(existsSync(dependency)).toBe(false);
   }, 20_000);
 });

@@ -35,28 +35,18 @@ export interface HostSessionPorts {
 }
 
 export interface HostSessionServices {
-  readonly sessionLedger: SessionLedger | null;
-  readonly hostNoticeOutbox: HostNoticeOutbox | null;
-  readonly sessionWakeBus: SessionWakeBus | null;
-  readonly sessionReadWatch: SessionReadWatch | null;
-  readonly sessionActivityWatch: SessionActivityWatch | null;
-  readonly sessionEngine: SessionEngine | null;
+  readonly sessionLedger: SessionLedger;
+  readonly hostNoticeOutbox: HostNoticeOutbox;
+  readonly sessionWakeBus: SessionWakeBus;
+  readonly sessionReadWatch: SessionReadWatch;
+  readonly sessionActivityWatch: SessionActivityWatch;
+  readonly sessionEngine: SessionEngine;
 }
 
 export function createHostSessionServices(
-  db: Database.Database | null,
+  db: Database.Database,
   ports: HostSessionPorts,
 ): HostSessionServices {
-  if (db === null) {
-    return {
-      sessionLedger: null,
-      hostNoticeOutbox: null,
-      sessionWakeBus: null,
-      sessionReadWatch: null,
-      sessionActivityWatch: null,
-      sessionEngine: null,
-    };
-  }
   // The outbox and engine share exactly one Session transaction writer.
   const sessionLedger = createSqliteSessionLedger(db);
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);

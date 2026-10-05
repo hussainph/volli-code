@@ -1,10 +1,4 @@
-/**
- * Staged runtime-service construction (VC-555). Desktop calls these at the
- * same points in its boot sequence as before: legacy key migration stays in
- * the host, ahead of Web Access, and sign-in is wired after the runtime.
- * Construction captures ports; none of these services is opened at boot until
- * its factory is called.
- */
+/** One live host runtime-service module. Construction captures ports; credentials remain lazy. */
 import type { SessionExecutionVenue } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -15,7 +9,6 @@ import { createDesktopDecisions } from "./decision/desktop";
 import { FileMcpCredentialStore, MCP_CREDENTIAL_FILE_NAME } from "./mcp/credential-store";
 import { McpOAuthBroker } from "./mcp/oauth";
 import { McpSettingsService } from "./mcp/settings";
-import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import type { ClientCapabilityPort } from "./ports";
 import {
   BRAVE_SEARCH_KEY_SECRET,
@@ -46,88 +39,74 @@ export interface WebKeySealingOptions {
 }
 
 export function createHostRuntimeServices(
-  db: Database.Database | null,
-  sessionEngine: SessionEngine | null,
+  db: Database.Database,
+  sessionEngine: SessionEngine,
   ports: { client: ClientCapabilityPort },
-  options: { dbPath: string },
+  options: {
+    dbPath: string;
+    modelAccess?: PiModelAccess;
+    venue?: SessionExecutionVenue;
+    webKeySealing?: WebKeySealingOptions;
+  },
 ) {
-  return {
-    createModelAccess: () => (db === null ? null : piOwnedModelAccess()),
-    createDecisions: (
-      modelAccess: PiModelAccess | null,
-      venue: SessionExecutionVenue = { id: "local", kind: "local" },
-    ) =>
-      db !== null && modelAccess !== null
-        ? createDesktopDecisions({
-            db,
-            models: modelAccess.models,
-            catalogReady: modelAccess.catalogReady,
-            recordUsage: async (sessionId, usage, purpose) => {
-              if (sessionEngine === null) return;
-              await sessionEngine.observe({
-                // A fresh id per call: every decision is its own bill.
-                id: `usage:decision:${randomUUID()}`,
-                kind: "usage.recorded",
-                sessionId,
-                occurredAt: Date.now(),
-                provenance: {
-                  source: { kind: "system", id: "decision-service", detail: { purpose } },
-                  venue,
-                },
-                attachmentId: null,
-                turnId: null,
-                usage,
-              });
-            },
-          })
-        : null,
-    createMcp: () => {
-      const credentials = new FileMcpCredentialStore(
-        join(dirname(options.dbPath), MCP_CREDENTIAL_FILE_NAME),
-      );
-      const settings =
-        db === null
-          ? null
-          : new McpSettingsService({
-              db,
-              credentials,
-              oauth: new McpOAuthBroker({
-                store: credentials,
-                // Only an authorization page already checked by the broker.
-                openExternal: (url) => ports.client.openExternal(url),
-              }),
-            });
-      return { credentials, settings };
+  const modelAccess = options.modelAccess ?? piOwnedModelAccess();
+  const venue = options.venue ?? { id: "local", kind: "local" };
+  const decisions = createDesktopDecisions({
+    db,
+    models: modelAccess.models,
+    catalogReady: modelAccess.catalogReady,
+    recordUsage: async (sessionId, usage, purpose) => {
+      await sessionEngine.observe({
+        id: `usage:decision:${randomUUID()}`,
+        kind: "usage.recorded",
+        sessionId,
+        occurredAt: Date.now(),
+        provenance: {
+          source: { kind: "system", id: "decision-service", detail: { purpose } },
+          venue,
+        },
+        attachmentId: null,
+        turnId: null,
+        usage,
+      });
     },
-    createWebAccess: (sealing: WebKeySealingOptions = {}) =>
-      db === null
-        ? null
-        : new WebAccessSettings({
-            db,
-            credentials: {
-              brave: new WebCredentialStore({ db, secretName: BRAVE_SEARCH_KEY_SECRET }),
-              exa: new WebCredentialStore({ db, secretName: EXA_SEARCH_KEY_SECRET }),
-            },
-            mirror: new WebCredentialMirror({
-              db,
-              inventory:
-                sealing.keyring == null
-                  ? null
-                  : new SealedInventory({
-                      path: join(dirname(options.dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
-                      keyring: sealing.keyring,
-                      families: ["web-search"],
-                    }),
-              keyring: sealing.keyring ?? null,
-              ...(sealing.mayUnlockUnattended === undefined
-                ? {}
-                : { mayUnlockUnattended: sealing.mayUnlockUnattended }),
-              ...(sealing.onResult === undefined ? {} : { onResult: sealing.onResult }),
+  });
+  const credentials = new FileMcpCredentialStore(
+    join(dirname(options.dbPath), MCP_CREDENTIAL_FILE_NAME),
+  );
+  const mcp = new McpSettingsService({
+    db,
+    credentials,
+    oauth: new McpOAuthBroker({
+      store: credentials,
+      openExternal: (url) => ports.client.openExternal(url),
+    }),
+  });
+  const webAccess = new WebAccessSettings({
+    db,
+    credentials: {
+      brave: new WebCredentialStore({ db, secretName: BRAVE_SEARCH_KEY_SECRET }),
+      exa: new WebCredentialStore({ db, secretName: EXA_SEARCH_KEY_SECRET }),
+    },
+    mirror: new WebCredentialMirror({
+      db,
+      inventory:
+        options.webKeySealing?.keyring == null
+          ? null
+          : new SealedInventory({
+              path: join(dirname(options.dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
+              keyring: options.webKeySealing.keyring,
+              families: ["web-search"],
             }),
-          }),
-    createSignIn: (input: ConstructorParameters<typeof ModelAccessSignInService>[0]) =>
-      new ModelAccessSignInService(input),
-  };
+      keyring: options.webKeySealing?.keyring ?? null,
+      ...(options.webKeySealing?.mayUnlockUnattended === undefined
+        ? {}
+        : { mayUnlockUnattended: options.webKeySealing.mayUnlockUnattended }),
+      ...(options.webKeySealing?.onResult === undefined
+        ? {}
+        : { onResult: options.webKeySealing.onResult }),
+    }),
+  });
+  return { modelAccess, decisions, mcp, webAccess };
 }
-
 export type HostRuntimeServices = ReturnType<typeof createHostRuntimeServices>;

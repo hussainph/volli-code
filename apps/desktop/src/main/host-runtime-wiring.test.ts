@@ -1,0 +1,415 @@
+/**
+ * index.ts's ACTUAL host wiring, executed against recorded ports.
+ *
+ * `host-runtime.test.ts` proves the desktop adapter in isolation; nothing there
+ * fails if index.ts stops handing it the right gates, lifecycle or socket.
+ * Importing index.ts is impractical (Electron, top-level boot side effects), so
+ * this file parses it with oxc (the parser vite-plus ships), lifts the exact
+ * composition expressions out of the source — `prepareHostQuit`, the three
+ * late-bound quit gates, the accepted-quit hold, and the
+ * `createDesktopHostRuntime` call — strips their types, and evaluates them with
+ * every free identifier bound to a recorded port. The real `prepareDesktopQuit`,
+ * `createDesktopHostRuntime`, `registerAcceptedQuitCoordinator` and quit-gate
+ * helpers run unmodified; only index.ts's surroundings are fakes.
+ *
+ * An identifier the lifted code starts to need that this file does not bind
+ * surfaces as a ReferenceError naming it — extend the scope, do not loosen the
+ * assertions.
+ */
+import { readFileSync } from "node:fs";
+import { parseSync, transformSync } from "vite/rolldown/utils";
+import { describe, expect, it, vi } from "vite-plus/test";
+import type { HostRuntimeOwner } from "@volli/host-core";
+import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
+import {
+  planUnsavedQuit,
+  quitAlreadyRefused,
+  refuseQuit,
+  registerAcceptedQuitCoordinator,
+} from "./quit-gate";
+
+/** The slice of oxc's ESTree this file reads. */
+interface AstNode {
+  readonly type: string;
+  readonly start: number;
+  readonly end: number;
+  readonly [field: string]: unknown;
+}
+
+const INDEX_SOURCE = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+const parsed = parseSync("index.ts", INDEX_SOURCE);
+if (parsed.errors.length > 0)
+  throw new Error(`index.ts failed to parse: ${parsed.errors[0]?.message}`);
+const program = parsed.program as unknown as AstNode;
+
+function isNode(value: unknown): value is AstNode {
+  return typeof value === "object" && value !== null && typeof (value as AstNode).type === "string";
+}
+
+function nodesWhere(test: (node: AstNode) => boolean): AstNode[] {
+  const found: AstNode[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!isNode(value)) return;
+    if (test(value)) found.push(value);
+    for (const [field, nested] of Object.entries(value)) if (field !== "parent") visit(nested);
+  };
+  visit(program);
+  return found;
+}
+
+function exactlyOne<T>(nodes: readonly T[], what: string): T {
+  if (nodes.length !== 1) {
+    throw new Error(`index.ts must contain exactly one ${what}; found ${nodes.length}.`);
+  }
+  return nodes[0] as T;
+}
+
+function child(node: AstNode, field: string): AstNode {
+  const value = node[field];
+  if (!isNode(value)) throw new Error(`${node.type}.${field} is not a node.`);
+  return value;
+}
+
+function isIdentifierNamed(value: unknown, name: string): boolean {
+  return isNode(value) && value.type === "Identifier" && value["name"] === name;
+}
+
+function sourceOf(node: AstNode): string {
+  return INDEX_SOURCE.slice(node.start, node.end);
+}
+
+/** The initializer of index.ts's one `const|let <name> = …` declaration. */
+function initializerOf(name: string): AstNode {
+  const declarator = exactlyOne(
+    nodesWhere((node) => node.type === "VariableDeclarator" && isIdentifierNamed(node["id"], name)),
+    `declaration of \`${name}\``,
+  );
+  return child(declarator, "init");
+}
+
+/** The right-hand side of index.ts's one later `<name> = …` assignment. */
+function assignmentTo(name: string): AstNode {
+  const assignment = exactlyOne(
+    nodesWhere(
+      (node) =>
+        node.type === "AssignmentExpression" &&
+        node["operator"] === "=" &&
+        isIdentifierNamed(node["left"], name),
+    ),
+    `assignment to \`${name}\``,
+  );
+  return child(assignment, "right");
+}
+
+function callsTo(name: string): AstNode[] {
+  return nodesWhere(
+    (node) => node.type === "CallExpression" && isIdentifierNamed(node["callee"], name),
+  );
+}
+
+function isCallTo(node: AstNode, name: string): boolean {
+  return node.type === "CallExpression" && isIdentifierNamed(node["callee"], name);
+}
+
+function argument(call: AstNode, index: number): AstNode {
+  const value = (call["arguments"] as unknown[])[index];
+  if (!isNode(value)) throw new Error(`Call has no argument ${index}.`);
+  return value;
+}
+
+function objectProperty(literal: AstNode, name: string): AstNode {
+  if (literal.type !== "ObjectExpression") throw new Error("Expected an object literal.");
+  const property = exactlyOne(
+    (literal["properties"] as AstNode[]).filter(
+      (candidate) =>
+        candidate.type === "Property" &&
+        candidate["computed"] === false &&
+        isIdentifierNamed(candidate["key"], name),
+    ),
+    `\`${name}:\` property`,
+  );
+  return child(property, "value");
+}
+
+/**
+ * Evaluates one lifted index.ts expression. `scope` stands in for the lexical
+ * bindings around it and is read and written LIVE (`with`), so a `let` that
+ * index.ts reassigns after the expression was created is seen at call time —
+ * exactly the late binding the quit gates rely on.
+ */
+function evaluate<T>(node: AstNode, scope: Record<string, unknown>): T {
+  const stripped = transformSync("lifted.ts", `(${sourceOf(node)});`, { target: "es2022" });
+  if (stripped.errors.length > 0) throw new Error(stripped.errors[0]?.message);
+  const expression = stripped.code.trim().replace(/;$/, "");
+  const run = new Function("scope", `with (scope) { return ${expression}; }`) as (
+    scope: Record<string, unknown>,
+  ) => T;
+  return run(scope);
+}
+
+type QuitEvent = { preventDefault(): void };
+
+/**
+ * index.ts's quit path, lifted whole: `prepareHostQuit` as declared, each gate as
+ * index.ts later assigns it, and the accepted-quit hold registered through the
+ * Session runtime lifecycle's `installQuitHold`. Each gate's own port records.
+ */
+function liftedQuitPath(options: { declineUnsaved: boolean }) {
+  const calls: string[] = [];
+  const listeners: Array<(event: QuitEvent) => void> = [];
+  const exited = Promise.withResolvers<number>();
+  const ptyManager = { kind: "pty-manager" };
+  const hostCore = {
+    stop: vi.fn(async () => {
+      calls.push("host.stop");
+    }),
+  };
+  const scope: Record<string, unknown> = {
+    // Real modules index.ts imports.
+    prepareDesktopQuit,
+    registerAcceptedQuitCoordinator,
+    planUnsavedQuit,
+    quitAlreadyRefused,
+    refuseQuit,
+    errorMessage: (error: unknown) => String(error),
+    // index.ts's own surroundings.
+    noQuitAction: () => {},
+    runtimeAutomations: {
+      stop: () => {
+        calls.push("automations.stop");
+      },
+    },
+    updateInstallQuitInFlight: () => false,
+    unsavedDocumentNames: () => ["draft.md"],
+    process: { env: {} },
+    confirmDiscardUnsaved: (names: readonly string[], verb: string) => {
+      calls.push(`unsaved.confirm:${names.join(",")}:${verb}`);
+      return !options.declineUnsaved;
+    },
+    ptyManager,
+    prepareTerminalQuit: (manager: unknown, event: QuitEvent) => {
+      expect(manager).toBe(ptyManager);
+      calls.push(quitAlreadyRefused(event) ? "terminal.gate(refused)" : "terminal.gate");
+    },
+    transcriptRepackAbort: {
+      abort: () => {
+        calls.push("repack.abort");
+      },
+    },
+    app: {
+      on: (event: string, listener: (event: QuitEvent) => void) => {
+        expect(event).toBe("before-quit");
+        listeners.push(listener);
+      },
+      exit: exited.resolve,
+    },
+    hostCore,
+    webSealing: {
+      stop: vi.fn(() => {
+        calls.push("web-sealing.stop");
+      }),
+    },
+    console: { error: vi.fn() },
+  };
+  // Boot order as in index.ts: the gates start as no-ops, prepareHostQuit and
+  // the quit hold are created, and only later does each gate get its body.
+  scope["terminalQuit"] = evaluate(initializerOf("terminalQuit"), scope);
+  scope["unsavedQuit"] = evaluate(initializerOf("unsavedQuit"), scope);
+  scope["abortRepack"] = evaluate(initializerOf("abortRepack"), scope);
+  scope["prepareHostQuit"] = evaluate(initializerOf("prepareHostQuit"), scope);
+  const lifecycleCall = exactlyOne(
+    callsTo("createSessionRuntimeLifecycle"),
+    "createSessionRuntimeLifecycle(...) call",
+  );
+  const installQuitHold = evaluate<() => void>(
+    objectProperty(argument(lifecycleCall, 0), "installQuitHold"),
+    scope,
+  );
+  installQuitHold();
+  scope["unsavedQuit"] = evaluate(assignmentTo("unsavedQuit"), scope);
+  scope["terminalQuit"] = evaluate(assignmentTo("terminalQuit"), scope);
+  scope["abortRepack"] = evaluate(assignmentTo("abortRepack"), scope);
+  return { calls, listeners, exited: exited.promise, hostCore, scope };
+}
+
+describe("index.ts quit wiring", () => {
+  it("has one accepted-quit hold, registered through the Session runtime lifecycle", () => {
+    const hold = exactlyOne(
+      callsTo("registerAcceptedQuitCoordinator"),
+      "registerAcceptedQuitCoordinator(...) call",
+    );
+    const lifecycleCall = exactlyOne(
+      callsTo("createSessionRuntimeLifecycle"),
+      "createSessionRuntimeLifecycle(...) call",
+    );
+    const installQuitHold = objectProperty(argument(lifecycleCall, 0), "installQuitHold");
+    expect(hold.start >= installQuitHold.start && hold.end <= installQuitHold.end).toBe(true);
+  });
+
+  it("an accepted quit runs all four gates in order, then stops the host and exits 0", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: false });
+    expect(quit.listeners).toHaveLength(1);
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "automations.stop",
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "repack.abort",
+    ]);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(await quit.exited).toBe(0);
+    expect(quit.hostCore.stop).toHaveBeenCalledOnce();
+    expect(quit.calls.slice(-2)).toEqual(["web-sealing.stop", "host.stop"]);
+  });
+
+  it("a refused quit still runs all four gates in order and never stops the host", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: true });
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "automations.stop",
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate(refused)",
+      "repack.abort",
+    ]);
+    expect(quitAlreadyRefused(event)).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(quit.hostCore.stop).not.toHaveBeenCalled();
+    expect(quit.calls).not.toContain("web-sealing.stop");
+  });
+
+  it("prepareHostQuit reads each gate at quit time, not when it was created", () => {
+    const quit = liftedQuitPath({ declineUnsaved: false });
+    const late: string[] = [];
+    for (const gate of ["unsavedQuit", "terminalQuit", "abortRepack"]) {
+      quit.scope[gate] = () => {
+        late.push(gate);
+      };
+    }
+    (quit.scope["prepareHostQuit"] as (event: QuitEvent) => void)({ preventDefault: vi.fn() });
+    expect(quit.calls).toEqual(["automations.stop"]);
+    expect(late).toEqual(["unsavedQuit", "terminalQuit", "abortRepack"]);
+  });
+});
+
+/** The recorded `vi.fn` at `binding` or `binding.member` in a lifted scope. */
+function spy(scope: Record<string, unknown>, path: string) {
+  const [binding, member] = path.split(".");
+  const target = scope[binding as string] as Record<string, ReturnType<typeof vi.fn>>;
+  return member === undefined
+    ? (target as unknown as ReturnType<typeof vi.fn>)
+    : (target[member] as ReturnType<typeof vi.fn>);
+}
+
+describe("index.ts desktop host runtime wiring", () => {
+  function liftedDesktopRuntime() {
+    const proof = { services: { kind: "recovered" } };
+    const rpc = { kind: "session-rpc" };
+    let owner: HostRuntimeOwner | undefined;
+    const createDesktopHostRuntimeSpy = vi.fn(createDesktopHostRuntime);
+    const scope: Record<string, unknown> = {
+      createDesktopHostRuntime: createDesktopHostRuntimeSpy,
+      hostCore: {
+        start: vi.fn(async (runtime: HostRuntimeOwner) => {
+          owner = runtime;
+          await runtime.start();
+        }),
+      },
+      runtimeLifecycle: {
+        ready: vi.fn(async () => proof),
+        close: vi.fn(async () => {}),
+      },
+      sessionRpc: null,
+      createSessionRpc: vi.fn(() => rpc),
+      runtimeSessionAgents: { toolDoor: vi.fn(), stop: vi.fn() },
+      runtimeAutomations: { stop: vi.fn(), settled: vi.fn(async () => {}) },
+      ptyManagerRef: { stopParkSweep: vi.fn() },
+      backgroundShells: { close: vi.fn(async () => {}) },
+      shutdownAgentSocket: vi.fn(async () => true),
+      hostClosing: false,
+    };
+    const call = exactlyOne(
+      callsTo("createDesktopHostRuntime"),
+      "createDesktopHostRuntime(...) call",
+    );
+    const desktopRuntime = evaluate<{ start(): Promise<unknown> }>(call, scope);
+    return {
+      call,
+      desktopRuntime,
+      proof,
+      rpc,
+      scope,
+      createDesktopHostRuntimeSpy,
+      owner: () => {
+        if (owner === undefined) throw new Error("index.ts's runtime never reached host.start.");
+        return owner;
+      },
+    };
+  }
+
+  it("is the runtime index.ts boots, over the host core it built", () => {
+    const { call } = liftedDesktopRuntime();
+    expect(initializerOf("desktopRuntime")).toBe(call);
+    const ready = initializerOf("readyRuntimeServices");
+    expect(ready.type).toBe("AwaitExpression");
+    expect(sourceOf(ready)).toBe("await desktopRuntime.start()");
+    expect(isCallTo(initializerOf("hostCore"), "createHostCore")).toBe(true);
+    expect(isCallTo(initializerOf("runtimeLifecycle"), "createSessionRuntimeLifecycle")).toBe(true);
+    expect(isCallTo(initializerOf("agentSocket"), "createHostAgentSocket")).toBe(true);
+    const shutdown = Symbol("agentSocket.shutdown");
+    expect(evaluate(initializerOf("shutdownAgentSocket"), { agentSocket: { shutdown } })).toBe(
+      shutdown,
+    );
+  });
+
+  it("builds the host core with desktop's quit stop policy", () => {
+    const hostCoreCall = initializerOf("hostCore");
+    expect(isCallTo(hostCoreCall, "createHostCore")).toBe(true);
+    expect(evaluate(objectProperty(argument(hostCoreCall, 1), "stopPolicy"), {})).toBe(
+      "desktop-quit",
+    );
+  });
+
+  it("hands createDesktopHostRuntime index's host, Session lifecycle and agent socket", async () => {
+    const f = liftedDesktopRuntime();
+    expect(f.createDesktopHostRuntimeSpy).toHaveBeenCalledOnce();
+    const options = f.createDesktopHostRuntimeSpy.mock.calls[0]?.[0];
+    expect(options?.host).toBe(f.scope["hostCore"]);
+    expect(options?.lifecycle).toBe(f.scope["runtimeLifecycle"]);
+
+    // start: host adopts the owner, which binds only the recovered services.
+    expect(await f.desktopRuntime.start()).toBe(f.proof);
+    expect(spy(f.scope, "hostCore.start")).toHaveBeenCalledOnce();
+    expect(spy(f.scope, "createSessionRpc")).toHaveBeenCalledExactlyOnceWith(f.proof);
+    expect(f.scope["sessionRpc"]).toBe(f.rpc);
+    expect(spy(f.scope, "runtimeSessionAgents.toolDoor")).toHaveBeenCalledWith(f.proof);
+
+    // stop: index's producers stop synchronously.
+    f.owner().stopProducers();
+    expect(f.scope["hostClosing"]).toBe(true);
+    expect(spy(f.scope, "runtimeAutomations.stop")).toHaveBeenCalledOnce();
+    expect(spy(f.scope, "runtimeSessionAgents.stop")).toHaveBeenCalledOnce();
+    expect(spy(f.scope, "ptyManagerRef.stopParkSweep")).toHaveBeenCalledOnce();
+
+    // close joins index's Session runtime lifecycle; the socket is index's.
+    await f.owner().close();
+    expect(spy(f.scope, "runtimeLifecycle.close")).toHaveBeenCalledOnce();
+    expect(spy(f.scope, "shutdownAgentSocket")).not.toHaveBeenCalled();
+    expect(await f.owner().closeSocket?.()).toBe(true);
+    expect(spy(f.scope, "shutdownAgentSocket")).toHaveBeenCalledOnce();
+  });
+
+  it("adds no shell or Automation waits to desktop's quit", async () => {
+    const f = liftedDesktopRuntime();
+    await f.desktopRuntime.start();
+    f.owner().stopProducers();
+    await Promise.all([f.owner().close(), f.owner().closeSocket?.()]);
+    expect(spy(f.scope, "backgroundShells.close")).not.toHaveBeenCalled();
+    expect(spy(f.scope, "runtimeAutomations.settled")).not.toHaveBeenCalled();
+  });
+});

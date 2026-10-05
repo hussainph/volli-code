@@ -6,6 +6,8 @@ import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { DbHandle } from "@volli/host-core";
+import type { DetachedWorkPort } from "@volli/host-core/detached-work";
+import type { HostMaintenance } from "@volli/host-core/maintenance-services";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
@@ -414,6 +416,8 @@ export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
     detectBaseBranch?: (projectPath: string) => Promise<string | null>;
+    detachedWork?: DetachedWorkPort;
+    maintenance?: Pick<HostMaintenance, "retention" | "triggerRetention">;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -514,6 +518,7 @@ export function registerDataIpcHandlers(
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
   const retentionWatcher = () =>
+    options.maintenance?.retention ??
     getRetentionWatcher(
       db,
       { events: windowEventBus, attention: { deliver: deliverNotification } },
@@ -588,6 +593,7 @@ export function registerDataIpcHandlers(
   const movePorts = () => ({
     worktree: worktreeDeps(db),
     now: () => Date.now(),
+    detachedWork: options.detachedWork,
     ...busySeam(),
     interruptTicketSessions: options.interruptTicketSessions,
     onDeliberateMove: options.onDeliberateMove,
@@ -1923,7 +1929,8 @@ export function registerDataIpcHandlers(
 
     "volli:retention-poll": (): RetentionPollResult => {
       // Fire-and-forget: the poll runs async and broadcasts on change itself.
-      retentionWatcher().triggerNow();
+      if (options.maintenance === undefined) retentionWatcher().triggerNow();
+      else options.maintenance.triggerRetention();
       return { ok: true };
     },
   };

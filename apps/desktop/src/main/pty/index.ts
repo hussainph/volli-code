@@ -3,4 +3,9 @@
 // This barrel is the adapter's public surface — import from "./pty" (or
 // "../pty"), not from "./pty/ipc" directly.
 
-export { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./ipc";
+export {
+  confirmDestructiveClose,
+  desktopPtyHost,
+  prepareTerminalQuit,
+  registerTerminalIpcHandlers,
+} from "./ipc";

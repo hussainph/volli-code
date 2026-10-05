@@ -6,8 +6,8 @@ import { piOwnedModelAccess, ALWAYS_ONLINE } from "@volli/agent-runtime";
 import {
   createHostCore,
   throwTransactionViolation,
-  type HostCore,
   type HostCorePorts,
+  type LiveHostCore,
 } from "../index";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "../ports";
 import { SecretStore } from "../secrets";
@@ -23,14 +23,19 @@ import * as browser from "../browser/agent-port";
 import type { BrowserBackend } from "../browser/backend";
 import { DEFAULT_CODE_MODE_POLICY } from "@volli/shared";
 
-let core: HostCore;
+let core: LiveHostCore | undefined;
 let root: string;
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  core?.sessionActivityWatch?.stop();
-  if (core?.database.ok) core.database.db.close();
+  await core?.stop("test teardown");
+  core = undefined;
   if (root) rmSync(root, { recursive: true, force: true });
 });
+
+function live(): LiveHostCore {
+  if (core === undefined) throw new Error("fixture() was not called");
+  return core;
+}
 
 async function fixture(): Promise<RuntimeAssemblyOptions> {
   root = mkdtempSync(join(tmpdir(), "volli-runtime-assembly-"));
@@ -43,14 +48,18 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
     listOpenNativeBindings: () => [],
     observeScheduledResume: vi.fn(),
   };
-  core = createHostCore(hostPorts, {
+  const models = piOwnedModelAccess({ agentDir: join(root, "pi-agent") });
+  await models.catalogReady;
+  const composed = createHostCore(hostPorts, {
     dataDir: root,
     onTransactionViolation: throwTransactionViolation,
     devDiagnostics: false,
+    processReaders: { liveSessionIds: () => [], openTerminalCwds: () => [] },
+    // The host's model access, so no Pi agent directory outside the fixture is read.
+    modelAccess: () => models,
   });
-  if (!core.database.ok) throw new Error(core.database.error);
-  const models = piOwnedModelAccess({ agentDir: join(root, "pi-agent") });
-  await models.catalogReady;
+  if (composed.kind !== "live") throw new Error(composed.database.error);
+  core = composed;
   vi.spyOn(pi, "createPiRuntimeHost").mockReturnValue({
     adapter: {
       id: "pi",
@@ -67,15 +76,15 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
     },
   });
   return {
-    dbHandle: core.database,
-    sessionEngine: core.sessionEngine,
+    dbHandle: composed.database,
+    sessionEngine: composed.sessionEngine,
     dataDir: root,
     binDir: join(root, "bin"),
     venue: { id: "test-host", kind: "remote" },
     hostPorts,
     modelAccess: models,
     decisions: null,
-    webAccess: core.runtimeServices.createWebAccess(),
+    webAccess: composed.runtimeServices.webAccess,
     mcpSettings: null,
     mcpDispatch: desktopMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
     codeMode: desktopCodeMode({
@@ -86,7 +95,7 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
       sandboxAvailable: false,
     }),
     observability: null,
-    delegation: createTicketSessionDelegationStore(core.database.db),
+    delegation: createTicketSessionDelegationStore(composed.database.db),
     secrets: new SecretService(
       new SecretStore(join(root, "secrets.enc"), {
         isEncryptionAvailable: () => false,
@@ -117,15 +126,15 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
 describe("runtime attachment assembly", () => {
   it("is synchronous and inert, and consumes the host's existing engine", async () => {
     const options = await fixture();
-    const read = vi.spyOn(core.sessionEngine!, "getSession");
-    const events = vi.spyOn(core.sessionEngine!, "listEvents");
+    const read = vi.spyOn(live().sessionEngine, "getSession");
+    const events = vi.spyOn(live().sessionEngine, "listEvents");
     const construct = vi.spyOn(runtime, "createDesktopSessionRuntime");
     const assembled = createRuntimeAssembly(options);
     expect(read).not.toHaveBeenCalled();
     expect(events).not.toHaveBeenCalled();
     expect(options.beforeExecution).not.toHaveBeenCalled();
     expect(construct).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEngine: core.sessionEngine }),
+      expect.objectContaining({ sessionEngine: live().sessionEngine }),
     );
     expect(assembled.sessionToolSurface?.resolve("subagent", [])).toEqual([
       "read",

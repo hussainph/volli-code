@@ -2546,14 +2546,14 @@ describe("warm park", () => {
 
   beforeEach(() => {
     parts = makeInspector();
-    parkManager = new PtyManager(
-      desktopPtyHost(),
-      testDb.db,
-      "",
-      fixtureSessionEngine,
-      parts.inspector,
-      ENABLED_CONFIG,
-    );
+    parkManager = new PtyManager({
+      host: desktopPtyHost(),
+      db: testDb.db,
+      dbError: "",
+      sessionEngine: fixtureSessionEngine,
+      inspector: parts.inspector,
+      parkConfig: ENABLED_CONFIG,
+    });
   });
 
   /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
@@ -2724,17 +2724,17 @@ describe("warm park", () => {
     });
 
     it("refuses even a manual park when parking is disabled", async () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyHost(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const sender = makeWebContents();
@@ -2940,17 +2940,17 @@ describe("warm park", () => {
 
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyHost(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       await disabled.create(asWc(makeWebContents()), {
@@ -3047,18 +3047,18 @@ describe("warm park", () => {
     });
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
-      const manager2 = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const manager2 = new PtyManager({
+        host: desktopPtyHost(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           idleThresholdMs: 0,
           quietSamplesRequired: 1,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const created = await manager2.create(asWc(makeWebContents()), {
@@ -3080,17 +3080,17 @@ describe("warm park", () => {
     });
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyHost(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       expect(() => {
         disabled.startParkSweep();
         disabled.stopParkSweep();

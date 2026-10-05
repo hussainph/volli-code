@@ -15,6 +15,13 @@ export default defineConfig({
       // in desktop's gate until this package covers every registry branch.
       include: [
         "src/index.ts",
+        // One lifecycle, its maintenance loops and detached-work join (VC-627).
+        "src/host-lifecycle.ts",
+        "src/host-shutdown.ts",
+        "src/maintenance-services.ts",
+        "src/detached-work.ts",
+        "src/automation-services.ts",
+        "src/agent-services.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",
         "src/blob-collect.ts",

@@ -1,12 +1,13 @@
 /** Private recovery staging; public tools and watches require recovered services. */
 import { errorMessage } from "@volli/shared";
-import type { HostCore } from "../index";
+import { isLiveHost, type HostCore } from "../index";
 import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { getComment } from "../db/comments-repo";
 import { actorSessionTicketDisplay } from "../agent-dispatch/resolution";
 import type { AgentToolDoor } from "../agent-tool-door";
+import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import type { Watches } from "../watches";
 import { createDelegations, type Delegations } from "./delegate-session";
 import type { TicketSessionDelegationStore } from "./delegation-store";
@@ -33,8 +34,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     automations: runtimeAutomations,
     mcpSettings,
   } = options;
-  const { sessionEngine, sessionWakeBus } = hostCore;
-  const sessionDb = hostCore.database.ok ? hostCore.database.db : null;
+  const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
+  const sessionEngine = liveHost?.sessionEngine ?? null;
+  const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
+  const sessionDb = liveHost?.database.db ?? null;
   const {
     sessions,
     runtime: sessionRuntime,
@@ -43,7 +46,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     transcriptArtifacts,
   } = options.services;
   let delegations: Delegations | null = null;
+  let unsubscribeDelegations: (() => void) | undefined;
+  let stopped = false;
   const delegationsFor = (): Delegations | null => {
+    if (stopped) return null;
     if (delegations !== null) return delegations;
     if (
       sessions === null ||
@@ -65,12 +71,12 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     delegations = created;
     if (sessionWakeBus !== null && sessionDelegation !== null) {
       const store = sessionDelegation;
-      sessionWakeBus.subscribe((wake) => {
+      unsubscribeDelegations = sessionWakeBus.subscribe((wake) => {
         const payload = wake.event.payload;
         if (payload.kind !== "turn.started" || created.watching(wake.event.sessionId)) return;
         const entry = store.subagentDelegation(wake.event.sessionId);
         if (entry === null) return;
-        void created
+        const work = created
           .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
           .catch((error: unknown) => {
             options.log.error(
@@ -78,23 +84,26 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
               errorMessage(error),
             );
           });
+        liveHost?.detachedWork.track(work);
       });
     }
     return delegations;
   };
   let watches: Watches | null = null;
   const watchesFor = (): Watches | null => {
+    if (stopped) return null;
     if (watches !== null) return watches;
     if (
+      liveHost === undefined ||
       sessionWakeBus === null ||
       sessionRuntime === null ||
-      sessionEngine === null ||
-      sessionDb === null
+      sessionEngine === null
     ) {
       return null;
     }
-    const db = sessionDb;
-    watches = hostCore.agentServices.createWatches({
+    const db = liveHost.database.db;
+    watches = createHostAgentWatches({
+      detachedWork: liveHost.detachedWork,
       subscribeSessionWake: (listener) => sessionWakeBus.subscribe(listener),
       runtime: sessionRuntime,
       sessionEngine,
@@ -112,36 +121,42 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     agentToolDoor =
       sessionDb === null || sessionDelegation === null
         ? null
-        : hostCore.agentServices.createToolDoor({
-            db: sessionDb,
-            projects: () => listProjects(sessionDb),
-            sessions: () => sessions,
-            delegation: sessionDelegation,
-            automations: () =>
-              runtimeAutomations.runner === null
-                ? null
-                : {
-                    list: (projectId) => listAutomationsForProject(sessionDb, projectId),
-                    run: (input) => runtimeAutomations.runner!.run(input),
-                  },
-            authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
-            watches: watchesFor,
-            supervise: () =>
-              sessionEngine !== null && sessionRuntime !== null
-                ? { sessionEngine, runtime: sessionRuntime }
-                : null,
-            delegate: delegationsFor,
-            mcp: () => mcpSettings,
-            ...(submitKickoffMessage === undefined
-              ? {}
-              : { submitSessionMessage: submitKickoffMessage }),
-            ...(autoTitler === null
-              ? {}
-              : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-            actorTicketDisplay: (ticketId) =>
-              actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
-            now: () => Date.now(),
-          });
+        : createHostAgentToolDoor(
+            { events: options.events },
+            {
+              db: sessionDb,
+              projects: () => listProjects(sessionDb),
+              sessions: () => sessions,
+              delegation: sessionDelegation,
+              automations: () => {
+                if (runtimeAutomations.kind === "degraded") return null;
+                const execution = runtimeAutomations.execution;
+                return execution.kind !== "ready"
+                  ? null
+                  : {
+                      list: (projectId) => listAutomationsForProject(sessionDb, projectId),
+                      run: (input) => execution.runner.run(input),
+                    };
+              },
+              authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+              watches: watchesFor,
+              supervise: () =>
+                sessionEngine !== null && sessionRuntime !== null
+                  ? { sessionEngine, runtime: sessionRuntime }
+                  : null,
+              delegate: delegationsFor,
+              mcp: () => mcpSettings,
+              ...(submitKickoffMessage === undefined
+                ? {}
+                : { submitSessionMessage: submitKickoffMessage }),
+              ...(autoTitler === null
+                ? {}
+                : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
+              actorTicketDisplay: (ticketId) =>
+                actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
+              now: () => Date.now(),
+            },
+          );
     return agentToolDoor;
   }
   return {
@@ -151,6 +166,12 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
       return host === null ? null : { recover: (unanswered) => host.recover(unanswered) };
     },
     toolDoor,
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      watches?.dispose();
+      unsubscribeDelegations?.();
+    },
   };
 }
 

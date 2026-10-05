@@ -89,4 +89,63 @@ describe("host shutdown", () => {
     );
     expect(mcp).toHaveBeenCalledOnce();
   });
+
+  it("still runs the MCP backstop for a degraded host with no Session owners", async () => {
+    const mcp = vi.mocked(closeAllMcpSessionHosts).mockImplementationOnce(async () => {});
+    mcp.mockClear();
+    const error = vi.fn();
+    await shutdownNativeSessions({
+      sessionWatchdog: null,
+      scheduledResumeHost: null,
+      shellHostNotices: null,
+      sessionRpc: null,
+      sessionRuntime: null,
+      agentObservability: null,
+      log: { error },
+    });
+    expect(mcp).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("reports each Session owner that fails to close, then still flushes", async () => {
+    const calls: string[] = [];
+    const error = vi.fn();
+    vi.mocked(closeAllMcpSessionHosts).mockImplementationOnce(async () => {
+      calls.push("mcp");
+    });
+    await shutdownNativeSessions({
+      sessionWatchdog: null,
+      scheduledResumeHost: null,
+      shellHostNotices: null,
+      sessionRpc: { close: () => Promise.reject(new Error("rpc")) },
+      sessionRuntime: { close: () => Promise.reject(new Error("runtime")) },
+      agentObservability: {
+        shutdown: async () => {
+          calls.push("flush");
+        },
+      },
+      log: { error },
+    });
+    expect(error.mock.calls).toEqual([
+      ["[volli] failed to close native Session RPC:", "rpc"],
+      ["[volli] failed to close native Session RPC:", "runtime"],
+    ]);
+    expect(calls).toEqual(["mcp", "flush"]);
+  });
+
+  it("hands a failed export flush to its caller, which reports the drain unclean", async () => {
+    vi.mocked(closeAllMcpSessionHosts).mockImplementationOnce(async () => {});
+    const failure = new Error("collector gone");
+    await expect(
+      shutdownNativeSessions({
+        sessionWatchdog: null,
+        scheduledResumeHost: null,
+        shellHostNotices: null,
+        sessionRpc: null,
+        sessionRuntime: null,
+        agentObservability: { shutdown: () => Promise.reject(failure) },
+        log: { error: vi.fn() },
+      }),
+    ).rejects.toBe(failure);
+  });
 });

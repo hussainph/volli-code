@@ -11,6 +11,10 @@
  * An hour between ticks, because the condition it waits for is measured in
  * days. Nothing here reacts to memory pressure as it happens; a person who
  * needs the memory back now presses Reap, and that is the faster path anyway.
+ *
+ * `stop()` only disarms the timers. A tick already asking the service reads
+ * the database and may record its reaps, so a host closing that database
+ * stops the watch and then awaits `settled()` (VC-627).
  */
 import { errorMessage } from "@volli/shared";
 
@@ -23,9 +27,15 @@ export const AUTO_REAP_FIRST_DELAY_MS = 5 * 60 * 1000;
 
 export interface AutoReapWatch {
   start(): void;
+  /** Disarms the timers. A tick already running is not interrupted: see `settled`. */
   stop(): void;
   /** One ask now, awaited. The timers call this; tests drive it directly. */
   tick(): Promise<void>;
+  /**
+   * Resolves once no tick is in flight — including one started while this
+   * waited. Never rejects and adds no delay of its own.
+   */
+  settled(): Promise<void>;
 }
 
 export interface AutoReapWatchOptions {
@@ -43,8 +53,10 @@ export function createAutoReapWatch(
   const log = options.log ?? ((line: string) => console.info(line));
   let interval: ReturnType<typeof setInterval> | null = null;
   let first: ReturnType<typeof setTimeout> | null = null;
+  /** Ticks still running, timer-fired and direct alike. */
+  const inFlight = new Set<Promise<void>>();
 
-  const tick = async (): Promise<void> => {
+  const ask = async (): Promise<void> => {
     try {
       const outcome = await service.autoReap();
       // Only a reap is worth a line: "declined, the setting is off" every hour
@@ -58,6 +70,18 @@ export function createAutoReapWatch(
       // it would have taken.
       log(`[orphan-processes] automatic sweep failed: ${errorMessage(error)}`);
     }
+  };
+
+  const tick = (): Promise<void> => {
+    const run = ask();
+    inFlight.add(run);
+    // Observed on both paths, so tracking never adds a rejection of its own:
+    // a tick that rejects still rejects to whoever called it, exactly as before.
+    const forget = (): void => {
+      inFlight.delete(run);
+    };
+    run.then(forget, forget);
+    return run;
   };
 
   return {
@@ -78,5 +102,8 @@ export function createAutoReapWatch(
       interval = null;
     },
     tick,
+    async settled() {
+      while (inFlight.size > 0) await Promise.allSettled(inFlight);
+    },
   };
 }

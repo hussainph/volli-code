@@ -118,17 +118,14 @@ beforeEach(async () => {
     worktreeDeps: (db) => worktreeDeps(db, { events }, { dataDir }),
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
   };
-  manager = new PtyManager(
+  manager = new PtyManager({
     host,
-    testDb.db,
-    "",
-    createTestSessionEngine(testDb.db),
-    undefined,
-    parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
-    null,
-    "",
-    ledger.ledger,
-  );
+    db: testDb.db,
+    dbError: "",
+    sessionEngine: createTestSessionEngine(testDb.db),
+    parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
+    spawnLedger: ledger.ledger,
+  });
 });
 
 afterEach(async () => {
