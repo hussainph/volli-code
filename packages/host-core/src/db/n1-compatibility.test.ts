@@ -21,8 +21,8 @@
  * and that stamp committed only to the WAL, uncheckpointed, as a crash leaves
  * it.
  *
- * N-1 is prepared by `scripts/n1/prepare.mjs` (the latest release tag, or the
- * pull request's base) and driven by `scripts/n1/child.mjs` in its own `node`
+ * N-1 is prepared by `scripts/n1/prepare.mjs` (the latest release tag, the
+ * latest canary tag, or the pull request's base) and driven by `scripts/n1/child.mjs` in its own `node`
  * process; the manifest it writes comes in as `VOLLI_N1_MANIFEST`. With no
  * manifest the suite skips: it runs in CI's `N-1 compatibility` lanes, not in
  * the package suite. To run it on a dev machine:
@@ -83,7 +83,25 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: string 
     release: "v0.2.1",
     bundle: "Data document is missing table workspace_epochs.",
   },
+  // v0.2.1-canary.7 (schema 57) has v0.2.1's database and backup modules
+  // byte for byte, so the same fault.
+  a3bb337904f389fb7e89a52852f8d764870e125a: {
+    release: "v0.2.1-canary.7",
+    bundle: "Data document is missing table workspace_epochs.",
+  },
 };
+
+/**
+ * What unblocks a floor raise that an unguarded N-1 holds back: a newer build
+ * of the same channel, carrying the guard, for this lane to run instead.
+ */
+function releasePolicyRemedy(ref: string): string {
+  const channel = /-canary\.\d+$/.test(ref) ? "canary" : "stable";
+  return (
+    `Cut a ${channel} release containing VC-602 (the downgrade guard) before landing a ` +
+    "`raisesMinReader` migration; see VC-644."
+  );
+}
 
 const HOOKS = new URL("../../scripts/n1/hooks.mjs", import.meta.url).href;
 const CHILD = new URL("../../scripts/n1/child.mjs", import.meta.url).pathname;
@@ -274,15 +292,16 @@ describe.skipIf(manifest === null)(
       if (guarded) return;
       // A build from before the downgrade guard opens anything, so the only
       // protection its users have is that no floor raise ships while it is the
-      // release they would drop back to. Cut a release from a main that has
-      // `schema-compatibility.ts` (VC-602) first; then this lane runs that
-      // release, and the refusal tests below hold it to the floor.
+      // release (or canary) they would drop back to. Cut one from a main that
+      // has `schema-compatibility.ts` (VC-602) first; then this lane runs it,
+      // and the refusal tests below hold it to the floor.
       const raises = MIGRATIONS.filter(
         (migration) => migration.raisesMinReader === true && migration.version > head,
       ).map((migration) => migration.version);
       expect(
         raises,
-        `${manifest!.ref} predates the downgrade guard and cannot refuse these floor raises`,
+        `${manifest!.ref} predates the downgrade guard and cannot refuse these floor raises. ` +
+          releasePolicyRemedy(manifest!.ref),
       ).toEqual([]);
     });
 

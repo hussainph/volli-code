@@ -366,15 +366,17 @@ until its remaining desktop dependencies move.
 - **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by
-  `scripts/n1/`): the newest `vX.Y.Z` release and the PR's base. N-1 must
+  `scripts/n1/`): the newest `vX.Y.Z` release, the newest `vX.Y.Z-canary.N`
+  canary (what a canary tester drops back to) and the PR's base. N-1 must
   open the profile, save and clear a credential, create and move a ticket,
   create a Session and make a bundle, and this build must read and back up
   what it left; or, when the floor is above N-1's head, N-1 must refuse with
-  the db and WAL byte-identical. A release from before the guard cannot
-  refuse, so no `raisesMinReader` migration may land while it is the latest
-  release. A shipped build's known fault is listed, by commit, in
+  the db and WAL byte-identical. A release or canary from before the guard
+  cannot refuse, so no `raisesMinReader` migration may land while it is the
+  latest of its channel: cut a release (or canary) containing VC-602 first. A shipped build's known fault is listed, by commit, in
   `KNOWN_HAZARDS` and asserted exactly. Run it locally with
-  `node scripts/n1/prepare.mjs --release --out ../../.scratch/n1`, then
+  `node scripts/n1/prepare.mjs --release --out ../../.scratch/n1` (or
+  `--canary`, or `--ref <commit>`), then
   `VOLLI_N1_MANIFEST=<printed path> vp test run src/db/n1-compatibility.test.ts`.
 - **Transaction ownership (VC-551).** No transaction spans an `await`. Use
   `withTransaction` / `settleTransaction` from `db/transaction-gate`.
