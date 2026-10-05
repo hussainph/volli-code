@@ -64,6 +64,11 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
+# /home, /root and /run/user are invisible. Nothing hostd or a Session uses
+# lives there: HOME, Pi's auth.json, the push key and the Ticket worktrees
+# (~/.volli/worktrees) are under /var/lib/volli-hostd, and project checkouts
+# go in /srv (docs/runbooks/hostd-box.md). Operators' tokens stay out of reach.
+ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
