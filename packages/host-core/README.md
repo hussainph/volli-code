@@ -211,7 +211,7 @@ retention and automatic reap), `secretStore`, lazy `terminals.manager` when a
 terminal port exists (otherwise an explicit unavailable variant), and `worktreeDeps`. A degraded host carries its classified failure, not nullable
 live services. Recovery remains available independently for that variant.
 Desktop still starts maintenance after first paint and triggers retention on
-focus; hostd readiness enablement lands separately. The retention watch is shared per database
+focus; hostd starts it at readiness. The retention watch is shared per database
 with IPC, retaining dismissal state and read-only behavior without reclaim seams.
 
 `host.stop` has one interface and two policies. Both disarm producers/maintenance,

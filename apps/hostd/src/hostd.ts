@@ -285,6 +285,8 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         );
         publish("serving");
         logger.info("serving", { socketPath, database: host.dbPath, capabilities });
+        // Retention and the automatic reap begin at readiness; the host's stop ends them.
+        host.maintenance.start();
         return;
       }
       const { error } = host.database;
