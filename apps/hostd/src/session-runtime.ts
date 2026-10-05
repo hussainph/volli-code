@@ -10,6 +10,7 @@ import {
 import {
   displayTicketId,
   errorMessage,
+  VOLLI_SOCKET_ENV,
   type SessionExecutionVenue,
   type TicketMovedNotice,
 } from "@volli/shared";
@@ -84,6 +85,8 @@ export function createHeadlessSessionRuntime(input: {
   ports: HostCorePorts;
   secrets: HeadlessSecrets;
   env: Readonly<Record<string, string | undefined>>;
+  /** The agent socket this host serves; every Session command is pointed at it. */
+  socketPath: string;
   options: HeadlessRuntimeOptions;
 }) {
   const { host, ports, env, options } = input;
@@ -152,8 +155,17 @@ export function createHeadlessSessionRuntime(input: {
     requestSecret: false,
     // systemd/launchd environment is operator-owned; no rc files are executed.
     beforeExecution: async () => {},
-    concurrencyEnvFor: async (sessionId) =>
-      concurrency({ excludeSessionId: sessionId, environment: env }),
+    // Every command a Session runs, through `execute` and background shells
+    // alike, is handed this record (VC-563). Beside the concurrency budget it
+    // names this host's socket: desktop bakes its socket into the generated
+    // `volli` shim, while the artifact's `bin/volli` is one launcher shared
+    // with operators and bakes nothing. Without it the agent's `volli` answers
+    // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
+    // The Session's identity is still composed after this, never from here.
+    concurrencyEnvFor: async (sessionId) => ({
+      ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
+      [VOLLI_SOCKET_ENV]: input.socketPath,
+    }),
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
       sessionEngine,
