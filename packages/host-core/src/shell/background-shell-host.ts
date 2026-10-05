@@ -282,6 +282,7 @@ class OutputRing {
 }
 
 interface ShellEntry {
+  cwd: string;
   owner: BackgroundShellOwner;
   record: RuntimeShellRecord;
   pid: number;
@@ -313,6 +314,8 @@ interface ShellEntry {
 
 export class BackgroundShellHost {
   private readonly shells = new Map<string, ShellEntry>();
+  /** Disposed attachments can still have a kill in flight; retain those processes until close. */
+  private readonly processes = new Set<ShellEntry>();
   private readonly createId: () => string;
   private readonly now: () => number;
   private readonly settleMs: number;
@@ -380,6 +383,11 @@ export class BackgroundShellHost {
     owner: BackgroundShellOwner,
     input: BackgroundShellStartInput,
   ): Promise<{ shell: RuntimeShellRecord; pid: number; output: string }> {
+    if (this.closing !== undefined)
+      throw new ShellRefusal(
+        "shell.closing",
+        "The host is stopping; no new background shell can start.",
+      );
     const live = this.ownedBy(owner.sessionId).filter((entry) => entry.record.state === "running");
     if (live.length >= SHELL_MAX_PER_SESSION) {
       throw new ShellRefusal(
@@ -480,6 +488,7 @@ export class BackgroundShellHost {
         record.signal = signal;
         record.exitedAt = this.now();
         if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
+        this.processes.delete(entry);
         if (this.shells.has(shellId)) {
           this.deps.publishState(this.stateOf(entry));
           stdout.finish();
@@ -507,6 +516,7 @@ export class BackgroundShellHost {
       child.once("error", () => settle(null, null));
     });
     const entry: ShellEntry = {
+      cwd: input.cwd,
       owner,
       record,
       pid,
@@ -519,6 +529,7 @@ export class BackgroundShellHost {
       returned: false,
     };
     this.shells.set(shellId, entry);
+    this.processes.add(entry);
     this.deps.publishState(this.stateOf(entry));
 
     await this.settle(entry);
@@ -706,6 +717,22 @@ export class BackgroundShellHost {
   }
 
   // ---- the renderer's doors: every shell, unscoped by Session -------------
+
+  /** Every running shell cwd, including shells between a turn and attachment cleanup. */
+  liveCwds(): string[] {
+    return [...this.processes].map((entry) => entry.cwd);
+  }
+
+  private closing: Promise<void> | undefined;
+  /** Headless shutdown joins the kills before the spawn ledger's database closes. */
+  close(): Promise<void> {
+    if (this.closing !== undefined) return this.closing;
+    const entries = [...new Set([...this.processes, ...this.shells.values()])];
+    for (const entry of entries) this.cancelExitNotice(entry);
+    this.shells.clear();
+    this.closing = Promise.all(entries.map((entry) => this.terminate(entry))).then(() => undefined);
+    return this.closing;
+  }
 
   listAll(): BackgroundShellState[] {
     return [...this.shells.values()].map((entry) => this.stateOf(entry));

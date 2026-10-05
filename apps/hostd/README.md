@@ -18,8 +18,8 @@ VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 | Capability    | State         | Arrives with                                                                                            |
 | ------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
 | `board`       | available     | The agent socket's verbs over the database: projects, tickets, comments, labels, conflicts, `identify`. |
-| `sessions`    | `unavailable` | VC-622. Session verbs answer `APP_UNREACHABLE`, as desktop's do when its runtime did not come up.       |
-| `automations` | `unavailable` | VC-622 (the scheduler starts Sessions).                                                                 |
+| `sessions`    | available     | Shared Pi runtime, recovered Session commands and operator-only CLI `session start` (VC-622).           |
+| `automations` | available     | Shared scheduler, armed arrivals and runner over the recovered Session facade (VC-622).                 |
 | `terminals`   | `unavailable` | The host protocol's terminal streams (VC-568). node-pty already ships and loads.                        |
 | `browser`     | `unavailable` | Standalone Chromium (VC-619).                                                                           |
 
@@ -31,14 +31,14 @@ VC-618; hostd wires them once they land.
 
 ## Ports
 
-| Port                                               | hostd passes                                                                          |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `events`                                           | Drops each broadcast (no client is connected before M2); logs the topic at `debug`.   |
-| `attention`                                        | `HEADLESS_ATTENTION` (every alert `unsupported`), plus an `info` line with its title. |
-| `power`, `connectivity`                            | `NO_POWER_EVENTS`, `ALWAYS_ONLINE`.                                                   |
-| `client`, `trash`                                  | Absent: host-core refuses those requests with its typed errors.                       |
-| `log`                                              | The JSON logger.                                                                      |
-| `listOpenNativeBindings`, `observeScheduledResume` | Nothing bound, nothing to resume (no runtime yet).                                    |
+| Port                                               | hostd passes                                                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `events`                                           | Drops each broadcast (no client is connected before M2); logs the topic at `debug`.              |
+| `attention`                                        | `HEADLESS_ATTENTION` (every alert `unsupported`), plus an `info` line with its title.            |
+| `power`, `connectivity`                            | `NO_POWER_EVENTS`, `ALWAYS_ONLINE`.                                                              |
+| `client`, `trash`                                  | Absent: host-core refuses those requests with its typed errors.                                  |
+| `log`                                              | The JSON logger.                                                                                 |
+| `listOpenNativeBindings`, `observeScheduledResume` | The shared runtime's bindings and scheduled-resume observer, scoped to this host's remote venue. |
 
 Policy: `onTransactionViolation: throwTransactionViolation` (VC-551: nobody
 watches a server's log while a bug corrupts a transaction) and
@@ -95,6 +95,32 @@ In order; each refusal is logged as one JSON line and exits **78**
    verb answers `DB_UNAVAILABLE` with the reason, and the status file carries
    the typed `databaseFailure`. That includes a database from a newer Volli
    (VC-602), which is left byte-identical.
+7. **Session recovery**, before commands or `serving`: the shared assembly,
+   facade and lifecycle reconcile this socket's remote venue, recover
+   delegations and notices, then start Automations. Other hosts' and desktop's
+   attachments are not closed by this host. A failed runtime startup settles
+   waiting requests with `APP_UNREACHABLE`, drains what opened and exits 1.
+
+## Session environment and model credentials
+
+Sessions get the service's explicit `PATH`, with the artifact's `bin` first
+(the shipped Node and `volli` CLI). hostd executes no login-shell rc files.
+Provision project tools on that PATH in the systemd/launchd environment.
+Model credentials belong to Pi: `PI_CODING_AGENT_DIR`, or `$HOME/.pi/agent`.
+They are separate from Volli's sealed Session environment secrets and must
+belong to the service user. A missing model or credential is a structured
+start refusal, not a silent terminal fallback.
+
+The frozen headless tool surface omits `ask_user`, `request_secret` and all
+browser tools: there is no client to answer their cards and no browser port.
+Background shells, MCP, Code Mode, Web Access and delegation use the shared
+host services. Busy-worktree evidence includes active turns and every live
+background-shell cwd, including a shell still terminating after detach; an
+unreadable activity projection refuses automatic trim rather than deleting.
+
+Locked/refused/corrupt saved secrets still permit secret-independent Sessions.
+Their unavailable Session environment is reported in health; required named
+secret lookup remains VC-642's service boundary, not a new hostd secret store.
 
 ## Operators
 
@@ -111,6 +137,7 @@ sudo usermod -aG volli alice                     # reach the socket; log in agai
 export VOLLI_SOCKET=/run/volli-hostd.sock        # as alice
 volli project add ~/code/acme [--name Acme] [--dry-run]
 volli ticket create --title "Fix auth" --project AC
+volli session start AC-1 -m "Fix auth" --model anthropic/claude-opus-4-6
 sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next request
 ```
 
@@ -139,6 +166,8 @@ sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next r
   actor the app's own writes carry, and governed by each project's `user`
   policy. `project add` is the person's verb alone: no Session may run it,
   whatever a policy grants (`docs/plans/host-identity.md`, "Operator token").
+  `session start` is likewise operator-only on the CLI: ordinary and
+  Session-token callers retain `WRONG_DOOR`; the bound agent tool door is unchanged.
 - **Revocation needs no restart.** hostd reads the operators file again for
   every request that presents a token, so `--revoke` (or deleting the line)
   holds from the next request. Reissuing replaces the old token.
@@ -230,10 +259,13 @@ The host protocol (VC-564) carries the same facts to remote clients.
 `SIGTERM` or `SIGINT`:
 
 1. Status `stopping`.
-2. Close the agent socket: refuse new connections and wait up to its 10 s
-   request timeout for the requests in flight.
-3. Wait up to 10 s more for any execution still running. One that outlives
-   that is abandoned and logged, and the stop is not clean.
+2. Refuse new commands, stop Automation/resume/watchdog producers and durable
+   notice delivery; drain the shared Session runtime and background shells,
+   then the MCP backstop and observability flush. Shell admission closes at
+   drain, and every kill joins before SQLite closes.
+3. Close the agent socket, waiting up to its 10 s request timeout for requests
+   in flight, then wait up to 10 s for any execution still running. One that
+   outlives that is abandoned and logged, and the stop is not clean.
 4. Stop the Session activity watch's flush timer.
 5. `PRAGMA wal_checkpoint(TRUNCATE)`, then close the database. The WAL is
    folded in and removed.
@@ -285,6 +317,7 @@ volli-hostd-<version>-linux-x64/
                         and pure-JS dependencies, bundled by `vp pack`
   lib/volli.cjs         the CLI bundle (packages/cli)
   lib/probe-natives.cjs loads and exercises every native under bin/node
+  lib/probe-codemode.mjs executes the shipped sandbox worker and QuickJS wasm
   lib/node_modules/     `pnpm deploy --prod` of this package, from the lockfile
   share/systemd/volli-hostd.{service,socket}
   share/launchd/com.volli.hostd.plist
@@ -296,6 +329,9 @@ jsdom. Everything else is a devDependency and bundled. `pnpm deploy --prod
 --config.node-linker=hoisted` installs the externals flat, at the lockfile's
 exact versions, and runs their install scripts on the build machine. Other
 platforms' prebuilds are pruned; the probe then proves nothing needed went.
+Code Mode's published worker package and `quickjs-wasi` are copied from the
+lockfile-resolved install into `lib/node_modules`; the main bundle names their
+worker/wasm paths explicitly and refuses an artifact missing either.
 
 ### Natives (linux-x64)
 
@@ -340,8 +376,15 @@ login, which registers a project and creates a ticket with the bundled CLI; a
 token-less caller and a Session-token caller are refused; the `volli` account
 can neither read the token nor run `operator-token`; revocation holds at once.
 
+The build container also runs `session-runtime.integration.test.ts`: with
+only the provider wire scripted, the built CLI starts a Session over the real
+socket, its real `write` tool creates a file, `turn.completed` arrives and the
+CLI reads the completed answer. No in-process `startSessionOperation` shortcut
+counts as that proof.
+
 The boot check unpacks the archive in a fresh container with no checkout and
-no system Node on `PATH`, probes the natives, boots against an empty data
+no system Node on `PATH`, probes the natives, executes a Code Mode host call
+through the shipped worker and wasm, boots against an empty data
 directory, waits for `status` to report `serving`, lists projects through the
 socket with the bundled CLI, sends `SIGTERM`, requires exit 0, status
 `not-serving` (stopped), no socket and no WAL left, `PRAGMA integrity_check` =
