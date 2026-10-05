@@ -107,7 +107,11 @@ In order; each refusal is logged as one JSON line and exits **78**
 ## Session environment and model credentials
 
 Sessions get the service's explicit `PATH`, with the artifact's `bin` first
-(the shipped Node and `volli` CLI). hostd executes no login-shell rc files.
+(the shipped Node and `volli` CLI), and `VOLLI_SOCKET` naming this host's
+agent socket (the `--socket` path), so the agent's `volli` (`session done`,
+board moves) reaches the host that runs it (VC-563). Desktop bakes its socket
+into a generated shim instead; the artifact's `bin/volli` is shared with
+operators and bakes nothing. hostd executes no login-shell rc files.
 Provision project tools on that PATH in the systemd/launchd environment.
 Model credentials belong to Pi: `PI_CODING_AGENT_DIR`, or `$HOME/.pi/agent`.
 They are separate from Volli's sealed Session environment secrets and must
@@ -308,7 +312,7 @@ fields. `console.*` from host-core is routed through the same logger.
 carries a key, a secret or a request payload.
 
 ```sh
-journalctl -u volli-hostd -o cat | jq -r '[.ts, .level, .msg] | @tsv'
+journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
 ```
 
 ## Packaging
@@ -404,6 +408,17 @@ socket, its real `write` tool creates a file, `turn.completed` arrives and the
 CLI reads the completed answer. No in-process `startSessionOperation` shortcut
 counts as that proof.
 
+Its M1 smoke (VC-563) is the box demo's journey on the source boot's runtime
+paths: an operator token registers a repository whose `origin` is a local bare
+remote (`volli project add`), creates a Ticket and starts a Session over the
+built CLI. The client that started it hangs up (its whole process group, as an
+SSH drop would) while the turn runs; the agent writes a file, commits and
+pushes from its Ticket worktree under `~/.volli/worktrees`, and runs
+`volli session done` from inside the Session. The test asserts the pushed ref
+on the bare remote, each ledger command's receipt, the done signal, one
+completed turn and a fresh CLI's answer. Beside it, `node apps/hostd/dist/hostd.cjs`
+boots, serves and stops clean.
+
 The boot check unpacks the archive in a fresh container with no checkout and
 no system Node on `PATH`, probes the natives, executes a Code Mode host call
 through the shipped worker and wasm, boots against an empty data
@@ -411,6 +426,23 @@ directory, waits for `status` to report `serving`, lists projects through the
 socket with the bundled CLI, sends `SIGTERM`, requires exit 0, status
 `not-serving` (stopped), no socket and no WAL left, `PRAGMA integrity_check` =
 `ok`, and that every log line is JSON.
+
+## Running from source
+
+For development, from the repository root after `pnpm install`:
+
+```sh
+pnpm --filter @volli/hostd --filter @volli/cli run build
+(umask 077 && node apps/hostd/dist/hostd.cjs --data-dir .tmp/hostd-dev)
+VOLLI_SOCKET=.tmp/hostd-dev/volli.sock node packages/cli/dist/volli.cjs project list
+```
+
+A workspace build finds Code Mode's sandbox through the installed
+`@volli/agent-runtime`, as desktop's unpackaged build does, and puts
+`apps/hostd/dev-bin` (a `volli` launcher for the workspace CLI bundle, run by
+the `node` on `PATH`) first on its Sessions' `PATH`
+(`src/runtime-paths.ts`). The integration test boots exactly this. The box
+runbook (`docs/runbooks/hostd-box.md`) uses the artifact.
 
 ## Running under systemd
 
@@ -445,7 +477,10 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
   of service, not disclosure).
 - **`RestartPreventExitStatus=78`**: a boot refusal waits for the operator.
 - **Hardening** that leaves git, Node, node-pty and a shell working:
-  `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`, the
+  `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=full`,
+  `ProtectHome=yes` (the service's `HOME`, and so its worktrees under
+  `~/.volli/worktrees`, is the data directory; project checkouts belong in
+  `/srv`, never under `/home`), the
   kernel and control-group protections, an empty `CapabilityBoundingSet=`,
   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
   `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
@@ -458,12 +493,12 @@ is gone for good), set them aside and start over, with hostd stopped and the
 unit's `VOLLI_SECRET_KEY_FILE` in the environment:
 
 ```sh
-sudo systemctl stop volli-hostd
+sudo systemctl stop volli-hostd.socket volli-hostd   # the socket too, or a CLI call restarts it
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd          # says what it found
 sudo -u volli env VOLLI_SECRET_KEY_FILE=... /opt/volli-hostd/bin/volli-hostd \
   credentials reset --data-dir /var/lib/volli-hostd --yes    # sets it aside
-sudo systemctl start volli-hostd
+sudo systemctl start volli-hostd.socket volli-hostd
 ```
 
 It refuses a data directory boot would refuse (another user's, or writable by

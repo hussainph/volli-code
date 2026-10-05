@@ -258,6 +258,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           secrets,
           env: options.env,
           version: options.version,
+          socketPath,
           // An address locates this host; only its persisted identity names
           // ownership. Override packaged/source runtime path metadata alike.
           options: { ...runtimeOptions, venue: hostdVenue(host.database.db) },
