@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
-import { sessionProcedureSchemas } from "./index";
+import { hostSignInUpdateSchema, sessionProcedureSchemas } from "./index";
 import {
   attentionSchema,
   eventSchema,
@@ -34,10 +34,16 @@ function vocabulary(node: Node): string {
 }
 
 describe("explicit tolerant-read output unions", () => {
-  const open = [eventSchema.shape.payload, streamEmissionWireSchema.options[1].shape.delta];
+  const open = [
+    eventSchema.shape.payload,
+    streamEmissionWireSchema.options[1].shape.delta,
+    // A sign-in flow's updates (VC-702): a Client ignores a kind it does not
+    // know, and `done`, `failed` and `cancelled` stay the only ends.
+    hostSignInUpdateSchema,
+  ];
 
-  it("marks only payload kind and overlay op; receipt status and attention kind stay closed", () => {
-    const expectedDiscriminators = ["kind", "op"];
+  it("marks only payload kind, overlay op and sign-in update kind; receipt status and attention kind stay closed", () => {
+    const expectedDiscriminators = ["kind", "op", "kind"];
     expect(markedUnions(z.toJSONSchema(receiptSchema))).toEqual([]);
     expect(markedUnions(z.toJSONSchema(attentionSchema))).toEqual([]);
     open.forEach((schema, index) => {
@@ -60,9 +66,9 @@ describe("explicit tolerant-read output unions", () => {
     expect(markedUnions(stopped)).toEqual([]);
   });
 
-  it("publishes only these two vocabularies on outputs, never on inputs", () => {
+  it("publishes only these three vocabularies on outputs, never on inputs", () => {
     const expected = new Set(open.map((schema) => vocabulary(z.toJSONSchema(schema))));
-    expect(expected.size).toBe(2);
+    expect(expected.size).toBe(3);
     const found = new Set<string>();
     for (const procedure of Object.values(sessionProcedureSchemas())) {
       expect(markedUnions(z.toJSONSchema(procedure.input, { io: "input" }))).toEqual([]);

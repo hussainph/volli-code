@@ -20,6 +20,9 @@ describe("what hostd offers", () => {
       "sessions.subscribe",
       "sessions.history",
       "session.read",
+      // Sign-ins on this host and the relay's delivery (VC-702).
+      "sign-ins",
+      "auth.callback",
     ]);
   });
 });

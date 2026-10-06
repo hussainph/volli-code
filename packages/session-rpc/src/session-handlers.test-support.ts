@@ -31,6 +31,7 @@ import type {
   SessionCreateResult,
   SessionRouterContext,
   SessionRouterHandlers,
+  SignInRouterHandlers,
 } from "./index";
 import type { SessionStartResult } from "@volli/session-engine";
 
@@ -66,6 +67,8 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
     workspaceId: string,
     args: Record<string, unknown>,
   ) => Promise<AgentResponse>;
+  /** Sign-ins on a host (VC-702), handler by handler; an absent one answers unavailable. */
+  signIns?: Partial<SignInRouterHandlers>;
 }
 
 function need<Port>(port: Port | undefined, message: string): Port {
@@ -79,6 +82,26 @@ const MODEL_ACCESS = "Model Access is unavailable on this transport";
 const PREFERENCES = "Model Access preferences are unavailable on this transport";
 const RUNTIME = "The Session runtime is unavailable on this host";
 const SESSION_READS = "Session reads are unavailable on this transport";
+const SIGN_INS = "Sign-ins are unavailable on this host";
+
+/** Each sign-in handler the test stated, or one that answers unavailable. */
+function signInHandlersFrom(stated: Partial<SignInRouterHandlers> = {}): SignInRouterHandlers {
+  const unavailable = (): never => {
+    throw new OperationUnavailableError(SIGN_INS);
+  };
+  return {
+    "signIns.status": stated["signIns.status"] ?? unavailable,
+    "signIns.setApiKey": stated["signIns.setApiKey"] ?? unavailable,
+    "signIns.signOut": stated["signIns.signOut"] ?? unavailable,
+    "signIns.start": stated["signIns.start"] ?? unavailable,
+    "signIns.subscribe": stated["signIns.subscribe"] ?? (async () => unavailable()),
+    "signIns.answer": stated["signIns.answer"] ?? unavailable,
+    "signIns.cancel": stated["signIns.cancel"] ?? unavailable,
+    "signIns.setGitCredential": stated["signIns.setGitCredential"] ?? unavailable,
+    "signIns.clearGitCredential": stated["signIns.clearGitCredential"] ?? unavailable,
+    "auth.callback.deliver": stated["auth.callback.deliver"] ?? unavailable,
+  };
+}
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof SessionRouterContext>) {
@@ -88,6 +111,7 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
     return (bound as (...args: never[]) => unknown).bind(ports.runtime) as SessionRuntime[Method];
   };
   const handlers: SessionRouterHandlers = {
+    ...signInHandlersFrom(ports.signIns),
     "sessions.create": (input) => need(ports.createSession, SESSIONS)(input),
     "sessions.attach": (input) => need(ports.attachSession, SESSIONS)(input),
     "settings.experiments": () => need(ports.readExperiments, EXPERIMENTS)(),

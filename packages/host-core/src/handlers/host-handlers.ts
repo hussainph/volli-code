@@ -49,7 +49,16 @@ import {
   type ExperimentSnapshot,
   type HandlerCall,
   type HiddenModelRef,
+  type HostAuthCallbackDeliverInput,
+  type HostAuthCallbackDeliverResult,
   type HostHandler,
+  type HostSetApiKeyInput,
+  type HostSetGitCredentialInput,
+  type HostSignInAnswerInput,
+  type HostSignInFlow,
+  type HostSignInStartInput,
+  type HostSignInStatus,
+  type HostSignInUpdate,
   type HostHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -61,6 +70,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import type { HostSignIns } from "../host-sign-ins";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
@@ -189,6 +199,19 @@ export interface HostHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  readonly "signIns.status": HostHandler<void, HostSignInStatus>;
+  readonly "signIns.setApiKey": HostHandler<HostSetApiKeyInput, HostSignInStatus>;
+  readonly "signIns.signOut": HostHandler<{ providerId: string }, HostSignInStatus>;
+  readonly "signIns.start": HostHandler<HostSignInStartInput, HostSignInFlow>;
+  readonly "signIns.subscribe": HostSubscriptionHandler<HostSignInFlow, HostSignInUpdate>;
+  readonly "signIns.answer": HostHandler<HostSignInAnswerInput, void>;
+  readonly "signIns.cancel": HostHandler<HostSignInFlow, void>;
+  readonly "signIns.setGitCredential": HostHandler<HostSetGitCredentialInput, HostSignInStatus>;
+  readonly "signIns.clearGitCredential": HostHandler<{ host: string }, HostSignInStatus>;
+  readonly "auth.callback.deliver": HostHandler<
+    HostAuthCallbackDeliverInput,
+    HostAuthCallbackDeliverResult
+  >;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -264,6 +287,12 @@ export interface HostHandlerOptions {
    * passes a forwarder.
    */
   readonly sessionReads?: SessionReadPort | null;
+  /**
+   * Sign-ins on a host (VC-702), or null where no network door serves them
+   * (the desktop, whose window signs in over its own IPC): they answer
+   * unavailable.
+   */
+  readonly signIns?: HostSignIns | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -274,6 +303,7 @@ const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport"
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
+const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
@@ -310,6 +340,7 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
+  const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
 
   return {
     "ticket.move": (input, call) => {
@@ -437,5 +468,15 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    "signIns.status": () => signIns().status(),
+    "signIns.setApiKey": (input) => signIns().setApiKey(input),
+    "signIns.signOut": (input) => signIns().signOut(input),
+    "signIns.start": (input, call) => signIns().start(input, call),
+    "signIns.subscribe": async (input, call, sink) => signIns().subscribe(input, call, sink),
+    "signIns.answer": (input, call) => signIns().answer(input, call),
+    "signIns.cancel": (input, call) => signIns().cancel(input, call),
+    "signIns.setGitCredential": (input) => signIns().setGitCredential(input),
+    "signIns.clearGitCredential": (input) => signIns().clearGitCredential(input),
+    "auth.callback.deliver": (input, call) => signIns().deliverCallback(input, call),
   };
 }

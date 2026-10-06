@@ -14,8 +14,9 @@
  * - **What it serves.** The Session router's commands, its stream and the
  *   socket's Session reads, from the host's one handler map (VC-668) under
  *   the router's policy: the same handlers the agent socket answers through.
- *   `model-access` is not offered yet: VC-572 decides its policy for a
- *   paired device.
+ *   Sign-ins on this host (`sign-ins`, and the relay's `auth.callback`,
+ *   VC-702): person-only. `model-access` itself is not offered yet: the
+ *   rest of VC-572 decides its policy for a paired device.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
@@ -59,6 +60,8 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.subscribe",
   "sessions.history",
   "session.read",
+  "sign-ins",
+  "auth.callback",
 ];
 
 /** Whether the `cloud` flag is on for this host: the environment's opt-in list. */

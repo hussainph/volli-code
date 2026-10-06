@@ -6,6 +6,7 @@ import {
   hostErrorOf,
   LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
+  type ProcedurePaths,
   type RpcProcedurePerformanceObserver,
   type SessionRouterHandlers,
 } from "@volli/session-rpc";
@@ -38,12 +39,9 @@ import type {
  * Widened, every namespace has to be spoken for below: routed, deliberately
  * withheld, or declared missing.
  */
-type RouterProcedures = ReturnType<typeof createSessionRouter>["_def"]["procedures"];
-type SessionRouterProcedure = {
-  [
-    Namespace in keyof RouterProcedures & string
-  ]: `${Namespace}.${keyof RouterProcedures[Namespace] & string}`;
-}[keyof RouterProcedures & string];
+type SessionRouterProcedure = ProcedurePaths<
+  ReturnType<typeof createSessionRouter>["_def"]["record"]
+>;
 
 /**
  * Pins the shared allow-list to procedures the router actually publishes.
@@ -92,6 +90,18 @@ type DeliberatelyWebSocketOnlyProcedure = PublishedProcedure<
   | "session.peek"
   | "session.answer"
   | "session.subscribeQueue"
+  // Sign-ins on a remote host (VC-702): a connection owns its flows, and the
+  // desktop's own window signs in over its own Model Access IPC.
+  | "signIns.status"
+  | "signIns.setApiKey"
+  | "signIns.signOut"
+  | "signIns.start"
+  | "signIns.subscribe"
+  | "signIns.answer"
+  | "signIns.cancel"
+  | "signIns.setGitCredential"
+  | "signIns.clearGitCredential"
+  | "auth.callback.deliver"
 >;
 
 /**

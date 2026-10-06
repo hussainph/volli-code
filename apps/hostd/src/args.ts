@@ -6,6 +6,7 @@ import { HostdBootError } from "./boot-error";
 import type { CredentialsResetCommand } from "./credentials";
 import { parseListen, type HostProtocolBind } from "./host-protocol";
 import type { DatabaseRestoreCommand } from "./database";
+import type { GitCredentialCommand } from "./git-credential";
 import type { OperatorTokenCommand } from "./operator-token";
 import { DEFAULT_OPERATORS_FILE } from "./operators";
 
@@ -28,6 +29,9 @@ export const USAGE = `Usage:
   volli-hostd operator-token --for <login>         As root: issue <login> an operator
   volli-hostd operator-token --revoke <login>      token, or revoke it. [--operators
                                                    <file>] [--service-user <name>]
+  volli-hostd git-credential --data-dir <dir> <get|store|erase>
+                                                   Volli's git credential helper, run by
+                                                   git inside a Session; not for people.
   volli-hostd --version | --help
 
 The agent socket defaults to <dir>/volli.sock, mode 600. Under systemd socket
@@ -55,6 +59,7 @@ export type HostdCommand =
   | CredentialsResetCommand
   | DatabaseRestoreCommand
   | OperatorTokenCommand
+  | GitCredentialCommand
   | { kind: "help" }
   | { kind: "version" };
 
@@ -65,6 +70,7 @@ export function defaultSocketPath(dataDir: string): string {
 
 /** Parses argv (without node and the script). Relative paths resolve against `cwd`. */
 export function parseHostdArgs(argv: readonly string[], cwd: string): HostdCommand {
+  if (argv[0] === "git-credential") return gitCredentialCommand(argv.slice(1), cwd);
   let parsed: ReturnType<typeof parse>;
   try {
     parsed = parse(argv);
@@ -223,4 +229,30 @@ function parse(argv: readonly string[]) {
       version: { type: "boolean", short: "v" },
     },
   });
+}
+
+/**
+ * `git-credential --data-dir <dir> <action>`: git appends the action after
+ * the configured command, so it is the one positional, wherever it falls.
+ */
+function gitCredentialCommand(argv: readonly string[], cwd: string): GitCredentialCommand {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: [...argv],
+      options: { "data-dir": { type: "string" } },
+      allowPositionals: true,
+      strict: true,
+    });
+  } catch (error) {
+    throw new HostdBootError("usage", (error as Error).message);
+  }
+  const dataDir = parsed.values["data-dir"];
+  if (dataDir === undefined || dataDir.length === 0) {
+    throw new HostdBootError("usage", "git-credential needs --data-dir <dir>.");
+  }
+  if (parsed.positionals.length !== 1) {
+    throw new HostdBootError("usage", "git-credential takes one action: get, store or erase.");
+  }
+  return { kind: "git-credential", dataDir: resolve(cwd, dataDir), action: parsed.positionals[0]! };
 }

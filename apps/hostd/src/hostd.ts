@@ -61,6 +61,7 @@ import type { HostCredentialVerifier } from "@volli/host-protocol";
 import type { HostProtocolListener } from "@volli/session-rpc/websocket";
 
 import { cloudEnabled, startHostdProtocolListener, type HostProtocolBind } from "./host-protocol";
+import { shellWord } from "@volli/host-core/session-runtime";
 import {
   createHeadlessSessionRuntime,
   headlessModelAccess,
@@ -119,6 +120,12 @@ export interface HostdOptions {
    */
   readonly hostProtocolVerifier?: HostCredentialVerifier;
   readonly runtime?: HeadlessRuntimeOptions;
+  /**
+   * Volli's git credential helper command (VC-702). A test seam: by default
+   * it is this very program, `git-credential --data-dir <dir>`. Installed in
+   * every Session command's environment only with the `cloud` flag on.
+   */
+  readonly gitCredentialHelper?: string;
   readonly now?: () => Date;
   /**
    * How long a stop waits, after the socket has closed, for requests still
@@ -293,7 +300,13 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           socketPath,
           // An address locates this host; only its persisted identity names
           // ownership. Override packaged/source runtime path metadata alike.
-          options: { ...runtimeOptions, venue },
+          options: {
+            ...runtimeOptions,
+            venue,
+            gitCredentialHelper: cloud
+              ? (options.gitCredentialHelper ?? defaultGitCredentialHelper(dataDir))
+              : null,
+          },
         });
         const { handlers, automationsAvailable, serveSessionReads, ...sessionPorts } =
           await sessionRuntime.ready();
@@ -571,4 +584,14 @@ function prepareDataDir(dataDir: string, logger: HostdLogger): void {
       },
     );
   }
+}
+
+/**
+ * This program as git's `credential.helper`: `!<node> [<node flags>] <script>
+ * git-credential --data-dir <dir>`, each word shell-quoted. Packaged, that is
+ * the bundled Node running `lib/hostd/hostd.cjs`.
+ */
+export function defaultGitCredentialHelper(dataDir: string): string {
+  const program = [process.execPath, ...process.execArgv, process.argv[1] ?? ""];
+  return `!${[...program, "git-credential", "--data-dir", dataDir].map(shellWord).join(" ")}`;
 }
