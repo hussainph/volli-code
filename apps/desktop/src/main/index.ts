@@ -94,6 +94,8 @@ import {
 import { isInternalNavigationTarget } from "./navigation";
 import {
   applyQuietAppPolicy,
+  hideDockForMenuBar,
+  showDockAfterMenuBar,
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
@@ -133,6 +135,7 @@ import {
   createSessionConcurrencyEnvReader,
   type SessionConcurrencyEnvReader,
   createSessionTokenRegistry,
+  NO_LIVE_WORK,
 } from "@volli/host-core/sessions";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
@@ -203,9 +206,12 @@ import { piSignIn } from "@volli/agent-runtime";
 import {
   ExperimentalSettings,
   installExperimentalSettings,
+  isExperimentEnabled,
   readExperiments,
   setExperiment,
 } from "./experiments";
+import { createMenuBarHost, type MenuBarHost } from "./menu-bar-host";
+import { confirmMenuBarQuit, electronMenuBarPower, electronMenuBarTray } from "./menu-bar-electron";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -224,7 +230,7 @@ import {
   windowEventBus,
 } from "./broadcast";
 import { subscribeTicketWake } from "@volli/host-core/board";
-import { registerUpdateIpcHandlers } from "./update-ipc";
+import { installDownloadedUpdate, registerUpdateIpcHandlers } from "./update-ipc";
 import {
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
@@ -346,10 +352,20 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+/**
+ * Brings a window back for a launch that found none (VC-577). Bound once the
+ * window factory exists; until then a second launch has nothing to open.
+ */
+let revealWindowForLaunch: (() => void) | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
     const mainWindow = BrowserWindow.getAllWindows()[0];
-    if (!mainWindow) return;
+    if (!mainWindow) {
+      // Flag off: today's early return. Flag on: a menu-bar host (or one whose
+      // every window was closed) answers a second launch with a window.
+      if (isExperimentEnabled("cloud")) revealWindowForLaunch?.();
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     revealWindow(mainWindow, nativeWindowPolicy);
     sealQuietAppActivation(app, nativeWindowPolicy);
@@ -1054,8 +1070,16 @@ const appStartup = app.whenReady().then(async () => {
     redactOutput: (text) => secrets.store.redact(text),
     redactNoticeOutput: (text) => secrets.store.redactPartial(text),
     onNotice: (notice) => relayShellNotice?.(notice),
-    publishState: (started) => publishBackgroundShellEvent({ shell: started }),
-    publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
+    // The host's live work counts running shells (VC-577) off the same feed
+    // the renderer gets, so the two can never disagree about one shell.
+    publishState: (started) => {
+      liveHost?.liveWork.observeShell(started);
+      publishBackgroundShellEvent({ shell: started });
+    },
+    publishRemoved: (removedShellId) => {
+      liveHost?.liveWork.forgetShell(removedShellId);
+      publishBackgroundShellEvent({ removedShellId });
+    },
     // One row per started shell (VC-341). A background shell is the door a
     // model most often uses to start a dev server, and the one whose child can
     // outlive both the Session and this launch.
@@ -1441,14 +1465,21 @@ const appStartup = app.whenReady().then(async () => {
   let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let abortRepack = noQuitAction;
   let hostClosing = false;
+  /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
+  let menuBarHost: MenuBarHost | null = null;
   const prepareHostQuit = (event: { preventDefault(): void }) => {
-    // Preserve the former listener order, including the two unconditional
-    // stops on a refused attempt. Only the quit trigger is registered.
+    // Flag off: the former listener order, including the two unconditional
+    // stops on a refused attempt. Only the quit trigger is registered. Flag
+    // on: the menu-bar branch decides after the confirms, and a host already
+    // stopping is never offered it.
     prepareDesktopQuit(event, {
       stopAutomations: runtimeAutomations.stop,
       unsavedQuit,
       terminalQuit,
       abortRepack,
+      ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
+        ? { menuBar: menuBarHost }
+        : {}),
     });
   };
   const runtimeLifecycle = createSessionRuntimeLifecycle({
@@ -1966,7 +1997,11 @@ const appStartup = app.whenReady().then(async () => {
   // the app alive), and the renderer collects the parked target as it
   // subscribes. Bound here because this is where the factory exists.
   notifications.bindWindowOpener(() => {
-    if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
+    // Through the menu-bar host once it exists, so a click on a windowless
+    // host also brings the Dock icon back (VC-577). Outside menu-bar mode its
+    // reveal is exactly this line's former body.
+    if (menuBarHost !== null) menuBarHost.reveal();
+    else if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
   });
   const mainWindow = createOwnedWindow();
   const transcriptRepackAbort = new AbortController();
@@ -2107,7 +2142,11 @@ const appStartup = app.whenReady().then(async () => {
     currentVersion: app.getVersion(),
     notify: (request) => notifications.deliver(request),
     log: (line) => console.info(line),
-    onStateChange: broadcastUpdateState,
+    onStateChange: (state) => {
+      broadcastUpdateState(state);
+      // The Tray's "Install Update When Idle" follows the staged update.
+      menuBarHost?.refresh();
+    },
     // The double-notify guard: with a window open the sidebar badge/dialog
     // owns the "downloaded" announcement; the native notification only speaks
     // when no window is left to show it (macOS keeps the app alive).
@@ -2146,6 +2185,71 @@ const appStartup = app.whenReady().then(async () => {
         }
       : undefined,
   });
+
+  // Menu-bar mode (VC-577, D-A2 (b)): with the `cloud` flag on, ⌘Q over live
+  // host work keeps this process running as the Mac's host, windowless and
+  // Dock-less, with a Tray. Built for every launch so reopening goes through
+  // one door; with the flag off nothing ever enters the mode, and its reveal
+  // is exactly "open a window if none exists".
+  const menuBar = createMenuBarHost({
+    // Read from the host, never a renderer. A degraded host runs nothing.
+    liveWork: liveHost?.liveWork ?? { current: () => NO_LIVE_WORK, subscribe: () => () => {} },
+    windows: {
+      count: () => BrowserWindow.getAllWindows().length,
+      // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
+      // confirms already answered, and a window `close` would ask again.
+      closeAll: () => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) window.destroy();
+        }
+      },
+      open: () => {
+        createOwnedWindow();
+      },
+    },
+    dock: {
+      hide: () => hideDockForMenuBar(app, nativeWindowPolicy),
+      show: () => showDockAfterMenuBar(app, nativeWindowPolicy),
+    },
+    tray: electronMenuBarTray((item) => {
+      if (item === "open") menuBar.reveal({ focus: true });
+      else if (item === "quit") menuBar.quitFromTray();
+      else if (item === "install-when-idle") menuBar.toggleInstallWhenIdle();
+    }),
+    power: electronMenuBarPower(),
+    update: {
+      ready: () => autoUpdate.state().phase === "downloaded",
+      installInFlight: updateInstallQuitInFlight,
+      install: () => {
+        const started = installDownloadedUpdate({
+          update: autoUpdate,
+          beginInstall: beginAcceptedUpdateInstall,
+          abandonInstall: abandonAcceptedUpdateInstall,
+        });
+        if (!started.ok) console.error("[menu-bar] update install failed:", started.error);
+        return started.ok;
+      },
+    },
+    confirmQuit: confirmMenuBarQuit,
+    quit: () => app.quit(),
+    focusApp: () => {
+      if (!nativeWindowPolicy.enabled) app.focus({ steal: true });
+    },
+  });
+  menuBarHost = menuBar;
+  revealWindowForLaunch = () => menuBar.reveal({ focus: true });
+  // The menu-bar smokes' seam (`e2e/menu-bar-*-smoke.mjs`): a CI runner has no
+  // model to keep a turn live, so the mechanics smoke enters the mode through
+  // the controller itself. Two locks, as with the browser host above: an
+  // unpackaged build AND the smoke's own flag — never a door on a release.
+  if (isDev && process.env["VOLLI_SMOKE_MENU_BAR_HOST"] === "1") {
+    (globalThis as { volliMenuBarHost?: MenuBarHost }).volliMenuBarHost = menuBar;
+  }
+  // Logout, restart and shutdown (`NSWorkspaceWillPowerOffNotification`)
+  // arrive here BEFORE macOS asks the app to quit: the quit that follows must
+  // not be refused, or Volli would cancel the person's logout. Never
+  // preventDefault: that would delay the system instead.
+  powerMonitor.on("shutdown", () => menuBar.noteSystemShutdown());
 
   let shimPath = join(runtimePaths.binDir, "volli");
 
@@ -2658,9 +2762,11 @@ const appStartup = app.whenReady().then(async () => {
 
   app.on("activate", () => {
     // On macOS it's common to re-create a window when the dock icon is
-    // clicked and there are no other windows open.
+    // clicked and there are no other windows open. A menu-bar host (VC-577)
+    // also leaves menu-bar mode and shows its Dock icon again; otherwise the
+    // reveal is exactly this re-creation.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createOwnedWindow();
+      menuBar.reveal();
     }
   });
 });

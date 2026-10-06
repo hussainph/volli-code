@@ -95,6 +95,41 @@ describe("desktop host adapter", () => {
     }
   });
 
+  it("flag on: confirms first, then menu-bar or quit, and a refusal stops nothing (VC-577)", () => {
+    for (const [refused, branch, want] of [
+      [true, "menu-bar", ["draft.gate"]],
+      [false, "menu-bar", ["draft.gate", "terminal.kill", "menu-bar.enter"]],
+      [false, "quit", ["draft.gate", "terminal.kill", "automations.stop", "repack.abort"]],
+    ] as const) {
+      const calls: string[] = [];
+      const event = { preventDefault: vi.fn() };
+      prepareDesktopQuit(event, {
+        stopAutomations: () => {
+          calls.push("automations.stop");
+        },
+        unsavedQuit: (attempt) => {
+          calls.push("draft.gate");
+          if (refused) refuseQuit(attempt);
+        },
+        terminalQuit: (attempt) => {
+          if (!quitAlreadyRefused(attempt)) calls.push("terminal.kill");
+        },
+        abortRepack: () => {
+          calls.push("repack.abort");
+        },
+        menuBar: {
+          branch: () => branch,
+          enter: () => {
+            calls.push("menu-bar.enter");
+          },
+        },
+      });
+      expect(calls).toEqual(want);
+      // Menu-bar entry refuses through refuseQuit, so listeners behind it stand down.
+      expect(quitAlreadyRefused(event)).toBe(refused || branch === "menu-bar");
+    }
+  });
+
   it("a throwing synchronous gate cannot strand the already-prevented quit", async () => {
     const trigger = Promise.withResolvers<(event: { preventDefault(): void }) => void>();
     const exited = Promise.withResolvers<number>();

@@ -158,7 +158,11 @@ type QuitEvent = { preventDefault(): void };
  * index.ts later assigns it, and the accepted-quit hold registered through the
  * Session runtime lifecycle's `installQuitHold`. Each gate's own port records.
  */
-function liftedQuitPath(options: { declineUnsaved: boolean }) {
+function liftedQuitPath(options: {
+  declineUnsaved: boolean;
+  cloud?: boolean;
+  menuBar?: { branch(): "quit" | "menu-bar"; enter(): void } | null;
+}) {
   const calls: string[] = [];
   const listeners: Array<(event: QuitEvent) => void> = [];
   const exited = Promise.withResolvers<number>();
@@ -184,6 +188,12 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
       },
     },
     updateInstallQuitInFlight: () => false,
+    isExperimentEnabled: (id: string) => {
+      expect(id).toBe("cloud");
+      return options.cloud === true;
+    },
+    menuBarHost: options.menuBar ?? null,
+    hostClosing: false,
     unsavedDocumentNames: () => ["draft.md"],
     process: { env: {} },
     confirmDiscardUnsaved: (names: readonly string[], verb: string) => {
@@ -234,6 +244,15 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
   scope["terminalQuit"] = evaluate(assignmentTo("terminalQuit"), scope);
   scope["abortRepack"] = evaluate(assignmentTo("abortRepack"), scope);
   return { calls, listeners, exited: exited.promise, hostCore, scope };
+}
+
+function menuBarFake(branch: "quit" | "menu-bar", calls: string[]) {
+  return {
+    branch: vi.fn(() => branch),
+    enter: vi.fn(() => {
+      calls.push("menu-bar.enter");
+    }),
+  };
 }
 
 describe("index.ts quit wiring", () => {
@@ -295,7 +314,151 @@ describe("index.ts quit wiring", () => {
     expect(quit.calls).toEqual(["automations.stop"]);
     expect(late).toEqual(["unsavedQuit", "terminalQuit", "abortRepack"]);
   });
+
+  it("flag off: a built menu-bar host is never asked, and the quit is today's", async () => {
+    const calls: string[] = [];
+    const menuBar = menuBarFake("menu-bar", calls);
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: false, menuBar });
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    expect(quit.calls.slice(0, 4)).toEqual([
+      "automations.stop",
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "repack.abort",
+    ]);
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(await quit.exited).toBe(0);
+  });
+
+  it("flag on, live work: the confirms run, then menu-bar mode — no Automation stop, no host stop", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls);
+    quit.scope["menuBarHost"] = menuBar;
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "menu-bar.enter",
+    ]);
+    expect(quitAlreadyRefused(event)).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(quit.hostCore.stop).not.toHaveBeenCalled();
+  });
+
+  it("flag on, no live work: today's quit with the two stops behind the decision", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    quit.scope["menuBarHost"] = menuBarFake("quit", quit.calls);
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    expect(quit.calls.slice(0, 4)).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "automations.stop",
+      "repack.abort",
+    ]);
+    expect(await quit.exited).toBe(0);
+  });
+
+  it("flag on, but the host is already stopping: never offered menu-bar mode", () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls);
+    quit.scope["menuBarHost"] = menuBar;
+    quit.scope["hostClosing"] = true;
+    (quit.scope["prepareHostQuit"] as (event: QuitEvent) => void)({ preventDefault: vi.fn() });
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(quit.calls[0]).toBe("automations.stop");
+  });
 });
+
+/** index.ts's one `app.on("<event>", listener)` listener, as source. */
+function appListener(event: string): AstNode {
+  const call = exactlyOne(
+    nodesWhere((node) => {
+      if (node.type !== "CallExpression") return false;
+      const callee = node["callee"];
+      if (!isNode(callee) || callee.type !== "MemberExpression") return false;
+      if (!isIdentifierNamed(callee["object"], "app")) return false;
+      if (!isIdentifierNamed(callee["property"], "on")) return false;
+      const first = (node["arguments"] as unknown[])[0];
+      return isNode(first) && first.type === "Literal" && first["value"] === event;
+    }),
+    `app.on("${event}", …) listener`,
+  );
+  return argument(call, 1);
+}
+
+function windowsFake(count: number) {
+  const restore = vi.fn();
+  const focus = vi.fn();
+  const all = Array.from({ length: count }, () => ({
+    isMinimized: () => false,
+    restore,
+    focus,
+  }));
+  return { BrowserWindow: { getAllWindows: () => all }, restore, focus };
+}
+
+describe("index.ts window-return wiring (VC-577)", () => {
+  it("activate with no window reveals through the menu-bar host; with one, does nothing", () => {
+    const reveal = vi.fn();
+    const listener = evaluate<() => void>(appListener("activate"), {
+      ...windowsFake(0),
+      menuBar: { reveal },
+    });
+    listener();
+    expect(reveal).toHaveBeenCalledExactlyOnceWith();
+    const busy = vi.fn();
+    evaluate<() => void>(appListener("activate"), {
+      ...windowsFake(1),
+      menuBar: { reveal: busy },
+    })();
+    expect(busy).not.toHaveBeenCalled();
+  });
+
+  it("second-instance with no window: today's early return with the flag off, a reveal with it on", () => {
+    for (const cloud of [false, true]) {
+      const reveal = vi.fn();
+      const listener = evaluate<() => void>(appListener("second-instance"), {
+        ...windowsFake(0),
+        isExperimentEnabled: () => cloud,
+        revealWindowForLaunch: reveal,
+      });
+      listener();
+      expect(reveal).toHaveBeenCalledTimes(cloud ? 1 : 0);
+    }
+  });
+
+  it("a notification click with no window reveals through the menu-bar host once it exists", () => {
+    const opener = argument(exactlyOne(callsToMember("bindWindowOpener"), "bindWindowOpener"), 0);
+    const reveal = vi.fn();
+    const createOwnedWindow = vi.fn();
+    evaluate<() => void>(opener, {
+      ...windowsFake(0),
+      menuBarHost: { reveal },
+      createOwnedWindow,
+    })();
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(createOwnedWindow).not.toHaveBeenCalled();
+    // Before the host exists (boot), exactly the former body.
+    evaluate<() => void>(opener, { ...windowsFake(0), menuBarHost: null, createOwnedWindow })();
+    expect(createOwnedWindow).toHaveBeenCalledOnce();
+    evaluate<() => void>(opener, { ...windowsFake(1), menuBarHost: null, createOwnedWindow })();
+    expect(createOwnedWindow).toHaveBeenCalledOnce();
+  });
+});
+
+/** Calls to `<anything>.<name>(…)`. */
+function callsToMember(name: string): AstNode[] {
+  return nodesWhere((node) => {
+    if (node.type !== "CallExpression") return false;
+    const callee = node["callee"];
+    return (
+      isNode(callee) &&
+      callee.type === "MemberExpression" &&
+      isIdentifierNamed(callee["property"], name)
+    );
+  });
+}
 
 /** The recorded `vi.fn` at `binding` or `binding.member` in a lifted scope. */
 function spy(scope: Record<string, unknown>, path: string) {

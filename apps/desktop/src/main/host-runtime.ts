@@ -1,5 +1,6 @@
 /** Desktop's actual host edge, shared by boot and recorded-port composition tests. */
 import type { HostCore } from "@volli/host-core";
+import { quitAlreadyRefused, refuseQuit } from "./quit-gate";
 import type {
   RecoveredSessionServices,
   SessionRuntimeLifecycle,
@@ -30,7 +31,28 @@ export function createDesktopHostRuntime<Services>(options: {
   };
 }
 
-/** Former synchronous listeners, in their original order even on a refused quit. */
+/**
+ * The menu-bar branch's two seams (VC-577), present only with the `cloud`
+ * flag on. `branch` is asked after the destructive-work confirms have
+ * answered; `enter` runs only for an attempt they did not refuse.
+ */
+export interface MenuBarQuitPort {
+  branch(): "quit" | "menu-bar";
+  enter(): void;
+}
+
+/**
+ * Former synchronous listeners.
+ *
+ * **Flag off (`menuBar` absent): today's order, byte for byte** — including
+ * the two unconditional stops (Automations, repack) on a refused attempt.
+ *
+ * **Flag on:** the confirms run first and unchanged; a refused attempt then
+ * stops nothing. An accepted one either enters menu-bar mode — refused
+ * through {@link refuseQuit}, so the coordinator and every listener behind it
+ * stand down, and Automations keep running — or takes the same quit, with the
+ * two stops moved behind the decision.
+ */
 export function prepareDesktopQuit(
   event: { preventDefault(): void },
   ports: {
@@ -38,10 +60,25 @@ export function prepareDesktopQuit(
     unsavedQuit(event: { preventDefault(): void }): void;
     terminalQuit(event: { preventDefault(): void }): void;
     abortRepack(): void;
+    menuBar?: MenuBarQuitPort;
   },
 ): void {
-  ports.stopAutomations();
+  const menuBar = ports.menuBar;
+  if (menuBar === undefined) {
+    ports.stopAutomations();
+    ports.unsavedQuit(event);
+    ports.terminalQuit(event);
+    ports.abortRepack();
+    return;
+  }
   ports.unsavedQuit(event);
   ports.terminalQuit(event);
+  if (quitAlreadyRefused(event)) return;
+  if (menuBar.branch() === "menu-bar") {
+    refuseQuit(event);
+    menuBar.enter();
+    return;
+  }
+  ports.stopAutomations();
   ports.abortRepack();
 }

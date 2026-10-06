@@ -652,6 +652,9 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/host-runtime.ts",
+        // Menu-bar mode's whole decision and lifecycle (VC-577).
+        "**/src/main/menu-bar-host.ts",
+        "**/src/main/menu-bar-electron.ts",
         // When the web keys' sealed mirror reconciles, and that an accepted quit
         // stops it before it can start keychain work (VC-643). Every branch is
         // a rule about teardown nobody watches.

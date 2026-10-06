@@ -44,6 +44,34 @@ export interface UpdateIpcDeps {
   };
 }
 
+/**
+ * The accepted install, shared by the sidebar's dialog and the menu-bar
+ * Tray's "Install Update When Idle" (VC-577). Order is the whole point: the
+ * latch must be up before `quitAndInstall()` starts closing windows
+ * (Electron's native updater closes them all, then quits, and `before-quit`
+ * comes after the window `close` events — every gate on that path checks the
+ * latch). Phase is re-read here, never trusted from a caller: a stray request
+ * with nothing staged must not raise a latch that lets the next ordinary ⌘Q
+ * bypass every confirm.
+ */
+export function installDownloadedUpdate(
+  deps: Pick<UpdateIpcDeps, "update" | "beginInstall" | "abandonInstall">,
+): { ok: true } | { ok: false; error: string } {
+  if (deps.update.state().phase !== "downloaded") {
+    return { ok: false, error: "No update has been downloaded yet." };
+  }
+  deps.beginInstall();
+  try {
+    deps.update.quitAndInstall();
+  } catch (error) {
+    // The app is staying up after all — lower the latch or the next
+    // plain quit runs gateless over live work.
+    deps.abandonInstall();
+    return { ok: false, error: errorMessage(error) };
+  }
+  return { ok: true };
+}
+
 export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
   registerGuardedIpcHandlers(UPDATE_IPC, {
     "volli:update-state-get": () => ({ ok: true as const, state: deps.update.state() }),
@@ -56,30 +84,8 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
       return { ok: true as const };
     },
 
-    /**
-     * The confirmed install — the ONE prompt's accept. Order is the whole
-     * point: the latch must be up before `quitAndInstall()` starts closing
-     * windows (Electron's native updater closes them all, then quits, and
-     * `before-quit` comes after the window `close` events — every gate on
-     * that path checks the latch). Phase is re-read here, not trusted from
-     * the renderer: a stray invoke with nothing staged must not raise a
-     * latch that lets the next ordinary ⌘Q bypass every confirm.
-     */
-    "volli:update-install": () => {
-      if (deps.update.state().phase !== "downloaded") {
-        return { ok: false as const, error: "No update has been downloaded yet." };
-      }
-      deps.beginInstall();
-      try {
-        deps.update.quitAndInstall();
-      } catch (error) {
-        // The app is staying up after all — lower the latch or the next
-        // plain quit runs gateless over live work.
-        deps.abandonInstall();
-        return { ok: false as const, error: errorMessage(error) };
-      }
-      return { ok: true as const };
-    },
+    /** The confirmed install — the ONE prompt's accept. See {@link installDownloadedUpdate}. */
+    "volli:update-install": () => installDownloadedUpdate(deps),
 
     "volli:update-live-work": async () => ({
       ok: true as const,
