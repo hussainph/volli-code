@@ -332,6 +332,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Which host held authority over each workspace at each epoch. The counter must never restart, or a restored workspace could reissue an epoch the old host already used.",
   },
   {
+    table: "board_command_receipts",
+    decision: "exclude",
+    reason:
+      "Short-lived retry receipts for board commands, keyed to Clients of this host. A restore is a new host whose Clients resnapshot, so no retry crosses it.",
+  },
+  {
     table: "host_identity",
     decision: "exclude",
     reason:

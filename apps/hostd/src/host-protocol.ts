@@ -17,22 +17,28 @@
  *   (VC-623) is a long-lived bearer and is never accepted here. VC-575
  *   (pairing), VC-577 (the same-machine bootstrap) and a hosted control
  *   plane each plug a verifier into the same port.
- * - **What it serves.** The Session router's commands, its stream and the
- *   socket's Session reads, from the host's one handler map (VC-668) under
- *   the router's policy: the same handlers the agent socket answers through.
- *   Sign-ins on this host (`sign-ins`, and the relay's `auth.callback`,
- *   VC-702): person-only. `model-access` itself is not offered yet: the
- *   rest of VC-572 decides its policy for a paired device.
+ * - **What it serves.** The composed host router (VC-565): the Session
+ *   router's commands, its stream and the socket's Session reads, and the
+ *   board's reads, writes and change feed, all from the host's one handler map
+ *   (VC-668) under the router's policy: the same handlers the agent socket
+ *   answers through. Sign-ins on this host (`sign-ins`, and the relay's
+ *   `auth.callback`, VC-702): person-only. `model-access` itself is not
+ *   offered yet: the rest of VC-572 decides its policy for a paired device.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
-import { getProjectById, prepared } from "@volli/host-core/db";
+import {
+  boardResourceWorkspace,
+  createBoardChangeFeed,
+  type BoardChangeFeed,
+} from "@volli/host-core/board";
+import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import {
-  createSessionRouter,
+  createHostRouter,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
   type WorkspaceResource,
@@ -64,6 +70,8 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.subscribe",
   "sessions.history",
   "session.read",
+  "board.read",
+  "board.write",
   "sign-ins",
   "auth.callback",
 ];
@@ -155,6 +163,46 @@ export function sessionWorkspace(
       : null;
 }
 
+/**
+ * Every family's resource port in one (VC-565): a Session's Workspace from its
+ * ledger, a ticket's, comment's or label's from the board. The kinds are
+ * disjoint across families (`HostRouterResourceKindsDisjoint`), so each kind
+ * has exactly one answer.
+ */
+export function hostResourceWorkspace(
+  db: Database.Database,
+  sessionEngine: Pick<SessionEngine, "getSession">,
+): (resource: WorkspaceResource) => Promise<string | null> {
+  const sessions = sessionWorkspace(sessionEngine);
+  const board = boardResourceWorkspace(db);
+  return async (resource) =>
+    resource.kind === SESSION_RESOURCE ? sessions(resource) : board(resource);
+}
+
+/**
+ * hostd's board change feeds (VC-565), one per Workspace it serves: its
+ * handlers stamp their rows, and its bus feeds every other writer's
+ * `data-changed`. Made before the database opens (the bus exists first), so
+ * it reads the database through `db`, and answers nothing until it is open.
+ * A Workspace's epoch is the one its welcome names.
+ */
+export function hostdBoardFeed(db: () => Database.Database | undefined): BoardChangeFeed {
+  return createBoardChangeFeed({
+    epochOf: (workspaceId) => {
+      const open = db();
+      return open === undefined ? 0 : (servedWorkspace(open, workspaceId)?.epoch ?? 0);
+    },
+    projectOfTicket: (ticketId) => {
+      const open = db();
+      return open === undefined ? undefined : getTicketRow(open, ticketId)?.project_id;
+    },
+    workspaces: () => {
+      const open = db();
+      return open === undefined ? [] : listProjects(open).map(({ id }) => id);
+    },
+  });
+}
+
 /** What the listener needs from the composed host. */
 export interface HostdProtocolPorts {
   readonly db: Database.Database;
@@ -190,7 +238,7 @@ export function startHostdProtocolListener(
   const diagnostics = new RpcDiagnosticLog();
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
-    router: createSessionRouter(),
+    router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
     features: HOSTD_FEATURES,
@@ -200,7 +248,7 @@ export function startHostdProtocolListener(
     context: () => ({
       handlers,
       diagnostics,
-      resourceWorkspace: sessionWorkspace(sessionEngine),
+      resourceWorkspace: hostResourceWorkspace(db, sessionEngine),
     }),
     log: (event) => logListenerEvent(logger, event),
   });

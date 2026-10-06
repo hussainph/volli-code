@@ -33,6 +33,7 @@ import {
   TRPCError,
   type AnyProcedure,
   type AnyRouter,
+  type TRPCDefaultErrorShape,
   type TRPCCreateRouterOptions,
 } from "@trpc/server";
 import {
@@ -670,6 +671,30 @@ function recordProcedurePerformance(
   });
 }
 
+/**
+ * The one error envelope every catalog router answers with: the code, the
+ * sanitized message, and `data.hostError`. One function for every family, so
+ * the families compose into one served router (`host-router.ts`).
+ */
+export function catalogErrorFormatter({
+  shape,
+  error,
+}: {
+  shape: TRPCDefaultErrorShape;
+  error: TRPCError;
+}) {
+  return {
+    code: shape.code,
+    message: sanitizeDiagnosticText(shape.message),
+    data: {
+      code: shape.data.code,
+      httpStatus: shape.data.httpStatus,
+      ...(shape.data.path === undefined ? {} : { path: shape.data.path }),
+      hostError: hostErrorOf(error),
+    },
+  };
+}
+
 /** How one family of builders is configured. */
 export interface CatalogBuildersOptions<Entry extends VerbEntry> {
   /**
@@ -719,16 +744,7 @@ export function createCatalogBuilders<
   const t = initTRPC.context<Ctx>().create({
     // Never ship a stack, whatever NODE_ENV says.
     isDev: false,
-    errorFormatter: ({ shape, error }) => ({
-      code: shape.code,
-      message: sanitizeDiagnosticText(shape.message),
-      data: {
-        code: shape.data.code,
-        httpStatus: shape.data.httpStatus,
-        ...(shape.data.path === undefined ? {} : { path: shape.data.path }),
-        hostError: hostErrorOf(error),
-      },
-    }),
+    errorFormatter: catalogErrorFormatter,
   });
 
   /**

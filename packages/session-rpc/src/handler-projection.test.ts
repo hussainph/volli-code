@@ -20,7 +20,12 @@ import {
 } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { createBoardRouter, TICKET_RESOURCE, type BoardRouterContextPorts } from "./board-router";
+import {
+  createBoardRouter,
+  TICKET_RESOURCE,
+  type BoardRouterContextPorts,
+  type BoardRouterHandlersCoverage,
+} from "./board-router";
 import {
   createCatalogBuilders,
   handlerCallOf,
@@ -47,6 +52,7 @@ import {
 
 const SESSION = { sessionId: "session-1" };
 const PROJECT = "project-1";
+const COMMAND = "00000000-0000-4000-8000-000000000001";
 
 /** One valid input per served procedure path, both tiers. */
 const SAMPLE_INPUTS: {
@@ -106,6 +112,37 @@ const SAMPLE_INPUTS: {
   "signIns.setGitCredential": { host: "github.com", username: "x", password: "token" },
   "signIns.clearGitCredential": { host: "github.com" },
   "auth.callback.deliver": { flowId: "flow-1", pathAndQuery: "/callback?code=c&state=s" },
+  "board.snapshot": { projectId: PROJECT },
+  "board.roster": { projectId: PROJECT },
+  "board.changes": { projectId: PROJECT },
+  "board.projectFolder": { projectId: PROJECT },
+  "board.ticketBody": { ticketId: "ticket-1" },
+  "board.archivedTickets": { projectId: PROJECT },
+  "board.ticketEvents": { ticketId: "ticket-1" },
+  "board.latestSignals": { projectId: PROJECT },
+  "board.statusEntries": { projectId: PROJECT },
+  "board.comments": { ticketId: "ticket-1" },
+  "board.updateProject": { commandId: COMMAND, projectId: PROJECT, baseBranch: null },
+  "board.setSkillModes": { commandId: COMMAND, projectId: PROJECT, modes: {} },
+  "board.setSessionDefaults": { commandId: COMMAND, projectId: PROJECT, model: null },
+  "board.createTicket": { commandId: COMMAND, projectId: PROJECT, status: "todo", title: "T" },
+  "board.moveTickets": {
+    commandId: COMMAND,
+    projectId: PROJECT,
+    ticketIds: ["ticket-1"],
+    toStatus: "done",
+    toIndex: 0,
+  },
+  "board.setPriority": { commandId: COMMAND, ticketId: "ticket-1", priority: "high" },
+  "board.updateTicket": { commandId: COMMAND, ticketId: "ticket-1", title: "T" },
+  "board.setLabels": { commandId: COMMAND, ticketId: "ticket-1", labels: ["ui"] },
+  "board.archiveTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.unarchiveTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.deleteTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.createComment": { commandId: COMMAND, ticketId: "ticket-1", body: "hi" },
+  "board.updateComment": { commandId: COMMAND, commentId: "comment-1", body: "hi" },
+  "board.removeComment": { commandId: COMMAND, commentId: "comment-1" },
+  "board.setLabelColor": { commandId: COMMAND, labelId: "label-1", color: null },
 };
 
 class Reached extends Error {}
@@ -159,6 +196,7 @@ describe("every router procedure projects its own handler (VC-668)", () => {
     expectTypeOf<BoardRouterContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<ExampleAreaContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<SessionRouterHandlersCoverage>().toEqualTypeOf<never>();
+    expectTypeOf<BoardRouterHandlersCoverage>().toEqualTypeOf<never>();
     expectTypeOf<DesktopRouterContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<DesktopRouterHandlersCoverage>().toEqualTypeOf<never>();
   });
@@ -169,7 +207,7 @@ describe("every router procedure projects its own handler (VC-668)", () => {
     // Both tiers (D-A1 = (c)): a desktop-only key is projected by the
     // desktop router exactly as a public key is by its area's.
     const caller =
-      key === "ticket.move"
+      key === "ticket.move" || key.startsWith("board.")
         ? callers.board
         : (DESKTOP_HANDLER_KEYS as readonly string[]).includes(key)
           ? callers.desktop
@@ -300,11 +338,11 @@ describe("the board router's ticket.move", () => {
       resourceWorkspace: (resource) =>
         resource.kind === TICKET_RESOURCE && resource.id === "ticket-1" ? WORKSPACE : null,
       handlers: {
-        "ticket.move": (input, call) => {
+        "ticket.move": (input: unknown, call: HandlerCall) => {
           calls.push({ input, call });
           return [{ id: "ticket-0", status: "todo", order: 0 } as Ticket, moved];
         },
-      },
+      } as never,
     });
     return { router, calls };
   }
