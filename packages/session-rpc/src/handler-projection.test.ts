@@ -61,6 +61,7 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
   "session.snapshot": SESSION,
   "session.projection": SESSION,
   "session.subscribe": SESSION,
+  "session.subscribeQueue": SESSION,
   "session.command": {
     commandId: "command-1",
     ...SESSION,

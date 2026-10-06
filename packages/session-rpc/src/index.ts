@@ -86,6 +86,7 @@ import {
   sessionProjectionOutputSchema,
   sessionSnapshotOutputSchema,
   streamEmissionSchema,
+  legacyStreamEmissionSchema,
   uiMessageWireSchema,
 } from "./output-schema";
 export {
@@ -303,6 +304,7 @@ export interface SessionRouterHandlers {
       fail(error: unknown): void;
     },
   ) => Promise<() => void>;
+  readonly "session.subscribeQueue": SessionRouterHandlers["session.subscribe"];
   readonly "session.command": HostHandler<
     SessionRuntimeCommandRequest,
     SessionRuntimeCommandResult
@@ -806,36 +808,6 @@ const commandSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-// Queue mutations have public output validation; they do not return executor identity.
-const queueMutationResultSchema = z.object({
-  sessionId: nonEmptyString,
-  receipt: z
-    .discriminatedUnion("status", [
-      z.object({
-        status: z.literal("completed"),
-        result: z.object({ kind: nonEmptyString, sessionId: nonEmptyString }),
-      }),
-      z.object({
-        status: z.literal("accepted"),
-        acceptedAt: nonNegativeSafeInteger,
-        result: z.object({ kind: nonEmptyString, sessionId: nonEmptyString }),
-      }),
-      z.object({ status: z.literal("rejected"), code: nonEmptyString, detail: nullableString }),
-      z.object({ status: z.literal("unreconciled"), detail: nullableString }),
-    ])
-    .and(
-      z.object({
-        id: nonEmptyString,
-        commandId: nonEmptyString,
-        recordedAt: nonNegativeSafeInteger,
-        sequence: nonNegativeSafeInteger,
-      }),
-    )
-    .nullable(),
-  throughSequence: nonNegativeSafeInteger,
-  refusal: z.enum(["benign", "failure"]).nullable(),
-});
-
 const commandRequestSchema = z
   .object({
     commandId: nonEmptyString,
@@ -927,6 +899,184 @@ function subscriptionOverflowError(message: string): HostProcedureError {
 
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
+  const subscription = (key: "session.subscribe" | "session.subscribeQueue") =>
+    workspaceProcedure(key, sessionSubscriptionSchema, sessionResource).subscription(
+      async function* ({ ctx, input, signal }) {
+        if (signal?.aborted) return;
+        const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
+        // A bounded door (the WebSocket, D9) refuses a resume it would have
+        // to replay too much for, before the source is opened at all.
+        const bounds = ctx.replayBounds;
+        if (
+          bounds !== undefined &&
+          replayExceedsEvents(
+            bounds,
+            afterSequence,
+            (
+              await hostAnswer(() =>
+                ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
+              )
+            ).throughSequence,
+          )
+        ) {
+          throw resnapshotRequired();
+        }
+        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
+        const frameBound = ctx.maxResponseBytes;
+        // Bounded in bytes too on a bounded door: twice the replay bound holds a
+        // whole admitted replay and the live frames that arrive behind it.
+        const queue = new AsyncQueue<RendererSessionStreamEmission>(
+          SESSION_STREAM_QUEUE_CAPACITY,
+          bounds === undefined ? undefined : 2 * bounds.bytes,
+        );
+        const sourceFailure: { current: { error: unknown } | null } = { current: null };
+        // What this stream ends with instead of a frame it refused to stage:
+        // resnapshot past the replay bounds, response-too-large past the frame
+        // bound. Set once; the source is cancelled with it.
+        const refused: { current: HostProcedureError | null } = { current: null };
+        // Cancels the runtime's side even while its subscribe call is still
+        // replaying: a refused replay is not read any further.
+        const source = new AbortController();
+        const abort = (): void => {
+          source.abort();
+          queue.close();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        // A subscription's handler runs inside the stream, past the policy
+        // middleware, so its "unavailable" is mapped here.
+        const unsubscribe = await hostAnswer(() =>
+          ctx.handlers[key](
+            {
+              sessionId: input.sessionId,
+              afterSequence,
+              ...(replay === null ? {} : { signal: source.signal }),
+            },
+            ctx.call,
+            {
+              // Live emissions pass through untouched: `rendererFrame` exists to
+              // keep runtime identity and recovery locators behind the server
+              // boundary, and no transient arm carries either. Asked as the
+              // negation of the durable arm so a third transient arm needs no
+              // edit here.
+              emit: (emission) => {
+                if (refused.current !== null) return;
+                // The old network operation's closed output cannot gain a new
+                // union arm. Queue-aware peers opt into the new feature's path;
+                // the private desktop IPC stream keeps its existing vocabulary.
+                if (
+                  key === "session.subscribe" &&
+                  ctx.transport !== "electron-ipc" &&
+                  "kind" in emission &&
+                  emission.kind === "queue"
+                )
+                  return;
+                const durable = isSessionStreamFrame(emission);
+                const sent = durable ? rendererFrame(emission) : emission;
+                if (replay === null) {
+                  queue.push(sent);
+                  return;
+                }
+                // Judged before it is staged: nothing past a bound is ever held.
+                const bytes = jsonByteLength(sent);
+                if (frameBound !== undefined && bytes > frameBound) {
+                  refused.current = new HostProcedureError(
+                    "response-too-large",
+                    SESSION_FRAME_TOO_LARGE_MESSAGE,
+                  );
+                } else if (!replay.admit(bytes, durable)) {
+                  refused.current = resnapshotRequired();
+                } else {
+                  queue.push(sent, bytes);
+                  return;
+                }
+                // A refused replay sends nothing of itself; a live refusal still
+                // drains what came before it.
+                queue.close(replay.replaying);
+                source.abort();
+              },
+              // The runtime's drain died behind this subscription. Ended like an
+              // overflow — buffered contiguous frames still drain, then the
+              // stream closes with an error instead of a clean `done`, because a
+              // clean end here is the one thing the client must never see: it
+              // reads as a stream with nothing left to say, not one that lost
+              // `turn.completed` mid-turn.
+              fail: (error) => {
+                sourceFailure.current = { error };
+                queue.close(false);
+              },
+            },
+          ),
+        );
+        // The runtime replays history before its subscribe call returns, so
+        // a refusal so far was a replay's: nothing of it is sent.
+        replay?.end();
+        if (refused.current !== null) {
+          signal?.removeEventListener("abort", abort);
+          unsubscribe();
+          throw refused.current;
+        }
+        if (signal?.aborted) {
+          unsubscribe();
+          return;
+        }
+        try {
+          // A transient emission is tracked by the durable sequence it was
+          // emitted beside, never by a suffixed id: `sseCursor` rejects one on
+          // resubscribe, and duplicate ids are safe on both transports. A
+          // reconnect from an overlay id therefore replays durable history and
+          // is served a fresh baseline.
+          for await (const emission of queue) {
+            yield isRendererStreamTransient(emission)
+              ? tracked(String(emission.throughSequence), emission)
+              : tracked(String(emission.sequence), emission);
+          }
+          // The loop ends the same way on a clean close and on an overflow, so
+          // this throw is the only thing that tells them apart downstream. It
+          // sits inside the `try` on purpose: `finally` still runs on the way
+          // out, so `unsubscribe()` fires before the error leaves the
+          // generator and no runtime listener outlives the stream it fed.
+          // A consumer that tears the iterator down instead resumes at the
+          // `yield` with a return completion and never reaches this line —
+          // an overflow the client already walked away from stays a diagnostic.
+          // A frame refused after the replay ended the stream, once what
+          // came before it drained.
+          if (refused.current !== null) throw refused.current;
+          if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
+          // A source failure ends the same way an overflow does, and for the
+          // same reason: whatever this stream still owed its consumer is now
+          // only in the ledger, and only an error makes the client go back
+          // for it.
+          if (sourceFailure.current !== null) {
+            throw new HostProcedureError(
+              "subscription-source-failed",
+              SESSION_SOURCE_FAILURE_MESSAGE,
+              sourceFailure.current.error,
+            );
+          }
+        } finally {
+          signal?.removeEventListener("abort", abort);
+          unsubscribe();
+          if (queue.overflowed) {
+            ctx.diagnostics.record({
+              procedure: key,
+              phase: "error",
+              transport: ctx.transport ?? "unknown",
+              code: SUBSCRIPTION_OVERFLOW_CODE,
+              message: SESSION_OVERFLOW_MESSAGE,
+            });
+          }
+          if (sourceFailure.current !== null) {
+            ctx.diagnostics.record({
+              procedure: key,
+              phase: "error",
+              transport: ctx.transport ?? "unknown",
+              code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
+              message: SESSION_SOURCE_FAILURE_MESSAGE,
+            });
+          }
+        }
+      },
+    );
   return catalogRouter({
     protocol: {
       // The v1 bootstrap read: base, in no feature, so a client can always
@@ -1146,7 +1296,10 @@ export function createSessionRouter() {
       )
         .output(sessionSnapshotOutputSchema)
         .query(async ({ ctx, input }) =>
-          rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
+          rendererSnapshot(
+            await ctx.handlers["session.snapshot"](input, ctx.call),
+            ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
+          ),
         ),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
@@ -1160,177 +1313,13 @@ export function createSessionRouter() {
       )
         .output(sessionProjectionOutputSchema)
         .query(async ({ ctx, input }) =>
-          rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
-        ),
-      subscribe: workspaceProcedure(
-        "session.subscribe",
-        sessionSubscriptionSchema,
-        sessionResource,
-      ).subscription(async function* ({ ctx, input, signal }) {
-        if (signal?.aborted) return;
-        const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-        // A bounded door (the WebSocket, D9) refuses a resume it would have
-        // to replay too much for, before the source is opened at all.
-        const bounds = ctx.replayBounds;
-        if (
-          bounds !== undefined &&
-          replayExceedsEvents(
-            bounds,
-            afterSequence,
-            (
-              await hostAnswer(() =>
-                ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
-              )
-            ).throughSequence,
-          )
-        ) {
-          throw resnapshotRequired();
-        }
-        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
-        const frameBound = ctx.maxResponseBytes;
-        // Bounded in bytes too on a bounded door: twice the replay bound holds a
-        // whole admitted replay and the live frames that arrive behind it.
-        const queue = new AsyncQueue<RendererSessionStreamEmission>(
-          SESSION_STREAM_QUEUE_CAPACITY,
-          bounds === undefined ? undefined : 2 * bounds.bytes,
-        );
-        const sourceFailure: { current: { error: unknown } | null } = { current: null };
-        // What this stream ends with instead of a frame it refused to stage:
-        // resnapshot past the replay bounds, response-too-large past the frame
-        // bound. Set once; the source is cancelled with it.
-        const refused: { current: HostProcedureError | null } = { current: null };
-        // Cancels the runtime's side even while its subscribe call is still
-        // replaying: a refused replay is not read any further.
-        const source = new AbortController();
-        const abort = (): void => {
-          source.abort();
-          queue.close();
-        };
-        signal?.addEventListener("abort", abort, { once: true });
-        // A subscription's handler runs inside the stream, past the policy
-        // middleware, so its "unavailable" is mapped here.
-        const unsubscribe = await hostAnswer(() =>
-          ctx.handlers["session.subscribe"](
-            {
-              sessionId: input.sessionId,
-              afterSequence,
-              ...(replay === null ? {} : { signal: source.signal }),
-            },
-            ctx.call,
-            {
-              // Live emissions pass through untouched: `rendererFrame` exists to
-              // keep runtime identity and recovery locators behind the server
-              // boundary, and no transient arm carries either. Asked as the
-              // negation of the durable arm so a third transient arm needs no
-              // edit here.
-              emit: (emission) => {
-                if (refused.current !== null) return;
-                const durable = isSessionStreamFrame(emission);
-                const sent = durable ? rendererFrame(emission) : emission;
-                if (replay === null) {
-                  queue.push(sent);
-                  return;
-                }
-                // Judged before it is staged: nothing past a bound is ever held.
-                const bytes = jsonByteLength(sent);
-                if (frameBound !== undefined && bytes > frameBound) {
-                  refused.current = new HostProcedureError(
-                    "response-too-large",
-                    SESSION_FRAME_TOO_LARGE_MESSAGE,
-                  );
-                } else if (!replay.admit(bytes, durable)) {
-                  refused.current = resnapshotRequired();
-                } else {
-                  queue.push(sent, bytes);
-                  return;
-                }
-                // A refused replay sends nothing of itself; a live refusal still
-                // drains what came before it.
-                queue.close(replay.replaying);
-                source.abort();
-              },
-              // The runtime's drain died behind this subscription. Ended like an
-              // overflow — buffered contiguous frames still drain, then the
-              // stream closes with an error instead of a clean `done`, because a
-              // clean end here is the one thing the client must never see: it
-              // reads as a stream with nothing left to say, not one that lost
-              // `turn.completed` mid-turn.
-              fail: (error) => {
-                sourceFailure.current = { error };
-                queue.close(false);
-              },
-            },
+          rendererProjection(
+            await ctx.handlers["session.projection"](input, ctx.call),
+            ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
           ),
-        );
-        // The runtime replays history before its subscribe call returns, so
-        // a refusal so far was a replay's: nothing of it is sent.
-        replay?.end();
-        if (refused.current !== null) {
-          signal?.removeEventListener("abort", abort);
-          unsubscribe();
-          throw refused.current;
-        }
-        if (signal?.aborted) {
-          unsubscribe();
-          return;
-        }
-        try {
-          // A transient emission is tracked by the durable sequence it was
-          // emitted beside, never by a suffixed id: `sseCursor` rejects one on
-          // resubscribe, and duplicate ids are safe on both transports. A
-          // reconnect from an overlay id therefore replays durable history and
-          // is served a fresh baseline.
-          for await (const emission of queue) {
-            yield isRendererStreamTransient(emission)
-              ? tracked(String(emission.throughSequence), emission)
-              : tracked(String(emission.sequence), emission);
-          }
-          // The loop ends the same way on a clean close and on an overflow, so
-          // this throw is the only thing that tells them apart downstream. It
-          // sits inside the `try` on purpose: `finally` still runs on the way
-          // out, so `unsubscribe()` fires before the error leaves the
-          // generator and no runtime listener outlives the stream it fed.
-          // A consumer that tears the iterator down instead resumes at the
-          // `yield` with a return completion and never reaches this line —
-          // an overflow the client already walked away from stays a diagnostic.
-          // A frame refused after the replay ended the stream, once what
-          // came before it drained.
-          if (refused.current !== null) throw refused.current;
-          if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
-          // A source failure ends the same way an overflow does, and for the
-          // same reason: whatever this stream still owed its consumer is now
-          // only in the ledger, and only an error makes the client go back
-          // for it.
-          if (sourceFailure.current !== null) {
-            throw new HostProcedureError(
-              "subscription-source-failed",
-              SESSION_SOURCE_FAILURE_MESSAGE,
-              sourceFailure.current.error,
-            );
-          }
-        } finally {
-          signal?.removeEventListener("abort", abort);
-          unsubscribe();
-          if (queue.overflowed) {
-            ctx.diagnostics.record({
-              procedure: "session.subscribe",
-              phase: "error",
-              transport: ctx.transport ?? "unknown",
-              code: SUBSCRIPTION_OVERFLOW_CODE,
-              message: SESSION_OVERFLOW_MESSAGE,
-            });
-          }
-          if (sourceFailure.current !== null) {
-            ctx.diagnostics.record({
-              procedure: "session.subscribe",
-              phase: "error",
-              transport: ctx.transport ?? "unknown",
-              code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
-              message: SESSION_SOURCE_FAILURE_MESSAGE,
-            });
-          }
-        }
-      }),
+        ),
+      subscribe: subscription("session.subscribe"),
+      subscribeQueue: subscription("session.subscribeQueue"),
       command: workspaceProcedure(
         "session.command",
         commandRequestSchema,
@@ -1366,7 +1355,7 @@ export function createSessionRouter() {
         }),
         sessionResource,
       )
-        .output(queueMutationResultSchema)
+        .output(sessionCommandOutputSchema)
         .mutation(async ({ ctx, input }) =>
           rendererCommandResult(await ctx.handlers["session.cancelQueued"](input, ctx.call)),
         ),
@@ -1381,7 +1370,7 @@ export function createSessionRouter() {
         }),
         sessionResource,
       )
-        .output(queueMutationResultSchema)
+        .output(sessionCommandOutputSchema)
         .mutation(async ({ ctx, input }) =>
           rendererCommandResult(await ctx.handlers["session.editQueued"](input, ctx.call)),
         ),
@@ -1474,7 +1463,10 @@ function rendererFrame(frame: SessionStreamFrame): RendererSessionStreamFrame {
 export type RendererSessionProjection = SessionPresentationProjection &
   Pick<SessionRuntimeProjectionSnapshot["projection"], "queue" | "queueRevision">;
 
-function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
+function rendererProjection(
+  snapshot: SessionRuntimeProjectionSnapshot,
+  includeQueue: boolean,
+): {
   projection: RendererSessionProjection;
   throughSequence: number;
 } {
@@ -1485,8 +1477,12 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   const projection: {
     -readonly [K in keyof RendererSessionProjection]?: RendererSessionProjection[K];
   } = {};
-  if (source.queue !== undefined) projection.queue = source.queue;
-  if (source.queueRevision !== undefined) projection.queueRevision = source.queueRevision;
+  // Old peers did not negotiate these optional output fields. Keep their
+  // strict JSON readers on the frozen projection shape, even if work exists.
+  if (includeQueue) {
+    if (source.queue !== undefined) projection.queue = source.queue;
+    if (source.queueRevision !== undefined) projection.queueRevision = source.queueRevision;
+  }
   if (source.session !== undefined) projection.session = source.session;
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {
@@ -1530,13 +1526,16 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
+function rendererSnapshot(
+  snapshot: SessionRuntimeSnapshot,
+  includeQueue: boolean,
+): {
   projection: RendererSessionProjection;
   frames: RendererSessionStreamFrame[];
   throughSequence: number;
 } {
   return {
-    ...rendererProjection(snapshot),
+    ...rendererProjection(snapshot, includeQueue),
     frames: snapshot.frames.map(rendererFrame),
   };
 }
@@ -1563,7 +1562,10 @@ function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
       if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
         throw new Error("session.command needs object alternatives with literal kinds");
       }
-      if (option.shape.kind.value === "message.submit") {
+      if (
+        option.shape.kind.value === "message.submit" ||
+        option.shape.kind.value === "message.edit"
+      ) {
         return option.extend({
           message: uiMessageWireSchema.extend({
             id: nonEmptyString,
@@ -1588,7 +1590,8 @@ export function sessionProcedureSchemas(
   const supplementalOutputs: Record<string, z.ZodType> = {
     "sessions.create": z.object({ sessionId: z.string() }),
     "sessions.attach": sessionAttachOutputSchema,
-    "session.subscribe": streamEmissionSchema,
+    "session.subscribe": legacyStreamEmissionSchema,
+    "session.subscribeQueue": streamEmissionSchema,
     "session.cancelInteraction": z.null(),
     "session.reconcile": z.null(),
     "labDiagnostics.list": z.array(diagnosticEntrySchema),
@@ -1597,7 +1600,20 @@ export function sessionProcedureSchemas(
   return procedureSchemas(
     router,
     supplementalOutputs,
-    (key, input) => (key === "session.command" ? publishCommandInput(input) : (input ?? z.null())),
+    (key, input) => {
+      if (key === "session.command") return publishCommandInput(input);
+      if (key === "session.editQueued") {
+        if (!(input instanceof z.ZodObject))
+          throw new Error("session.editQueued needs a structural message envelope for publication");
+        return input.safeExtend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      return input ?? z.null();
+    },
     ["session.cancelInteraction", "session.reconcile"],
   );
 }

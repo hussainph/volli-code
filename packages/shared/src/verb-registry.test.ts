@@ -264,6 +264,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.snapshot": "coordination",
   "session.projection": "coordination",
   "session.subscribe": "coordination",
+  "session.subscribeQueue": "coordination",
   "session.command": "coordination",
   "session.cancelQueued": "coordination",
   "session.editQueued": "coordination",
@@ -1304,6 +1305,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.snapshot": ["workspace", "read"],
     "session.projection": ["workspace", "read"],
     "session.subscribe": ["workspace", "read"],
+    "session.subscribeQueue": ["workspace", "read"],
     "session.command": ["workspace", "command-id"],
     "session.cancelQueued": ["workspace", "command-id"],
     "session.editQueued": ["workspace", "command-id"],
@@ -1372,6 +1374,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "session.snapshot"
       | "session.projection"
       | "session.subscribe"
+      | "session.subscribeQueue"
       | "session.command"
       | "session.cancelQueued"
       | "session.editQueued"

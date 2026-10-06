@@ -117,6 +117,12 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
         (emission) => sink.emit(emission),
         (error) => sink.fail(error),
       ),
+    "session.subscribeQueue": (input, _call, sink) =>
+      runtime("subscribe")(
+        input,
+        (emission) => sink.emit(emission),
+        (error) => sink.fail(error),
+      ),
     "session.command": (request) => runtime("command")(request),
     "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
       runtime("command")({
