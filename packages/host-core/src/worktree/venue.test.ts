@@ -6,10 +6,10 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { venueFileTotal } from "@volli/shared";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { GitError } from "./git";
 import { scriptedGit } from "./scripted-git";
 import { readVenue, venueSnapshot } from "./venue";

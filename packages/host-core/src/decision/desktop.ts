@@ -38,7 +38,7 @@ import type {
   DecisionModelSettingsView,
   DecisionModelTestView,
 } from "@volli/shared";
-import { getProjectById, updateProjectDecisionModel } from "@volli/host-core/db/projects-repo";
+import { getProjectById, updateProjectDecisionModel } from "../db/projects-repo";
 import {
   readGlobalDecisionModel,
   readProjectDecisionModel,

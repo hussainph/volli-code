@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { OrphanCleanupPlanItem } from "@volli/shared";
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb, type TestDb } from "../db/test-helpers";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
 

@@ -28,21 +28,21 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
-import { blobsRoot, writeBlob } from "@volli/host-core/blob-store";
+import { blobsRoot, writeBlob } from "../blob-store";
 import {
   DatabaseSwapFinalizeError,
   DatabaseSwapRollbackError,
   swapInStagedProfile,
-} from "@volli/host-core/db/database-file";
-import type { DatabaseFileFaults } from "@volli/host-core/db/database-file";
-import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
-import { SqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
+} from "../db/database-file";
+import type { DatabaseFileFaults } from "../db/database-file";
+import { MIGRATIONS, migrate } from "../db/migrations";
+import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
+import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
 import {
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,
   transcriptReferenceForId,
-} from "@volli/host-core/session-runtime/transcript-artifacts";
+} from "../session-runtime/transcript-artifacts";
 import {
   BLOB_PREFIX,
   readBackupBundle,

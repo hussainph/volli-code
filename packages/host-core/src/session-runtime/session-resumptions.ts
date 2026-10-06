@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import type { SessionProjection } from "@volli/shared";
-import { recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { recordSessionResumedOnce } from "../db/events-repo";
+import { prepared } from "../db/prepared";
 
 interface ResumptionPorts {
   publish(input: { projectId: string; ticketId: string }): void;

@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { insertTicket } from "../db/tickets-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 
 // Only `ensure` is stood in for, so `prepare` can be asked the one question no
 // return value answers: whether a ticketless Session touches git at all.
 const { ensureWorktree } = vi.hoisted(() => ({ ensureWorktree: vi.fn() }));
-vi.mock("@volli/host-core/worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
+vi.mock("../worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
@@ -28,7 +28,7 @@ import {
   acquireWorktreeStartLease,
   resetDeletionLeasesForTest,
   UNDER_DELETION_REFUSAL,
-} from "@volli/host-core/worktree/deletion-lease";
+} from "../worktree/deletion-lease";
 
 let testDb: TestDb | undefined;
 let scratchRoot: string | undefined;

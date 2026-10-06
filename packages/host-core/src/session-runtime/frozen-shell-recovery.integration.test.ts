@@ -12,9 +12,9 @@ import {
   scriptedProvider,
   type ScriptedReply,
 } from "../../../agent-runtime/test-fixtures/scripted-provider";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
+import { insertProject } from "../db/projects-repo";
+import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createPiNativeAdapter, type DesktopShellPort } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 

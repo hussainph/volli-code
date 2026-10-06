@@ -8,9 +8,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { findProjectByPath, insertProject, listProjects } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { findProjectByPath, insertProject, listProjects } from "./db/projects-repo";
+import { openTestDb, testProject } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
 
 import { createProject, planProjectCreate } from "./project-create";
 

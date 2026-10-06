@@ -23,15 +23,15 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
-import { createAgentCommandService } from "@volli/host-core/agent-commands";
-import { insertProject, updateProjectAuthorityPolicy } from "@volli/host-core/db/projects-repo";
-import { listTicketsByProject, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { listComments } from "@volli/host-core/db/comments-repo";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { createAgentCommandService } from "./agent-commands";
+import { insertProject, updateProjectAuthorityPolicy } from "./db/projects-repo";
+import { listTicketsByProject, insertTicket } from "./db/tickets-repo";
+import { listComments } from "./db/comments-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { insertSession } from "./session-control/test-support";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 

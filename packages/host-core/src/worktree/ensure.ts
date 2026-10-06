@@ -30,9 +30,9 @@ import {
 } from "@volli/shared";
 
 import { materializeBlobs } from "../blob-materialize";
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { refExists, resolveBaseBranch } from "./base";
 import { GitError, stderrOf } from "./git";

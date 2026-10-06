@@ -39,8 +39,8 @@
 import type Database from "better-sqlite3";
 import type { TicketEvent } from "@volli/shared";
 
-import { listTicketEventsAfter, ticketEventCursor } from "@volli/host-core/db/events-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { listTicketEventsAfter, ticketEventCursor } from "./db/events-repo";
+import { getTicketRow } from "./db/tickets-repo";
 
 /** One committed planner fact, its project scope, and its opaque durable cursor. */
 export interface TicketWake {

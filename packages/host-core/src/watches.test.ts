@@ -20,10 +20,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SessionRuntimeCommandRequest, SessionStreamEmission } from "@volli/session-engine";
 import type { SessionEvent, SessionProjection, TicketEvent } from "@volli/shared";
 
-import type {
-  SessionWake,
-  SessionWakeListener,
-} from "@volli/host-core/session-control/session-wake";
+import type { SessionWake, SessionWakeListener } from "./session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
 import { createWatches } from "./watches";
 import type { WatchesPorts } from "./watches";

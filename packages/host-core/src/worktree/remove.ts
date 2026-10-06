@@ -42,8 +42,8 @@ import {
   type TicketEventActor,
 } from "@volli/shared";
 
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import type { AgentSiteReleaseReport } from "./agent-sites";
 import { isOwnedWorktreePath, ownedContainers } from "./containers";

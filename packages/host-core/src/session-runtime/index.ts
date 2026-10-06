@@ -8,7 +8,7 @@ import {
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import { createCheckpointFailureReporter } from "@volli/host-core/session-control";
+import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
 import { createDesktopSessionLocationResolver } from "./location";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";

@@ -39,9 +39,9 @@ import type {
   ProjectRelinkSubject,
 } from "@volli/shared";
 
-import { getProjectById, listProjects, updateProjectPath } from "@volli/host-core/db/projects-repo";
+import { getProjectById, listProjects, updateProjectPath } from "./db/projects-repo";
 import { runGitCapturingAsync } from "./worktree/git";
-import { listWorktreeSitesByProject, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { listWorktreeSitesByProject, updateTicketFields } from "./db/tickets-repo";
 import { busySiteWithin } from "./worktree/activity";
 import type { BusyWorktreeSites } from "./worktree/activity";
 import { projectContainerName } from "./worktree/containers";

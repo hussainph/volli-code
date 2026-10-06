@@ -3,15 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { listTicketEvents } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import {
-  archiveTicket,
-  getTicketRow,
-  insertTicket,
-  updateTicketFields,
-} from "@volli/host-core/db/tickets-repo";
+import { listTicketEvents } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { archiveTicket, getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { projectContainerName } from "./containers";
 import {
   acquireDeletionLease,

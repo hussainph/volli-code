@@ -15,16 +15,11 @@ import {
   startAgentSocket,
   type AgentSocketServer,
 } from "./agent-socket";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import {
-  openTestDb,
-  testProject,
-  testSession,
-  type TestDb,
-} from "@volli/host-core/db/test-helpers";
+import { insertProject } from "./db/projects-repo";
+import { openTestDb, testProject, testSession, type TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { insertSession } from "./session-control/test-support";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 let server: AgentSocketServer | undefined;

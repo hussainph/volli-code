@@ -25,29 +25,22 @@ import {
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createAgentToolDoor, type VerbBudgetAsk } from "@volli/host-core/agent-tool-door";
-import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
-import { getMcpServer, putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import {
-  FileMcpCredentialStore,
-  MemoryMcpCredentialStore,
-} from "@volli/host-core/mcp/credential-store";
+import { createAgentToolDoor, type VerbBudgetAsk } from "../agent-tool-door";
+import { listMcpOperations } from "../db/mcp-operations-repo";
+import { getMcpServer, putMcpServer } from "../db/mcp-servers-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
+import { FileMcpCredentialStore, MemoryMcpCredentialStore } from "./credential-store";
 import {
   McpCredentialMissingError,
   missingMcpSecretSlots,
   resolveMcpCredentialEntries,
-} from "@volli/host-core/mcp/credentials";
-import {
-  approveInBrowser,
-  startOAuthFixture,
-  type OAuthFixture,
-} from "@volli/host-core/mcp/fixtures/oauth-fixture";
-import { McpOAuthBroker } from "@volli/host-core/mcp/oauth";
-import { McpSessionHost } from "@volli/host-core/mcp/session-host";
-import { McpSettingsService } from "@volli/host-core/mcp/settings";
+} from "./credentials";
+import { approveInBrowser, startOAuthFixture, type OAuthFixture } from "./fixtures/oauth-fixture";
+import { McpOAuthBroker } from "./oauth";
+import { McpSessionHost } from "./session-host";
+import { McpSettingsService } from "./settings";
 
 const CALLER: RuntimeSessionIdentity = {
   role: "project",

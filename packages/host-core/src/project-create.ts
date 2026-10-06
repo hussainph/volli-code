@@ -25,8 +25,8 @@ import {
   insertProject,
   listProjects,
   nextSortOrder,
-} from "@volli/host-core/db/projects-repo";
-import { detectProjectBaseBranchAsync } from "@volli/host-core/project-base-branch";
+} from "./db/projects-repo";
+import { detectProjectBaseBranchAsync } from "./project-base-branch";
 
 export interface ProjectCreateRequest {
   /** The folder, exactly as the door received it; desktop's picker hands an absolute path. */

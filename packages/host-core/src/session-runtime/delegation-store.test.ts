@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type Database from "better-sqlite3";
 import type { SessionEvent } from "@volli/shared";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { deleteTicket, insertTicket } from "../db/tickets-repo";
+import { insertSession } from "../session-control/test-support";
+import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
 
 import { DEFAULT_TICKET_SESSION_DELEGATION } from "./delegation-policy";
 import { createTicketSessionDelegationStore } from "./delegation-store";

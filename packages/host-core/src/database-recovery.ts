@@ -20,14 +20,11 @@ import {
   openVolliDb,
   recoveryPendingPath,
   swapInStagedProfile,
-} from "@volli/host-core/db/database-file";
-import type { DatabaseFileFaults } from "@volli/host-core/db/database-file";
-import { SCHEMA_HEAD } from "@volli/host-core/db/migrations";
-import {
-  DatabaseFromNewerVersionError,
-  checkSchemaCompatibility,
-} from "@volli/host-core/db/schema-compatibility";
-import { migrationBackupCandidatePattern } from "@volli/host-core/db/backup-retention";
+} from "./db/database-file";
+import type { DatabaseFileFaults } from "./db/database-file";
+import { SCHEMA_HEAD } from "./db/migrations";
+import { DatabaseFromNewerVersionError, checkSchemaCompatibility } from "./db/schema-compatibility";
+import { migrationBackupCandidatePattern } from "./db/backup-retention";
 
 export class RecoveryFailure extends Error {}
 

@@ -23,11 +23,8 @@
 import type Database from "better-sqlite3";
 import type { SessionListingRow, SessionProjection } from "@volli/shared";
 
-import {
-  readSessionProvenance,
-  readSessionProvenances,
-} from "@volli/host-core/db/session-provenance-repo";
-import { readSessionUnread, readSessionUnreads } from "@volli/host-core/db/session-read-repo";
+import { readSessionProvenance, readSessionProvenances } from "../db/session-provenance-repo";
+import { readSessionUnread, readSessionUnreads } from "../db/session-read-repo";
 import { sessionListingRow, sessionListingRows } from "./listing-row";
 
 export function sessionListingRowsForRoster(

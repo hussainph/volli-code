@@ -29,7 +29,7 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { WorktreeBranchListing } from "@volli/shared";
 
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getProjectById } from "../db/projects-repo";
 import { err, ok, type StatMtimeMs, type WorktreeDeps, type WorktreeResult } from "./types";
 
 export const statMtimeMs: StatMtimeMs = (path) => {

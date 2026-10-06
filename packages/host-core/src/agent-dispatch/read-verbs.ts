@@ -17,18 +17,18 @@ import {
 import type { AgentRequest, AgentResponse, Project, SessionEvent } from "@volli/shared";
 import type Database from "better-sqlite3";
 
-import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import { listRecentComments } from "@volli/host-core/db/comments-repo";
-import { listRecentTicketEvents } from "@volli/host-core/db/events-repo";
-import { findLabelByName, listAllLabels } from "@volli/host-core/db/labels-repo";
-import { listLatestSignals } from "@volli/host-core/db/signals-repo";
+import { listMaterializableLinks } from "../db/blobs-repo";
+import { listRecentComments } from "../db/comments-repo";
+import { listRecentTicketEvents } from "../db/events-repo";
+import { findLabelByName, listAllLabels } from "../db/labels-repo";
+import { listLatestSignals } from "../db/signals-repo";
 import {
   getTicket,
   listArchivedTicketsByProject,
   listTicketsByProject,
   listWorktreePathsByProject,
-} from "@volli/host-core/db/tickets-repo";
-import { isInside } from "@volli/host-core/worktree/paths";
+} from "../db/tickets-repo";
+import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";

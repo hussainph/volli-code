@@ -24,9 +24,9 @@ import {
   type TicketEventPayload,
 } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
 import { commitRemaining, type CommitChoices, type CommitOutcome } from "./commit";
 import {
