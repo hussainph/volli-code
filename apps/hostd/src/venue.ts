@@ -26,8 +26,7 @@ import { isAbsolute } from "node:path";
 
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
-import { prepared } from "@volli/host-core/db/prepared";
-import { withTransaction } from "@volli/host-core/db/transaction-gate";
+import { prepared, withTransaction } from "@volli/host-core/db";
 
 /** hostd's venue kind, unchanged by VC-627. */
 export const HOSTD_VENUE_KIND = "remote" satisfies SessionExecutionVenue["kind"];

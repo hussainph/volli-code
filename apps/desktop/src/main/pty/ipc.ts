@@ -19,17 +19,18 @@ import type {
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
-import { blobsRoot } from "@volli/host-core/blob-store";
+import { blobsRoot } from "@volli/host-core/files";
 import type { DbHandle } from "../data-ipc";
 import { windowEventBus } from "../broadcast";
 import { clientEventSink } from "../client-event-sink";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
+import { SpawnLedger } from "@volli/host-core/maintenance";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
-import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
-import { PtyManager } from "@volli/host-core/pty/manager";
+import {
+  createSessionConcurrencyEnvReader,
+  type SessionConcurrencyEnvReader,
+} from "@volli/host-core/sessions";
+import { type AgentRuntimeEnvironment, type PtyHost, PtyManager } from "@volli/host-core/pty";
 import { worktreeDeps } from "../worktree-host";
 
 /**

@@ -1,14 +1,77 @@
 import { clientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
-import { withTransaction } from "@volli/host-core/db/transaction-gate";
+import {
+  withTransaction,
+  createBlobLink,
+  deleteBlobLink,
+  listLinkViews,
+  listMaterializableLinks,
+  listMcpOperations,
+  getAllAppState,
+  setAppState,
+  MIN_READER_VERSION_KEY,
+  deleteComment,
+  getComment,
+  listComments,
+  updateComment,
+  listTicketEvents,
+  listTicketStatusEntries,
+  listAllLabels,
+  listLabelsByProject,
+  setLabelColor,
+  countProjects,
+  deleteProject,
+  getProjectById,
+  insertProject,
+  listProjects,
+  reorderProjects,
+  updateProjectAuthorityPolicy,
+  updateProjectBaseBranch,
+  updateProjectSessionDefaults,
+  updateProjectSetupCommand,
+  updateProjectSkillModes,
+  readSessionUnread,
+  writeSessionUnread,
+  prepared,
+  getTicket,
+  getTicketBody,
+  getTicketRow,
+  listAllTickets,
+  listArchivedTicketsByProject,
+  listTicketRosterByProject,
+  listWorktreePaths,
+  setTicketRetentionKeep,
+} from "@volli/host-core/db";
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { DbHandle } from "@volli/host-core";
-import type { DetachedWorkPort } from "@volli/host-core/detached-work";
-import type { HostMaintenance } from "@volli/host-core/maintenance-services";
+import {
+  type DetachedWorkPort,
+  createProject,
+  inspectProjectFolder,
+  relinkProject,
+  archiveTicketCommand,
+  createTicketCommand,
+  createTicketCommentCommand,
+  deleteTicketCommand,
+  setTicketLabelsCommand,
+  setTicketPriorityCommand,
+  unarchiveTicketCommand,
+  updateTicketFieldsCommand,
+  executeTicketMove,
+  trimFinishedTicketInBackground,
+  withTicketWake,
+} from "@volli/host-core/board";
+import {
+  type HostMaintenance,
+  invalidateOrphanScan,
+  orphanScanReport,
+  resolveCleanupPlan,
+  getRetentionWatcher,
+} from "@volli/host-core/maintenance";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
@@ -19,22 +82,15 @@ import {
   USER_ACTOR,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/blob-attach";
-import {
-  createBlobLink,
-  deleteBlobLink,
-  listLinkViews,
-  listMaterializableLinks,
-} from "@volli/host-core/db/blobs-repo";
+import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/files";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import { createProject } from "@volli/host-core/project-create";
-import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
-import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
-import { McpSettingsService } from "@volli/host-core/mcp/settings";
-import { removeTicketToolOutput } from "@volli/host-core/pi-tool-output";
-import type { StopSessionByIdPorts } from "@volli/host-core/session-runtime/supervise-session";
+import {
+  type AutoTitleRequest,
+  removeTicketToolOutput,
+  type StopSessionByIdPorts,
+} from "@volli/host-core/session-runtime";
+import { McpSettingsService } from "@volli/host-core/integrations";
 import type { AuthorityPolicyOverride, DataChangedEvent, Label, Ticket } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -142,29 +198,6 @@ import type {
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
-import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
-import {
-  deleteComment,
-  getComment,
-  listComments,
-  updateComment,
-} from "@volli/host-core/db/comments-repo";
-import { listTicketEvents, listTicketStatusEntries } from "@volli/host-core/db/events-repo";
-import { listAllLabels, listLabelsByProject, setLabelColor } from "@volli/host-core/db/labels-repo";
-import {
-  countProjects,
-  deleteProject,
-  getProjectById,
-  insertProject,
-  listProjects,
-  reorderProjects,
-  updateProjectAuthorityPolicy,
-  updateProjectBaseBranch,
-  updateProjectSessionDefaults,
-  updateProjectSetupCommand,
-  updateProjectSkillModes,
-} from "@volli/host-core/db/projects-repo";
 /**
  * Both listing channels build their rows through one roster-shaped read
  * (VC-131, VC-392). The provenance question lives beside the other Session read
@@ -176,38 +209,9 @@ import {
   readSessionPeekContent,
   sessionListingRowsForRoster,
   type SessionPeekContentPorts,
-} from "@volli/host-core/session-control";
-import { readSessionUnread, writeSessionUnread } from "@volli/host-core/db/session-read-repo";
-import { prepared } from "@volli/host-core/db/prepared";
-import {
-  getTicket,
-  getTicketBody,
-  getTicketRow,
-  listAllTickets,
-  listArchivedTicketsByProject,
-  listTicketRosterByProject,
-  listWorktreePaths,
-  setTicketRetentionKeep,
-} from "@volli/host-core/db/tickets-repo";
-import {
-  archiveTicketCommand,
-  createTicketCommand,
-  createTicketCommentCommand,
-  deleteTicketCommand,
-  setTicketLabelsCommand,
-  setTicketPriorityCommand,
-  unarchiveTicketCommand,
-  updateTicketFieldsCommand,
-} from "@volli/host-core/ticket-commands";
-import { executeTicketMove, trimFinishedTicketInBackground } from "@volli/host-core/ticket-move";
+} from "@volli/host-core/sessions";
 import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
-import { withTicketWake } from "@volli/host-core/ticket-wake";
-import {
-  invalidateOrphanScan,
-  orphanScanReport,
-  resolveCleanupPlan,
-} from "@volli/host-core/orphan-scan";
 import { exportDatabase } from "./menu";
 import {
   acquireDeletionLease,
@@ -238,17 +242,17 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   WorktreeChangeWatchManager,
-} from "@volli/host-core/worktree";
-import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "@volli/host-core/worktree/coalesce";
-import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
-import { credentialHelperIssues } from "@volli/host-core/credential-helper-diagnostics";
-import { getRetentionWatcher } from "@volli/host-core/retention-runtime";
-import {
+  createCoalescer,
+  RAIL_READ_SHARE_WINDOW_MS,
+  getWorktreeSnapshots,
+  credentialHelperIssues,
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
-} from "@volli/host-core/worktree/paths";
-import { isOwnedWorktreePath, ownedContainers } from "@volli/host-core/worktree/containers";
-import { orphanCleanupEngine, worktreeHomeDir } from "@volli/host-core/worktree-runtime";
+  isOwnedWorktreePath,
+  ownedContainers,
+  orphanCleanupEngine,
+  worktreeHomeDir,
+} from "@volli/host-core/worktree";
 import { worktreeDeps } from "./worktree-host";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";

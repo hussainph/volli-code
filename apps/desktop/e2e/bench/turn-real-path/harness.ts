@@ -51,17 +51,16 @@ import {
 } from "@volli/session-engine";
 import { type ObservabilityEvent, type ObservabilitySink, type SessionLedger } from "@volli/shared";
 
-import { openVolliDb } from "@volli/host-core/db";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+import { openVolliDb, insertProject } from "@volli/host-core/db";
 import {
   createCheckpointFailureReporter,
   createSqliteSessionLedger,
-} from "@volli/host-core/session-control";
+} from "@volli/host-core/testing";
 import {
   createPiRuntimeHost,
   type PiRuntimeContext,
-} from "@volli/host-core/session-runtime/pi-adapter";
-import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
+  createFileTranscriptArtifactStore,
+} from "@volli/host-core/session-runtime";
 
 import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 

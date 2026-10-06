@@ -34,18 +34,18 @@ vi.mock("electron", () => ({
 }));
 
 import { registerAutomationIpcHandlers } from "./ipc";
-import { createAutomationEngine } from "@volli/host-core/automations/engine";
-import { enabledAutomationIds } from "@volli/host-core/automations/enablement";
-import type { PendingArmedRunCoordinator } from "@volli/host-core/automations/pending-armed-runs";
-import type { AutomationRunner } from "@volli/host-core/automations/run";
-import { createAutomationScheduler } from "@volli/host-core/automations/scheduler";
 import {
+  createAutomationEngine,
+  enabledAutomationIds,
+  type PendingArmedRunCoordinator,
+  type AutomationRunner,
+  createAutomationScheduler,
   advanceScheduleCursor,
   readScheduleCursors,
   rebaseScheduleCursor,
-} from "@volli/host-core/automations/schedule-cursor";
-import { createAutomationService } from "@volli/host-core/automations/service";
-import { SqliteAutomationLedger } from "@volli/host-core/automations/sqlite-ledger";
+  createAutomationService,
+  SqliteAutomationLedger,
+} from "@volli/host-core/automations";
 import {
   createAutomation,
   deleteAutomation,
@@ -57,12 +57,17 @@ import {
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   recordAutomationRun,
-} from "@volli/host-core/db/automations-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+  insertProject,
+  insertTicket,
+} from "@volli/host-core/db";
+import {
+  insertSession,
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/testing";
 
 let ctx: TestDb;
 

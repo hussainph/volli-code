@@ -20,7 +20,7 @@ import {
   LEGACY_GLOBAL_CLI_LINK,
   loginPathHasUserBin,
   userCliLinkPath,
-} from "@volli/host-core/agent-tools";
+} from "@volli/host-core/agents";
 
 export interface CliStatusDeps {
   home: string;

@@ -13,7 +13,7 @@
  * bootstrap, so the rule is reachable by a test: which event closes tabs, and
  * that a Ticket Event of any other kind closes none.
  */
-import type { TicketWake } from "@volli/host-core/ticket-wake";
+import type { TicketWake } from "@volli/host-core/board";
 
 export interface HeadlessTabCloser {
   closeHeadlessForTicket(ticketId: string): string[];

@@ -22,8 +22,11 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vite-plus/test";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import { OtlpObservabilityExporter, traceIdForRun } from "@volli/host-core/observability/otlp";
-import { QueuedObservabilitySink } from "@volli/host-core/observability/sink";
+import {
+  OtlpObservabilityExporter,
+  traceIdForRun,
+  QueuedObservabilitySink,
+} from "@volli/host-core/integrations";
 
 const enabled = process.env.VOLLI_JAEGER_INTEGRATION === "1";
 

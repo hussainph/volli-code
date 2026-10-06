@@ -28,10 +28,37 @@ export interface HostSessionPorts {
   events: HostEventBus;
   /** Unattended Run alerts, and which Sessions a focused client is showing. */
   attention: AttentionDeliveryPort;
-  listOpenNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId">[];
-  /** Installed by desktop once its runtime-dependent scheduled-resume host exists. */
-  observeScheduledResume(projection: SessionProjection): void;
   log: Pick<Console, "error" | "warn">;
+}
+
+/**
+ * What the Session runtime host-core assembles later tells the Session
+ * services it built first: which executor bindings are open (a listing row is
+ * live only while one is), and each folded projection, for scheduled resume.
+ * Not ports: both answers come from host-core's own runtime assembly
+ * (`session-runtime/assembly`) and lifecycle (`session-runtime/lifecycle`),
+ * which wire them here as they are built (VC-632). Until then nothing is open
+ * and nothing is scheduled.
+ */
+export interface SessionRuntimeWiring {
+  openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId">[];
+  observeScheduledResume(projection: SessionProjection): void;
+}
+
+/** Keyed by the composed engine, which is the identity every runtime constructor receives. */
+const runtimeWiring = new WeakMap<SessionEngine, SessionRuntimeWiring>();
+
+/** Internal: the runtime assembly and lifecycle report into the services that own `engine`. */
+export function wireSessionRuntime(
+  engine: SessionEngine,
+  wiring: Partial<SessionRuntimeWiring>,
+): void {
+  const slot = runtimeWiring.get(engine);
+  if (slot === undefined) return;
+  if (wiring.openNativeBindings !== undefined) slot.openNativeBindings = wiring.openNativeBindings;
+  if (wiring.observeScheduledResume !== undefined) {
+    slot.observeScheduledResume = wiring.observeScheduledResume;
+  }
 }
 
 export interface HostSessionServices {
@@ -49,6 +76,10 @@ export function createHostSessionServices(
 ): HostSessionServices {
   // The outbox and engine share exactly one Session transaction writer.
   const sessionLedger = createSqliteSessionLedger(db);
+  const runtime: SessionRuntimeWiring = {
+    openNativeBindings: () => [],
+    observeScheduledResume: () => undefined,
+  };
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
     attendanceOf: (sessionId) => readAutomationRunAttendance(db, sessionId),
@@ -68,7 +99,7 @@ export function createHostSessionServices(
         db,
         getSession: (query) => sessionEngine.getSession(query),
         liveAttachmentIds: () =>
-          new Set(ports.listOpenNativeBindings().map((binding) => binding.attachmentId)),
+          new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
         publish: publishSessionActivity,
       },
       sessionId,
@@ -92,7 +123,7 @@ export function createHostSessionServices(
     publish: publishSessionActivity,
     provenanceOf: (born) => readSessionProvenance(db, born),
     readOf: (sessionId) => readSessionUnread(db, sessionId),
-    listOpenNativeBindings: () => ports.listOpenNativeBindings(),
+    listOpenNativeBindings: () => runtime.openNativeBindings(),
     observe: (projection) => {
       observeSessionResumptions(db, projection, {
         publish: (change) => ports.events.publish("data-changed", change),
@@ -100,7 +131,7 @@ export function createHostSessionServices(
           ports.log.error("[volli] failed to record Session resumption:", errorMessage(error)),
       });
       runAttention.observe(projection);
-      ports.observeScheduledResume(projection);
+      runtime.observeScheduledResume(projection);
       sessionReadWatch.observe(projection);
     },
     observeBirth: (sessionId) => {
@@ -109,6 +140,7 @@ export function createHostSessionServices(
     },
   });
   const sessionEngine = sessionActivityWatch.engine;
+  runtimeWiring.set(sessionEngine, runtime);
   return {
     sessionLedger,
     hostNoticeOutbox,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostCore, HostRuntimeOwner } from "@volli/host-core";
-import type { RecoveredSessionServices } from "@volli/host-core/session-runtime/lifecycle";
+import type { RecoveredSessionServices } from "@volli/host-core/session-runtime";
 import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import { quitAlreadyRefused, refuseQuit, registerAcceptedQuitCoordinator } from "./quit-gate";
 

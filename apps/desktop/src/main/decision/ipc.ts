@@ -15,7 +15,7 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import type { HostDecisions } from "@volli/host-core/decision/desktop";
+import type { HostDecisions } from "@volli/host-core/session-runtime";
 
 /**
  * Registers the surface, or the honest refusal: `decisions` is null when the

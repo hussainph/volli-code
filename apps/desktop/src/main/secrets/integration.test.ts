@@ -14,14 +14,14 @@ import {
 } from "@volli/shared";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import { secretFixtureProvider } from "../../../../../packages/agent-runtime/src/pi/fixtures/secret-provider";
-import { createPiRuntimeHost } from "@volli/host-core/session-runtime/pi-adapter";
-import { createTestSessionEngine } from "../test-session-engine";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
-import { createAgentShellPort } from "@volli/host-core/shell/agent-port";
-import { SecretStore } from "@volli/host-core/secrets";
-import { SecretService } from "@volli/host-core/secrets/service";
+import {
+  createPiRuntimeHost,
+  BackgroundShellHost,
+  createAgentShellPort,
+} from "@volli/host-core/session-runtime";
+import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
+import { insertProject } from "@volli/host-core/db";
+import { SecretStore, SecretService } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./codec";
 import { registerSecretIpc } from "./ipc";
 

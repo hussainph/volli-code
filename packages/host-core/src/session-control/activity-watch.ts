@@ -95,7 +95,7 @@ export interface SessionActivityWatchPorts {
    * not make a listing row live until one of these bindings exists again.
    * Read once per flush so every row in a publication burst sees one snapshot.
    */
-  listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
+  listOpenNativeBindings: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
   /**
    * Every folded Session's projection, handed over BEFORE the row-difference
    * gate below (VC-133).
@@ -209,7 +209,7 @@ export function watchSessionActivity(
     const ids = [...dirty];
     dirty.clear();
     const liveAttachmentIds = new Set(
-      (ports.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId),
+      ports.listOpenNativeBindings().map((binding) => binding.attachmentId),
     );
     for (const sessionId of ids) {
       try {

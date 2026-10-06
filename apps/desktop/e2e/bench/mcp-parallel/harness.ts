@@ -36,10 +36,13 @@ import {
   type RuntimeMcpPort,
 } from "@volli/shared";
 
-import { openMcpProtocolClient } from "@volli/host-core/mcp/client";
-import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
-import { MCP_PARALLEL_DEV_ENV } from "@volli/host-core/mcp/parallel-dev-config";
-import { McpSessionHost, type McpSessionHostOptions } from "@volli/host-core/mcp/session-host";
+import {
+  openMcpProtocolClient,
+  desktopMcpDispatch,
+  MCP_PARALLEL_DEV_ENV,
+  McpSessionHost,
+  type McpSessionHostOptions,
+} from "@volli/host-core/integrations";
 import { startFixtureMcpServer, type FixtureMcpServer } from "./http-fixture";
 
 export type { BatchShape, DispatchArm };

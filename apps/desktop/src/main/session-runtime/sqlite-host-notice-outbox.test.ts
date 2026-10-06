@@ -13,16 +13,23 @@ import {
 import { sessionHostNoticeMetadata } from "@volli/shared";
 import { readHostNotice } from "@volli/session-presentation";
 import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
-import { createSessionWakeBus } from "@volli/host-core/session-control/session-wake";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { buildBackupDataDocument } from "@volli/host-core/backup/data-document";
-import { openRawDb, openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
-import { createFileTranscriptArtifactStore } from "@volli/host-core/session-runtime/transcript-artifacts";
-import { createPiNativeAdapter } from "@volli/host-core/session-runtime/pi-adapter";
-import { createHostNoticeDelivery } from "@volli/host-core/session-runtime/durable-host-notice-delivery";
-import { createSqliteHostNoticeOutbox } from "@volli/host-core/session-runtime/sqlite-host-notice-outbox";
-import type { HostNoticeDelivery } from "@volli/host-core/session-runtime/host-notice-delivery";
+import {
+  createSqliteSessionLedger,
+  openRawDb,
+  openTestDb,
+  testProject,
+  type TestDb,
+} from "@volli/host-core/testing";
+import { createSessionWakeBus } from "@volli/host-core/sessions";
+import { insertProject } from "@volli/host-core/db";
+import { buildBackupDataDocument } from "@volli/host-core/maintenance";
+import {
+  createFileTranscriptArtifactStore,
+  createPiNativeAdapter,
+  createHostNoticeDelivery,
+  createSqliteHostNoticeOutbox,
+  type HostNoticeDelivery,
+} from "@volli/host-core/session-runtime";
 
 let db: TestDb | undefined;
 let clock = 1000;

@@ -31,7 +31,7 @@ const COMPARISON_DOT: Record<SessionPathComparison["state"], StatusDotState> = {
  * It reports the PATH and nothing else. The Git credential-helper notice used
  * to render here unconditionally, describing the stock macOS setup as a hazard
  * every time this pane was opened; it now rides the Git failure it can account
- * for instead (VC-159/R8, `@volli/host-core/credential-helper-diagnostics`).
+ * for instead (VC-159/R8, `credentialHelperIssues`, `@volli/host-core/worktree`).
  */
 export function SessionPathComparison({
   environment,

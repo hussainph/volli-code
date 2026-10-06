@@ -39,22 +39,18 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/volli-secrecy" },
 }));
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
-import { readSecret } from "@volli/host-core/db/secrets-repo";
-import { createTestSessionEngine } from "../test-session-engine";
+import { openTestDb, type TestDb, createTestSessionEngine } from "@volli/host-core/testing";
+import { readSecret } from "@volli/host-core/db";
 import { registerDataIpcHandlers } from "../data-ipc";
-import {
-  createPiNativeAdapter,
-  type PiRuntimeContext,
-} from "@volli/host-core/session-runtime/pi-adapter";
+import { createPiNativeAdapter, type PiRuntimeContext } from "@volli/host-core/session-runtime";
 import {
   BRAVE_SEARCH_KEY_SECRET,
   EXA_SEARCH_KEY_SECRET,
   WebCredentialStore,
-} from "@volli/host-core/web/credential";
+  webPortsFor,
+  WebAccessSettings,
+} from "@volli/host-core/integrations";
 import { registerWebAccessIpcHandlers } from "./ipc";
-import { webPortsFor } from "@volli/host-core/web/ports";
-import { WebAccessSettings } from "@volli/host-core/web/settings";
 
 const KEY = "BSA-super-secret-brave-key-42";
 const EXA_KEY = "exa-super-secret-second-key-77";

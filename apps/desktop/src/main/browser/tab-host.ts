@@ -15,14 +15,12 @@ import {
   isAllowedBrowserUrl,
   type BrowserLoadWaitMode,
   type BrowserTabCreateOptions,
-} from "@volli/host-core/browser/backend";
-import type { CdpTransport } from "@volli/host-core/browser/cdp-controller";
-import {
+  type CdpTransport,
   BrowserTabRegistry,
   type BrowserTabChrome,
   type BrowserTabRecord,
   type BrowserTabRegistryDependencies,
-} from "@volli/host-core/browser/tab-registry";
+} from "@volli/host-core/browser";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type { BrowserTabBounds, BrowserTabCaptureFrame, BrowserTabState } from "../../ipc/contract";

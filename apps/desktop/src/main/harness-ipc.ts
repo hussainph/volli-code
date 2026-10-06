@@ -50,14 +50,17 @@ import type {
 } from "../ipc/contract";
 
 import type { DbHandle } from "./data-ipc";
-import { listHarnessChannels } from "@volli/host-core/db/harness-channel-repo";
 import {
+  listHarnessChannels,
   getRegisteredHarness,
   recordHarnessTrust,
   restoreRegisteredHarness,
-} from "@volli/host-core/db/harness-registry-repo";
-import { decideRegisteredHarnesses, scanHarnessManifests } from "@volli/host-core/harness-registry";
-import type { DecidedHarnessManifest } from "@volli/host-core/harness-registry";
+} from "@volli/host-core/db";
+import {
+  decideRegisteredHarnesses,
+  scanHarnessManifests,
+  type DecidedHarnessManifest,
+} from "@volli/host-core/agents";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 

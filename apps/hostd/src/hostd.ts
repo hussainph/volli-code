@@ -51,8 +51,11 @@ import {
   type HostCore,
   type HostCorePorts,
 } from "@volli/host-core";
-import { createAgentSocketLifecycle, startAgentSocket } from "@volli/host-core/agent-socket";
-import { createHostAgentCommands } from "@volli/host-core/agent-services";
+import {
+  createAgentSocketLifecycle,
+  startAgentSocket,
+  createHostAgentCommands,
+} from "@volli/host-core/agents";
 
 import {
   createHeadlessSessionRuntime,
@@ -320,11 +323,6 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     try {
       publish("starting");
       const ports = headlessPorts(logger);
-      // Deferred at the host edge only: the attachment assembly holds its ports
-      // at construction, and no ledger consumer is exposed before ready().
-      ports.listOpenNativeBindings = () => sessionRuntime?.openNativeBindings() ?? [];
-      ports.observeScheduledResume = (projection) =>
-        sessionRuntime?.observeScheduledResume(projection);
       const booting = createHostCore(ports, {
         dataDir,
         onTransactionViolation: throwTransactionViolation,

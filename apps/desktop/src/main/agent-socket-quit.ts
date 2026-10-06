@@ -1,5 +1,5 @@
-import type { ShutdownAgentSocket } from "@volli/host-core/agent-socket";
-import { settleShutdownBeforeDeadline } from "@volli/host-core/shutdown-deadline";
+import type { ShutdownAgentSocket } from "@volli/host-core/agents";
+import { settleShutdownBeforeDeadline } from "@volli/host-core/maintenance";
 
 interface AgentSocketAppLifecycle {
   on(event: "will-quit", listener: (event: { preventDefault(): void }) => void): void;

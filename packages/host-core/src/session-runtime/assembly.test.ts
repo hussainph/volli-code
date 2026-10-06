@@ -45,8 +45,6 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
     power: NO_POWER_EVENTS,
     connectivity: ALWAYS_ONLINE,
     log: { error: vi.fn(), warn: vi.fn() },
-    listOpenNativeBindings: () => [],
-    observeScheduledResume: vi.fn(),
   };
   const models = piOwnedModelAccess({ agentDir: join(root, "pi-agent") });
   await models.catalogReady;

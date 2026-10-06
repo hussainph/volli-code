@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import type Database from "better-sqlite3";
 
-import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { getAppState, setAppState } from "@volli/host-core/db";
 
 export const INSTALLATION_ID_APP_STATE_KEY = "volli:installation-id";
 

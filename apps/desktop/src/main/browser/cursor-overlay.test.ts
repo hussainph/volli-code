@@ -22,7 +22,7 @@ import {
   type CursorOverlayView,
   type CursorOverlayWindow,
 } from "./cursor-overlay";
-import type { BrowserHoldEvent } from "@volli/host-core/browser/backend";
+import type { BrowserHoldEvent } from "@volli/host-core/browser";
 
 const A = { sessionId: "ses-a", attachmentId: "att-a" };
 const HOLDER_A: BrowserTabHolder = {
