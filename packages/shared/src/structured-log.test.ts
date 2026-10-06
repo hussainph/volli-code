@@ -21,6 +21,10 @@ import {
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN = "00f067aa0ba902b7";
 
+function stackless(thrown: Error): Error {
+  return Object.assign(thrown, { stack: undefined });
+}
+
 describe("log levels", () => {
   it("ranks debug < info < warn < error", () => {
     expect(LOG_LEVELS.map((level) => LOG_LEVEL_RANK[level])).toEqual([10, 20, 30, 40]);
@@ -140,7 +144,6 @@ describe("redaction (a merge gate: no secret, key or credential reaches a line)"
     });
     expect(String(out["message"])).not.toContain("abc123");
     expect(JSON.stringify(out)).not.toContain("secret cause");
-    const stackless = (error: Error) => Object.assign(error, { stack: undefined });
     expect(redactLogValue(stackless(new Error("plain")))).toEqual({
       name: "Error",
       message: "plain",
