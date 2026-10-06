@@ -168,6 +168,13 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
       calls.push("host.stop");
     }),
   };
+  const app = {
+    on: (event: string, listener: (event: QuitEvent) => void) => {
+      expect(event).toBe("before-quit");
+      listeners.push(listener);
+    },
+    exit: exited.resolve,
+  };
   const scope: Record<string, unknown> = {
     // Real modules index.ts imports.
     prepareDesktopQuit,
@@ -200,13 +207,10 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
         calls.push("repack.abort");
       },
     },
-    app: {
-      on: (event: string, listener: (event: QuitEvent) => void) => {
-        expect(event).toBe("before-quit");
-        listeners.push(listener);
-      },
-      exit: exited.resolve,
-    },
+    app,
+    // index.ts hands the quit coordinator `app` with a log-flushing exit
+    // (VC-699); the lifted path sees the same object under that name.
+    quittingApp: app,
     hostCore,
     webSealing: {
       stop: vi.fn(() => {

@@ -4,11 +4,16 @@ name: Release
 # stapled build published to GitHub Releases, where the in-app updater (VC-24,
 # electron-updater) picks it up.
 #
-# There are two doors into this workflow, and they end in the same place:
+# Dispatch defaults to a SAFE DRY RUN: selected ref, hostd packaging on both
+# architectures and a desktop build with the generated pin, workflow artifacts
+# only. To release, the owner must explicitly set dry_run=false. Dry runs never
+# enter prepare or the macOS signing/publishing job.
+#
+# There are two publishing doors into this workflow:
 #
 #   1. BUTTON (workflow_dispatch) — the default. Actions -> Release -> Run
 #      workflow, pick patch/minor/major, or `gh workflow run release.yml -f
-#      bump=patch`. The `prepare` job bumps both package.json files on a
+#      bump=patch -f dry_run=false`. The `prepare` job bumps both package.json files on a
 #      runner, commits, tags and pushes, then hands off to the build job.
 #      Nothing is built, tested or tagged on a developer machine.
 #
@@ -119,19 +124,22 @@ on:
         description: "Refuse to release unless CI passed on the commit being released"
         type: boolean
         default: true
+      dry_run:
+        description: "Defaults to dry-run (no tag/sign/publish). Set false for a real button release."
+        type: boolean
+        default: true
 
 permissions:
-  # The publish step uploads dmg + zip + latest-mac.yml to the GitHub Release
-  # using GH_TOKEN. `prepare` additionally pushes the release commit and tag to
-  # main with it.
-  contents: write
+  contents: read
 
 jobs:
   # Door 1 only. Cheap ubuntu runner: everything here is a guard, and a guard
   # that fails should not have cost a macOS runner first.
   prepare:
     name: Bump, tag, push
-    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -237,13 +245,207 @@ jobs:
           git push origin HEAD:main
           git push origin "$TAG"
 
+  # Resolve once, so both architectures and desktop use exactly the same ref.
+  # Dry runs always use the selected branch; they never enter prepare/release.
+  hostd-ref:
+    name: Resolve hostd release ref
+    needs: [prepare]
+    if: >-
+      always() && !cancelled() &&
+      (needs.prepare.result == 'success' ||
+       (needs.prepare.result == 'skipped' &&
+        (github.event_name == 'push' || inputs.dry_run)))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Resolve ref
+        id: resolve
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.sha }}
+        run: echo "ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+
+  hostd:
+    name: Package hostd (linux-${{ matrix.arch }})
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Guard release version
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::root package.json is $version but apps/desktop/package.json is $pkg — bump both together."
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$RELEASE_REF" != "v$pkg" ]; then
+            echo "::error::Tag $RELEASE_REF does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+      # Native runners + the same multi-arch bookworm image as CI: no QEMU,
+      # cross-compilation, Electron rebuild or glibc baseline change.
+      - name: Build host image
+        run: docker build --file .devcontainer/host/Dockerfile --tag volli-host-dev .
+      - name: Package and probe hostd
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hostd"
+          chmod 0777 "$RUNNER_TEMP/hostd"
+          docker run --rm -e EXPECTED_ARCH="$ARCH" volli-host-dev sh -ec \
+            'test "$(node -p process.arch)" = "$EXPECTED_ARCH"'
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/hostd:/out" volli-host-dev \
+            bash /src/apps/hostd/scripts/ci-build-artifact.sh
+          docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-boot-artifact.sh
+      - name: Upload architecture assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  hostd-assets:
+    name: Verify hostd checksums and generate desktop pin
+    needs: [hostd-ref, hostd]
+    if: always() && !cancelled() && needs.hostd.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Download architecture assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hostd-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Generate verified manifest and SHA256SUMS
+        run: |
+          node scripts/hostd-release-manifest.mjs --assets "$RUNNER_TEMP/hostd-assets"
+          cd "$RUNNER_TEMP/hostd-assets"
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          cat hostd-release-manifest.json >> "$GITHUB_STEP_SUMMARY"
+      # Developer ID signs the Mac app, not Linux binaries. Sign provenance
+      # for Linux assets/checksums/pin with GitHub OIDC (no new private key).
+      - name: Sign hostd provenance
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/hostd-assets/*.tar.gz
+            ${{ runner.temp }}/hostd-assets/SHA256SUMS
+            ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
+      - name: Collect signature bundle
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/hostd-assets/hostd-provenance.sigstore.json"
+      - name: Upload complete hostd release asset set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  dry-run-desktop:
+    name: Dry-run desktop build with hostd pin (no signing or publishing)
+    needs: [hostd-assets]
+    if: >-
+      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download verified hostd assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Build desktop with verified hostd pin
+        env:
+          VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
+        run: |
+          vp run --filter @volli/desktop build
+          cmp "$VOLLI_HOSTD_MANIFEST" apps/desktop/dist-electron/hostd-release-manifest.json
+      - name: Upload desktop pin
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-hostd-manifest
+          path: apps/desktop/dist-electron/hostd-release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Sign, notarize, publish
+    permissions:
+      contents: write
     # Door 1 arrives via prepare; door 2 skips it. `always()` is what lets a
     # skipped dependency still run this job, so the two results are
     # distinguished explicitly rather than by truthiness.
-    needs: [prepare]
-    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
+    # A hostd-assets failure blocks desktop release by design: the signed pin
+    # requires same-release assets. After a failure use "Re-run all jobs", not
+    # "re-run failed jobs" (actions/download-artifact#486, cross-attempt 404s).
+    # Button-mode prepare is not idempotent: it may bump again on a full rerun.
+    needs: [prepare, hostd-assets]
+    if: >-
+      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.dry_run) &&
+      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     # arm64, matching the arm64-only target list in electron-builder.yml.
     runs-on: macos-latest
     env:
@@ -366,6 +568,26 @@ jobs:
           fi
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
+      # Download and verify before creating a live canary pre-release: missing
+      # or corrupt hostd inputs must not leave an empty release behind.
+      - name: Download verified hostd release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets
+
+      - name: Verify hostd release asset set
+        working-directory: ${{ runner.temp }}/hostd-assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
+          [ "${#hostdFiles[@]}" -eq 7 ] || { echo "::error::hostd asset set incomplete"; exit 1; }
+          for f in "${hostdFiles[@]}"; do
+            [ -s "$f" ] || { echo "::error::hostd release asset missing or empty: $f"; exit 1; }
+          done
+          shasum -a 256 -c SHA256SUMS
+
       # Seed the release for this tag before electron-builder runs, so its
       # racing publisher instances all find and reuse one release instead of
       # each trying to create it (see header). Hyphenated tag = live
@@ -403,8 +625,11 @@ jobs:
       # extraResources reads Chromium's notice from the installed package.
       # Prefetch that package too (as CI does), or packaging silently omits it.
       - name: Build desktop pipeline and fetch Electron
+        env:
+          VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
         run: |
           vp run --filter @volli/desktop build
+          cmp "$VOLLI_HOSTD_MANIFEST" apps/desktop/dist-electron/hostd-release-manifest.json
           vp run --filter @volli/desktop ensure:electron
           test -s apps/desktop/node_modules/electron/dist/LICENSES.chromium.html
 
@@ -495,6 +720,11 @@ jobs:
           [ "${#zipMaps[@]}" -eq 1 ] || { echo "::error::expected exactly one zip blockmap, found: ${zipMaps[*]:-none}"; exit 1; }
           [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
           files=("${dmgs[0]}" "${dmgMaps[0]}" "${zips[0]}" "${zipMaps[0]}" latest-mac.yml)
+          # Own the complete set in this one upload: the cleanup below must not
+          # remove hostd assets from a canary or a re-run of an existing draft.
+          cp "$RUNNER_TEMP/hostd-assets/"* .
+          hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
+          files+=("${hostdFiles[@]}")
 
           # latest-mac.yml must describe the dmg about to be uploaded, but
           # electron-builder builds that entry while it builds the dmg, and the
