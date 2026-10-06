@@ -98,6 +98,7 @@ describe("app_state key registry", () => {
       "volli:experimental-flags": "split VC-577",
       "volli:installation-id": "host VC-572",
       "volli:agent-tools-removed": "host VC-572",
+      "volli:follow-up-clean-close": "host stays",
       "volli:min-reader-version": "host stays",
       "volli:legacy-backup": "host VC-573",
       "volli:retention": "host VC-573",

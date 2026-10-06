@@ -45,8 +45,10 @@ and ignores it); without `--listen` nothing listens either.
 - **Loopback only**, a literal address (`127.0.0.1`, `[::1]`; not `localhost`),
   until pairing and TLS land (VC-575); `--listen` refuses anything else. Port
   `0` picks one; the status file's `hostProtocol` names it. Its limits are
-  tight while devices enrolled over SSH are all it admits (8 connections,
-  4 MiB frames, 8 MiB unsent each; `HOSTD_LISTENER_LIMITS`).
+  tight while devices enrolled over SSH are all it admits: at most 8 active
+  client/Workspace connections per host (host-wide, across every Mac; a
+  client holds one per Workspace), 4 MiB frames, 8 MiB unsent each
+  (`HOSTD_LISTENER_LIMITS`).
 - **Devices enrolled over SSH** are admitted (VC-700): `volli-hostd enroll`
   trusts a device's public key, and the device signs a short-lived `vdc1`
   credential per handshake. A device acts as you, so a system install keeps

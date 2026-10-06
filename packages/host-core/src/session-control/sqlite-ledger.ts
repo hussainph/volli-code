@@ -78,6 +78,25 @@ export function createSqliteSessionLedger(db: Database.Database): SessionLedger 
   return new SqliteSessionLedger(db);
 }
 
+/** Read-only delivery evidence from an already-owned synchronous DB transaction. */
+export function readSqliteSessionCommandEvidence(
+  db: Database.Database,
+  sessionId: string,
+  commandId: string,
+): {
+  command: SessionCommand | null;
+  receipts: readonly CommandReceipt[];
+  events: readonly SessionEvent[];
+} {
+  if (!db.inTransaction) throw new Error("Session command evidence requires a transaction");
+  const reader = new SqliteSessionLedgerTransaction(db, () => db.inTransaction);
+  return {
+    command: reader.getCommand(commandId),
+    receipts: reader.listReceipts(commandId),
+    events: reader.listEvents({ sessionId }),
+  };
+}
+
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   readonly #touchedSessionIds = new Set<string>();
   /** Every fact this transaction appended, in order: logged once it commits. */

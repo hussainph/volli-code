@@ -4,8 +4,10 @@ import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
 import type { IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import {
+  createDesktopRouter,
   createSessionRouter,
   DESKTOP_IPC_PATHS,
+  type DesktopRouterHandlers,
   LOCAL_DESKTOP_CALLER,
   logRpcDiagnostics,
   RpcDiagnosticLog,
@@ -27,14 +29,14 @@ import {
  */
 export interface RegisterSessionRpcIpcOptions {
   /**
-   * The host's one handler map (`@volli/host-core/handlers`, VC-668), as the
-   * routers project it: production hands the router policy's view,
+   * The host's one handler map (`@volli/host-core/handlers`, VC-668), both
+   * tiers of it (VC-608), as the routers project it: production hands the router policy's view,
    * `admittedHandlers(map, ROUTER_POLICY)`, so each handler is admitted at the
    * map as well as by the router's middleware (a sealed map has no other
    * callable form). The bridge forwards this one object; it carries no
    * per-behaviour port of its own.
    */
-  handlers: SessionRouterHandlers;
+  handlers: SessionRouterHandlers & DesktopRouterHandlers;
   diagnostics?: RpcDiagnosticLog;
   /** Optional payload-free timing tap for benchmark runs. */
   performanceObserver?: RpcProcedurePerformanceObserver;
@@ -59,7 +61,9 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   // Every call's start and outcome, in the renderer's trace for it (VC-699).
   logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const server = createIpcServer({
-    routers: [createSessionRouter()],
+    // The Session router and the desktop-only tier's: an area router joins
+    // here, and in `DesktopIpcRouters`, when its area moves.
+    routers: [createSessionRouter(), createDesktopRouter()],
     served: DESKTOP_IPC_PATHS,
     createContext: () => ({
       caller: LOCAL_DESKTOP_CALLER,

@@ -58,6 +58,7 @@ import {
   type ModelSelection,
   type SessionReadVerb,
   type Ticket,
+  type WorktreeTrimSettings,
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
@@ -81,8 +82,10 @@ import {
 } from "../session-runtime/model-access-preferences";
 import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
 import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
+import { reorderProjects } from "../db/projects-repo";
 import { executeTicketMove, type TicketMoveCommandInput } from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
+import { getTrimSettings } from "../worktree/trim-settings";
 import type { WorktreePorts } from "../worktree/types";
 import { worktreeDeps } from "../worktree-runtime";
 
@@ -190,6 +193,12 @@ export interface HostHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  /**
+   * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
+   * placement-derived policy (both host-placed: device-as-user).
+   */
+  readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -466,5 +475,12 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    // The desktop-only tier: the bodies `volli:project-reorder` and
+    // `volli:worktree-trim-settings-get` had in `data-ipc.ts`, moved, not copied.
+    "project.reorder": ({ orderedIds }) => {
+      reorderProjects(board(), orderedIds, now());
+      return null;
+    },
+    "worktree.trimSettings": () => getTrimSettings(board()),
   };
 }

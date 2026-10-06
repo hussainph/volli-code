@@ -138,6 +138,13 @@ export {
   type BoardRouterHandlers,
   type BoardTicketMoveInput,
 } from "./board-router";
+export {
+  createDesktopRouter,
+  desktopProcedureSchemas,
+  type DesktopRouter,
+  type DesktopRouterContext,
+  type DesktopRouterHandlers,
+} from "./desktop-router";
 export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
 export {
   DESKTOP_IPC_EXPOSURE,

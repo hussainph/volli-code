@@ -12,6 +12,10 @@ import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
 import { wireSessionRuntime } from "../session-services";
 import { listProjects } from "../db/projects-repo";
+import {
+  consumeFollowUpCleanClose,
+  FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
+} from "../db/session-follow-up-repo";
 import { listScheduledResumeSessionIds } from "../db/scheduled-resume-repo";
 import {
   createScheduledResumeHost,
@@ -194,7 +198,16 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   options.installQuitHold(close);
 
   async function recover(): Promise<RecoveredSessionServices<Services>> {
+    let held: string[] = [];
     if (database.ok && sessionEngine !== null) {
+      // Compare before recovery itself can append events. A present watermark
+      // is consumed in the same transaction that refuses any stale queued rows.
+      held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
+        ports.log.error(
+          `[volli] unreadable follow-up queue for ${sessionId}:`,
+          errorMessage(error),
+        ),
+      );
       try {
         await closeStaleAttachments({
           engine: sessionEngine,
@@ -241,6 +254,19 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     }
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
+    // Explain durable holds after stale bindings are retired, so the Attention
+    // belongs to today's executor. Failure cannot unhold a row; retry next boot.
+    for (const sessionId of held) {
+      try {
+        await runtime?.reportMessageDeliveryFailure({
+          sessionId,
+          commandId: `follow-up:${sessionId}`,
+          detail: FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
+        });
+      } catch (error) {
+        ports.log.error("[volli] failed to explain held follow-ups:", errorMessage(error));
+      }
+    }
     if (runtime !== null) await recoverFollowUps(runtime);
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
