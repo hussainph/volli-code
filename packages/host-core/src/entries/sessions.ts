@@ -11,6 +11,9 @@ export {
   type SessionConcurrencyEnvReader,
 } from "../session-concurrency";
 export {
+  hasLiveWork,
+  type HostLiveWork,
+  NO_LIVE_WORK,
   publishSessionListingRow,
   readSessionPeekContent,
   sessionListingRowsForRoster,
