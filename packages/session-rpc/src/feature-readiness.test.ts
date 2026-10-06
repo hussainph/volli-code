@@ -9,7 +9,7 @@ import { CATALOG_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { assertHostFeatureReadiness } from "./feature-readiness";
-import { createSessionRouter } from "./index";
+import { createHostRouter } from "./host-router";
 
 const t = initTRPC.create();
 const tableOperations: readonly string[] = [
@@ -27,7 +27,7 @@ function selectPaths(router: AnyRouter, paths: readonly string[]): AnyRouter {
   return t.router(Object.fromEntries(paths.map((path) => [path, procedures[path]!])));
 }
 
-const actual = createSessionRouter();
+const actual = createHostRouter();
 
 describe("host feature readiness", () => {
   it("accepts the complete actual router and canonical offers", () => {

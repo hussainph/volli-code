@@ -47,6 +47,8 @@ import {
   type HostProtocolListenerLimits,
 } from "./websocket-server";
 
+/** What the Session router alone serves: every v1 feature but the board's (VC-565). */
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
@@ -207,7 +209,7 @@ async function serve(
     router: createSessionRouter(),
     bind: { host: "127.0.0.1", port: 0 },
     host: { id: HOST, version: "test" },
-    features: HOST_V1_FEATURES,
+    features: SESSION_ROUTER_FEATURES,
     workspace: async (id) => (id === WORKSPACE ? { id, epoch: 2 } : null),
     verifier: options.verifier ?? {
       verify: ({ credential: presented }) => grants[presented] ?? null,
@@ -796,7 +798,7 @@ describe("the listener's own lifetime", () => {
       router: createSessionRouter(),
       bind: { host: "::1", port: 0 },
       host: { id: HOST, version: "test" },
-      features: HOST_V1_FEATURES,
+      features: SESSION_ROUTER_FEATURES,
       workspace: () => null,
       verifier: { verify: () => null },
       context: () => ({
@@ -857,7 +859,7 @@ describe("isLoopbackHost", () => {
         router: createSessionRouter(),
         bind: { host: "0.0.0.0", port: 0 },
         host: { id: HOST, version: "test" },
-        features: HOST_V1_FEATURES,
+        features: SESSION_ROUTER_FEATURES,
         workspace: () => null,
         verifier: { verify: () => null },
         context: () => ({

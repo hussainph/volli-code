@@ -29,6 +29,8 @@ import {
 import { sessionHandlersFrom } from "./session-handlers.test-support";
 import { startHostProtocolListener } from "./websocket-server";
 
+/** What the Session router alone serves: every v1 feature but the board's (VC-565). */
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const DEVICE = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";
@@ -108,7 +110,7 @@ async function serve() {
     router: createSessionRouter(),
     bind: { host: "127.0.0.1", port: 0 },
     host: { id: HOST, version: "test" },
-    features: HOST_V1_FEATURES,
+    features: SESSION_ROUTER_FEATURES,
     workspace: async (id) => (id === WORKSPACE ? { id, epoch: 2 } : null),
     verifier: {
       verify: ({ credential }) =>

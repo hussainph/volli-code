@@ -17,17 +17,29 @@ import { format } from "node:util";
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
 import type { HostCorePorts } from "@volli/host-core";
+import type { DataChangeScope } from "@volli/shared";
 
 import type { HostdLogger } from "./log";
 
-export function headlessPorts(logger: HostdLogger): HostCorePorts {
+/**
+ * `onDataChanged` hears every `data-changed` a host-core writer announces: the
+ * board's change feed stamps them (VC-565), so a Client following the feed
+ * learns of an agent's write as of a person's. No window is told: none exists.
+ */
+export function headlessPorts(
+  logger: HostdLogger,
+  onDataChanged: (scope: DataChangeScope) => void = () => {},
+): HostCorePorts {
   return {
     log: {
       error: (...args: unknown[]) => logger.error(format(...args), { source: "host-core" }),
       warn: (...args: unknown[]) => logger.warn(format(...args), { source: "host-core" }),
     },
     events: {
-      publish: (topic) => logger.debug("event dropped: no client connected", { topic }),
+      publish: (topic, payload) => {
+        if (topic === "data-changed") onDataChanged(payload as DataChangeScope);
+        logger.debug("event dropped: no client connected", { topic });
+      },
     },
     attention: {
       deliver: (request) => {
