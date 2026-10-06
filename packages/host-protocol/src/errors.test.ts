@@ -141,11 +141,15 @@ describe("identity and actor guards", () => {
     expect(Object.isFrozen(LOCAL_DEVICE_ACTOR)).toBe(true);
   });
 
-  it("never mistakes a malformed actor with no Workspace for the desktop", () => {
+  it("recognizes the desktop by identity, never by shape", () => {
     const malformed = [
       { kind: "session", sessionId: "agent" },
       { kind: "worker", workerId: ID },
       { kind: "device", deviceId: ID },
+      // Spelled exactly like the desktop, or with extra fields: still not it.
+      { kind: "device", deviceId: LOCAL_DEVICE_ID },
+      { ...LOCAL_DEVICE_ACTOR },
+      { kind: "device", deviceId: LOCAL_DEVICE_ID, network: true, workerId: ID },
     ];
     for (const actor of malformed) {
       expect(isLocalDeviceActor(actor as never)).toBe(false);
