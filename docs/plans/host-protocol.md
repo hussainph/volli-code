@@ -159,6 +159,17 @@ VC-564 implements this in the catalog middleware ([Command catalog](#command-cat
 
 Context carries the authorized workspace; inputs cannot override it. Every ticket, Session, terminal, artifact, blob, subscription and worker lookup verifies workspace ownership **before** returning data or mutating. Cross-workspace ids and absent ids have the same `NOT_FOUND` answer (`workspace-unknown`), including subscriptions and bulk-channel grants. Policy denial within the workspace is `FORBIDDEN` / `verb-refused`. A promoted authority rejects old-epoch writes; worker checkout writes additionally carry `(workspaceEpoch, leaseEpoch)`, ordered lexicographically, and must equal the current live, unexpired per-ticket grant for the authenticated worker. A claimed higher token is not authorization. Lease epochs belong on writes, not the hello; a valid workspace connection is not a checkout lease.
 
+### Remote hosts on the desktop (VC-700 PR 2)
+
+Desktop main holds the hosts this Mac added over SSH (`@volli/host-install`'s `createRemoteHosts`, composed in `apps/desktop/src/main/remote-hosts.ts`), behind `cloud`:
+
+- **Registry:** `<userData>/remote-hosts.json`, plain JSON with no secret: each host's id (pinned at enrollment), name, SSH target, OS, mode, version, device id, listen address and the Workspaces opened on it.
+- **Device keys:** one P-256 key per host, minted per add flow and kept in the host's sealed credential inventory (`host-private`, purpose `remote-host-device:<name>`), sealed by the same keychain-wrapped key as the web search keys. Every handshake gets a fresh `vdc1` (iat now, 120 s life, random `jti`). Never logged, never in a snapshot.
+- **Transport:** one `ssh -L` tunnel per host (the person's own `ssh`, config and known_hosts) and one VC-670 link per opened Workspace on its local end. A project's link is the tunnel's state until its link exists.
+- **What it installs:** the app's signed `hostd-release-manifest.json` is the only trust root for release assets; with none pinned, an unpackaged build may name local tarballs in `VOLLI_HOSTD_DEV_TARBALLS`, a packaged build never.
+- **Desktop-only tier** (`DESKTOP_ENTRIES`, host-placed, person-only): `hosts.snapshot|subscribe|retry|updateHost|cancelScheduledUpdate|signIn|forget` and `hostAdd.start|subscribe|answer|sudoPassword|retry|cancel`, through host-core's map (`HostHandlerOptions.remoteHosts`; hostd supplies none, so they answer `operation-unavailable`). The sudo password is write-only: it reaches only sudo's stdin, and no snapshot, event, log line, diagnostic or error carries it. `updateHost`/`cancelScheduledUpdate` and `signIn` refuse in v1 (`operation-unavailable`).
+- **The UI's source:** `hosts.subscribe` streams `RemoteHostsSnapshot` (`@volli/shared`): hosts with no link of their own, and each remote project with its own Workspace link state. The renderer's `createRemoteHostSource` feeds each project's link into its own VC-576 `createHostLinkTracker` and attaches beside This Mac while `cloud` is on; the host-connection store aggregates a host's link from its projects'.
+
 ## Command catalog (F3)
 
 Desktop has three verb vocabularies:
