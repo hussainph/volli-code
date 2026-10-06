@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   CredentialsResult,
   SecretReplaceInput,
@@ -47,9 +48,6 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  SessionRpcIpcEvent,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -837,8 +835,8 @@ const api = {
    * called instead.
    */
   sessionRpc: {
-    /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
-    request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
+    /** Runs one served procedure; a subscription acknowledges with the id its frames will carry. */
+    request: (request: IpcRequest): Promise<IpcResponse> =>
       invoke("volli:session-rpc" satisfies typeof SESSION_RPC_IPC_CHANNEL, request),
     /**
      * Subscribes to the frames of EVERY live subscription; returns the
@@ -846,9 +844,8 @@ const api = {
      * because the id main acknowledged with is what tells them apart, and it
      * can arrive after the first frame does.
      */
-    onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
-        callback(payload);
+    onEvent: (callback: (event: IpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) => callback(payload);
       const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
