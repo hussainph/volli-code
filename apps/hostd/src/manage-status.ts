@@ -13,7 +13,7 @@
  *
  * It reports the installed releases, the unit, user lingering, the running
  * host (its version, host id and listener) and the enrolled devices, never
- * their keys. Run as another account than the data directory's owner, the
+ * their keys (a system install's from root's `/etc/volli-hostd-devices`). Run as another account than the data directory's owner, the
  * host and its devices read as unknown rather than failing the whole answer.
  */
 import { existsSync } from "node:fs";
@@ -25,10 +25,10 @@ import {
   type InstallMode,
 } from "@volli/host-install/contract";
 
-import { describeDevice, readEnrolledDevices } from "./enrolled-devices";
+import { dataDirDeviceStore, describeDevice, readEnrolledDevices } from "./enrolled-devices";
 import { currentVersion, installedReleases } from "./install";
 import type { InstallLayout } from "./layout";
-import { SERVICE_UNIT } from "./layout";
+import { layoutDeviceStore, SERVICE_UNIT } from "./layout";
 import { lingerOf, readManaged, unitState, type RunTool } from "./management";
 import { checkStatus, type StatusProbes } from "./status";
 
@@ -46,6 +46,8 @@ export interface ManagedStatusPorts {
   readonly probes: StatusProbes;
   readonly login: () => string;
   readonly version: string;
+  /** Who a system install's device store must belong to: root (0) on a box. */
+  readonly trustedOwnerUid: number;
 }
 
 export async function managedStatus(
@@ -57,7 +59,15 @@ export async function managedStatus(
   const dataDir = command.dataDir ?? layout?.dataDir ?? null;
   const report = dataDir === null ? null : await checkStatus(dataDir, ports.probes);
   const status = report?.status ?? null;
-  const devices = dataDir === null ? null : readEnrolledDevices(dataDir);
+  // A system install's devices are root's (readable by anyone); a data
+  // directory's are its owner's.
+  const store =
+    layout !== null
+      ? layoutDeviceStore(layout, ports.trustedOwnerUid)
+      : dataDir === null
+        ? null
+        : dataDirDeviceStore(dataDir);
+  const devices = store === null ? null : readEnrolledDevices(store);
   const managed = layout === null ? null : readManaged(layout);
   const releases = layout === null ? [] : installedReleases(layout);
   const flat = layout?.mode === "system" && existsSync(join(layout.root, "bin/volli-hostd"));
@@ -94,7 +104,7 @@ export async function managedStatus(
                 ? null
                 : { host: status.hostProtocol.host, port: status.hostProtocol.port },
           },
-    devices: devices === null || devices === "unreadable" ? null : devices.map(describeDevice),
+    devices: devices === null || typeof devices === "string" ? null : devices.map(describeDevice),
   };
 }
 

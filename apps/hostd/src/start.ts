@@ -30,6 +30,7 @@ import {
   readManaged,
   systemctlArgs,
   unitState,
+  writeManaged,
   type RunTool,
 } from "./management";
 import { ROOT_UID } from "./install";
@@ -100,13 +101,24 @@ export async function runStart(
       status.hostProtocol?.port === managed.port;
     return { report, ok };
   };
+  // One version can be rebuilt (another revision): what runs is the release
+  // `start` last brought up, so a new one restarts even at the same version.
+  const releaseStarted = managed.release === undefined || managed.started === managed.release;
 
   let { report, ok } = await matches();
-  const restarted = !ok;
-  if (!ok) {
+  const restarted = !ok || !releaseStarted;
+  if (restarted) {
     const units = mode === "system" ? [SERVICE_UNIT, SOCKET_UNIT] : [SERVICE_UNIT];
     must(run, "systemctl", systemctlArgs(mode, "stop", ...units));
-    must(run, "systemctl", systemctlArgs(mode, "start", ...units.toReversed()));
+    const started = run("systemctl", systemctlArgs(mode, "start", ...units.toReversed()));
+    if (started.code !== 0) {
+      // The common start failure: the job failed at once. The journal says why.
+      throw new ManagementError(
+        "start-failed",
+        "volli-hostd did not start.",
+        journalTail(run, mode),
+      );
+    }
     const deadline = ports.now() + command.timeoutMs;
     for (;;) {
       ({ report, ok } = await matches());
@@ -137,6 +149,7 @@ export async function runStart(
       await ports.sleep(POLL_MS);
     }
   }
+  if (!releaseStarted) writeManaged(layout, { ...managed, started: managed.release });
   // `ok` means serving, this version, the listener on the recorded port.
   const status = report.status!;
   const listener = status.hostProtocol!;

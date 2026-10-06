@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { installLayout, type InstallLayout } from "./layout";
-import { ManagementError, writeManaged, type CommandResult } from "./management";
+import { ManagementError, readManaged, writeManaged, type CommandResult } from "./management";
 import { runStart, type StartCommand, type StartPorts } from "./start";
 import type { HostdStatus, StatusProbes } from "./status";
 
@@ -254,5 +254,41 @@ describe("start --user", () => {
     expect(fake.calls).toContain(
       "journalctl --user -u volli-hostd.service -n 20 -o cat --no-pager",
     );
+  });
+});
+
+describe("start, after the final review", () => {
+  // Note: the common failure, a start job failing at once, is the designed one.
+  it("types a systemctl start job failure as start-failed with journal detail", async () => {
+    const fake = box({
+      systemctl: (args) =>
+        args.includes("start") ? { code: 1, stderr: "Job for volli-hostd.service failed." } : {},
+      journalctl: () => ({ stdout: "boot refusal details\n" }),
+    });
+    const error = await refusal(runStart(SYSTEM, ports({ run: fake.run, probes: probes(null) })));
+    expect(error).toMatchObject({ code: "start-failed", detail: ["boot refusal details"] });
+  });
+
+  // B3: one version rebuilt from another revision is a new release to run.
+  it("restarts once for a new release of the same version, then records it as started", async () => {
+    writeManaged(layout, {
+      v: 1,
+      mode: "system",
+      version: "1.1.0",
+      release: "1.1.0-def",
+      started: "1.1.0-abc",
+      port: 7420,
+      installedAt: "t",
+    });
+    const fake = box();
+    expect(await runStart(SYSTEM, ports({ run: fake.run }))).toMatchObject({ restarted: true });
+    expect(fake.calls.slice(0, 2)).toEqual([
+      "systemctl stop volli-hostd.service volli-hostd.socket",
+      "systemctl start volli-hostd.socket volli-hostd.service",
+    ]);
+    expect(readManaged(layout)).toMatchObject({ release: "1.1.0-def", started: "1.1.0-def" });
+    const again = box();
+    expect(await runStart(SYSTEM, ports({ run: again.run }))).toMatchObject({ restarted: false });
+    expect(again.calls).toEqual([]);
   });
 });

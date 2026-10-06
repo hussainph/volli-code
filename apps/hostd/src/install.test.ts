@@ -1,8 +1,10 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   statSync,
@@ -21,7 +23,7 @@ import {
   type InstallPorts,
 } from "./install";
 import { installLayout, type InstallLayout } from "./layout";
-import { ManagementError, readManaged, type CommandResult } from "./management";
+import { ManagementError, readManaged, writeManaged, type CommandResult } from "./management";
 
 let root: string;
 
@@ -144,7 +146,7 @@ describe("install --system", () => {
       "created the volli account",
       "added alice to the volli group",
       `made the data directory ${layout.dataDir}`,
-      "installed release 1.0.0",
+      "installed release 1.0.0-abc",
       "current is 1.0.0",
       `linked ${join(layout.binLinkDir, "volli-hostd")}`,
       `linked ${join(layout.binLinkDir, "volli")}`,
@@ -161,13 +163,15 @@ describe("install --system", () => {
       `useradd --system --create-home --home-dir ${layout.dataDir} --shell /bin/bash volli`,
       "id -nG alice",
       "usermod -aG volli alice",
+      // The unit's effective configuration, read before making a key (B1).
+      "systemctl show volli-hostd.service -p Environment -p EnvironmentFiles",
       "systemctl daemon-reload",
       "systemctl is-enabled volli-hostd.socket volli-hostd.service",
       "systemctl enable volli-hostd.socket volli-hostd.service",
     ]);
     expect(statSync(layout.dataDir).mode & 0o777).toBe(0o700);
     expect(p.chowned).toEqual([layout.dataDir, join(root, "etc/volli-hostd"), layout.keyFile]);
-    expect(readlinkSync(layout.currentLink)).toBe("releases/1.0.0");
+    expect(readlinkSync(layout.currentLink)).toBe("releases/1.0.0-abc");
     expect(readlinkSync(join(layout.binLinkDir, "volli"))).toBe(
       join(layout.currentLink, "bin/volli"),
     );
@@ -179,18 +183,20 @@ describe("install --system", () => {
     const managed = readFileSync(join(layout.dropInDir, "50-volli-managed.conf"), "utf8");
     expect(managed).toContain("Environment=VOLLI_EXPERIMENTAL=cloud\nExecStart=\n");
     expect(managed).toContain(
-      `ExecStart=${layout.currentLink}/bin/volli-hostd --data-dir ${layout.dataDir} --socket /run/volli-hostd.sock --listen 127.0.0.1:7420`,
+      `ExecStart=${layout.currentLink}/bin/volli-hostd --data-dir ${layout.dataDir} --socket /run/volli-hostd.sock --devices ${join(root, "etc/volli-hostd-devices")} --listen 127.0.0.1:7420`,
     );
     expect(statSync(join(layout.unitDir, "volli-hostd.service")).mode & 0o777).toBe(0o644);
     expect(readManaged(layout)).toEqual({
       v: 1,
       mode: "system",
       version: "1.0.0",
+      release: "1.0.0-abc",
       port: 7420,
       installedAt: "2026-10-07T00:00:00.000Z",
     });
     expect(currentVersion(layout)).toBe("1.0.0");
-    expect(installedReleases(layout)).toEqual(["1.0.0"]);
+    expect(installedReleases(layout)).toEqual(["1.0.0-abc"]);
+    expect(existsSync(join(layout.root, ".reload-pending"))).toBe(false);
     expect(installedReleases(userLayoutOf(root))).toEqual([]);
   });
 
@@ -229,33 +235,63 @@ describe("install --system", () => {
     );
     expect(next).toMatchObject({ previous: "1.0.0", version: "1.1.0", changed: true });
     expect(next.actions).toEqual([
-      "installed release 1.1.0",
+      "installed release 1.1.0-abc",
       "current moved from 1.0.0 to 1.1.0",
       "wrote volli-hostd.service",
       "wrote 50-volli-managed.conf",
       "reloaded systemd",
       "recorded 1.1.0 on port 7500",
     ]);
-    expect(installedReleases(layout)).toEqual(["1.0.0", "1.1.0"]);
+    expect(installedReleases(layout)).toEqual(["1.0.0-abc", "1.1.0-abc"]);
   });
 
-  it("replaces a release of the same version built from another revision", () => {
+  // B3: one version can be rebuilt; each build keeps its own directory.
+  it("keeps the prior same-version revision for rollback, and moves current in one rename", () => {
     const layout = systemLayout();
     runInstall(SYSTEM, ports(layout));
     const rebuilt = runInstall(SYSTEM, ports(layout, { ownRelease: release("1.0.0", "def") }));
-    expect(rebuilt.actions).toEqual(["installed release 1.0.0"]);
+    expect(rebuilt.actions).toEqual([
+      "installed release 1.0.0-def",
+      "current moved from 1.0.0-abc to 1.0.0-def",
+      "recorded 1.0.0 on port 7420",
+    ]);
+    expect(readlinkSync(layout.currentLink)).toBe("releases/1.0.0-def");
+    expect(installedReleases(layout)).toEqual(["1.0.0-abc", "1.0.0-def"]);
+    const names = readdirSync(layout.releasesDir);
     expect(
-      JSON.parse(readFileSync(join(layout.releasesDir, "1.0.0/MANIFEST.json"), "utf8")),
-    ).toMatchObject({
-      revision: "def",
-    });
-    expect(installedReleases(layout)).toEqual(["1.0.0"]);
+      names.some((name) =>
+        readFileSync(join(layout.releasesDir, name, "MANIFEST.json"), "utf8").includes("abc"),
+      ),
+    ).toBe(true);
+    expect(readManaged(layout)).toMatchObject({ version: "1.0.0", release: "1.0.0-def" });
+    // What start last brought up is kept, so start knows to restart.
+    writeManaged(layout, { ...readManaged(layout)!, started: "1.0.0-abc" });
+    // Rolling back is installing the build before again: nothing copied, current moved.
+    const back = runInstall(SYSTEM, ports(layout));
+    expect(back.actions).toEqual([
+      "current moved from 1.0.0-def to 1.0.0-abc",
+      "recorded 1.0.0 on port 7420",
+    ]);
+    expect(readManaged(layout)).toMatchObject({ release: "1.0.0-abc", started: "1.0.0-abc" });
+  });
+
+  it("names a release with no usable revision by a digest of its files", () => {
+    const layout = systemLayout();
+    const unknown = release("1.0.0", "unknown");
+    symlinkSync("volli-hostd", join(unknown, "bin/volli"));
+    const first = runInstall(SYSTEM, ports(layout, { ownRelease: unknown }));
+    const [name] = installedReleases(layout);
+    expect(name).toMatch(/^1\.0\.0-sha256-[0-9a-f]{12}$/u);
+    expect(first.actions).toContain(`installed release ${name}`);
+    writeFileSync(join(unknown, "bin/volli-hostd"), "#!/bin/sh\necho rebuilt\n");
+    runInstall(SYSTEM, ports(layout, { ownRelease: unknown }));
+    expect(installedReleases(layout)).toHaveLength(2);
   });
 
   it("copies nothing when run from the installed release itself", () => {
     const layout = systemLayout();
     runInstall(SYSTEM, ports(layout));
-    const own = join(layout.releasesDir, "1.0.0");
+    const own = join(layout.releasesDir, "1.0.0-abc");
     expect(
       runInstall({ ...SYSTEM, from: own }, ports(layout, { ownRelease: "/nowhere" })).changed,
     ).toBe(false);
@@ -359,6 +395,7 @@ describe("install --user", () => {
       dataDir: join(root, "state/volli-hostd"),
     });
     expect(fake.calls).toEqual([
+      "systemctl --user show volli-hostd.service -p Environment -p EnvironmentFiles",
       "systemctl --user daemon-reload",
       "systemctl --user is-enabled volli-hostd.service",
       "systemctl --user enable volli-hostd.service",
@@ -397,5 +434,185 @@ describe("install --user", () => {
         runInstall(USER, ports(layout, { uid: () => 1000, systemInstallPresent: () => true })),
       ).code,
     ).toBe("other-mode-installed");
+  });
+});
+
+// The reviewers' regressions (VC-700 final round), kept as invariants.
+describe("install converges and never orphans a key", () => {
+  // B2: what the filesystem cannot show was finished still converges.
+  it("retries daemon-reload after an install interrupted at reload", () => {
+    const layout = systemLayout();
+    runInstall(SYSTEM, ports(layout)); // An existing, enabled system unit: an upgrade.
+    const calls: string[] = [];
+    let interrupted = true;
+    const p = ports(layout, {
+      ownRelease: release("1.1.0"),
+      version: "1.1.0",
+      run: (tool, args) => {
+        calls.push([tool, ...args].join(" "));
+        if (args.includes("daemon-reload") && interrupted) {
+          interrupted = false;
+          return { code: 1, stdout: "", stderr: "simulated interruption" };
+        }
+        return {
+          code: 0,
+          stdout: args.includes("is-enabled") ? "enabled\nenabled\n" : "",
+          stderr: "",
+        };
+      },
+    });
+    expect(() => runInstall(SYSTEM, p)).toThrow();
+    expect(existsSync(join(layout.root, ".reload-pending"))).toBe(true);
+    calls.length = 0;
+    const retried = runInstall(SYSTEM, p);
+    expect(calls).toContain("systemctl daemon-reload");
+    expect(retried.actions).toContain("reloaded systemd");
+    expect(existsSync(join(layout.root, ".reload-pending"))).toBe(false);
+    calls.length = 0;
+    expect(runInstall(SYSTEM, p).changed).toBe(false);
+    expect(calls).not.toContain("systemctl daemon-reload");
+  });
+
+  it("finishes key ownership after interruption between key publication and chown", () => {
+    const layout = systemLayout();
+    const p = ports(layout);
+    let interrupted = true;
+    const owned: string[] = [];
+    const chown = (path: string) => {
+      if (path === layout.keyFile && interrupted) {
+        interrupted = false;
+        throw new Error("power loss at key chown");
+      }
+      owned.push(path);
+    };
+    expect(() => runInstall(SYSTEM, { ...p, chown })).toThrow("power loss");
+    const bytes = readFileSync(layout.keyFile, "utf8");
+    owned.length = 0;
+    runInstall(SYSTEM, { ...p, chown });
+    expect(readFileSync(layout.keyFile, "utf8")).toBe(bytes);
+    expect(owned).toContain(layout.keyFile);
+  });
+
+  // B1: the effective configuration, not one file name, says whether a key exists.
+  it("does not supersede an existing secret-key Environment in another drop-in", () => {
+    const layout = systemLayout();
+    mkdirSync(layout.dropInDir, { recursive: true });
+    writeFileSync(
+      join(layout.dropInDir, "10-custom.conf"),
+      "[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=/srv/private/original.key\n",
+    );
+    runInstall(SYSTEM, ports(layout));
+    expect(existsSync(join(layout.dropInDir, "secret-key.conf"))).toBe(false);
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+
+  it("does not point the unit at a leftover key over one configured in another drop-in", () => {
+    const layout = systemLayout();
+    mkdirSync(join(root, "etc/volli-hostd"), { recursive: true });
+    writeFileSync(layout.keyFile, "leftover");
+    mkdirSync(layout.dropInDir, { recursive: true });
+    writeFileSync(
+      join(layout.dropInDir, "10-custom.conf"),
+      '[Service]\nEnvironment="VOLLI_SECRET_KEY_FILE=/srv/private/original.key"\n',
+    );
+    runInstall(SYSTEM, ports(layout));
+    expect(existsSync(join(layout.dropInDir, "secret-key.conf"))).toBe(false);
+  });
+
+  it("refuses to make a key when systemd reports one configured where no file shows it", () => {
+    const layout = systemLayout();
+    const p = ports(layout, {
+      run: box({
+        systemctl: (args) =>
+          args.includes("show")
+            ? {
+                stdout: "Environment=VOLLI_SECRET_KEY_FILE=/run/elsewhere.key\nEnvironmentFiles=\n",
+              }
+            : {},
+      }).run,
+    });
+    expect(refusal(() => runInstall(SYSTEM, p))).toMatchObject({ code: "secret-key-unclear" });
+    expect(existsSync(layout.keyFile)).toBe(false);
+    expect(existsSync(join(layout.dropInDir, "secret-key.conf"))).toBe(false);
+  });
+
+  it("refuses to make a key when an EnvironmentFile or a silent systemd leaves it in doubt", () => {
+    const layout = systemLayout();
+    mkdirSync(layout.dropInDir, { recursive: true });
+    writeFileSync(
+      join(layout.dropInDir, "20-env.conf"),
+      "[Service]\nEnvironmentFile=/etc/default/volli\n",
+    );
+    expect(refusal(() => runInstall(SYSTEM, ports(layout))).code).toBe("secret-key-unclear");
+    expect(existsSync(layout.keyFile)).toBe(false);
+    rmSync(join(layout.dropInDir, "20-env.conf"));
+    mkdirSync(layout.unitDir, { recursive: true });
+    writeFileSync(join(layout.unitDir, "volli-hostd.service"), "[Service]\n");
+    const silent = ports(layout, {
+      run: box({ systemctl: (args) => (args.includes("show") ? { code: 1 } : {}) }).run,
+    });
+    expect(refusal(() => runInstall(SYSTEM, silent)).code).toBe("secret-key-unclear");
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+
+  it("refuses to make a key beside a key drop-in that names none, or a systemd reading a file", () => {
+    const layout = systemLayout();
+    mkdirSync(layout.dropInDir, { recursive: true });
+    writeFileSync(join(layout.dropInDir, "secret-key.conf"), "[Service]\n# emptied by hand\n");
+    expect(refusal(() => runInstall(SYSTEM, ports(layout))).message).toMatch(
+      /secret-key\.conf names no VOLLI_SECRET_KEY_FILE/u,
+    );
+    rmSync(join(layout.dropInDir, "secret-key.conf"));
+    const reading = ports(layout, {
+      run: box({
+        systemctl: (args) =>
+          args.includes("show")
+            ? {
+                stdout:
+                  "Environment=VOLLI_HOSTD_LOG_LEVEL=info\nEnvironmentFiles=/etc/default/volli (ignore_errors=no)\n",
+              }
+            : {},
+      }).run,
+    });
+    expect(refusal(() => runInstall(SYSTEM, reading)).message).toMatch(
+      /reads environment from \/etc\/default\/volli/u,
+    );
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+
+  it("makes a key on a fresh box whose systemd has nothing loaded to show", () => {
+    const layout = systemLayout();
+    const p = ports(layout, {
+      run: box({ systemctl: (args) => (args.includes("show") ? { code: 1 } : {}) }).run,
+    });
+    expect(runInstall(SYSTEM, p).actions).toContain(`made the secret key ${layout.keyFile}`);
+  });
+
+  it("refuses to replace a configured key that has gone missing", () => {
+    const layout = systemLayout();
+    runInstall(SYSTEM, ports(layout));
+    rmSync(layout.keyFile);
+    expect(refusal(() => runInstall(SYSTEM, ports(layout)))).toMatchObject({
+      code: "secret-key-unclear",
+    });
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+
+  // Note: useradd --create-home makes the home with its own mode.
+  it("makes a data directory useradd created private", () => {
+    const layout = systemLayout();
+    let account: typeof VOLLI | null = null;
+    const fake = box({
+      useradd: () => {
+        mkdirSync(layout.dataDir, { recursive: true, mode: 0o755 });
+        chmodSync(layout.dataDir, 0o755);
+        account = VOLLI;
+        return {};
+      },
+      systemctl: (args) => (args.includes("is-enabled") ? { stdout: "enabled\nenabled\n" } : {}),
+    });
+    const result = runInstall(SYSTEM, ports(layout, { run: fake.run, lookupUser: () => account }));
+    expect(statSync(layout.dataDir).mode & 0o777).toBe(0o700);
+    expect(result.actions).toContain(`made the data directory ${layout.dataDir}`);
   });
 });

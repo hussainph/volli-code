@@ -1,14 +1,15 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { bytesToBase64Url } from "@volli/host-protocol";
 
+import { runDevices } from "./devices";
 import { runEnroll, type EnrollCommand, type EnrollPorts } from "./enroll";
-import { enrolledDevicesPath } from "./enrolled-devices";
-import { installLayout, type InstallLayout } from "./layout";
+import { enrolledDevicesPath, readEnrolledDevices, rootDeviceStore } from "./enrolled-devices";
+import { installLayout, layoutDeviceStore, type InstallLayout } from "./layout";
 import { ManagementError } from "./management";
 import type { HostdStatus, StatusProbes } from "./status";
 
@@ -23,6 +24,8 @@ beforeEach(() => {
     user: installLayout("user", { home: join(root, "home"), env: {} }),
   };
   mkdirSync(layouts.system.dataDir, { recursive: true });
+  mkdirSync(join(root, "etc"), { recursive: true, mode: 0o755 });
+  chmodSync(join(root, "etc"), 0o755);
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -54,9 +57,15 @@ function serving(overrides: Partial<HostdStatus> = {}): StatusProbes {
   };
 }
 
+const ME = process.getuid!();
+/** The service account: neither root nor the store's owner. */
+const VOLLI_UID = ME + 4242;
+
 function ports(overrides: Partial<EnrollPorts> = {}): EnrollPorts {
   return {
-    uid: () => process.getuid!(),
+    uid: () => ME,
+    // The tests' own uid stands in for root as the system store's owner.
+    trustedOwnerUid: ME,
     layouts,
     probes: serving(),
     version: "1.1.0",
@@ -68,8 +77,8 @@ function ports(overrides: Partial<EnrollPorts> = {}): EnrollPorts {
 
 const command = (overrides: Partial<EnrollCommand> = {}): EnrollCommand => ({
   kind: "enroll",
-  mode: "system",
-  dataDir: null,
+  mode: null,
+  dataDir: join(root, "own"),
   publicKey: spki(),
   name: "Alice's Mac",
   ...overrides,
@@ -85,6 +94,10 @@ async function refusal(work: Promise<unknown>): Promise<ManagementError> {
 }
 
 describe("enroll", () => {
+  beforeEach(() => {
+    mkdirSync(join(root, "own"));
+  });
+
   it("trusts the key and answers the host id the desktop pins, idempotently", async () => {
     const key = command();
     const first = await runEnroll(key, ports());
@@ -103,7 +116,10 @@ describe("enroll", () => {
 
   it("finds the data directory from the mode, or takes it as given", async () => {
     mkdirSync(layouts.user.dataDir, { recursive: true });
-    await runEnroll(command({ mode: "user" }), ports({ probes: serving({ hostProtocol: null }) }));
+    await runEnroll(
+      command({ mode: "user", dataDir: null }),
+      ports({ probes: serving({ hostProtocol: null }) }),
+    );
     const elsewhere = join(root, "elsewhere");
     mkdirSync(elsewhere);
     expect(
@@ -118,6 +134,9 @@ describe("enroll", () => {
 
   it("refuses root, another account's data directory, and a host that is not serving", async () => {
     expect((await refusal(runEnroll(command(), ports({ uid: () => 0 })))).code).toBe("is-root");
+    expect(
+      (await refusal(runEnroll(command({ dataDir: layouts.system.dataDir }), ports()))).message,
+    ).toMatch(/is the system install's: run enroll --system as root/u);
     expect((await refusal(runEnroll(command(), ports({ uid: () => 4242 })))).code).toBe(
       "data-dir-owner",
     );
@@ -138,7 +157,151 @@ describe("enroll", () => {
     expect((await refusal(runEnroll(command({ publicKey: "AAAA" }), ports()))).code).toBe(
       "bad-key",
     );
-    writeFileSync(enrolledDevicesPath(layouts.system.dataDir), "{");
+    writeFileSync(enrolledDevicesPath(join(root, "own")), "{");
     expect((await refusal(runEnroll(command(), ports()))).code).toBe("store-unreadable");
+  });
+});
+
+// S-B1: an enrolled device acts as the person. On a system install every
+// Session runs as `volli`, so `volli` must be able neither to enroll nor to
+// write where enrolled keys are kept.
+describe("enroll --system", () => {
+  const system = (overrides: Partial<EnrollCommand> = {}) =>
+    command({ mode: "system", dataDir: null, ...overrides });
+  const asRoot = (overrides: Partial<EnrollPorts> = {}) => ports({ uid: () => 0, ...overrides });
+
+  it("refuses the service account: only root may enroll a device that acts as the person", async () => {
+    const error = await refusal(runEnroll(system(), ports({ uid: () => VOLLI_UID })));
+    expect(error).toMatchObject({ code: "not-root", exitCode: 77 });
+    expect(readEnrolledDevices(layoutDeviceStore(layouts.system, ME))).toEqual([]);
+    // Nor through the data directory it owns: the system host never reads that.
+    expect(
+      (await refusal(runEnroll(system({ mode: null, dataDir: layouts.system.dataDir }), ports())))
+        .code,
+    ).toBe("usage");
+  });
+
+  it("as root, keeps the key in root's 0644 store outside the data directory", async () => {
+    const previous = process.umask(0o077);
+    let first;
+    try {
+      first = await runEnroll(system(), asRoot());
+    } finally {
+      process.umask(previous);
+    }
+    expect(first).toMatchObject({ ok: true, hostId: HOST, created: true });
+    const file = layouts.system.devicesFile;
+    expect(file).toBe(join(root, "etc/volli-hostd-devices"));
+    const stat = statSync(file);
+    // Readable by hostd's account, writable by root alone (its owner here is the stand-in).
+    expect(stat.mode & 0o777).toBe(0o644);
+    expect(stat.uid).toBe(ME);
+    expect(readEnrolledDevices(rootDeviceStore(file, ME))).toMatchObject([
+      { deviceId: first.deviceId },
+    ]);
+    expect(readEnrolledDevices(rootDeviceStore(file, VOLLI_UID))).toBe("untrusted");
+    expect(() => statSync(enrolledDevicesPath(layouts.system.dataDir))).toThrow();
+    expect((await runEnroll(system({ publicKey: spki() }), asRoot())).created).toBe(true);
+  });
+
+  it("refuses a system store the service account could write, and never overwrites it", async () => {
+    await runEnroll(system(), asRoot());
+    chmodSync(layouts.system.devicesFile, 0o666);
+    expect(await refusal(runEnroll(system({ publicKey: spki() }), asRoot()))).toMatchObject({
+      code: "store-untrusted",
+    });
+    expect(readEnrolledDevices(layoutDeviceStore(layouts.system, ME))).toBe("untrusted");
+    chmodSync(layouts.system.devicesFile, 0o644);
+    expect((await refusal(runEnroll(system(), asRoot({ trustedOwnerUid: VOLLI_UID })))).code).toBe(
+      "store-untrusted",
+    );
+  });
+});
+
+describe("devices list | revoke", () => {
+  it("lists without keys and revokes as root on a system install, idempotently", async () => {
+    const enrolled = await runEnroll(
+      command({ mode: "system", dataDir: null }),
+      ports({ uid: () => 0 }),
+    );
+    const base = { kind: "devices" as const, mode: "system" as const, dataDir: null };
+    const listed = runDevices(
+      { ...base, action: "list", deviceId: null },
+      ports({ uid: () => VOLLI_UID }),
+    );
+    expect(listed).toMatchObject({ ok: true, devices: [{ deviceId: enrolled.deviceId }] });
+    expect(JSON.stringify(listed)).not.toContain("publicKey");
+    const revoke = { ...base, action: "revoke" as const, deviceId: enrolled.deviceId };
+    expect(() => runDevices(revoke, ports({ uid: () => VOLLI_UID }))).toThrow(
+      expect.objectContaining({ code: "not-root" }),
+    );
+    expect(runDevices(revoke, ports({ uid: () => 0 }))).toMatchObject({
+      ok: true,
+      changed: true,
+      device: { deviceId: enrolled.deviceId, revokedAt: "2026-10-07T00:00:00.000Z" },
+    });
+    expect(runDevices(revoke, ports({ uid: () => 0 }))).toMatchObject({ changed: false });
+    expect(() =>
+      runDevices({ ...revoke, deviceId: randomUUID() }, ports({ uid: () => 0 })),
+    ).toThrow(expect.objectContaining({ code: "unknown-device" }));
+  });
+
+  it("revokes in a user install's own store, as its owner", async () => {
+    mkdirSync(join(root, "own"));
+    const enrolled = await runEnroll(command(), ports());
+    const revoke = {
+      kind: "devices" as const,
+      action: "revoke" as const,
+      mode: null,
+      dataDir: join(root, "own"),
+      deviceId: enrolled.deviceId,
+    };
+    expect(() => runDevices(revoke, ports({ uid: () => 0 }))).toThrow(
+      expect.objectContaining({ code: "is-root" }),
+    );
+    expect(runDevices(revoke, ports())).toMatchObject({ changed: true });
+    expect(runDevices({ ...revoke, action: "list", deviceId: null }, ports())).toMatchObject({
+      devices: [{ revokedAt: "2026-10-07T00:00:00.000Z" }],
+    });
+  });
+
+  it("lists a user install's store from its mode", () => {
+    expect(
+      runDevices(
+        { kind: "devices", action: "list", mode: "user", dataDir: null, deviceId: null },
+        ports(),
+      ),
+    ).toEqual({ v: 1, ok: true, devices: [] });
+  });
+
+  it("refuses to list a store it cannot read or trust", async () => {
+    mkdirSync(join(root, "own"));
+    writeFileSync(enrolledDevicesPath(join(root, "own")), "{");
+    const list = { kind: "devices" as const, action: "list" as const, deviceId: null };
+    expect(() => runDevices({ ...list, mode: null, dataDir: join(root, "own") }, ports())).toThrow(
+      expect.objectContaining({ code: "store-unreadable" }),
+    );
+    await runEnroll(command({ mode: "system", dataDir: null }), ports({ uid: () => 0 }));
+    chmodSync(layouts.system.devicesFile, 0o666);
+    expect(() => runDevices({ ...list, mode: "system", dataDir: null }, ports())).toThrow(
+      expect.objectContaining({ code: "store-untrusted" }),
+    );
+  });
+
+  it.skipIf(ME === 0)("passes on a failure that is no refusal of the store's", () => {
+    const dir = join(root, "readonly");
+    mkdirSync(dir);
+    writeFileSync(enrolledDevicesPath(dir), JSON.stringify({ v: 1, devices: [] }));
+    chmodSync(dir, 0o500);
+    try {
+      expect(() =>
+        runDevices(
+          { kind: "devices", action: "revoke", mode: null, dataDir: dir, deviceId: randomUUID() },
+          ports(),
+        ),
+      ).toThrow(expect.objectContaining({ code: "EACCES" }));
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 });
