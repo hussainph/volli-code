@@ -70,28 +70,25 @@ const attentionBase = {
   diagnostic: z.null(),
   stopDetail: stopDetail.optional(),
 };
-export const attentionSchema = z
-  .discriminatedUnion("kind", [
-    z.object({ ...attentionBase, kind: z.literal("rate_limited"), retryAt: integer.nullable() }),
-    z.object({ ...attentionBase, kind: z.literal("quota_exhausted"), resetAt: integer.nullable() }),
-    z.object({
-      ...attentionBase,
-      kind: z.literal("adapter_unrecoverable"),
-      resetsAt: integer.nullable(),
-    }),
-    z.object({
-      ...attentionBase,
-      kind: z.enum(
-        SESSION_ATTENTION_KINDS.filter(
-          (kind) =>
-            kind !== "rate_limited" &&
-            kind !== "quota_exhausted" &&
-            kind !== "adapter_unrecoverable",
-        ),
+export const attentionSchema = z.discriminatedUnion("kind", [
+  z.object({ ...attentionBase, kind: z.literal("rate_limited"), retryAt: integer.nullable() }),
+  z.object({ ...attentionBase, kind: z.literal("quota_exhausted"), resetAt: integer.nullable() }),
+  z.object({
+    ...attentionBase,
+    kind: z.literal("adapter_unrecoverable"),
+    resetsAt: integer.nullable(),
+  }),
+  z.object({
+    ...attentionBase,
+    kind: z.enum(
+      SESSION_ATTENTION_KINDS.filter(
+        (kind) =>
+          kind !== "rate_limited" && kind !== "quota_exhausted" && kind !== "adapter_unrecoverable",
       ),
-    }),
-  ])
-  .meta({ "x-volli-open-union": "kind" });
+    ),
+  }),
+]);
+// Attention kinds stay closed: today's N−1 reader rejects unknown kinds.
 const option = z.object({ id: text, label: text, description: nullableText });
 const prompt = z.object({
   id: text,
@@ -159,19 +156,18 @@ const receiptResult = z.object({
   sessionId: text,
 });
 const receiptBase = { id: text, commandId: text, sequence, recordedAt: integer };
-export const receiptSchema = z
-  .discriminatedUnion("status", [
-    z.object({
-      ...receiptBase,
-      status: z.literal("accepted"),
-      acceptedAt: integer,
-      result: receiptResult,
-    }),
-    z.object({ ...receiptBase, status: z.literal("rejected"), code: text, detail: nullableText }),
-    z.object({ ...receiptBase, status: z.literal("completed"), result: receiptResult }),
-    z.object({ ...receiptBase, status: z.literal("unreconciled"), detail: nullableText }),
-  ])
-  .meta({ "x-volli-open-union": "status" });
+export const receiptSchema = z.discriminatedUnion("status", [
+  z.object({
+    ...receiptBase,
+    status: z.literal("accepted"),
+    acceptedAt: integer,
+    result: receiptResult,
+  }),
+  z.object({ ...receiptBase, status: z.literal("rejected"), code: text, detail: nullableText }),
+  z.object({ ...receiptBase, status: z.literal("completed"), result: receiptResult }),
+  z.object({ ...receiptBase, status: z.literal("unreconciled"), detail: nullableText }),
+]);
+// Receipt statuses stay closed: an unknown status can be misreported as success.
 const outcome = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("resumed"), retryCommandId: text }),
   z.object({

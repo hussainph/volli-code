@@ -445,3 +445,47 @@ test("the committed public feature/bootstrap sets are frozen independently of de
   additive.tiers.public["new.area.read"] = { kind: "query", input: {}, output: text };
   assert.deepEqual(unapprovedChanges(old, additive), []);
 });
+
+function outputUnionSites(value, discriminator, member) {
+  if (Array.isArray(value))
+    return value.flatMap((node) => outputUnionSites(node, discriminator, member));
+  if (value === null || typeof value !== "object") return [];
+  const matches = value.oneOf?.some((branch) => {
+    const field = branch.properties?.[discriminator];
+    return field?.const === member || field?.enum?.includes(member);
+  });
+  return [
+    ...(matches ? [value] : []),
+    ...Object.values(value).flatMap((node) => outputUnionSites(node, discriminator, member)),
+  ];
+}
+
+test("published receipt statuses and attention kinds remain closed at every output site", () => {
+  const document = JSON.parse(
+    readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),
+  );
+
+  for (const [discriminator, member] of [
+    ["status", "accepted"],
+    ["kind", "rate_limited"],
+  ]) {
+    let sites = 0;
+    for (const entry of Object.values(document.tiers.public)) {
+      const before = entry.output;
+      for (const [index, union] of outputUnionSites(before, discriminator, member).entries()) {
+        sites++;
+        assert.equal(union[marker], undefined, `${discriminator} must not opt in to open reading`);
+        const after = structuredClone(before);
+        const changed = outputUnionSites(after, discriminator, member)[index];
+        const branch = structuredClone(changed.oneOf[0]);
+        branch.properties[discriminator] = { type: "string", const: "future.reader-unsupported" };
+        changed.oneOf.push(branch);
+        assert.ok(
+          schemaChanges(before, after, "", "output").length,
+          `${discriminator} addition at site ${index} must be breaking`,
+        );
+      }
+    }
+    assert.ok(sites > 0, `${discriminator} regression must exercise actual published sites`);
+  }
+});
