@@ -286,6 +286,9 @@ import type {
   WorktreeStatusResult,
   WorktreeWatchErrorEvent,
   WorktreeRevealInput,
+  BoardRpcIpcEvent,
+  BoardRpcIpcRequest,
+  BoardRpcIpcResponse,
 } from "../ipc/contract";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
@@ -856,6 +859,26 @@ const api = {
     /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
     cancel: (subscriptionId: string): void => {
       send("volli:session-rpc-cancel" satisfies typeof SESSION_RPC_CANCEL_CHANNEL, subscriptionId);
+    },
+  },
+  /**
+   * The board router's door for this window (VC-565), used only with the
+   * `cloud` flag on: one invoke per board procedure, by path, and one push
+   * channel for the change feed's frames. The renderer's terminating tRPC
+   * link (`lib/board-rpc-link.ts`) is the only caller.
+   */
+  boardRpc: {
+    request: (request: BoardRpcIpcRequest): Promise<BoardRpcIpcResponse> =>
+      invoke("volli:board-rpc", request),
+    onEvent: (callback: (event: BoardRpcIpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BoardRpcIpcEvent) =>
+        callback(payload);
+      const channel = "volli:board-rpc-event" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+    cancel: (subscriptionId: string): void => {
+      send("volli:board-rpc-cancel", subscriptionId);
     },
   },
   /**

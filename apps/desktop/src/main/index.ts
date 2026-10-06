@@ -219,6 +219,7 @@ import { registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
+import { registerBoardRpcIpcHandlers } from "./board-rpc-ipc";
 import {
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
@@ -1627,6 +1628,13 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
+  });
+  // The board router for this window when the `cloud` flag is on (VC-565):
+  // the same router, over the same handlers, hostd serves on its WebSocket.
+  // Registered whatever the flag says (nothing calls it with the flag off),
+  // and its feed streams end with the window that opened them.
+  registerBoardRpcIpcHandlers({
+    handlers: admittedHandlers(handlersFor(readyRuntimeServices), ROUTER_POLICY),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its

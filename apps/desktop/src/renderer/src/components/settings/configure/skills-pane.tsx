@@ -73,6 +73,7 @@ import {
 } from "@renderer/components/ui/select";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 /** What each mode is called, and the one line explaining what it costs. */
 const MODE_LABEL: Record<SkillMode, string> = {
@@ -201,7 +202,7 @@ function SkillsTable({
   async function write(next: SkillModes): Promise<void> {
     setPending(next);
     const saved = await writeThrough("update this project's skills", () =>
-      window.api.projects.setSkillModes({ id: project.id, modes: next }),
+      boardApi().projects.setSkillModes({ id: project.id, modes: next }),
     );
     setPending(null);
     if (saved !== null) adoptProject(saved.project);
