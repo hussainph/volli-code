@@ -428,7 +428,7 @@ function guardResolver(resolver: AnyResolver, type: ResolverType): AnyResolver {
 }
 
 type ResolverType = "query" | "mutation" | "subscription";
-const RESOLVER_TYPES: readonly string[] = ["query", "mutation", "subscription"];
+const RESOLVER_TYPES: ReadonlySet<string> = new Set(["query", "mutation", "subscription"]);
 
 /**
  * A builder whose every descendant resolves through {@link guardResolver}:
@@ -443,7 +443,7 @@ function guardedBuilder<Builder extends object>(builder: Builder): Builder {
       const value: unknown = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
       const method = value as (...args: unknown[]) => unknown;
-      if (typeof property === "string" && RESOLVER_TYPES.includes(property)) {
+      if (typeof property === "string" && RESOLVER_TYPES.has(property)) {
         return (resolver: AnyResolver) =>
           method.call(target, guardResolver(resolver, property as ResolverType));
       }
