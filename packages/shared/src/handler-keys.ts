@@ -20,12 +20,15 @@ import {
 /**
  * Catalog keys the projection answers itself, so no host handler exists for
  * them: the Session router's own route diagnostics, recorded by the router
- * that serves them and read by the in-process lab. They are policed like any
- * entry and projected onto no network door. The list can only shrink.
+ * that serves them and read by the in-process lab (projected onto no network
+ * door), and `protocol.welcome`, the WebSocket handshake's own answer: the
+ * welcome the door negotiated for this connection, which no host handler
+ * could know (VC-663). They are policed like any entry.
  */
 export const DOOR_LOCAL_CATALOG_KEYS = Object.freeze([
   "labDiagnostics.list",
   "labDiagnostics.subscribe",
+  "protocol.welcome",
 ] as const satisfies readonly CatalogKey[]);
 
 export type DoorLocalCatalogKey = (typeof DOOR_LOCAL_CATALOG_KEYS)[number];
@@ -37,11 +40,33 @@ export type HostHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey>;
 export type HostHandlerKeyOf<E extends VerbEntry> = Exclude<CatalogKeyOf<E>, DoorLocalCatalogKey>;
 
 /**
+ * Both-door keys whose map entry runs the socket verb's own handler, rather
+ * than the other way round: the socket's Session reads, which the WebSocket
+ * serves Workspace-scoped (VC-663, D4). Their map entry reaches the socket's
+ * pipeline (`AgentCommandService.executeInWorkspace`) under the router's
+ * policy, so both doors still reach one function, and the socket binding
+ * stays the verb's own (a projection of the map would call itself). The list
+ * can only shrink: an area that moves a read's logic into host-core makes its
+ * socket verb a projection and strikes it here.
+ */
+export const SOCKET_DELEGATED_HANDLER_KEYS = Object.freeze([
+  "session.list",
+  "session.show",
+  "session.peek",
+  "session.answer",
+] as const satisfies readonly CatalogKey[]);
+
+export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[number];
+
+/**
  * The handler keys the agent socket also serves: its `AGENT_VERB_TABLE`
  * binding for each must be a projection of the map, never a handler of its
  * own. A both-door entry's socket binding id is its key.
  */
-export type SocketHandlerKey = Extract<HostHandlerKey, AgentCommandBindingId>;
+export type SocketHandlerKey = Exclude<
+  Extract<HostHandlerKey, AgentCommandBindingId>,
+  SocketDelegatedHandlerKey
+>;
 
 /**
  * What a door tells a handler about the call, besides its input: who it

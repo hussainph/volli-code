@@ -33,6 +33,23 @@ process reap at readiness and joins them at stop (VC-627). Migration rollback
 backups and backup retention use the shared database open path; backup bundles
 remain explicit operations, not a periodic scheduler.
 
+### The host protocol (behind `cloud`)
+
+With `VOLLI_EXPERIMENTAL=cloud` and `--listen <host>:<port>`, hostd also serves
+the host protocol's WebSocket (VC-663; `docs/plans/host-protocol.md`): the
+Session router (`sessions`, `sessions.subscribe`) and the socket's Session reads
+(`session.read`), from the same runtime and verb handlers the socket answers
+through. Without the flag nothing listens, whatever `--listen` says (hostd warns
+and ignores it); without `--listen` nothing listens either.
+
+- **Loopback only** (`127.0.0.1`, `localhost`, `[::1]`) until pairing and TLS
+  land (VC-575); `--listen` refuses anything else. Port `0` picks one; the
+  status file's `hostProtocol` names it.
+- **Every credential is refused** until VC-575 (pairing) and VC-577 (the
+  same-machine bootstrap) provide verifiers: a hello answers `UNAUTHORIZED` /
+  `credential-invalid`. An operator token is never accepted here.
+- An address it cannot bind refuses boot (`host-protocol`, exit 78).
+
 ## Ports
 
 | Port                    | hostd passes                                                                          |
@@ -263,7 +280,9 @@ believing it only when its pid is alive and its socket accepts a connection:
 | 1    | `refusing`    | Up, but the database did not open: read `database`.          |
 | 3    | `not-serving` | Stopped, starting, stopping, crashed, or socket unreachable. |
 
-The host protocol (VC-564) carries the same facts to remote clients.
+`hostProtocol` is where the host protocol listens, `{ "url", "host", "port" }`,
+or `null` when nothing does. The host protocol (VC-564) carries the same facts
+to remote clients.
 
 ## Stable execution venue
 

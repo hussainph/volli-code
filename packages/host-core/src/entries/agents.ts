@@ -6,7 +6,7 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  */
-export { createAgentCommandService } from "../agent-commands";
+export { createAgentCommandService, type AgentCommandService } from "../agent-commands";
 export { createHostAgentCommands, createHostAgentSocket } from "../agent-services";
 export {
   createAgentSocketLifecycle,

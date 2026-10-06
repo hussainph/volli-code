@@ -23,10 +23,14 @@
     "sharp": "0.35.4"
   },
   "devDependencies": {
+    "@trpc/client": "^11.18.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "@volli/agent-runtime": "workspace:*",
     "@volli/host-core": "workspace:*",
+    "@volli/host-protocol": "workspace:*",
+    "@volli/session-engine": "workspace:*",
+    "@volli/session-rpc": "workspace:*",
     "@volli/shared": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

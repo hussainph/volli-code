@@ -11,6 +11,7 @@
 import type { SessionRuntime } from "@volli/session-engine";
 import {
   OperationUnavailableError,
+  type AgentResponse,
   type CodeModePolicy,
   type CompactionPolicy,
   type ExperimentId,
@@ -21,6 +22,7 @@ import {
   type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
+  type SessionReadVerb,
 } from "@volli/shared";
 
 import type {
@@ -58,6 +60,12 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
   ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /** The socket's Session reads, Workspace-scoped (VC-663, D4): host-core's `executeInWorkspace`. */
+  readSessionVerb?: (
+    verb: SessionReadVerb,
+    workspaceId: string,
+    args: Record<string, unknown>,
+  ) => Promise<AgentResponse>;
 }
 
 function need<Port>(port: Port | undefined, message: string): Port {
@@ -70,6 +78,7 @@ const EXPERIMENTS = "Experimental settings are unavailable on this transport";
 const MODEL_ACCESS = "Model Access is unavailable on this transport";
 const PREFERENCES = "Model Access preferences are unavailable on this transport";
 const RUNTIME = "The Session runtime is unavailable on this host";
+const SESSION_READS = "Session reads are unavailable on this transport";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof SessionRouterContext>) {
@@ -112,6 +121,14 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
     "session.cancelInteraction": (input) =>
       runtime("cancelInteraction")({ ...input, reason: "abandoned", origin: { kind: "user" } }),
     "session.reconcile": (input) => runtime("reconcile")(input),
+    "session.list": ({ workspaceId, args }) =>
+      need(ports.readSessionVerb, SESSION_READS)("session.list", workspaceId, args),
+    "session.show": ({ workspaceId, args }) =>
+      need(ports.readSessionVerb, SESSION_READS)("session.show", workspaceId, args),
+    "session.peek": ({ workspaceId, args }) =>
+      need(ports.readSessionVerb, SESSION_READS)("session.peek", workspaceId, args),
+    "session.answer": ({ workspaceId, args }) =>
+      need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
   return handlers;
 }

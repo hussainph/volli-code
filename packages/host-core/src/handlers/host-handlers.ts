@@ -40,6 +40,7 @@ import type {
 import {
   OperationUnavailableError,
   roleImpliedByTicket,
+  type AgentResponse,
   type CodeModePolicy,
   type CompactionPolicy,
   type ExperimentId,
@@ -53,6 +54,7 @@ import {
   type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
+  type SessionReadVerb,
   type Ticket,
 } from "@volli/shared";
 
@@ -131,8 +133,12 @@ export interface HostHandlerSignatures {
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
   >;
+  /**
+   * `signal` lets a bounded door (the WebSocket's replay bounds, VC-663)
+   * cancel a replay it refused before the subscribe call returns.
+   */
   readonly "session.subscribe": HostSubscriptionHandler<
-    { sessionId: string; afterSequence: number },
+    { sessionId: string; afterSequence: number; signal?: AbortSignal },
     SessionStreamEmission
   >;
   readonly "session.command": HostHandler<
@@ -144,7 +150,30 @@ export interface HostHandlerSignatures {
     void
   >;
   readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
+  /**
+   * The socket's Session reads, for a caller bound to one Workspace (VC-663,
+   * D4): the socket verb's own handler, its roster forced to `workspaceId`
+   * (`AgentCommandService.executeInWorkspace`). Socket-delegated keys
+   * (`SOCKET_DELEGATED_HANDLER_KEYS`): the socket serves these verbs itself.
+   */
+  readonly "session.list": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
 }
+
+/** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
+export interface SessionReadHandlerInput {
+  readonly workspaceId: string;
+  readonly args: Record<string, unknown>;
+}
+
+/** Runs one of the socket's Session reads forced to one Workspace: the agent command service's. */
+export type SessionReadPort = (
+  verb: SessionReadVerb,
+  workspaceId: string,
+  args: Record<string, unknown>,
+) => Promise<AgentResponse>;
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
@@ -199,6 +228,13 @@ export interface HostHandlerOptions {
   readonly worktree?: WorktreePorts;
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
+  /**
+   * The socket's Session reads, Workspace-scoped (VC-663, D4), or null where
+   * the host serves them over no network door (the desktop): they answer
+   * unavailable. A root whose agent command service is built after this map
+   * passes a forwarder.
+   */
+  readonly sessionReads?: SessionReadPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -208,6 +244,7 @@ const EXPERIMENTS_UNAVAILABLE = "Experimental settings are unavailable on this t
 const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport";
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
+const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
 
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
@@ -243,6 +280,7 @@ function hostHandlerEntries(
   const modelAccess = () => present(options.modelAccess, MODEL_ACCESS_UNAVAILABLE);
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
+  const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
 
   return {
     "ticket.move": (input, call) => {
@@ -335,5 +373,10 @@ function hostHandlerEntries(
     "session.cancelInteraction": (input) =>
       runtime().cancelInteraction({ ...input, reason: "abandoned", origin: { kind: "user" } }),
     "session.reconcile": (input) => runtime().reconcile(input),
+    "session.list": ({ workspaceId, args }) => sessionReads()("session.list", workspaceId, args),
+    "session.show": ({ workspaceId, args }) => sessionReads()("session.show", workspaceId, args),
+    "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
+    "session.answer": ({ workspaceId, args }) =>
+      sessionReads()("session.answer", workspaceId, args),
   };
 }

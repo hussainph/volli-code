@@ -22,6 +22,8 @@ export {
   type HostHandlerSignatures,
   type HostSubscriptionHandler,
   type SessionCreateHandlerInput,
+  type SessionReadHandlerInput,
+  type SessionReadPort,
 } from "../handlers/host-handlers";
 export {
   ADMITTED,

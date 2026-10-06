@@ -80,6 +80,16 @@ type DeliberatelyMainOnlyProcedure = PublishedProcedure<
 >;
 
 /**
+ * The host protocol's own (VC-663): the welcome a WebSocket handshake
+ * negotiated, which the desktop's window never has, and the socket's Session
+ * reads, Workspace-scoped for a network caller. The renderer keeps its own
+ * listing; VC-608's generic bridge decides whether these cross IPC.
+ */
+type DeliberatelyWebSocketOnlyProcedure = PublishedProcedure<
+  "protocol.welcome" | "session.list" | "session.show" | "session.peek" | "session.answer"
+>;
+
+/**
  * Adding a procedure to the router — in any namespace — without accounting for
  * it above fails here.
  *
@@ -93,7 +103,10 @@ type DeliberatelyMainOnlyProcedure = PublishedProcedure<
  */
 type AssertNever<T extends never> = T;
 export type SessionRpcIpcCoverage = AssertNever<
-  Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
+  Exclude<
+    SessionRouterProcedure,
+    SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure | DeliberatelyWebSocketOnlyProcedure
+  >
 >;
 
 /**
