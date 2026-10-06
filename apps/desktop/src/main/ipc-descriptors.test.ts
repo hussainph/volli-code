@@ -592,34 +592,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:project-reorder", () => {
-    const { guard, invalidError } = DATA_IPC["volli:project-reorder"];
-
-    it("accepts a string array", () => {
-      expect(guard([["p1", "p2"]])).toBe(true);
-    });
-
-    it("accepts an empty array", () => {
-      expect(guard([[]])).toBe(true);
-    });
-
-    it("rejects a non-array", () => {
-      expect(guard(["p1"])).toBe(false);
-    });
-
-    it("rejects an array with a non-string entry", () => {
-      expect(guard([["p1", 2]])).toBe(false);
-    });
-
-    it("rejects a wrong arity", () => {
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid project order");
-    });
-  });
-
   describe("volli:ticket-create", () => {
     const { guard, invalidError } = DATA_IPC["volli:ticket-create"];
     const valid = { projectId: "p1", title: "Do the thing", status: "todo" };
@@ -2179,8 +2151,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 83 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(83);
+    it("covers all 81 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(81);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
@@ -2223,12 +2195,14 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
-      // Build artifacts (VC-340): one read, one destructive action, and the two
-      // settings that govern both.
+      // Build artifacts (VC-340): one read, one destructive action, and the
+      // settings write. The settings read is `worktree.trimSettings` on the
+      // bridge (VC-608), as the rail order is `project.reorder`.
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim");
-      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).not.toContain("volli:worktree-trim-settings-get");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+      expect(DATA_CHANNELS).not.toContain("volli:project-reorder");
     });
   });
 
@@ -2247,11 +2221,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(invalidError).toBe("Invalid trim request");
     });
 
-    it("takes no argument for either read", () => {
+    it("takes no argument for the scan", () => {
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
     });
 
     it("requires a settings patch to actually patch something", () => {

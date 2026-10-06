@@ -317,13 +317,19 @@ function resolveLocalRef(schema, root, cache, resolving = new Set()) {
   return resolved;
 }
 
-/** Both tiers are compared; adding a provider/tier cannot hide existing entries. */
+/**
+ * Both tiers are compared; adding a provider/tier cannot hide existing entries.
+ * A desktop-only entry may leave its tier only by promotion (D-A1 = (c)): it
+ * reappears under the same key in the public tier, and is then held to the
+ * same additive rules against its desktop shape.
+ */
 export function protocolChanges(before, after) {
   const changes = [];
   for (const [tier, entries] of Object.entries(before.tiers)) {
     for (const [key, entry] of Object.entries(entries)) {
       const path = `/tiers/${escape(tier)}/${escape(key)}`;
-      const next = after.tiers[tier]?.[key];
+      const promoted = tier === "desktop" ? after.tiers.public?.[key] : undefined;
+      const next = after.tiers[tier]?.[key] ?? promoted;
       if (!next) {
         changes.push({ path, reason: "catalog entry removed" });
         continue;
