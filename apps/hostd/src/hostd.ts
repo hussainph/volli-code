@@ -627,7 +627,7 @@ function prepareDataDir(dataDir: string, logger: HostdLogger): void {
  * the bundled Node running `lib/hostd/hostd.cjs`.
  */
 export function defaultGitCredentialHelper(dataDir: string): string {
-  const program = [process.execPath, ...process.execArgv, process.argv[1] ?? ""];
+  const program = [process.execPath, ...process.execArgv, ...process.argv.slice(1, 2)];
   return `!${[...program, "git-credential", "--data-dir", dataDir].map(shellWord).join(" ")}`;
 }
 

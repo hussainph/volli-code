@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,25 @@ import {
 const TOKEN = "ghp_PUSHTOKEN0123456789abcdef";
 let dataDir: string;
 
+/** One handle per question, so nothing is judged from a path checked earlier. */
+async function modeOf(path: string): Promise<number> {
+  const handle = await open(path, "r");
+  try {
+    return (await handle.stat()).mode & 0o777;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function textOf(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), "vc702-git-"));
 });
@@ -33,12 +52,12 @@ describe("the push-credential file", () => {
     await store.set("git.example.com:8443", { username: "me", password: "other" });
     expect(await store.hosts()).toEqual(["git.example.com:8443", "github.com"]);
     expect(await store.get("github.com")).toEqual({ username: "x-access-token", password: TOKEN });
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect((await stat(join(dataDir, "credentials"))).mode & 0o777).toBe(0o700);
+    expect(await modeOf(path)).toBe(0o600);
+    expect(await modeOf(join(dataDir, "credentials"))).toBe(0o700);
     await store.clear("github.com");
     await store.clear("github.com");
     expect(await store.get("github.com")).toBeNull();
-    expect(await readFile(path, "utf8")).not.toContain(TOKEN);
+    expect(await textOf(path)).not.toContain(TOKEN);
     // The agent's structured read tools refuse the file by its location.
     const tools = refusingCredentialReads(
       { readTextFile: async () => "read" } as unknown as Parameters<

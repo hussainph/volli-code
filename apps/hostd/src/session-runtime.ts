@@ -67,8 +67,6 @@ export interface HeadlessRuntimeOptions {
    * Sessions push exactly as before.
    */
   gitCredentialHelper?: string | null;
-  /** Test seam: the relay's replay to the host's own sign-in listener. */
-  signInReplay?: (url: string, signal: AbortSignal) => Promise<number>;
 }
 
 function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {
@@ -328,7 +326,6 @@ export function createHeadlessSessionRuntime(input: {
                 models: piHostCredentials(modelAccess.credentials),
                 git: fileGitCredentialStore(join(host.dataDir, GIT_CREDENTIALS_FILE)),
               },
-              ...(options.signInReplay === undefined ? {} : { replay: options.signInReplay }),
             });
       let sessionReads: SessionReadPort | undefined;
       return {

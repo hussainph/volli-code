@@ -341,6 +341,26 @@ describe("headless runtime ownership", () => {
       GIT_CONFIG_VALUE_0: "!'/opt/hostd' git-credential",
     });
   });
+  it("composes sign-ins over the recovered model access, and none without it (VC-702)", async () => {
+    const f = fixture();
+    const inspectModelAccess = vi.fn(async () => ({ observedAt: 0, providers: [], models: [] }));
+    seam.recovered.mockReturnValue({
+      sessions: {},
+      runtime: f.runtime,
+      piRuntimeHost: { inspectModelAccess },
+    });
+    seam.piHostCredentials.mockReturnValue({ stored: async () => [], setApiKey: vi.fn() });
+    await f.launch().ready();
+    const composed = seam.handlers.mock.lastCall![1] as { signIns: { status(): Promise<unknown> } };
+    // The status reads the runtime's own snapshot, and the push store under
+    // the data directory (absent here: no git host).
+    expect(await composed.signIns.status()).toEqual({ providers: [], git: [] });
+    expect(inspectModelAccess).toHaveBeenCalledWith({});
+    seam.recovered.mockReturnValue({ sessions: {}, runtime: f.runtime, piRuntimeHost: null });
+    await f.launch().ready();
+    expect(seam.handlers.mock.lastCall![1]).toMatchObject({ signIns: null });
+  });
+
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {
     const f = fixture();
     const owner = f.launch();

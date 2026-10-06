@@ -26,4 +26,15 @@ describe("piHostCredentials", () => {
     expect(JSON.stringify(stored)).not.toContain(KEY);
     expect(JSON.stringify(stored)).not.toContain(REFRESH);
   });
+
+  it("reads an OAuth entry that vanished between list and read as no expiry", async () => {
+    const credentials = piHostCredentials({
+      list: async () => [{ providerId: "anthropic", type: "oauth" }],
+      read: async () => undefined,
+      modify: async () => undefined,
+    });
+    expect(await credentials.stored()).toEqual([
+      { providerId: "anthropic", type: "oauth", expiresAt: null },
+    ]);
+  });
 });

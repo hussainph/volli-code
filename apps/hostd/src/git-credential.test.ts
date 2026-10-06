@@ -17,6 +17,7 @@ import { createServer as createHttpsServer, type Server } from "node:https";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
+import { Readable } from "node:stream";
 import { join } from "node:path";
 
 import {
@@ -28,7 +29,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { parseHostdArgs } from "./args";
-import { runGitCredential } from "./git-credential";
+import { readAll, runGitCredential } from "./git-credential";
+import { defaultGitCredentialHelper } from "./hostd";
 
 const TOKEN = "ghp_PUSHPROOFTOKEN0123456789abcdef";
 let root: string;
@@ -83,6 +85,21 @@ describe("volli-hostd git-credential", () => {
     expect(() => parseHostdArgs(["git-credential", "--data-dir", "d"], "/srv")).toThrow(
       "one action",
     );
+    expect(() =>
+      parseHostdArgs(["git-credential", "--data-dir", "d", "--bogus", "get"], "/srv"),
+    ).toThrow("bogus");
+  });
+
+  it("reads git's whole request off stdin, however it arrives", async () => {
+    expect(
+      await readAll(Readable.from(["protocol=https\n", Buffer.from("host=github.com\n")])),
+    ).toBe("protocol=https\nhost=github.com\n");
+  });
+
+  it("is installed as this very program, every word quoted for git's shell", () => {
+    const helper = defaultGitCredentialHelper("/var/lib/volli hostd");
+    expect(helper.startsWith(`!${shellWord(process.execPath)} `)).toBe(true);
+    expect(helper.endsWith(` 'git-credential' '--data-dir' '/var/lib/volli hostd'`)).toBe(true);
   });
 
   it("answers `get` from the push-credential store and says nothing otherwise", async () => {
