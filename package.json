@@ -29,7 +29,9 @@
     "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs",
     "check:notices": "node scripts/generate-third-party-notices.mjs --self-test && node scripts/generate-third-party-notices.mjs --check",
     "check:merged-ticket-time": "node scripts/merged-ticket-time-to-merge.mjs --self-test",
-    "generate:notices": "node scripts/generate-third-party-notices.mjs"
+    "generate:notices": "node scripts/generate-third-party-notices.mjs",
+    "generate:protocol-schema": "node scripts/protocol-schema/generate.mjs",
+    "check:protocol-schema": "node --test scripts/protocol-schema/compatibility.test.mjs && node scripts/protocol-schema/generate.mjs --check"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",

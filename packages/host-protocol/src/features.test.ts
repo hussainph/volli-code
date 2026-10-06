@@ -20,13 +20,13 @@ describe("the v1 feature table", () => {
         "sessions.create",
         "sessions.attach",
         "session.snapshot",
-        "session.history",
         "session.projection",
         "session.command",
         "session.cancelInteraction",
         "session.reconcile",
       ],
       "sessions.subscribe": ["session.subscribe"],
+      "sessions.history": ["session.history"],
       "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
       "model-access": [
         "modelAccess.inspect",
@@ -45,6 +45,7 @@ describe("the v1 feature table", () => {
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
       "sessions.subscribe",
+      "sessions.history",
       "session.read",
       "model-access",
     ]);

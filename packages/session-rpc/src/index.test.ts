@@ -227,6 +227,21 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
   ];
 }
 
+/**
+ * A transcript carrying `value` in a message part: the transcript's open JSON,
+ * the one place a value no envelope field names can ride (VC-315).
+ */
+function transcriptWith(value: unknown) {
+  return {
+    version: 1,
+    threadId: "thread",
+    branchId: "branch",
+    attemptId: "attempt",
+    turnId: null,
+    message: { id: "m", role: "assistant", parts: [{ type: "text", text: "", extra: value }] },
+  };
+}
+
 function snapshot(): SessionRuntimeSnapshot {
   return {
     projection: {
@@ -755,49 +770,40 @@ describe("Session tRPC router", () => {
     cyclic.self = cyclic;
     const unsafe: unknown[] = [
       Number.NaN,
-      undefined,
       () => undefined,
       new Date(0),
       new Map(),
       cyclic,
       [1, Number.POSITIVE_INFINITY],
     ];
-    const pageWith = (value: unknown, transcript: unknown = null) => ({
-      frames: [{ ...frame(2), event: { ...frame(2).event, extra: value }, transcript }],
+    const pageWith = (value: unknown) => ({
+      frames: [{ ...frame(2), transcript: transcriptWith(value) }],
       before: null,
     });
-    for (const value of unsafe) {
-      const runtime: SessionRuntime = {
-        ...fixture.runtime,
-        history: async () => pageWith(value) as never,
-      };
-      const caller = createSessionRouter().createCaller(
+    const callerFor = (page: unknown) =>
+      createSessionRouter().createCaller(
         sessionContext({
           caller: LOCAL_DESKTOP_CALLER,
-          runtime,
+          runtime: { ...fixture.runtime, history: async () => page as never },
           diagnostics: new RpcDiagnosticLog(),
         }),
       );
+    for (const value of unsafe) {
       await expect(
-        caller.session.history({ sessionId: "session-1", before: 3 }),
+        callerFor(pageWith(value)).session.history({ sessionId: "session-1", before: 3 }),
         String(value),
       ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     }
-    // Plain JSON passes, including a null-prototype record, nested arrays and a transcript.
-    const plain = Object.assign(Object.create(null) as object, { list: [1, "two", true, null] });
-    const runtime: SessionRuntime = {
-      ...fixture.runtime,
-      history: async () => pageWith(plain, { message: { id: "m", parts: [] } }) as never,
-    };
-    const caller = createSessionRouter().createCaller(
-      sessionContext({
-        caller: LOCAL_DESKTOP_CALLER,
-        runtime,
-        diagnostics: new RpcDiagnosticLog(),
-      }),
-    );
+    // A cursor that is not one is refused too.
     await expect(
-      caller.session.history({ sessionId: "session-1", before: 3 }),
+      callerFor({ frames: [], before: 0 }).session.history({ sessionId: "session-1", before: 3 }),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    // Plain JSON passes, nested arrays and all.
+    await expect(
+      callerFor(pageWith([1, "two", true, null])).session.history({
+        sessionId: "session-1",
+        before: 3,
+      }),
     ).resolves.toMatchObject({ frames: [{ sequence: 2, transcript: { message: { id: "m" } } }] });
   });
 

@@ -113,7 +113,8 @@ function runtimeFixture(): {
   let listener: ((frame: SessionStreamFrame) => void) | null = null;
   return {
     runtime: {
-      command: async () => ({}) as never,
+      command: async () =>
+        ({ sessionId: "session-1", receipt: null, throughSequence: 4, refusal: null }) as never,
       snapshot: async ({ sessionId }) => {
         calls.snapshot.push(sessionId);
         return {
@@ -349,7 +350,10 @@ describe("registerSessionRpcIpcHandlers", () => {
           },
         },
       }),
-    ).resolves.toEqual({ ok: true, data: {} });
+    ).resolves.toEqual({
+      ok: true,
+      data: { sessionId: "session-1", receipt: null, throughSequence: 4, refusal: null },
+    });
     await expect(
       invoke(sender(), {
         procedure: "session.reconcile",
@@ -368,6 +372,32 @@ describe("registerSessionRpcIpcHandlers", () => {
         origin: { kind: "user" },
       },
     ]);
+    await registration.close();
+  });
+
+  it("skips output validation on in-process IPC but still validates input", async () => {
+    const fixture = runtimeFixture();
+    const malformed = {
+      sessionId: "session-1",
+      receipt: null,
+      throughSequence: "not-a-number",
+      refusal: null,
+    };
+    fixture.runtime.command = vi.fn(async () => malformed as never);
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const input = {
+      commandId: "command-1",
+      sessionId: "session-1",
+      command: { kind: "executor.retry" },
+    };
+    await expect(invoke(sender(), { procedure: "session.command", input })).resolves.toEqual({
+      ok: true,
+      data: malformed,
+    });
+    await expect(
+      invoke(sender(), { procedure: "session.command", input: { ...input, commandId: "" } }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+    expect(fixture.runtime.command).toHaveBeenCalledTimes(1);
     await registration.close();
   });
 

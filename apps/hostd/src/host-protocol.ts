@@ -56,6 +56,7 @@ export interface HostProtocolBind {
 export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions",
   "sessions.subscribe",
+  "sessions.history",
   "session.read",
 ];
 

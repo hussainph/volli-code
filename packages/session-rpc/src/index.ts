@@ -1,3 +1,5 @@
+import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
+export type { ProcedureSchema } from "./procedure-schema";
 import { TRPCError, tracked } from "@trpc/server";
 import {
   isHostActor,
@@ -21,7 +23,6 @@ import {
   type SessionStreamCompactionProgress,
   type SessionStreamFrame,
   type SessionStreamEmission,
-  type SessionTranscriptArtifact,
   type SessionStreamOverlay,
   type SessionStartResult,
 } from "@volli/session-engine";
@@ -79,6 +80,22 @@ import {
   sessionReadOutput,
   type SessionReadInput,
 } from "./session-reads";
+import {
+  diagnosticEntrySchema,
+  sessionAttachOutputSchema,
+  sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+  streamEmissionSchema,
+  uiMessageWireSchema,
+} from "./output-schema";
+export {
+  sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+} from "./output-schema";
 import {
   catalogRouter,
   hostProcedure,
@@ -471,7 +488,7 @@ const nonEmptyString = z
  * the answer to an unusable label live in {@link usableLabel}, which the
  * enclosing objects apply once they can see the ids to fall back to.
  */
-const displayLabel = z.string().transform((value) => value.trim());
+const displayLabel = z.string().trim();
 /**
  * The label to show, or the entry's own identity when the catalog's is unusable.
  *
@@ -579,11 +596,7 @@ const codeModePolicySchema = z.object({
     ),
 });
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
-const experimentIdSchema = z.custom<ExperimentId>(
-  (id): id is ExperimentId =>
-    typeof id === "string" && EXPERIMENTS.some((experiment) => experiment.id === id),
-  "Unknown experiment id",
-);
+const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
@@ -663,7 +676,7 @@ const modelAccessSnapshotSchema = z.object({
         hasStoredCredential: z.boolean(),
         usageLimits: usageLimitsSchema.optional(),
       })
-      .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
+      .overwrite((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),
   models: z.array(
     z
@@ -681,7 +694,7 @@ const modelAccessSnapshotSchema = z.object({
         // should not silently disable attachments across the whole catalog.
         acceptsImageInput: z.boolean().optional().default(true),
       })
-      .transform((model) => ({
+      .overwrite((model) => ({
         ...model,
         label: usableLabel(model.label, `${model.providerId}/${model.modelId}`),
       })),
@@ -698,12 +711,12 @@ const interactionAnswerSchema = z.object({
  * single-prompt shape `readInteractionAnswers` projects, so the edge neither
  * invents an empty array nor keeps a key it was handed empty-handed.
  */
-const interactionResolutionSchema = z
-  .object({
-    optionIds: z.array(nonEmptyString),
-    response: nullableString,
-    answers: z.array(interactionAnswerSchema).optional(),
-  })
+const interactionResolutionInputSchema = z.object({
+  optionIds: z.array(nonEmptyString),
+  response: nullableString,
+  answers: z.array(interactionAnswerSchema).optional(),
+});
+const interactionResolutionSchema = interactionResolutionInputSchema
   // An optional key that arrives explicitly `undefined` parses as a key that is
   // present and unserialisable — Electron's structured clone keeps one where
   // JSON would have dropped it. The ledger encodes a command intent behind a
@@ -799,7 +812,13 @@ const hostWelcomeSchema = z.object({
   protocolVersion: positiveSafeInteger,
   host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
   workspace: z.object({ id: z.uuidv4(), epoch: nonNegativeSafeInteger }),
-  actor: z.custom<HostActor>(isHostActor, "Expected a network actor"),
+  actor: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("session"), sessionId: nonEmptyString, workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("worker"), workerId: z.uuidv4(), workspaceId: z.uuidv4() }),
+    ])
+    .refine(isHostActor, "Expected a network actor") satisfies z.ZodType<HostActor>,
   features: z.array(z.string().max(128)).max(256).readonly(),
   proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
 });
@@ -814,44 +833,6 @@ const sessionSubscriptionSchema = z.object({
 const sessionHistorySchema = z.object({
   sessionId: nonEmptyString,
   before: nonNegativeSafeInteger.min(1),
-});
-
-/**
- * Whether a value survives a JSON wire unchanged: finite numbers, plain arrays
- * and records, nothing else, no cycles. The frame's event and transcript are
- * opaque to the envelope schema below, so this is what validates them (HP §
- * Commands, subscriptions and errors: new opaque seams validate JSON
- * recursively).
- */
-function isJsonValue(value: unknown, path: Set<object> = new Set()): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object" || path.has(value)) return false;
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return false;
-  path.add(value);
-  const items = Array.isArray(value) ? value : Object.values(value);
-  const json = items.every((item) => isJsonValue(item, path));
-  path.delete(value);
-  return json;
-}
-
-/**
- * One page of older transcript (VC-315), validated at the envelope: frames in
- * order with JSON payloads, and the cursor for the page before it.
- */
-const sessionHistoryPageSchema = z.object({
-  frames: z.array(
-    z.object({
-      sessionId: nonEmptyString,
-      sequence: nonNegativeSafeInteger.min(1),
-      event: z.custom<RendererSessionEvent>((value) => isJsonValue(value), "Expected JSON"),
-      transcript: z
-        .custom<SessionTranscriptArtifact>((value) => isJsonValue(value), "Expected JSON")
-        .nullable(),
-    }),
-  ),
-  before: nonNegativeSafeInteger.min(1).nullable(),
 });
 
 const diagnosticsSubscriptionSchema = z.object({
@@ -1119,13 +1100,15 @@ export function createSessionRouter() {
         "session.snapshot",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).query(async ({ ctx, input }) =>
-        rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
-      ),
+      )
+        .output(sessionSnapshotOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
+        ),
       // Older transcript, a bounded page at a time, for a surface scrolling
       // back past the snapshot's tail (VC-315). The engine owns the bound.
       history: workspaceProcedure("session.history", sessionHistorySchema, sessionResource)
-        .output(sessionHistoryPageSchema)
+        .output(sessionHistoryOutputSchema)
         .query(async ({ ctx, input }) =>
           rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
         ),
@@ -1138,9 +1121,11 @@ export function createSessionRouter() {
         "session.projection",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).query(async ({ ctx, input }) =>
-        rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
-      ),
+      )
+        .output(sessionProjectionOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
+        ),
       subscribe: workspaceProcedure(
         "session.subscribe",
         sessionSubscriptionSchema,
@@ -1316,20 +1301,25 @@ export function createSessionRouter() {
         // `session.create`, the one kind that names no Session, is withheld
         // before this resolves; every other kind requires `sessionId`.
         (input) => sessionResource({ sessionId: input.sessionId! }),
-      ).mutation(async ({ ctx, input }) => {
-        // The start kinds are refused before this line on every door: the
-        // catalog entry withholds them (`refusedIntents`), whoever asks.
-        try {
-          return rendererCommandResult(
-            await ctx.handlers["session.command"](toSessionRuntimeCommandRequest(input), ctx.call),
-          );
-        } catch (error) {
-          if (error instanceof SuperviseSessionError) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) => {
+          // The start kinds are refused before this line on every door: the
+          // catalog entry withholds them (`refusedIntents`), whoever asks.
+          try {
+            return rendererCommandResult(
+              await ctx.handlers["session.command"](
+                toSessionRuntimeCommandRequest(input),
+                ctx.call,
+              ),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
           }
-          throw error;
-        }
-      }),
+        }),
       // A pending interaction the user walked away from. The handler fixes the
       // reason rather than taking it as input: a person's door can honestly
       // report only that they left it undecided.
@@ -1486,20 +1476,88 @@ function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPa
  * The projection checkpoint plus the newest window of frames (VC-315). The
  * window's own artifact list stays behind: every one of them is already inlined
  * on its frame.
+ *
+ * `before` and `latestReply` ride only when they say something, like the
+ * projection's own fields: a window that reaches the first event and a turn
+ * with no reply read the same absent as present-and-null, and a snapshot that
+ * says neither is the exact reply an older Client already parses (VC-669's
+ * N−1 recording).
  */
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): RendererSessionHistoryPage & {
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
   projection: SessionPresentationProjection;
   throughSequence: number;
-  latestReply: SessionLatestReply | null;
+  frames: RendererSessionStreamFrame[];
+  before?: number;
+  latestReply?: SessionLatestReply;
 } {
   return {
     ...rendererProjection(snapshot),
-    ...rendererHistoryPage(snapshot),
-    latestReply: snapshot.latestReply,
+    frames: snapshot.frames.map(rendererFrame),
+    ...(snapshot.before === null ? {} : { before: snapshot.before }),
+    ...(snapshot.latestReply === null ? {} : { latestReply: snapshot.latestReply }),
   };
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;
+
+/**
+ * Publishable wire grammar for every catalog procedure, including subscriptions
+ * (their output is one untracked emission, not the transport's SSE envelope).
+ * No-input and void-result calls have no JSON value: null is the document
+ * sentinel, explicitly distinguished by the booleans, never a runtime rewrite.
+ * The two command-input adapters describe custom/transform parsers without
+ * weakening their runtime checks. Refinements remain runtime-only constraints.
+ */
+function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
+  if (
+    !(input instanceof z.ZodObject) ||
+    !(input.shape.command instanceof z.ZodDiscriminatedUnion)
+  ) {
+    throw new Error("session.command needs a structural command envelope for publication");
+  }
+  const commandWireSchema = z.union(
+    input.shape.command.options.map((option) => {
+      if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
+        throw new Error("session.command needs object alternatives with literal kinds");
+      }
+      if (option.shape.kind.value === "message.submit") {
+        return option.extend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      if (option.shape.kind.value === "interaction.resolve") {
+        return option.extend({ resolution: interactionResolutionInputSchema });
+      }
+      return option;
+    }),
+  );
+  // Preserve the actual envelope's required fields, bounds and refinements.
+  // Rebuilding it here would hide a breaking router change from the CI diff.
+  return input.safeExtend({ command: commandWireSchema });
+}
+
+export function sessionProcedureSchemas(
+  router: AppRouter = createSessionRouter(),
+): Record<string, ProcedureSchema> {
+  const supplementalOutputs: Record<string, z.ZodType> = {
+    "sessions.create": z.object({ sessionId: z.string() }),
+    "sessions.attach": sessionAttachOutputSchema,
+    "session.subscribe": streamEmissionSchema,
+    "session.cancelInteraction": z.null(),
+    "session.reconcile": z.null(),
+    "labDiagnostics.list": z.array(diagnosticEntrySchema),
+    "labDiagnostics.subscribe": diagnosticEntrySchema,
+  };
+  return procedureSchemas(
+    router,
+    supplementalOutputs,
+    (key, input) => (key === "session.command" ? publishCommandInput(input) : (input ?? z.null())),
+    ["session.cancelInteraction", "session.reconcile"],
+  );
+}
 
 /**
  * Every Session-router procedure is one of the family's catalog entries and

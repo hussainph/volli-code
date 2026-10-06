@@ -1143,7 +1143,7 @@ describe("the host protocol listener (VC-663)", () => {
       const welcome = await trpc.protocol.welcome.query();
       expect(welcome).toMatchObject({
         workspace: { id: WORKSPACE, epoch: 3 },
-        features: ["sessions", "sessions.subscribe", "session.read"],
+        features: ["sessions", "sessions.subscribe", "sessions.history", "session.read"],
       });
       // The socket's own handler, scoped to this Workspace.
       const listed = await trpc.session.list.query({ projectId: WORKSPACE, all: true });
@@ -1159,6 +1159,14 @@ describe("the host protocol listener (VC-663)", () => {
       expect(
         await expectHostError(trpc.session.projection.query({ sessionId: "no-such-session" })),
       ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      // The window and the history above it (VC-315): a young Session's
+      // window reaches its first event, and a page below it is empty.
+      const opened = await trpc.session.snapshot.query({ sessionId });
+      expect(opened.before).toBeNull();
+      expect(await trpc.session.history.query({ sessionId, before: 1 })).toEqual({
+        frames: [],
+        before: null,
+      });
       // The create door is the Sessions facade's; with no model it says so.
       expect(
         await expectHostError(
@@ -1192,6 +1200,8 @@ describe("the host protocol listener (VC-663)", () => {
           "session.list",
           "session.show",
           "session.projection",
+          "session.snapshot",
+          "session.history",
           "sessions.create",
           "session.subscribe",
         ]),

@@ -289,6 +289,22 @@ async function until(condition: () => boolean, what: string): Promise<void> {
 }
 
 describe("the handshake, before any procedure", () => {
+  it("enforces output validation on the network door", async () => {
+    const { listener } = await serve({
+      context: (source) => ({
+        runtime: {
+          ...source.runtime,
+          projection: async () =>
+            ({ projection: { turnActive: "not-a-boolean" }, throughSequence: 0 }) as never,
+        },
+      }),
+    });
+    const { client } = connect(listener.url);
+    await expect(client.session.projection.query({ sessionId: SESSION })).rejects.toThrow(
+      "Output validation failed",
+    );
+  });
+
   it("welcomes a verified device with the negotiated welcome its client validates", async () => {
     const { listener, events } = await serve();
     const { client, hellos } = connect(listener.url, { features: ["sessions", "board"] });
