@@ -1,3 +1,4 @@
+import type { SessionRuntime } from "@volli/session-engine";
 /**
  * Frozen public Session peer subset from 4c712841ae777dcc178d10552e7b0052fa905b81
  * (the pre-VC-669 PR base, not a released hostd binary). Only the four entries
@@ -9,7 +10,7 @@
  * the real IPC bridge; the reason/code/message and WS formatter are pinned here.
  */
 import { initTRPC, tracked } from "@trpc/server";
-import type { HostProcedureError, SessionRouterContext } from "@volli/session-rpc";
+import type { HostProcedureError, RouterCaller, WorkspaceResource } from "@volli/session-rpc";
 // Independent parsers avoid importing the current server's schema library or
 // schema definitions. tRPC accepts the same { parse } interface as Zod.
 function record(value: unknown): value is Record<string, unknown> {
@@ -159,9 +160,15 @@ export const oldTrackedOutput = parser<unknown>(
   (value) => record(value) && cursor(value.id) && isRecordedFrame(value.data),
 );
 
+interface OldSessionRouterContext {
+  caller: RouterCaller;
+  runtime: SessionRuntime;
+  resourceWorkspace?: (resource: WorkspaceResource) => string | null | Promise<string | null>;
+}
+
 /** No current catalog builders, schemas, presentation codec or AsyncQueue. */
 export function createOldSessionRouter(ErrorCarrier: typeof HostProcedureError) {
-  const rpc = initTRPC.context<SessionRouterContext>().create({
+  const rpc = initTRPC.context<OldSessionRouterContext>().create({
     errorFormatter: ({ shape, error }) => ({
       ...shape,
       data: {

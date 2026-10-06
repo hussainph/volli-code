@@ -135,6 +135,268 @@ test("optional recursive JSON fields tolerate generated ref renumbering", () => 
   assert.ok(schemaChanges(old, narrowed).length);
 });
 
+test("unchanged refs do not hide json definition mutations (N3/N12/F1)", () => {
+  const old = z.toJSONSchema(z.object({ data: z.json() }));
+  const name = old.properties.data.$ref.split("/").at(-1);
+  for (const direction of ["input", "output"]) {
+    for (const mutation of ["integer", "removeObject"]) {
+      const next = structuredClone(old);
+      if (mutation === "integer") {
+        next.$defs[name].anyOf.find(({ type }) => type === "number").type = "integer";
+      } else {
+        next.$defs[name].anyOf = next.$defs[name].anyOf.filter(({ type }) => type !== "object");
+      }
+      assert.deepEqual(old.properties, next.properties);
+      assert.ok(schemaChanges(old, next, "", direction).length, `${direction}: ${mutation}`);
+    }
+  }
+});
+
+test("refs under closed oneOf and unknown assertions follow changed definitions (N13)", () => {
+  for (const keyword of ["oneOf", "allOf"]) {
+    const old = { [keyword]: [{ $ref: "#/$defs/value" }], $defs: { value: text } };
+    const next = structuredClone(old);
+    next.$defs.value.maxLength = 5;
+    assert.deepEqual(old[keyword], next[keyword]);
+    assert.ok(schemaChanges(old, next, "", "output").length, keyword);
+    const renamed = { [keyword]: [{ $ref: "#/$defs/renamed" }], $defs: { renamed: text } };
+    assert.deepEqual(schemaChanges(old, renamed, "", "output"), []);
+  }
+});
+
+const marker = "x-volli-open-union";
+const variant = (discriminator, values, value = z.string()) =>
+  z.object({
+    [discriminator]: values.length === 1 ? z.literal(values[0]) : z.enum(values),
+    value,
+  });
+const openUnion = (discriminator, branches) =>
+  z.toJSONSchema(z.discriminatedUnion(discriminator, branches).meta({ [marker]: discriminator }));
+
+test("only explicitly open output discriminated unions permit disjoint additions (real Zod meta)", () => {
+  for (const discriminator of ["kind", "status", "op"]) {
+    const branches = [variant(discriminator, ["a"]), variant(discriminator, ["b", "c"])];
+    const old = openUnion(discriminator, branches);
+    const next = openUnion(discriminator, [...branches, variant(discriminator, ["d", "e"])]);
+    assert.equal(old[marker], discriminator);
+    assert.ok(old.oneOf[1].properties[discriminator].enum, "grouped enum is preserved");
+    assert.deepEqual(schemaChanges(old, next, "", "output"), []);
+    assert.ok(schemaChanges(old, next, "", "input").length, "input unions are never open");
+    for (const [beforeMarker, afterMarker] of [
+      [undefined, undefined],
+      [undefined, discriminator],
+      [discriminator, undefined],
+      [true, true],
+      ["unknown", "unknown"],
+      [discriminator, "unknown"],
+    ]) {
+      const before = { ...old, [marker]: beforeMarker };
+      const after = { ...next, [marker]: afterMarker };
+      assert.ok(
+        schemaChanges(before, after, "", "output").length,
+        JSON.stringify({ discriminator, beforeMarker, afterMarker }),
+      );
+    }
+  }
+});
+
+test("annotation-only changes under closed unions are additive, but never hide wire fields/literals", () => {
+  const old = openUnion("kind", [variant("kind", ["a"]), variant("kind", ["b"])]);
+  delete old[marker];
+  const next = structuredClone(old);
+  next[marker] = "kind";
+  next.oneOf[0].description = "annotation only";
+  next.oneOf[0].properties.value.title = "annotation only";
+  assert.deepEqual(schemaChanges(old, next, "", "output"), []);
+  assert.deepEqual(schemaChanges(old, next, "", "input"), []);
+  for (const name of ["title", "description", "$defs", marker]) {
+    const before = { type: "object", properties: { [name]: text } };
+    assert.ok(schemaChanges(before, { type: "object", properties: {} }).length, name);
+    assert.ok(schemaChanges({ const: { [name]: "a" } }, { const: { [name]: "b" } }).length, name);
+  }
+  const literal = { enum: [{ $ref: "literal, not a schema reference" }] };
+  assert.deepEqual(schemaChanges(literal, structuredClone(literal)), []);
+});
+
+test("open output variants stay additive inside nullable/array containers (real Zod)", () => {
+  const publish = (values) =>
+    z.toJSONSchema(
+      z.object({
+        receipts: z.array(
+          z
+            .discriminatedUnion(
+              "status",
+              values.map((value) => variant("status", [value])),
+            )
+            .meta({ [marker]: "status" })
+            .nullable(),
+        ),
+      }),
+    );
+  const old = publish(["accepted", "rejected"]);
+  const next = publish(["accepted", "rejected", "deferred"]);
+  assert.deepEqual(schemaChanges(old, next, "", "output"), []);
+  assert.ok(schemaChanges(old, next, "", "input").length);
+  const unmarked = structuredClone(next);
+  delete unmarked.properties.receipts.items.anyOf.find((branch) => branch.oneOf)[marker];
+  assert.ok(schemaChanges(old, unmarked, "", "output").length);
+  // A marker on anyOf cannot opt that union into the oneOf-only exception.
+  assert.ok(
+    schemaChanges(
+      { anyOf: [text], [marker]: "kind" },
+      { anyOf: [text, { type: "null" }], [marker]: "kind" },
+      "",
+      "output",
+    ).length,
+  );
+});
+
+test("open unions fail closed without a pairwise discriminator disjointness proof", () => {
+  const old = openUnion("kind", [variant("kind", ["a"]), variant("kind", ["b", "c"])]);
+  const next = openUnion("kind", [
+    variant("kind", ["a"]),
+    variant("kind", ["b", "c"]),
+    variant("kind", ["d", "e"]),
+  ]);
+  const invalid = [
+    (s) => {
+      s.oneOf[2].properties.kind = { type: "string", const: "b" };
+    },
+    (s) => {
+      s.oneOf[2].properties.kind.enum.push("c");
+    },
+    (s) => {
+      s.oneOf[2].required = ["value"];
+    },
+    (s) => {
+      delete s.oneOf[2].properties.kind;
+    },
+    (s) => {
+      s.oneOf[2].properties.kind = { type: "string" };
+    },
+    (s) => {
+      s.oneOf[2].properties.kind = { enum: [] };
+    },
+    (s) => {
+      s.oneOf[2].properties.kind = { enum: [1] };
+    },
+    (s) => {
+      s.oneOf[2].type = "string";
+    },
+  ];
+  for (const mutate of invalid) {
+    const after = structuredClone(next);
+    mutate(after);
+    assert.ok(schemaChanges(old, after, "", "output").length, mutate.toString());
+  }
+  const overlappingBefore = structuredClone(old);
+  overlappingBefore.oneOf[1].properties.kind.enum.push("a");
+  assert.ok(schemaChanges(overlappingBefore, next, "", "output").length);
+});
+
+test("open unions preserve every old member and recursively check its fields", () => {
+  const old = openUnion("status", [variant("status", ["a"]), variant("status", ["b", "c"])]);
+  for (const mutate of [
+    (s) => {
+      s.oneOf.pop();
+    },
+    (s) => {
+      s.oneOf[1].properties.status.enum.pop();
+    },
+    (s) => {
+      s.oneOf[0].properties.status.const = "changed";
+    },
+    (s) => {
+      s.oneOf[0].properties.value.maxLength = 5;
+    },
+    (s) => {
+      delete s.oneOf[0].properties.value;
+    },
+    (s) => {
+      s.oneOf[0].required = ["status"];
+    },
+    (s) => {
+      s.oneOf[0].properties.value = { anyOf: [text, { type: "null" }] };
+    },
+  ]) {
+    const next = structuredClone(old);
+    mutate(next);
+    assert.ok(schemaChanges(old, next, "", "output").length, mutate.toString());
+  }
+  const groupedAddition = structuredClone(old);
+  groupedAddition.oneOf[1].properties.status.enum.push("d");
+  assert.deepEqual(schemaChanges(old, groupedAddition, "", "output"), []);
+  const overlap = structuredClone(old);
+  overlap.oneOf[1].properties.status.enum.push("a");
+  assert.ok(schemaChanges(old, overlap, "", "output").length);
+  const additive = structuredClone(old);
+  additive.oneOf.reverse();
+  additive.oneOf[0].properties.extra = text;
+  additive.oneOf[0].required.push("extra");
+  assert.deepEqual(schemaChanges(old, additive, "", "output"), []);
+});
+
+test("open unions recursively compare identical branch refs and discriminator refs", () => {
+  const old = {
+    [marker]: "kind",
+    oneOf: [{ $ref: "#/$defs/branch" }],
+    $defs: {
+      tag: { type: "string", const: "a" },
+      branch: {
+        type: "object",
+        properties: { kind: { $ref: "#/$defs/tag" }, value: text },
+        required: ["kind", "value"],
+      },
+    },
+  };
+  const narrowed = structuredClone(old);
+  narrowed.$defs.branch.properties.value = { type: "string", maxLength: 5 };
+  assert.ok(schemaChanges(old, narrowed, "", "output").length);
+  const changedTag = structuredClone(old);
+  changedTag.$defs.tag.const = "b";
+  assert.ok(schemaChanges(old, changedTag, "", "output").length);
+  const additive = structuredClone(old);
+  additive.oneOf.push({ type: "object", properties: { kind: { const: "b" } }, required: ["kind"] });
+  assert.deepEqual(schemaChanges(old, additive, "", "output"), []);
+});
+
+test("output type/anyOf/boolean widening breaks the N−1 promise, including nullable Zod", () => {
+  for (const [before, after] of [
+    [text, { type: ["string", "null"] }],
+    [text, { type: ["string", "number"] }],
+    [{ type: "integer" }, { type: "number" }],
+    [text, {}],
+    [text, true],
+    [false, text],
+    [text, { anyOf: [text, { type: "null" }] }],
+    [text, { anyOf: [text, { type: "number" }] }],
+    [text, { anyOf: [text, true] }],
+    [
+      { anyOf: [{ type: "string", maxLength: 5 }] },
+      { anyOf: [{ type: "string", maxLength: 5 }, text] },
+    ],
+    [{ anyOf: [text, { type: "null" }] }, { anyOf: [text, { type: "null" }, { type: "number" }] }],
+    [z.toJSONSchema(z.string()), z.toJSONSchema(z.string().nullable())],
+  ]) {
+    assert.ok(schemaChanges(before, after, "", "output").length, JSON.stringify({ before, after }));
+    assert.deepEqual(schemaChanges(before, after, "", "input"), []);
+  }
+  // Equivalent wrapping/reordering is not widening; output enum growth remains
+  // the established tolerant-reader policy, distinct from admitting new types.
+  assert.deepEqual(schemaChanges(text, { anyOf: [text] }, "", "output"), []);
+  const union = { anyOf: [text, { type: "null" }] };
+  assert.deepEqual(schemaChanges(union, { anyOf: union.anyOf.toReversed() }, "", "output"), []);
+  assert.deepEqual(
+    schemaChanges(
+      { anyOf: [{ type: "string", enum: ["a"] }, { type: "null" }] },
+      { anyOf: [{ type: "string", enum: ["a", "b"] }, { type: "null" }] },
+      "",
+      "output",
+    ),
+    [],
+  );
+});
+
 test("dangling/external references and assertion siblings fail closed", () => {
   for (const next of [
     { $ref: "#/$defs/missing" },

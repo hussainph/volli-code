@@ -210,7 +210,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.compactionPolicy": {
@@ -233,7 +233,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.defaults": {
@@ -498,7 +498,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.hiddenModels": {
@@ -533,7 +533,7 @@
           "maxItems": 2000,
           "type": "array"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.inspect": {
@@ -855,7 +855,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.pickerView": {
@@ -873,7 +873,7 @@
           ],
           "type": "string"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.setCodeModePolicy": {
@@ -938,7 +938,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.setCompactionPolicy": {
@@ -969,7 +969,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.setDefault": {
@@ -1290,7 +1290,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.setHiddenModels": {
@@ -1345,7 +1345,7 @@
           "maxItems": 2000,
           "type": "array"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.setPickerView": {
@@ -1367,7 +1367,256 @@
           ],
           "type": "string"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "protocol.welcome": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "deviceId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "device",
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "deviceId",
+                    "workspaceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "session",
+                      "type": "string"
+                    },
+                    "sessionId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "sessionId",
+                    "workspaceId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "worker",
+                      "type": "string"
+                    },
+                    "workerId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                      "type": "string"
+                    },
+                    "workspaceId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "workerId",
+                    "workspaceId"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "features": {
+              "items": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "maxItems": 256,
+              "readOnly": true,
+              "type": "array"
+            },
+            "host": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                  "type": "string"
+                },
+                "version": {
+                  "maxLength": 128,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "version"
+              ],
+              "type": "object"
+            },
+            "proof": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "scheme": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "scheme",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "protocolVersion": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "workspace": {
+              "additionalProperties": false,
+              "properties": {
+                "epoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "epoch"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "host",
+            "workspace",
+            "actor",
+            "features",
+            "proof"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "session.answer": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "session": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId",
+            "session"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "session.cancelInteraction": {
@@ -1798,11 +2047,15 @@
                             "properties": {
                               "optionIds": {
                                 "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
                                   "type": "string"
                                 },
                                 "type": "array"
                               },
                               "promptId": {
+                                "maxLength": 512,
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "response": {
@@ -1827,6 +2080,8 @@
                         },
                         "optionIds": {
                           "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
                             "type": "string"
                           },
                           "type": "array"
@@ -2185,7 +2440,8 @@
                       ],
                       "type": "object"
                     }
-                  ]
+                  ],
+                  "x-volli-open-union": "status"
                 },
                 {
                   "type": "null"
@@ -2269,7 +2525,192 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "session.list": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "all": {
+              "type": "boolean"
+            },
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "since": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "state": {
+              "items": {
+                "enum": [
+                  "working",
+                  "waiting",
+                  "idle",
+                  "stopped",
+                  "interrupted",
+                  "running",
+                  "exited"
+                ],
+                "type": "string"
+              },
+              "maxItems": 7,
+              "minItems": 1,
+              "type": "array"
+            },
+            "ticket": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hidden": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "sessions",
+            "hidden"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "session.peek": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "lines": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "session": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId",
+            "session"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "session.projection": {
@@ -2842,7 +3283,8 @@
                             ],
                             "type": "object"
                           }
-                        ]
+                        ],
+                        "x-volli-open-union": "kind"
                       },
                       "type": "array"
                     },
@@ -3390,7 +3832,8 @@
                               ],
                               "type": "object"
                             }
-                          ]
+                          ],
+                          "x-volli-open-union": "kind"
                         },
                         {
                           "type": "null"
@@ -4202,7 +4645,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "session.reconcile": {
@@ -4234,6 +4677,75 @@
         },
         "outputValidation": "legacy-documentation",
         "voidOutput": true
+      },
+      "session.show": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "session": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId",
+            "session"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
       },
       "session.snapshot": {
         "input": {
@@ -6941,7 +7453,8 @@
                                     ],
                                     "type": "object"
                                   }
-                                ]
+                                ],
+                                "x-volli-open-union": "kind"
                               },
                               "kind": {
                                 "const": "attention.raised",
@@ -7542,7 +8055,8 @@
                                     ],
                                     "type": "object"
                                   }
-                                ]
+                                ],
+                                "x-volli-open-union": "status"
                               }
                             },
                             "required": [
@@ -7741,7 +8255,8 @@
                             ],
                             "type": "object"
                           }
-                        ]
+                        ],
+                        "x-volli-open-union": "kind"
                       },
                       "provenance": {
                         "additionalProperties": false,
@@ -8485,7 +9000,8 @@
                             ],
                             "type": "object"
                           }
-                        ]
+                        ],
+                        "x-volli-open-union": "kind"
                       },
                       "type": "array"
                     },
@@ -9033,7 +9549,8 @@
                               ],
                               "type": "object"
                             }
-                          ]
+                          ],
+                          "x-volli-open-union": "kind"
                         },
                         {
                           "type": "null"
@@ -9846,7 +10363,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "session.subscribe": {
@@ -12624,7 +13141,8 @@
                                   ],
                                   "type": "object"
                                 }
-                              ]
+                              ],
+                              "x-volli-open-union": "kind"
                             },
                             "kind": {
                               "const": "attention.raised",
@@ -13225,7 +13743,8 @@
                                   ],
                                   "type": "object"
                                 }
-                              ]
+                              ],
+                              "x-volli-open-union": "status"
                             }
                           },
                           "required": [
@@ -13424,7 +13943,8 @@
                           ],
                           "type": "object"
                         }
-                      ]
+                      ],
+                      "x-volli-open-union": "kind"
                     },
                     "provenance": {
                       "additionalProperties": false,
@@ -13797,7 +14317,8 @@
                       ],
                       "type": "object"
                     }
-                  ]
+                  ],
+                  "x-volli-open-union": "op"
                 },
                 "kind": {
                   "const": "overlay",
@@ -14134,7 +14655,8 @@
                       ],
                       "type": "object"
                     }
-                  ]
+                  ],
+                  "x-volli-open-union": "status"
                 },
                 {
                   "type": "null"
@@ -14331,7 +14853,7 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "settings.setExperiment": {
@@ -14387,7 +14909,80 @@
           ],
           "type": "object"
         },
-        "outputValidation": "runtime",
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "ticket.move": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "ticketId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "toStatus": {
+              "enum": [
+                "backlog",
+                "todo",
+                "doing",
+                "needs_review",
+                "done"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId",
+            "ticketId",
+            "toStatus"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "order"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ticket"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       }
     }

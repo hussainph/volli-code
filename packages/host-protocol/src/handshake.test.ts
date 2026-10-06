@@ -125,25 +125,25 @@ describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
     ...hello,
     protocol: { min: 1, max: 1 },
     client: { kind: "desktop", version: "0.3.0" },
-    features: ["sessions", "sessions.subscribe", "verbs.read", "unknown.client.feature"],
+    features: ["sessions", "sessions.subscribe", "session.read", "unknown.client.feature"],
   };
   const newDesktop: HostHello = {
     ...hello,
     protocol: HOST_PROTOCOL_VERSIONS,
     client: { kind: "desktop", version: "0.4.0" },
-    features: ["sessions", "sessions.subscribe", "events", "future.area", "sessions"],
+    features: ["sessions", "sessions.subscribe", "model-access", "future.area", "sessions"],
   };
   const oldHostd: HostOffer = {
     ...offer,
     protocol: { min: 1, max: 1 },
     host: { id: HOST, version: "0.3.0" },
-    features: ["sessions", "sessions.subscribe", "verbs.read"],
+    features: ["sessions", "sessions.subscribe", "session.read"],
   };
   const newHostd: HostOffer = {
     ...offer,
     protocol: HOST_PROTOCOL_VERSIONS,
     host: { id: HOST, version: "0.4.0" },
-    features: ["events", "sessions", "sessions.subscribe", "verbs.read", "events"],
+    features: ["model-access", "sessions", "sessions.subscribe", "session.read", "model-access"],
   };
 
   it.each([
@@ -151,7 +151,7 @@ describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
       cell: "old desktop × old hostd",
       desktop: oldDesktop,
       hostd: oldHostd,
-      features: ["sessions", "sessions.subscribe", "verbs.read"],
+      features: ["sessions", "sessions.subscribe", "session.read"],
     },
     {
       cell: "new desktop × old hostd",
@@ -163,13 +163,13 @@ describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
       cell: "old desktop × new hostd",
       desktop: oldDesktop,
       hostd: newHostd,
-      features: ["sessions", "sessions.subscribe", "verbs.read"],
+      features: ["sessions", "sessions.subscribe", "session.read"],
     },
     {
       cell: "new desktop × new hostd",
       desktop: newDesktop,
       hostd: newHostd,
-      features: ["events", "sessions", "sessions.subscribe"],
+      features: ["model-access", "sessions", "sessions.subscribe"],
     },
   ])(
     "welcomes $cell with only the deduplicated feature intersection",
@@ -186,6 +186,7 @@ describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
           workspace: hostd.workspace,
           actor: device,
           features,
+          proof: null,
         },
       });
     },

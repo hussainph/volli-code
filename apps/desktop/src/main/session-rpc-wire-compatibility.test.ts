@@ -43,7 +43,7 @@ import {
 } from "./session-rpc-n-minus-one.test-support";
 
 vi.mock("electron", () => fakeElectron);
-const peer = vi.hoisted(() => ({ old: false }));
+const peer = vi.hoisted(() => ({ old: false, runtime: null as SessionRuntime | null }));
 vi.mock("@volli/session-rpc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@volli/session-rpc")>();
   const { withHarnessIdentity } =
@@ -52,12 +52,24 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
     await import("./session-rpc-n-minus-one.test-support");
   return withHarnessIdentity({
     ...actual,
-    createSessionRouter: () =>
-      peer.old
-        ? // Only these four paths are used by the real bridge. The historical
-          // subset is intentionally NOT typed as today's entire application API.
-          (frozenRouter(actual.HostProcedureError) as unknown as AppRouter)
-        : actual.createSessionRouter(),
+    createSessionRouter: () => {
+      if (!peer.old) return actual.createSessionRouter();
+      // Adapt today's bridge context to the frozen host's historical port;
+      // its parser/router stays unchanged and owns the old wire semantics.
+      const runtime = peer.runtime!;
+      const router = frozenRouter(actual.HostProcedureError);
+      return {
+        ...router,
+        createCaller: (
+          context: Parameters<AppRouter["createCaller"]>[0],
+          options: Parameters<typeof router.createCaller>[1],
+        ) =>
+          router.createCaller(
+            { ...(context as import("@volli/session-rpc").SessionRouterContext), runtime },
+            options,
+          ),
+      } as unknown as AppRouter;
+    },
   });
 });
 
@@ -174,20 +186,23 @@ function oldHostLinks(): ContractLink<SessionRouterHost, AppRouter>[] {
       name: ipc.name,
       async open(host) {
         peer.old = true;
+        peer.runtime = host.runtime as SessionRuntime;
         try {
           return await ipc.open(host);
         } finally {
           peer.old = false;
+          peer.runtime = null;
         }
       },
     },
     webSocketContractLink({
-      router: createOldSessionRouter(HostProcedureError) as unknown as AppRouter,
-      createContext: (host) => ({
+      router: createOldSessionRouter(HostProcedureError),
+      createContext: (host: SessionRouterHost) => ({
         ...host,
+        runtime: host.runtime as SessionRuntime,
         diagnostics: host.diagnostics ?? new RpcDiagnosticLog(),
       }),
-    }),
+    }) as unknown as ContractLink<SessionRouterHost, AppRouter>,
   ];
 }
 

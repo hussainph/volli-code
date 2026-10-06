@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
-import { CATALOG_ENTRIES, scrubSessionEvent, SESSION_PROJECTION_EVENT_KINDS } from "@volli/shared";
+import {
+  CATALOG_ENTRIES,
+  BOARD_ENTRIES,
+  scrubSessionEvent,
+  SESSION_PROJECTION_EVENT_KINDS,
+} from "@volli/shared";
 import type { CommandReceipt, SessionEventPayload } from "@volli/shared";
 import type { SessionRuntime } from "@volli/session-engine";
 import {
@@ -13,6 +18,7 @@ import {
   sessionSnapshotOutputSchema,
   type AppRouter,
 } from "./index";
+import { sessionHandlersFrom } from "./session-handlers.test-support";
 import { frameSchema, receiptSchema, uiMessageWireSchema } from "./output-schema";
 
 const session = {
@@ -206,7 +212,7 @@ function callerWithResults(input: { projection?: unknown; frames?: unknown; comm
   } as unknown as SessionRuntime;
   return createSessionRouter().createCaller({
     caller: LOCAL_DESKTOP_CALLER,
-    runtime,
+    handlers: sessionHandlersFrom({ runtime }),
     diagnostics: new RpcDiagnosticLog(),
   });
 }
@@ -238,7 +244,9 @@ describe("publishable Session procedure schemas", () => {
   it("publishes every catalog entry, without unrepresentable fallback", () => {
     const schemas = sessionProcedureSchemas();
     expect(Object.keys(schemas).toSorted()).toEqual(
-      CATALOG_ENTRIES.map(({ key }) => key).toSorted(),
+      CATALOG_ENTRIES.filter(({ key }) => !BOARD_ENTRIES.some((entry) => entry.key === key))
+        .map(({ key }) => key)
+        .toSorted(),
     );
     for (const schema of Object.values(schemas)) {
       expect(() => z.toJSONSchema(schema.input, { io: "input" })).not.toThrow();
@@ -281,6 +289,54 @@ describe("publishable Session procedure schemas", () => {
       command: z.discriminatedUnion("kind", [z.object({ kind: z.enum(["a", "b"]) })]),
     });
     expect(() => sessionProcedureSchemas(commandRouter(nonliteral))).toThrow("literal kinds");
+  });
+
+  it("keeps the custom command input publication in parity with runtime accept/reject", () => {
+    const router = createSessionRouter();
+    // oxlint-disable-next-line no-underscore-dangle -- compare the actual parser, not a reconstructed validator.
+    const procedures = router._def.procedures as unknown as Record<
+      string,
+      { _def: { inputs: z.ZodType[] } }
+    >;
+    // oxlint-disable-next-line no-underscore-dangle -- actual tRPC input parser.
+    const runtime = procedures["session.command"]!._def.inputs[0]!;
+    const published = sessionProcedureSchemas(router)["session.command"]!.input;
+    const message = { id: "message", role: "user", parts: [{ type: "text", text: "hello" }] };
+    const resolution = { optionIds: ["yes"], response: null };
+    const samples = [
+      { kind: "message.submit", message },
+      { kind: "message.submit", message: { ...message, metadata: { arbitrary: [null, 1] } } },
+      ...[
+        { ...message, id: "" },
+        { ...message, id: " leading" },
+        { ...message, role: "unknown" },
+        { ...message, parts: [] },
+        { ...message, parts: [{ type: 1 }] },
+        { ...message, parts: [null] },
+      ].map((value) => ({ kind: "message.submit", message: value })),
+      { kind: "interaction.resolve", interactionId: "ask", resolution },
+      {
+        kind: "interaction.resolve",
+        interactionId: "ask",
+        resolution: { ...resolution, answers: [{ promptId: "prompt", ...resolution }] },
+      },
+      {
+        kind: "interaction.resolve",
+        interactionId: "ask",
+        resolution: { ...resolution, optionIds: [""] },
+      },
+      {
+        kind: "interaction.resolve",
+        interactionId: "ask",
+        resolution: { ...resolution, answers: [{ promptId: "", ...resolution }] },
+      },
+    ];
+    for (const command of samples) {
+      const envelope = { commandId: "command", sessionId: "session", command };
+      expect(published.safeParse(envelope).success, JSON.stringify(command)).toBe(
+        runtime.safeParse(envelope).success,
+      );
+    }
   });
 
   it.each(Object.entries(payloads))(

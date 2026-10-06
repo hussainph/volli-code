@@ -1,6 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 
-const annotations = new Set(["$schema", "title", "description", "default", "examples", "$comment"]);
+const openUnionMarker = "x-volli-open-union";
+const annotations = new Set([
+  "$schema",
+  "title",
+  "description",
+  "default",
+  "examples",
+  "$comment",
+  openUnionMarker,
+]);
 const lowerBounds = new Set([
   "minimum",
   "exclusiveMinimum",
@@ -18,6 +27,14 @@ const upperBounds = new Set([
 const list = (value) => (Array.isArray(value) ? value : value === undefined ? [] : [value]);
 const object = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const escape = (key) => key.replaceAll("~", "~0").replaceAll("/", "~1");
+const schemaMaps = new Set(["properties", "patternProperties", "dependentSchemas", "dependencies"]);
+const assertionKeys = (value, kind) =>
+  Object.keys(value)
+    .filter(
+      (key) =>
+        kind === "map" || (key !== "$defs" && key !== "definitions" && !annotations.has(key)),
+    )
+    .toSorted();
 
 /** Conservative JSON-Schema subset check. Unknown assertion changes fail closed.
  * Field/entry removal is forbidden even when removing an input field would widen
@@ -33,7 +50,11 @@ export function schemaChanges(before, after, path = "", direction = "input", con
   };
   before = resolveLocalRef(before, state.roots[0], state.caches[0]);
   after = resolveLocalRef(after, state.roots[1], state.caches[1]);
-  if (isDeepStrictEqual(before, after) || after === true || before === false) return [];
+  // Equality must follow $ref into each document's own definitions: two
+  // textually identical subtrees can point at different $defs bodies.
+  const same = (old, next) => resolvedEqual(old, next, state);
+  if (same(before, after)) return [];
+  if (direction === "input" && (after === true || before === false)) return [];
   if (state.ancestors.some(([old, next]) => old === before && next === after)) return [];
   const nested = { ...state, ancestors: [...state.ancestors, [before, after]] };
   const compare = (old, next, at) => schemaChanges(old, next, at, direction, nested);
@@ -50,6 +71,21 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       )
     ) {
       fail(`${path}/type`, "type narrowed");
+    }
+  }
+  // Output types are a promise to N−1 readers: admitting null (or any new
+  // type) breaks that promise. Input widening remains additive. anyOf wrappers
+  // are checked branch-by-branch below, rather than mistaken for type removal.
+  if (direction === "output" && before.type !== undefined) {
+    const oldTypes = list(before.type);
+    const newTypes = list(after.type);
+    if (
+      (after.type === undefined && after.anyOf === undefined) ||
+      newTypes.some(
+        (type) => !oldTypes.includes(type) && !(type === "integer" && oldTypes.includes("number")),
+      )
+    ) {
+      fail(`${path}/type`, "output type widened");
     }
   }
   for (const keyword of ["enum", "const"]) {
@@ -79,10 +115,31 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       else changes.push(...compare(oldSchema, after[keyword][key], at));
     }
   }
-  // Adding a oneOf branch can invalidate an old value that now matches TWO
-  // branches. Without a disjointness proof, any oneOf change fails closed.
-  if (!isDeepStrictEqual(before.oneOf, after.oneOf)) {
-    fail(`${path}/oneOf`, "exclusive union changed (requires explicit review)");
+  // oneOf is closed by default: additions may make an old value match TWO
+  // branches. Only explicitly tolerant output unions get a disjointness proof.
+  if (!same(before.oneOf, after.oneOf)) {
+    const discriminator = before[openUnionMarker];
+    const open =
+      direction === "output" &&
+      ["kind", "status", "op"].includes(discriminator) &&
+      after[openUnionMarker] === discriminator;
+    const oldVariants = open && unionVariants(before.oneOf, discriminator, state, 0);
+    const newVariants = open && unionVariants(after.oneOf, discriminator, state, 1);
+    if (!oldVariants || !newVariants) {
+      fail(`${path}/oneOf`, "exclusive union changed (requires explicit review)");
+    } else {
+      for (const [index, variant] of oldVariants.entries()) {
+        // Preserve every old discriminator value, including grouped enum
+        // branches (attention). A grouped branch may gain new values, provided
+        // the whole union remains disjoint and its old field contracts hold.
+        const next = newVariants.find(({ values }) =>
+          variant.values.every((value) => values.includes(value)),
+        );
+        const at = `${path}/oneOf/${index}`;
+        if (!next) fail(at, "open union variant removed or discriminator changed");
+        else changes.push(...compare(variant.branch, next.branch, at));
+      }
+    }
   }
   if (before.anyOf !== undefined || after.anyOf !== undefined) {
     const oldBranches = before.anyOf ?? [
@@ -94,6 +151,19 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     for (const [index, branch] of oldBranches.entries()) {
       if (!newBranches.some((next) => compare(branch, next, path).length === 0)) {
         fail(`${path}/anyOf/${index}`, "union alternative removed or narrowed");
+      }
+    }
+    if (direction === "output") {
+      // Unlike the marked/disjoint oneOf exception, anyOf has no open-union
+      // policy. Do not let an extra broad branch reuse an existing match and
+      // silently expand output acceptance (even within the same JSON type).
+      if (newBranches.length > oldBranches.length) {
+        fail(`${path}/anyOf`, "output union alternative added or widened");
+      }
+      for (const [index, branch] of newBranches.entries()) {
+        if (!oldBranches.some((old) => compare(old, branch, path).length === 0)) {
+          fail(`${path}/anyOf/${index}`, "output union alternative added or widened");
+        }
       }
     }
   }
@@ -123,8 +193,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     "additionalProperties",
   ]);
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (handled.has(key) || annotations.has(key) || isDeepStrictEqual(before[key], after[key]))
-      continue;
+    if (handled.has(key) || annotations.has(key) || same(before[key], after[key])) continue;
     if (lowerBounds.has(key)) {
       if (after[key] !== undefined && (before[key] === undefined || after[key] > before[key]))
         fail(`${path}/${key}`, "lower bound tightened");
@@ -136,6 +205,82 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     }
   }
   return changes;
+}
+
+/** Prove disjointness using a required string discriminator in every object
+ * branch. Unknown/unbounded discriminators cannot justify an open union. */
+function unionVariants(branches, discriminator, state, side) {
+  if (!Array.isArray(branches) || !branches.length) return null;
+  const seen = new Set();
+  const variants = [];
+  for (let branch of branches) {
+    branch = resolveLocalRef(branch, state.roots[side], state.caches[side]);
+    if (
+      !object(branch) ||
+      branch.type !== "object" ||
+      !list(branch.required).includes(discriminator)
+    )
+      return null;
+    const tag = resolveLocalRef(
+      branch.properties?.[discriminator],
+      state.roots[side],
+      state.caches[side],
+    );
+    if (!object(tag)) return null;
+    const values = tag.const !== undefined ? [tag.const] : tag.enum;
+    if (
+      !Array.isArray(values) ||
+      !values.length ||
+      values.some((value) => typeof value !== "string" || seen.has(value))
+    )
+      return null;
+    // Duplicate values inside a branch are harmless, but never across branches.
+    const unique = [...new Set(values)];
+    for (const value of unique) seen.add(value);
+    variants.push({ branch, values: unique });
+  }
+  return variants;
+}
+
+/** Deep equality after resolving local references in each document; $defs
+ * containers themselves are compared only through the references that use them. */
+function resolvedEqual(old, next, state, seen = [], kind = "schema") {
+  // Enum/const objects are wire data, not schemas; property-map keys are field
+  // names, not annotations. Do not erase literal data or fields named title.
+  if (kind === "literal") return isDeepStrictEqual(old, next);
+  if (kind === "schema") {
+    old = resolveLocalRef(old, state.roots[0], state.caches[0]);
+    next = resolveLocalRef(next, state.roots[1], state.caches[1]);
+  }
+  if (Array.isArray(old) || Array.isArray(next))
+    return (
+      Array.isArray(old) &&
+      Array.isArray(next) &&
+      old.length === next.length &&
+      old.every((value, index) => resolvedEqual(value, next[index], state, seen, kind))
+    );
+  if (!object(old) || !object(next)) return isDeepStrictEqual(old, next);
+  if (seen.some(([a, b]) => a === old && b === next)) return true;
+  const visited = [...seen, [old, next]];
+  const oldKeys = assertionKeys(old, kind);
+  return (
+    isDeepStrictEqual(oldKeys, assertionKeys(next, kind)) &&
+    oldKeys.every((key) =>
+      resolvedEqual(
+        old[key],
+        next[key],
+        state,
+        visited,
+        kind === "map"
+          ? "schema"
+          : key === "enum" || key === "const"
+            ? "literal"
+            : schemaMaps.has(key)
+              ? "map"
+              : "schema",
+      ),
+    )
+  );
 }
 
 /** Only local references are supported by the generated schema projection.

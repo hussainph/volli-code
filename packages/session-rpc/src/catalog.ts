@@ -1,3 +1,4 @@
+import type { AnyMiddlewareFunction } from "@trpc/server/unstable-core-do-not-import";
 /**
  * The host-protocol command catalog's tRPC projection (VC-564; HP § Command
  * catalog).
@@ -494,6 +495,11 @@ const RESOLVER_TYPES: ReadonlySet<string> = new Set(["query", "mutation", "subsc
  * given. A Proxy rather than a re-listing of tRPC's builder methods, so one
  * tRPC adds later cannot slip a resolver past the guard.
  */
+interface BuilderWithOutputChain {
+  // oxlint-disable-next-line no-underscore-dangle -- tRPC's newly built output middleware chain.
+  readonly _def: { middlewares: AnyMiddlewareFunction[] };
+}
+
 function guardedBuilder<Builder extends object>(builder: Builder): Builder {
   return new Proxy(builder, {
     get(target, property, receiver) {
@@ -503,6 +509,29 @@ function guardedBuilder<Builder extends object>(builder: Builder): Builder {
       if (typeof property === "string" && RESOLVER_TYPES.has(property)) {
         return (resolver: AnyResolver) =>
           method.call(target, guardResolver(resolver, property as ResolverType));
+      }
+      // Output schemas remain bound/published on every door. Only the trusted,
+      // in-process desktop IPC skips their parser; network doors and direct
+      // router tests keep tRPC's ordinary validation/error semantics. Input
+      // middleware is never bypassed.
+      if (property === "output") {
+        return (...args: unknown[]) => {
+          const next = method.apply(target, args) as BuilderWithOutputChain;
+          // oxlint-disable-next-line no-underscore-dangle -- the same pinned tRPC introspection seam as catalogRouter.
+          const chain = next._def.middlewares;
+          const output = chain.at(-1)!;
+          /* v8 ignore next 3 -- pinned tRPC's output() appends exactly this middleware; fail closed on a framework change. */
+          if (Reflect.get(output, "_type") !== "output") {
+            throw new Error("tRPC output middleware layout changed");
+          }
+          chain[chain.length - 1] = (opts) => {
+            const ctx = opts.ctx as CatalogCallerContext;
+            return ctx.transport === "electron-ipc" && isLocalDeviceActor(ctx.caller.actor)
+              ? opts.next()
+              : output(opts);
+          };
+          return guardedBuilder(next);
+        };
       }
       // Every other builder method returns the next builder.
       return (...args: unknown[]) => guardedBuilder(method.apply(target, args) as object);

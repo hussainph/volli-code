@@ -1,6 +1,8 @@
 /** JSON-wire schemas for the Session edge. Keep product envelopes explicit;
  * only AI SDK part payloads and JSON Schema documents are extensible JSON.
  * No transforms/custom parsers: these validators also publish with z.toJSONSchema.
+ * x-volli-open-union marks only HP's tolerant-read output extension points;
+ * writers still validate exhaustively, and all other unions stay closed.
  */
 import { z } from "zod";
 import {
@@ -20,12 +22,7 @@ import {
   SESSION_USAGE_CAUSES,
   TOOL_ROUTES,
 } from "@volli/shared";
-import type {
-  RendererSessionEventPayload,
-  SessionInput,
-  SessionPresentationProjection,
-} from "@volli/shared";
-import type { SessionTranscriptArtifact } from "@volli/session-engine";
+import type { RendererSessionEventPayload, SessionPresentationProjection } from "@volli/shared";
 import type { RendererSessionCommandResult, RendererSessionStreamFrame } from "./index";
 
 const text = z.string();
@@ -73,24 +70,28 @@ const attentionBase = {
   diagnostic: z.null(),
   stopDetail: stopDetail.optional(),
 };
-export const attentionSchema = z.discriminatedUnion("kind", [
-  z.object({ ...attentionBase, kind: z.literal("rate_limited"), retryAt: integer.nullable() }),
-  z.object({ ...attentionBase, kind: z.literal("quota_exhausted"), resetAt: integer.nullable() }),
-  z.object({
-    ...attentionBase,
-    kind: z.literal("adapter_unrecoverable"),
-    resetsAt: integer.nullable(),
-  }),
-  z.object({
-    ...attentionBase,
-    kind: z.enum(
-      SESSION_ATTENTION_KINDS.filter(
-        (kind) =>
-          kind !== "rate_limited" && kind !== "quota_exhausted" && kind !== "adapter_unrecoverable",
+export const attentionSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ ...attentionBase, kind: z.literal("rate_limited"), retryAt: integer.nullable() }),
+    z.object({ ...attentionBase, kind: z.literal("quota_exhausted"), resetAt: integer.nullable() }),
+    z.object({
+      ...attentionBase,
+      kind: z.literal("adapter_unrecoverable"),
+      resetsAt: integer.nullable(),
+    }),
+    z.object({
+      ...attentionBase,
+      kind: z.enum(
+        SESSION_ATTENTION_KINDS.filter(
+          (kind) =>
+            kind !== "rate_limited" &&
+            kind !== "quota_exhausted" &&
+            kind !== "adapter_unrecoverable",
+        ),
       ),
-    ),
-  }),
-]);
+    }),
+  ])
+  .meta({ "x-volli-open-union": "kind" });
 const option = z.object({ id: text, label: text, description: nullableText });
 const prompt = z.object({
   id: text,
@@ -158,17 +159,19 @@ const receiptResult = z.object({
   sessionId: text,
 });
 const receiptBase = { id: text, commandId: text, sequence, recordedAt: integer };
-export const receiptSchema = z.discriminatedUnion("status", [
-  z.object({
-    ...receiptBase,
-    status: z.literal("accepted"),
-    acceptedAt: integer,
-    result: receiptResult,
-  }),
-  z.object({ ...receiptBase, status: z.literal("rejected"), code: text, detail: nullableText }),
-  z.object({ ...receiptBase, status: z.literal("completed"), result: receiptResult }),
-  z.object({ ...receiptBase, status: z.literal("unreconciled"), detail: nullableText }),
-]);
+export const receiptSchema = z
+  .discriminatedUnion("status", [
+    z.object({
+      ...receiptBase,
+      status: z.literal("accepted"),
+      acceptedAt: integer,
+      result: receiptResult,
+    }),
+    z.object({ ...receiptBase, status: z.literal("rejected"), code: text, detail: nullableText }),
+    z.object({ ...receiptBase, status: z.literal("completed"), result: receiptResult }),
+    z.object({ ...receiptBase, status: z.literal("unreconciled"), detail: nullableText }),
+  ])
+  .meta({ "x-volli-open-union": "status" });
 const outcome = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("resumed"), retryCommandId: text }),
   z.object({
@@ -246,7 +249,7 @@ const codeMode = z.object({
   mode: z.enum(CODE_MODE_MODES).optional(),
   nudge: z.literal(true).optional(),
 });
-const sessionInput: z.ZodType<SessionInput, SessionInput> = z.discriminatedUnion("kind", [
+const sessionInput = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("runtime-brief"), text }),
   z.object({
     kind: z.literal("prompt-resources"),
@@ -271,7 +274,7 @@ const sessionInput: z.ZodType<SessionInput, SessionInput> = z.discriminatedUnion
       .optional(),
     codeMode: codeMode.optional(),
   }),
-]) as unknown as z.ZodType<SessionInput, SessionInput>;
+]);
 const usage = z.object({
   cause: z.enum(SESSION_USAGE_CAUSES),
   providerId: text,
@@ -400,12 +403,19 @@ const payloads = {
     usage,
   }),
 } satisfies {
+  // Keep the inferred wire vocabulary (notably open tool ids) intact. Recursive
+  // key completeness and domain-to-wire assignability are compile-checked in
+  // output-schema-exactness.test-d.ts, before any public boundary casts.
   [Kind in RendererSessionEventPayload["kind"]]: z.ZodType<
-    Extract<RendererSessionEventPayload, { kind: Kind }>
+    Kind extends "session.input.recorded"
+      ? { kind: Kind; input: z.output<typeof sessionInput> }
+      : Extract<RendererSessionEventPayload, { kind: Kind }>
   >;
 };
 const payloadOptions = Object.values(payloads);
-const payload = z.discriminatedUnion("kind", [payloadOptions[0]!, ...payloadOptions.slice(1)]);
+const payload = z
+  .discriminatedUnion("kind", [payloadOptions[0]!, ...payloadOptions.slice(1)])
+  .meta({ "x-volli-open-union": "kind" });
 const origin = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user") }),
   z.object({ kind: z.literal("session"), sessionId: text }),
@@ -425,7 +435,7 @@ const origin = z.discriminatedUnion("kind", [
     ]),
   }),
 ]);
-const event = z.object({
+export const eventSchema = z.object({
   id: text,
   sessionId: text,
   sequence: integer.positive(),
@@ -448,20 +458,29 @@ export const uiMessageWireSchema = z.object({
   metadata: z.json().optional(),
   parts: z.array(uiPartWireSchema),
 });
-const transcript = z.object({
+export const transcriptWireSchema = z.object({
   version: z.literal(1),
   threadId: text,
   branchId: text,
   attemptId: text,
   turnId: nullableText,
   message: uiMessageWireSchema,
-}) as unknown as z.ZodType<SessionTranscriptArtifact, SessionTranscriptArtifact>;
+});
+// Keep inferred wire schemas available for recursive key-completeness assertions.
 // The SDK's part union, tool ids and MCP names have richer TypeScript vocabularies
 // than their open JSON wire grammar. Keep those types at the transport boundary;
 // validation above still checks every envelope and every opaque value for JSON safety.
-export const frameSchema: z.ZodType<RendererSessionStreamFrame, RendererSessionStreamFrame> =
-  z.object({ sessionId: text, sequence, event, transcript: transcript.nullable() });
-const fullProjectionSchema = z.object({
+export const frameWireSchema = z.object({
+  sessionId: text,
+  sequence,
+  event: eventSchema,
+  transcript: transcriptWireSchema.nullable(),
+});
+export const frameSchema = frameWireSchema as unknown as z.ZodType<
+  RendererSessionStreamFrame,
+  RendererSessionStreamFrame
+>;
+export const fullProjectionSchema = z.object({
   session: sessionSchema,
   status: z.enum(["open", "archived"]),
   attention: z.object({ active: z.array(attentionSchema), primary: attentionSchema.nullable() }),
@@ -490,7 +509,8 @@ const fullProjectionSchema = z.object({
 // rendererProjection deliberately carries only fields its source contains (the
 // established minimal-projection contract). Retain the existing published TS
 // type, but describe that absence faithfully rather than inventing defaults.
-export const projectionSchema = fullProjectionSchema.partial() as unknown as z.ZodType<
+export const projectionWireSchema = fullProjectionSchema.partial();
+export const projectionSchema = projectionWireSchema as unknown as z.ZodType<
   SessionPresentationProjection,
   SessionPresentationProjection
 >;
@@ -501,10 +521,7 @@ export const sessionProjectionOutputSchema = z.object({
 export const sessionSnapshotOutputSchema = sessionProjectionOutputSchema.extend({
   frames: z.array(frameSchema),
 });
-export const sessionCommandOutputSchema: z.ZodType<
-  RendererSessionCommandResult,
-  RendererSessionCommandResult
-> = z.object({
+export const sessionCommandWireSchema = z.object({
   sessionId: text,
   receipt: receiptSchema.nullable(),
   throughSequence: sequence,
@@ -521,6 +538,10 @@ export const sessionCommandOutputSchema: z.ZodType<
     })
     .optional(),
 }) satisfies z.ZodType<RendererSessionCommandResult>;
+export const sessionCommandOutputSchema: z.ZodType<
+  RendererSessionCommandResult,
+  RendererSessionCommandResult
+> = sessionCommandWireSchema;
 export const sessionAttachOutputSchema = z.object({
   sessionId: text,
   state: z.enum(["ready", "needs-recovery"]),
@@ -536,29 +557,36 @@ export const diagnosticEntrySchema = z.object({
   code: nullableText,
   message: nullableText,
 });
-export const streamEmissionSchema = z.union([
-  frameSchema,
+export const streamEmissionWireSchema = z.union([
+  frameWireSchema,
   z.object({
     kind: z.literal("overlay"),
     sessionId: text,
     throughSequence: sequence,
     messageId: text,
-    delta: z.discriminatedUnion("op", [
-      z.object({
-        op: z.literal("reset"),
-        message: z.object({
-          id: text,
-          role: z.enum(["system", "user", "assistant"]),
-          metadata: z.json().optional(),
-          parts: z.array(z.object({ key: text, part: uiPartWireSchema })),
+    delta: z
+      .discriminatedUnion("op", [
+        z.object({
+          op: z.literal("reset"),
+          message: z.object({
+            id: text,
+            role: z.enum(["system", "user", "assistant"]),
+            metadata: z.json().optional(),
+            parts: z.array(z.object({ key: text, part: uiPartWireSchema })),
+          }),
         }),
-      }),
-      z.object({ op: z.literal("part.upsert"), key: text, index: integer, part: uiPartWireSchema }),
-      z.object({ op: z.literal("part.append"), key: text, text }),
-      z.object({ op: z.literal("part.remove"), key: text }),
-      z.object({ op: z.literal("metadata"), metadata: z.json() }),
-      z.object({ op: z.literal("message.remove") }),
-    ]),
+        z.object({
+          op: z.literal("part.upsert"),
+          key: text,
+          index: integer,
+          part: uiPartWireSchema,
+        }),
+        z.object({ op: z.literal("part.append"), key: text, text }),
+        z.object({ op: z.literal("part.remove"), key: text }),
+        z.object({ op: z.literal("metadata"), metadata: z.json() }),
+        z.object({ op: z.literal("message.remove") }),
+      ])
+      .meta({ "x-volli-open-union": "op" }),
   }),
   z.object({
     kind: z.literal("compaction"),
@@ -567,4 +595,9 @@ export const streamEmissionSchema = z.union([
     state: z.enum(["started", "finished"]),
     reason: z.enum(COMPACTION_WORK_REASONS),
   }),
+]);
+export const streamEmissionSchema = z.union([
+  frameSchema,
+  streamEmissionWireSchema.options[1],
+  streamEmissionWireSchema.options[2],
 ]);

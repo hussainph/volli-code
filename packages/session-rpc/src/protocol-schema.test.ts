@@ -2,17 +2,17 @@ import { CATALOG_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 
-import type { SessionProcedureSchema } from "./index";
+import type { ProcedureSchema } from "./index";
 import { generateProtocolSchema } from "./protocol-schema";
 
-const sample: Record<string, SessionProcedureSchema> = {
+const sample: Record<string, ProcedureSchema> = {
   read: {
     type: "query",
     input: z.string(),
     output: z.string(),
     noInput: false,
     voidOutput: false,
-    outputValidation: "runtime",
+    outputValidation: "network-and-tests",
   },
 };
 
@@ -29,7 +29,7 @@ describe("committed protocol schema projection", () => {
       });
     }
     for (const key of ["session.snapshot", "session.projection", "session.command"]) {
-      expect(document.tiers.public![key]).toMatchObject({ outputValidation: "runtime" });
+      expect(document.tiers.public![key]).toMatchObject({ outputValidation: "network-and-tests" });
     }
     expect(document.tiers.public!["session.subscribe"]).toMatchObject({
       outputValidation: "documented-yield",

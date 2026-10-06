@@ -1,3 +1,4 @@
+import { boardProcedureSchemas } from "./board-router";
 /** Build-time projection of both catalog tiers. Add area/desktop providers here,
  * never hand-write JSON Schema. Public providers exhaust the Verb Registry;
  * desktop-only providers publish the private bridge's schemas without new rows.
@@ -6,11 +7,11 @@ import { HOST_PROTOCOL_VERSION } from "@volli/host-protocol";
 import { CATALOG_ENTRIES } from "@volli/shared";
 import { z } from "zod";
 
-import { sessionProcedureSchemas, type SessionProcedureSchema } from "./index";
+import { sessionProcedureSchemas, type ProcedureSchema } from "./index";
 
 export interface ProtocolSchemaProvider {
   readonly tier: "public" | "desktop";
-  readonly procedures: () => Readonly<Record<string, SessionProcedureSchema>>;
+  readonly procedures: () => Readonly<Record<string, ProcedureSchema>>;
 }
 
 // VC-608 adds its desktop-only schema provider here. Do not filter its entries
@@ -18,6 +19,7 @@ export interface ProtocolSchemaProvider {
 export function generateProtocolSchema(
   providers: readonly ProtocolSchemaProvider[] = [
     { tier: "public", procedures: sessionProcedureSchemas },
+    { tier: "public", procedures: boardProcedureSchemas },
   ],
   publicEntries: readonly { key: string }[] = CATALOG_ENTRIES,
 ) {

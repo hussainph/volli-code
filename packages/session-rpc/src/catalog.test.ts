@@ -110,6 +110,49 @@ async function refusal(call: Promise<unknown>): Promise<unknown> {
   throw new Error("Expected the router to refuse this call");
 }
 
+describe("output validation doors", () => {
+  it("skips the parser only on trusted local IPC; network actors cannot forge that bypass", async () => {
+    const parse = vi.fn((value: string) => value);
+    const output = z.string().transform(parse);
+    const router = catalogRouter({
+      session: {
+        projection: workspaceProcedure(
+          "session.projection",
+          z.object({ sessionId: z.string().min(1) }),
+          ({ sessionId }) => ({ kind: "session", id: sessionId }),
+        )
+          .output(output)
+          .use(({ next }) => next())
+          .output(output)
+          .query(() => "answer"),
+      },
+    });
+    const call = (caller: RouterCaller, transport?: CatalogCallerContext["transport"]) =>
+      router.createCaller(
+        sessionContext({
+          caller,
+          transport,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          resourceWorkspace: () => WORKSPACE,
+        }),
+      );
+    const input = { sessionId: "session-1" };
+    await expect(
+      call(LOCAL_DESKTOP_CALLER, "electron-ipc").session.projection(input),
+    ).resolves.toBe("answer");
+    expect(parse).not.toHaveBeenCalled();
+    await expect(
+      call(LOCAL_DESKTOP_CALLER, "electron-ipc").session.projection({ sessionId: "" }),
+    ).rejects.toThrow();
+    expect(parse).not.toHaveBeenCalled();
+    await call(device, "electron-ipc").session.projection(input);
+    await call(device, "websocket").session.projection(input);
+    await call(LOCAL_DESKTOP_CALLER).session.projection(input);
+    expect(parse).toHaveBeenCalledTimes(6);
+  });
+});
+
 describe("the actor matrix (VC-564)", () => {
   it("admits the desktop's own window to every entry, the lab's included", async () => {
     const { caller } = fixture(LOCAL_DESKTOP_CALLER);

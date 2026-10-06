@@ -1,4 +1,6 @@
-import { TRPCError, tracked, type AnyProcedure } from "@trpc/server";
+import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
+export type { ProcedureSchema } from "./procedure-schema";
+import { TRPCError, tracked } from "@trpc/server";
 import {
   isHostActor,
   type HostActor,
@@ -78,7 +80,6 @@ import {
 } from "./session-reads";
 import {
   diagnosticEntrySchema,
-  interactionResolutionWireSchema,
   sessionAttachOutputSchema,
   sessionCommandOutputSchema,
   sessionProjectionOutputSchema,
@@ -702,12 +703,12 @@ const interactionAnswerSchema = z.object({
  * single-prompt shape `readInteractionAnswers` projects, so the edge neither
  * invents an empty array nor keeps a key it was handed empty-handed.
  */
-const interactionResolutionSchema = z
-  .object({
-    optionIds: z.array(nonEmptyString),
-    response: nullableString,
-    answers: z.array(interactionAnswerSchema).optional(),
-  })
+const interactionResolutionInputSchema = z.object({
+  optionIds: z.array(nonEmptyString),
+  response: nullableString,
+  answers: z.array(interactionAnswerSchema).optional(),
+});
+const interactionResolutionSchema = interactionResolutionInputSchema
   // An optional key that arrives explicitly `undefined` parses as a key that is
   // present and unserialisable — Electron's structured clone keeps one where
   // JSON would have dropped it. The ledger encodes a command intent behind a
@@ -803,7 +804,13 @@ const hostWelcomeSchema = z.object({
   protocolVersion: positiveSafeInteger,
   host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
   workspace: z.object({ id: z.uuidv4(), epoch: nonNegativeSafeInteger }),
-  actor: z.custom<HostActor>(isHostActor, "Expected a network actor"),
+  actor: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("session"), sessionId: nonEmptyString, workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("worker"), workerId: z.uuidv4(), workspaceId: z.uuidv4() }),
+    ])
+    .refine(isHostActor, "Expected a network actor") satisfies z.ZodType<HostActor>,
   features: z.array(z.string().max(128)).max(256).readonly(),
   proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
 });
@@ -1079,9 +1086,11 @@ export function createSessionRouter() {
         "session.snapshot",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).output(sessionSnapshotOutputSchema).query(async ({ ctx, input }) =>
-        rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
-      ),
+      )
+        .output(sessionSnapshotOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
+        ),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
@@ -1091,9 +1100,11 @@ export function createSessionRouter() {
         "session.projection",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).output(sessionProjectionOutputSchema).query(async ({ ctx, input }) =>
-        rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
-      ),
+      )
+        .output(sessionProjectionOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
+        ),
       subscribe: workspaceProcedure(
         "session.subscribe",
         sessionSubscriptionSchema,
@@ -1269,20 +1280,25 @@ export function createSessionRouter() {
         // `session.create`, the one kind that names no Session, is withheld
         // before this resolves; every other kind requires `sessionId`.
         (input) => sessionResource({ sessionId: input.sessionId! }),
-      ).output(sessionCommandOutputSchema).mutation(async ({ ctx, input }) => {
-        // The start kinds are refused before this line on every door: the
-        // catalog entry withholds them (`refusedIntents`), whoever asks.
-        try {
-          return rendererCommandResult(
-            await ctx.handlers["session.command"](toSessionRuntimeCommandRequest(input), ctx.call),
-          );
-        } catch (error) {
-          if (error instanceof SuperviseSessionError) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) => {
+          // The start kinds are refused before this line on every door: the
+          // catalog entry withholds them (`refusedIntents`), whoever asks.
+          try {
+            return rendererCommandResult(
+              await ctx.handlers["session.command"](
+                toSessionRuntimeCommandRequest(input),
+                ctx.call,
+              ),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
           }
-          throw error;
-        }
-      }),
+        }),
       // A pending interaction the user walked away from. The handler fixes the
       // reason rather than taking it as input: a person's door can honestly
       // report only that they left it undecided.
@@ -1435,6 +1451,65 @@ function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;
+
+/**
+ * Publishable wire grammar for every catalog procedure, including subscriptions
+ * (their output is one untracked emission, not the transport's SSE envelope).
+ * No-input and void-result calls have no JSON value: null is the document
+ * sentinel, explicitly distinguished by the booleans, never a runtime rewrite.
+ * The two command-input adapters describe custom/transform parsers without
+ * weakening their runtime checks. Refinements remain runtime-only constraints.
+ */
+function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
+  if (
+    !(input instanceof z.ZodObject) ||
+    !(input.shape.command instanceof z.ZodDiscriminatedUnion)
+  ) {
+    throw new Error("session.command needs a structural command envelope for publication");
+  }
+  const commandWireSchema = z.union(
+    input.shape.command.options.map((option) => {
+      if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
+        throw new Error("session.command needs object alternatives with literal kinds");
+      }
+      if (option.shape.kind.value === "message.submit") {
+        return option.extend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      if (option.shape.kind.value === "interaction.resolve") {
+        return option.extend({ resolution: interactionResolutionInputSchema });
+      }
+      return option;
+    }),
+  );
+  // Preserve the actual envelope's required fields, bounds and refinements.
+  // Rebuilding it here would hide a breaking router change from the CI diff.
+  return input.safeExtend({ command: commandWireSchema });
+}
+
+export function sessionProcedureSchemas(
+  router: AppRouter = createSessionRouter(),
+): Record<string, ProcedureSchema> {
+  const supplementalOutputs: Record<string, z.ZodType> = {
+    "sessions.create": z.object({ sessionId: z.string() }),
+    "sessions.attach": sessionAttachOutputSchema,
+    "session.subscribe": streamEmissionSchema,
+    "session.cancelInteraction": z.null(),
+    "session.reconcile": z.null(),
+    "labDiagnostics.list": z.array(diagnosticEntrySchema),
+    "labDiagnostics.subscribe": diagnosticEntrySchema,
+  };
+  return procedureSchemas(
+    router,
+    supplementalOutputs,
+    (key, input) => (key === "session.command" ? publishCommandInput(input) : (input ?? z.null())),
+    ["session.cancelInteraction", "session.reconcile"],
+  );
+}
 
 /**
  * Every Session-router procedure is one of the family's catalog entries and
