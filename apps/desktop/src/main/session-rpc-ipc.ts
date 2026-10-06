@@ -82,15 +82,32 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   return { diagnostics, close: () => server.close() };
 }
 
-/** A renderer as the bridge sees it: frames go out on the Session RPC event channel. */
+/**
+ * A renderer as the bridge sees it: frames go out on the Session RPC event
+ * channel, and it is gone, for the subscriptions its document opened, when
+ * its WebContents is destroyed, when its main frame navigates to another
+ * document (a reload included), or when its render process dies. The
+ * WebContents outlives the last two, so waiting for `destroyed` alone would
+ * keep those streams, and their runtime listeners, for as long as the window
+ * lives, which with the menu-bar host is as long as main does.
+ */
 function peerOf(sender: WebContents): IpcPeer {
   return {
     id: sender.id,
     isDestroyed: () => sender.isDestroyed(),
     send: (event) => sender.send(SESSION_RPC_EVENT_CHANNEL, event),
     onDestroyed: (listener) => {
+      const navigated = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+        if (details.isMainFrame && !details.isSameDocument) listener();
+      };
       sender.once("destroyed", listener);
-      return () => sender.removeListener("destroyed", listener);
+      sender.on("did-start-navigation", navigated);
+      sender.on("render-process-gone", listener);
+      return () => {
+        sender.removeListener("destroyed", listener);
+        sender.removeListener("did-start-navigation", navigated);
+        sender.removeListener("render-process-gone", listener);
+      };
     },
   };
 }

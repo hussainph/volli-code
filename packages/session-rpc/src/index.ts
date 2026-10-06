@@ -121,6 +121,7 @@ export {
   type LocalRouterCaller,
   type NetworkRouterCaller,
   type ProcedurePaths,
+  type RouterProcedurePaths,
   type RouterCaller,
   type RouterContextPorts,
   type WorkspaceResource,
@@ -154,6 +155,7 @@ export {
   type DesktopIpcRouter,
   type DesktopIpcRouterPath,
   type DesktopIpcRouters,
+  type IpcExposureTable,
 } from "./desktop-ipc";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
