@@ -10,8 +10,10 @@
  * `CONFLICT` / `command-conflict`). A write with no `commandId` (the desktop
  * window's legacy channels, flag off) records nothing, exactly as before.
  *
- * Receipts are retry evidence, not history: they are pruned after
- * {@link BOARD_RECEIPT_RETENTION_MS}, and a backup leaves them behind.
+ * Receipts are retry evidence, not history: past {@link
+ * BOARD_RECEIPT_RETENTION_MS} a receipt never answers (an expired row is
+ * read as absent, whether or not a later write has pruned it yet), and a
+ * backup leaves them behind.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -48,19 +50,26 @@ function intentDigest(key: BoardCommandKey): string {
     .digest("hex");
 }
 
+/** The oldest `created_at` that still answers at `now`. */
+function liveSince(now: number): number {
+  return now - BOARD_RECEIPT_RETENTION_MS;
+}
+
 /**
- * The recorded answer for this command, when it was already accepted with
- * this intent; `undefined` when it never was. Throws the branded conflict for
- * the same id under another intent.
+ * The recorded answer for this command, when it was accepted with this
+ * intent within retention; `undefined` when it never was, or its receipt has
+ * expired. Throws the branded conflict for the same id under another intent.
  */
 export function replayBoardCommand(
   db: Database.Database,
   key: BoardCommandKey,
+  now: number,
 ): { readonly reply: unknown } | undefined {
-  const row = prepared<[string, string], { intent_digest: string; reply: string }>(
+  const row = prepared<[string, string, number], { intent_digest: string; reply: string }>(
     db,
-    "SELECT intent_digest, reply FROM board_command_receipts WHERE workspace_id = ? AND command_id = ?",
-  ).get(key.workspaceId, key.commandId);
+    `SELECT intent_digest, reply FROM board_command_receipts
+     WHERE workspace_id = ? AND command_id = ? AND created_at >= ?`,
+  ).get(key.workspaceId, key.commandId, liveSince(now));
   if (row === undefined) return undefined;
   if (row.intent_digest !== intentDigest(key)) {
     throw new BoardCommandIntentConflictError(key.commandId);
@@ -79,13 +88,15 @@ export function replayBoardCommand(
 export function replayOrphanedBoardCommand(
   db: Database.Database,
   key: Omit<BoardCommandKey, "workspaceId">,
+  now: number,
 ): { readonly reply: unknown; readonly workspaceId: string } | undefined {
-  const row = prepared<[string, string], { workspace_id: string }>(
+  const row = prepared<[string, string, number], { workspace_id: string }>(
     db,
-    "SELECT workspace_id FROM board_command_receipts WHERE command_id = ? AND operation = ? LIMIT 1",
-  ).get(key.commandId, key.operation);
+    `SELECT workspace_id FROM board_command_receipts
+     WHERE command_id = ? AND operation = ? AND created_at >= ? LIMIT 1`,
+  ).get(key.commandId, key.operation, liveSince(now));
   if (row === undefined) return undefined;
-  const { reply } = replayBoardCommand(db, { ...key, workspaceId: row.workspace_id })!;
+  const { reply } = replayBoardCommand(db, { ...key, workspaceId: row.workspace_id }, now)!;
   return { reply, workspaceId: row.workspace_id };
 }
 
@@ -101,7 +112,7 @@ export function recordBoardCommand(
   now: number,
 ): void {
   prepared<[number]>(db, "DELETE FROM board_command_receipts WHERE created_at < ?").run(
-    now - BOARD_RECEIPT_RETENTION_MS,
+    liveSince(now),
   );
   prepared<[string, string, string, string, string, number]>(
     db,

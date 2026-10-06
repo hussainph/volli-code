@@ -625,6 +625,33 @@ describe("resumable subscriptions", () => {
     expect(listeners.size).toBe(0);
   });
 
+  it("takes lower replay bounds from its limits (hostd's, VC-700)", async () => {
+    const { listener, append, listeners } = await serve({
+      limits: { maxReplayEvents: 3, maxReplayBytes: 2 * 1024 * 1024 },
+    });
+    await append(4);
+    const { client } = connect(listener.url);
+    const behind = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION, afterSequence: 0 }, handlers),
+    );
+    expect(await behind.ended).toMatchObject({
+      error: { reason: "subscription-resnapshot-required" },
+    });
+    const resumed = recordSubscription<{ id: string }>((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION, afterSequence: 1 }, handlers),
+    );
+    expect((await resumed.received(3)).map(({ id }) => id)).toStrictEqual(["2", "3", "4"]);
+    resumed.unsubscribe();
+    await append(3, 1024 * 1024);
+    const heavy = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION, afterSequence: 4 }, handlers),
+    );
+    expect(await heavy.ended).toMatchObject({
+      error: { reason: "subscription-resnapshot-required" },
+    });
+    await until(() => listeners.size === 0, "the refused streams' listeners to go");
+  });
+
   // The ordering a Client's quiet-resnapshot guard is built on (VC-315 review,
   // B4): tRPC's WebSocket adapter says `started` once the subscription's
   // iterator exists, and the replay that refuses runs in its first `next()`.

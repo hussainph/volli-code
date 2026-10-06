@@ -45,7 +45,8 @@ import { assertHostFeatureReadiness } from "./feature-readiness";
  *   connection holds at most `maxSubscriptions` open streams. A connection
  *   that never says hello is closed (4408). Server pings find a peer that
  *   vanished.
- * - **Replay bounds** (`SUBSCRIPTION_REPLAY_BOUNDS`, D9), set in the context.
+ * - **Replay bounds** (`SUBSCRIPTION_REPLAY_BOUNDS`, D9, unless the limits
+ *   lower them: `maxReplayEvents`, `maxReplayBytes`), set in the context.
  *
  * Credentials are never logged: the log names a connection by a random id,
  * and a refusal by its reason.
@@ -119,6 +120,14 @@ export interface HostProtocolListenerLimits {
   readonly maxSubscriptions: number;
   /** The largest frame the host sends; an answer or emission past it is refused, never cut. */
   readonly maxFrameBytes: number;
+  /**
+   * Durable events one resume may replay, and their UTF-8 JSON bytes, before
+   * it is refused with `subscription-resnapshot-required` (D9). A stream
+   * stages up to twice the byte bound, so with `maxSubscriptions` it bounds
+   * what one connection's streams can hold.
+   */
+  readonly maxReplayEvents: number;
+  readonly maxReplayBytes: number;
   /** Unsent bytes one connection may hold before it is terminated as a slow peer. */
   readonly maxOutboundBytes: number;
   /** The largest frame a client may send. */
@@ -150,6 +159,8 @@ export const DEFAULT_LISTENER_LIMITS: HostProtocolListenerLimits = Object.freeze
   // One per Session a surface shows live, with room for several surfaces.
   maxSubscriptions: 64,
   maxFrameBytes: HOST_PROTOCOL_MAX_FRAME_BYTES,
+  maxReplayEvents: SUBSCRIPTION_REPLAY_BOUNDS.events,
+  maxReplayBytes: SUBSCRIPTION_REPLAY_BOUNDS.bytes,
   // Two frames' worth: a full resume, and the next answer behind it.
   maxOutboundBytes: 2 * HOST_PROTOCOL_MAX_FRAME_BYTES,
   maxInboundBytes: 8 * 1024 * 1024,
@@ -476,7 +487,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       transport: "websocket",
       operations: operationsGrantedBy(welcome.features),
       welcome,
-      replayBounds: SUBSCRIPTION_REPLAY_BOUNDS,
+      replayBounds: { events: limits.maxReplayEvents, bytes: limits.maxReplayBytes },
       admission: admissionOf(connection),
       maxResponseBytes: limits.maxFrameBytes - FRAME_ENVELOPE_BYTES,
     };

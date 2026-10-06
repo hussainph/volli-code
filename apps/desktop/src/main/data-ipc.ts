@@ -403,6 +403,8 @@ export function registerDataIpcHandlers(
      * output. Absent (tests, degraded boot) means nothing is removed.
      */
     piSessionsDirectory?: string;
+    /** Told after a project is removed: the host releases what it held for it (its board feed). */
+    onProjectRemoved?: (projectId: string) => void;
   },
 ): void {
   if (!handle.ok) {
@@ -623,6 +625,7 @@ export function registerDataIpcHandlers(
 
     "volli:project-remove": (id: string): ProjectMutationResult => {
       deleteProject(db, id);
+      options.onProjectRemoved?.(id);
       return { ok: true };
     },
 

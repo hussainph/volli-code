@@ -83,7 +83,11 @@ import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
 import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
 import { createBoardHandlers, type BoardHandlerSignatures } from "../board/commands";
 import { createBoardChangeFeed, type BoardChangeFeed } from "../board/change-feed";
-import { executeTicketMove, type TicketMoveCommandInput } from "../ticket-move";
+import {
+  executeTicketMove,
+  type TicketMoveCommandInput,
+  type TicketMoveSeam,
+} from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import type { WorktreePorts } from "../worktree/types";
 import { worktreeDeps } from "../worktree-runtime";
@@ -331,6 +335,7 @@ function hostHandlerEntries(
   const moveTicket = (
     input: TicketMoveCommandInput,
     call: HandlerCall,
+    seam?: TicketMoveSeam,
   ): Ticket[] | Promise<Ticket[]> => {
     const database = board();
     return executeTicketMove(
@@ -357,6 +362,7 @@ function hostHandlerEntries(
       },
       input,
       { now: now(), actor: call.actor },
+      seam,
     );
   };
 
@@ -371,7 +377,7 @@ function hostHandlerEntries(
       detachedWork: options.detachedWork,
       ticketSignals: options.ticketSignals ?? null,
       piSessionsDirectory: options.piSessionsDirectory,
-      move: (input, call) => moveTicket(input, call),
+      move: (input, call, seam) => moveTicket(input, call, seam),
     }),
     "sessions.create": (input) =>
       sessions().create({ ...input, role: roleImpliedByTicket(input.ticketId) }),

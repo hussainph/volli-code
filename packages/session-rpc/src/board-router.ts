@@ -81,6 +81,7 @@ import {
 } from "./catalog";
 import { procedureSchemas } from "./procedure-schema";
 import { resnapshotRequired } from "./replay-bound";
+import { SESSION_RESOURCE } from "./session-catalog";
 
 /** The board's resource kinds; the context's `resourceWorkspace` answers them. */
 export const TICKET_RESOURCE = BOARD_RESOURCE_KINDS.ticket;
@@ -247,7 +248,12 @@ const BOARD_FEED_OVERFLOW_MESSAGE = "Board feed fell behind; resume from the las
 const BOARD_FEED_SOURCE_FAILURE_MESSAGE = "Board feed source failed; resubscribe to resume";
 
 // Resources. A project is its own Workspace; every other kind is answered by
-// the context's `resourceWorkspace` port.
+// the context's `resourceWorkspace` port. Every id an input names is one:
+// the subject an operation acts on, and each resource it only refers to
+// (`relation: "reference"`), so a reference into another Workspace is refused
+// exactly as an absent one. Names a write creates or matches inside the
+// subject's own Workspace (a label's name, an armed Automation's id, which the
+// move only looks up among its board's own) are not resources.
 const project = (input: ProjectRef): WorkspaceResource => ({
   kind: PROJECT_RESOURCE,
   id: input.projectId,
@@ -368,6 +374,9 @@ export function createBoardRouter() {
             throw new HostProcedureError("subscription-overflow", BOARD_FEED_OVERFLOW_MESSAGE);
           }
           if (failure.current !== null) {
+            // The feed ended under the stream (its Workspace's epoch changed,
+            // or the Workspace was removed): resnapshot, not a source failure.
+            if (isFeedResnapshotRequired(failure.current.error)) throw resnapshotRequired();
             throw new HostProcedureError(
               "subscription-source-failed",
               BOARD_FEED_SOURCE_FAILURE_MESSAGE,
@@ -605,7 +614,14 @@ export function createBoardRouter() {
           body: z.string().min(1),
           sessionId: boardId.nullable().optional(),
         }),
-        ticket,
+        (input): WorkspaceResource[] => [
+          ticket(input),
+          // The Session a comment links to is the caller's to name only in
+          // its own Workspace; a foreign or absent one is one refusal.
+          ...(input.sessionId == null
+            ? []
+            : [{ kind: SESSION_RESOURCE, id: input.sessionId, relation: "reference" as const }]),
+        ],
       )
         .output(receipted({ comment: commentSchema }))
         .mutation(async ({ ctx, input }) =>
