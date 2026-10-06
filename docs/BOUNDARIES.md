@@ -80,8 +80,15 @@ review, not a project to execute — none of them asks anyone to build sync.
    the same core without depending on Electron.
 
 7. **No new shared/business state in `app_state`.** Every new key must be
-   classified as device-local or workspace state. Workspace state belongs
-   behind the workspace authority, not in the device-local catch-all.
+   classified as client-local, host, or workspace state (mixed keys name both
+   halves as `split`). Host is host-level state shared by every workspace on
+   that host, in the host-level file defined by `plans/host-identity.md`.
+   Workspace state belongs behind the workspace authority, not in the
+   client-local catch-all. The typed inventory is
+   `packages/shared/src/app-state-keys.ts`, enforced by
+   `packages/shared/src/app-state-keys.test.ts` and the typed repo writers;
+   channel placements live in `apps/desktop/src/ipc/placement.ts`, enforced by
+   `apps/desktop/src/ipc/placement.test.ts`.
 
 ## Shipped SQLite migrations
 

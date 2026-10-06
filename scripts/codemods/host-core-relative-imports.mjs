@@ -6,8 +6,9 @@
  *   node scripts/codemods/host-core-relative-imports.mjs --check   # list, change nothing
  *
  * Every `@volli/host-core[/<subpath>]` specifier inside `packages/host-core/src`
- * (static and dynamic imports, re-exports, `vi.mock`/`importActual`, `require`)
- * is resolved through the package's own `exports` map, exactly as Node resolves
+ * (static and dynamic imports, re-exports, `vi.mock`/`importActual`, `require`,
+ * in any quoting; found by `scripts/module-edges.mjs`, the scanner the guard
+ * uses) is resolved through the package's own `exports` map, exactly as Node resolves
  * a self-reference, and replaced by the relative path to the same file. Only the
  * specifier changes, so the module graph is identical. Idempotent: a re-run
  * after a main sync rewrites only what main added.
@@ -19,6 +20,8 @@ import { spawnSync } from "node:child_process";
 import { globSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { moduleEdges, namesPackage } from "../module-edges.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PKG = resolve(REPO, "packages/host-core");
@@ -57,29 +60,23 @@ function relativeSpecifier(fromFile, target) {
   return rel;
 }
 
-// Import contexts only: a quoted `@volli/host-core` in prose or an assertion is not a module edge.
-// Applied one at a time, so `typeof import("…")` inside `vi.importActual<…>(…)` is rewritten too.
-const CONTEXTS = [
-  String.raw`\bfrom\s*`,
-  String.raw`\bimport\s+`,
-  String.raw`\bimport\s*\(\s*`,
-  String.raw`\brequire\s*\(\s*`,
-  String.raw`\bvi\.(?:mock|doMock|unmock|doUnmock|importActual|importMock)\s*(?:<[^>]*>)?\s*\(\s*`,
-].map((lead) => new RegExp(`(${lead})(["'])(@volli\\/host-core(?:\\/[^"']*)?)\\2`, "g"));
-
 const touched = [];
 let edits = 0;
 for (const file of globSync("src/**/*.{ts,tsx,mts}", { cwd: PKG })) {
   const path = resolve(PKG, file);
   const before = readFileSync(path, "utf8");
-  const after = CONTEXTS.reduce(
-    (text, context) =>
-      text.replace(context, (_all, lead, quote, specifier) => {
-        edits += 1;
-        return `${lead}${quote}${relativeSpecifier(path, resolveSelf(specifier))}${quote}`;
-      }),
-    before,
-  );
+  // The guard's own scanner finds the edges, so the codemod rewrites exactly
+  // what `package-interface.test.ts` flags. Rewritten from the end, so earlier
+  // offsets stay valid.
+  let after = before;
+  for (const edge of moduleEdges(before).toReversed()) {
+    if (!namesPackage(edge, NAME)) continue;
+    if (edge.interpolated)
+      throw new Error(`${file}: cannot resolve the interpolated import \`${edge.specifier}\``);
+    edits += 1;
+    const replacement = relativeSpecifier(path, resolveSelf(edge.specifier));
+    after = `${after.slice(0, edge.start)}${edge.quote}${replacement}${edge.quote}${after.slice(edge.end)}`;
+  }
   if (after === before) continue;
   touched.push(path);
   if (check) console.log(file);
