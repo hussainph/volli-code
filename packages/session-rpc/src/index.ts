@@ -17,6 +17,8 @@ import {
   type SessionRuntimeCommandResult,
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
+  type SessionHistoryPage,
+  type SessionLatestReply,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
   type SessionStreamQueue,
@@ -86,6 +88,7 @@ import {
   diagnosticEntrySchema,
   sessionAttachOutputSchema,
   sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
   sessionProjectionOutputSchema,
   sessionSnapshotOutputSchema,
   streamEmissionSchema,
@@ -94,6 +97,7 @@ import {
 } from "./output-schema";
 export {
   sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
   sessionProjectionOutputSchema,
   sessionSnapshotOutputSchema,
 } from "./output-schema";
@@ -291,6 +295,10 @@ export interface SessionRouterHandlers {
   readonly "modelAccess.pickerView": HostHandler<void, ModelPickerView>;
   readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
   readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
+  readonly "session.history": HostHandler<
+    { sessionId: string; before: number },
+    SessionHistoryPage
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -920,6 +928,12 @@ const LOGS_QUEUE_CAPACITY = 256;
 const LOGS_OVERFLOW_MESSAGE = "The log stream fell behind the host's log";
 const LOGS_SOURCE_FAILURE_MESSAGE = "The host's log stopped";
 
+/** `before` is an event sequence: the page holds frames strictly below it (VC-315). */
+const sessionHistorySchema = z.object({
+  sessionId: nonEmptyString,
+  before: nonNegativeSafeInteger.min(1),
+});
+
 const diagnosticsSubscriptionSchema = z.object({
   afterId: nonNegativeSafeInteger.optional(),
   lastEventId: sseCursor.optional(),
@@ -1371,6 +1385,13 @@ export function createSessionRouter() {
             ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
           ),
         ),
+      // Older transcript, a bounded page at a time, for a surface scrolling
+      // back past the snapshot's tail (VC-315). The engine owns the bound.
+      history: workspaceProcedure("session.history", sessionHistorySchema, sessionResource)
+        .output(sessionHistoryOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
+        ),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
@@ -1627,6 +1648,8 @@ function rendererProjection(
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
+  // The plan as it stands, whatever part of the transcript a surface holds (VC-315).
+  if (source.todoList !== undefined) projection.todoList = source.todoList;
   if (source.liveExecutor !== undefined) {
     projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
     // Derived from the same attachment in the same branch, so the identity a
@@ -1645,17 +1668,42 @@ function rendererProjection(
   };
 }
 
+/** One window of transcript as the renderer receives it: scrubbed frames, then the older cursor. */
+export interface RendererSessionHistoryPage {
+  frames: RendererSessionStreamFrame[];
+  before: number | null;
+}
+
+function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPage {
+  return { frames: page.frames.map(rendererFrame), before: page.before };
+}
+
+/**
+ * The projection checkpoint plus the newest window of frames (VC-315). The
+ * window's own artifact list stays behind: every one of them is already inlined
+ * on its frame.
+ *
+ * `before` and `latestReply` ride only when they say something, like the
+ * projection's own fields: a window that reaches the first event and a turn
+ * with no reply read the same absent as present-and-null, and a snapshot that
+ * says neither is the exact reply an older Client already parses (VC-669's
+ * N−1 recording).
+ */
 function rendererSnapshot(
   snapshot: SessionRuntimeSnapshot,
   includeQueue: boolean,
 ): {
   projection: RendererSessionProjection;
-  frames: RendererSessionStreamFrame[];
   throughSequence: number;
+  frames: RendererSessionStreamFrame[];
+  before?: number;
+  latestReply?: SessionLatestReply;
 } {
   return {
     ...rendererProjection(snapshot, includeQueue),
     frames: snapshot.frames.map(rendererFrame),
+    ...(snapshot.before === null ? {} : { before: snapshot.before }),
+    ...(snapshot.latestReply === null ? {} : { latestReply: snapshot.latestReply }),
   };
 }
 

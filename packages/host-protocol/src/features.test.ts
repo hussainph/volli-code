@@ -28,6 +28,7 @@ describe("the v1 feature table", () => {
       "sessions.queue": ["session.cancelQueued", "session.editQueued", "session.subscribeQueue"],
       "host.logs": ["logs.tail", "logs.follow"],
       "sessions.subscribe": ["session.subscribe"],
+      "sessions.history": ["session.history"],
       "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
       "model-access": [
         "modelAccess.inspect",
@@ -48,6 +49,7 @@ describe("the v1 feature table", () => {
       "sessions.queue",
       "host.logs",
       "sessions.subscribe",
+      "sessions.history",
       "session.read",
       "model-access",
     ]);

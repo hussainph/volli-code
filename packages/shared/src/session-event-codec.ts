@@ -66,6 +66,7 @@ import {
   SESSION_INTERACTION_CANCEL_REASONS,
   roleImpliedByTicket,
 } from "./session-ledger";
+import { TODO_STATUSES } from "./session-todo";
 import { COST_BASES, SESSION_USAGE_CAUSES } from "./session-usage";
 import type { SessionUsage } from "./session-usage";
 import type {
@@ -92,6 +93,7 @@ import type {
   SessionNativeReference,
   SessionProjection,
   SessionStopActor,
+  SessionTranscriptDigest,
   SessionUsageAttribution,
   TranscriptReference,
 } from "./session-ledger";
@@ -398,6 +400,7 @@ const codecs = {
       attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
       turnId: readNullableString(record.turnId, `${context}.turnId`),
       reference: decodeTranscriptReference(record.reference, `${context}.reference`),
+      ...optionalTranscriptDigest(record.digest, `${context}.digest`),
     }),
     scrub: (payload) => payload,
   },
@@ -857,6 +860,7 @@ export interface SessionPresentationProjection extends Pick<
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
+  | "todoList"
 > {
   attention: RendererSessionAttentionProjection;
   interactions: RendererSessionInteractionProjection;
@@ -1765,6 +1769,35 @@ function enumValue<const T extends readonly string[]>(
     throw new Error(`${context} has an unsupported value`);
   }
   return value as T[number];
+}
+
+/**
+ * Optional rather than defaulted, like a stop detail: an event written before
+ * VC-315 has none, and its identity must not change on replay.
+ */
+function optionalTranscriptDigest(
+  value: unknown,
+  context: string,
+): { digest?: SessionTranscriptDigest } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  const digest: { -readonly [K in keyof SessionTranscriptDigest]: SessionTranscriptDigest[K] } = {
+    role: enumValue(row.role, ["user", "assistant", "system"], `${context}.role`),
+  };
+  if (row.reply !== undefined) {
+    if (row.reply !== true) throw new Error(`${context}.reply must be true when present`);
+    digest.reply = true;
+  }
+  if (row.todoList !== undefined) {
+    digest.todoList = readArray(row.todoList, `${context}.todoList`, (item, itemContext) => {
+      const todo = asRecord(item, itemContext);
+      return {
+        content: readString(todo.content, `${itemContext}.content`),
+        status: enumValue(todo.status, TODO_STATUSES, `${itemContext}.status`),
+      };
+    });
+  }
+  return { digest };
 }
 
 /** Optional rather than defaulted: legacy event identity must not change on replay. */
