@@ -60,7 +60,10 @@ export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOp
                   },
                 },
               } as never,
-              busyWorktreeSites: rest.busyWorktreeSites ?? (async () => []),
+              // A case that states no busy supplier ran no Done trim before
+              // the map; reporting the whole tree busy keeps it that way.
+              busyWorktreeSites:
+                rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
               ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
               ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),
             },
