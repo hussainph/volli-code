@@ -107,7 +107,8 @@ import {
   probeLoginShellPath,
   resetLoginShellPathCache,
 } from "@volli/host-core/maintenance";
-import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
+import type { DbHandle } from "./data-ipc";
+import { createDesktopBusyWorktreeSites } from "./worktree-activity";
 import { registerDataIpcHandlers } from "./data-ipc";
 import {
   createHostCore,
@@ -231,7 +232,6 @@ import {
 import { subscribeTicketWake } from "@volli/host-core/board";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
-  agentTurnOpenWithin,
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
@@ -1557,11 +1557,13 @@ const appStartup = app.whenReady().then(async () => {
   };
   /**
    * Where work is genuinely in flight in `target` right now, for the
-   * destructive worktree guards. The two surfaces answer differently ON PURPOSE.
+   * destructive worktree guards. The execution surfaces answer differently ON PURPOSE.
    *
    * A live PTY holds its cwd whatever it is doing: a shell whose directory was
    * deleted underneath it is broken whether or not anything was running in it.
    * Every live cwd is reported, unfiltered, and the guard does the containment.
+   * Background shells hold theirs between turns too, including while an ended
+   * attachment's shells are still terminating; only process exit clears them.
    *
    * An agent binding does not. It opens on attach and is dropped only by an
    * explicit release, by the executor closing itself, or by app shutdown, so it
@@ -1604,17 +1606,14 @@ const appStartup = app.whenReady().then(async () => {
    * that started inside the gap between this read and the delete is stopped and
    * recorded rather than having its directory pulled out from under it.
    */
-  const busyWorktreeSites = async (target: string): Promise<readonly BusyWorktreeSite[]> => {
-    const sites: BusyWorktreeSite[] = (ptyManagerRef?.liveSessionCwds() ?? []).map((directory) => ({
-      directory,
-      surface: "terminal",
-    }));
-    if (sessionRuntime === null) return sites;
-    const turnOpen = await agentTurnOpenWithin(sessionRuntime, target, (sessionId, error) => {
+  const busyWorktreeSites = createDesktopBusyWorktreeSites({
+    terminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+    shells: backgroundShells,
+    runtime: () => sessionRuntime,
+    onUnreadable: (sessionId, error) => {
       console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
-    });
-    return turnOpen ? [...sites, { directory: target, surface: "agent" }] : sites;
-  };
+    },
+  });
   /**
    * Ends every structured binding rooted at a directory that is about to stop
    * existing (`worktree/agent-sites.ts` carries the reasoning).
