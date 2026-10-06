@@ -1523,6 +1523,10 @@ const appStartup = app.whenReady().then(async () => {
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
         stopBackgroundWork: () => webSealing.stop(),
+        onShutdownDeadline: (deadlineMs) =>
+          hostCore.warnIfFollowUpCleanCloseSkipped(
+            `quit: shutdown deadline expired after ${deadlineMs}ms`,
+          ),
         reportFailure: (error) =>
           console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
       }),
