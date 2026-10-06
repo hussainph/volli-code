@@ -5,6 +5,10 @@
  *   node scripts/codemods/host-core-cluster-entries.mjs          # rewrite in place
  *   node scripts/codemods/host-core-cluster-entries.mjs --check  # report, change nothing
  *
+ * `--check` formats what a run would write (entries, importers, the root and
+ * `package.json`) and compares it with the checked-in files: it exits 0 on a
+ * clean tree and names each file a run would change.
+ *
  * 1. Reads every `@volli/host-core/<subpath>` import outside the package
  *    (apps/desktop, apps/hostd), resolving the subpath through the exports
  *    map host-core shipped before this change (`host-core-exports-before-vc632.json`)
@@ -29,7 +33,7 @@
  * adjusted by hand after this ran.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -650,24 +654,57 @@ for (const cluster of Object.keys(CLUSTERS).toSorted()) {
 }
 exportsMap["./testing"] = { types: "./src/testing/index.ts", import: "./src/testing/index.ts" };
 
+/** `path` → what this run would leave there, before formatting. */
+const proposed = new Map([
+  ...written.map(({ path, text }) => [path, text]),
+  ...rewrites.map(({ path, mutated }) => [path, mutated]),
+]);
+const rootPath = resolve(SRC, ROOT_OWN);
+proposed.set(rootPath, readFileSync(rootPath, "utf8").replace(ROOT_STAR_LINE, ""));
+const manifestPath = resolve(PKG, "package.json");
+{
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.exports = exportsMap;
+  proposed.set(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/**
+ * The proposed files as the formatter leaves them: written under `.tmp/` (in
+ * the repository, so the same formatter config applies), formatted, read back.
+ */
+function formatted(files) {
+  const scratch = resolve(REPO, ".tmp/host-core-cluster-entries-check");
+  rmSync(scratch, { recursive: true, force: true });
+  try {
+    const copies = [...files].map(([path, text]) => {
+      const copy = resolve(scratch, relative(REPO, path));
+      mkdirSync(dirname(copy), { recursive: true });
+      writeFileSync(copy, text);
+      return [path, copy];
+    });
+    spawnSync("vp", ["fmt", ...copies.map(([, copy]) => copy)], { stdio: "ignore", cwd: REPO });
+    return new Map(copies.map(([path, copy]) => [path, readFileSync(copy, "utf8")]));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 if (check) {
+  // Compare what a run would leave after formatting with what is checked in,
+  // so a clean tree passes and only a real difference fails.
+  const stale = [...formatted(proposed)]
+    .filter(([path, text]) => !existsSync(path) || readFileSync(path, "utf8") !== text)
+    .map(([path]) => relative(REPO, path));
+  for (const path of stale) console.log(path);
   console.log(
-    `would touch ${rewrites.length} importers (before formatting) and write ${written.length} entries`,
+    `would change ${stale.length} files (formatted; ${written.length} entries, ${rewrites.length} importers, root and package.json compared)`,
   );
-  process.exitCode = rewrites.length > 0 ? 1 : 0;
+  process.exitCode = stale.length > 0 ? 1 : 0;
 } else {
-  for (const { path, text } of written) {
+  for (const [path, text] of proposed) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
   }
-  for (const { path, mutated } of rewrites) writeFileSync(path, mutated);
-  const rootPath = resolve(SRC, ROOT_OWN);
-  writeFileSync(rootPath, readFileSync(rootPath, "utf8").replace(ROOT_STAR_LINE, ""));
-  const manifestPath = resolve(PKG, "package.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  manifest.exports = exportsMap;
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  const touched = [...written.map((w) => w.path), ...rewrites.map((r) => r.path), manifestPath];
-  spawnSync("vp", ["fmt", ...touched], { stdio: "inherit", cwd: REPO });
+  spawnSync("vp", ["fmt", ...proposed.keys()], { stdio: "inherit", cwd: REPO });
   console.log(`rewrote ${rewrites.length} importers; wrote ${written.length} entries`);
 }

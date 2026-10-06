@@ -7,7 +7,6 @@
  * the cluster map in the package README.
  */
 export { createAgentCommandService } from "../agent-commands";
-export { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "../host-profile";
 export { createHostAgentCommands, createHostAgentSocket } from "../agent-services";
 export {
   createAgentSocketLifecycle,
@@ -40,3 +39,4 @@ export {
   type ScannedHarnessManifest,
   trustedHarnessAdapters,
 } from "../harness-registry";
+export { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "../host-profile";
