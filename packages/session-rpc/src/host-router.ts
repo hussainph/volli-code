@@ -29,6 +29,7 @@ import {
   type ProcedurePaths,
   type PROJECT_RESOURCE,
 } from "./catalog";
+import type { DesktopRouter } from "./desktop-router";
 import type { SESSION_RESOURCE } from "./session-catalog";
 import { createSessionRouter, type AppRouter, type SessionRouterContext } from "./index";
 
@@ -108,3 +109,11 @@ export type HostRouter = ReturnType<typeof createHostRouter>;
 
 /** The composed seam, checked once more: every path survives JSON (BOUNDARIES rule 3). */
 export type HostRouterJsonSafety = AssertNever<JsonUnsafeProcedures<HostRouter>>;
+
+/**
+ * The desktop-only tier's paths are no public router's (VC-608): a key is
+ * public or desktop-only, never both, so promoting one moves its procedure.
+ */
+export type DesktopRouterPathsDisjoint = AssertNever<
+  Extract<ProcedurePaths<DesktopRouter["_def"]["record"]>, HostRouterPaths>
+>;

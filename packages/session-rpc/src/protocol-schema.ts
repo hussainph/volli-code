@@ -1,4 +1,5 @@
 import { boardProcedureSchemas } from "./board-router";
+import { desktopProcedureSchemas } from "./desktop-router";
 /** Build-time projection of both catalog tiers. Add area/desktop providers here,
  * never hand-write JSON Schema. Public providers exhaust the Verb Registry;
  * desktop-only providers publish the private bridge's schemas without new rows.
@@ -8,7 +9,7 @@ import {
   HOST_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
 } from "@volli/host-protocol";
-import { CATALOG_ENTRIES } from "@volli/shared";
+import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
 import { z } from "zod";
 
 import { sessionProcedureSchemas, type ProcedureSchema } from "./index";
@@ -18,23 +19,26 @@ export interface ProtocolSchemaProvider {
   readonly procedures: () => Readonly<Record<string, ProcedureSchema>>;
 }
 
-// VC-608 adds its desktop-only schema provider here. Do not filter its entries
-// out of generation/diff just because they have no public ceremony.
+// The desktop-only tier (VC-608) is generated and diffed like the public one:
+// no public ceremony, but the same additive-only gate.
 export function generateProtocolSchema(
   providers: readonly ProtocolSchemaProvider[] = [
     { tier: "public", procedures: sessionProcedureSchemas },
     { tier: "public", procedures: boardProcedureSchemas },
+    { tier: "desktop", procedures: desktopProcedureSchemas },
   ],
   publicEntries: readonly { key: string }[] = CATALOG_ENTRIES,
+  desktopEntries: readonly { key: string }[] = DESKTOP_ENTRIES,
 ) {
   const tiers: Record<string, Record<string, unknown>> = { public: {}, desktop: {} };
   const seen = new Set<string>();
   const publicKeys = new Set<string>();
+  const desktopKeys = new Set<string>();
   for (const { tier, procedures } of providers) {
     for (const [key, procedure] of Object.entries(procedures())) {
       if (seen.has(key)) throw new Error(`Duplicate schema provider for ${key}`);
       seen.add(key);
-      if (tier === "public") publicKeys.add(key);
+      (tier === "public" ? publicKeys : desktopKeys).add(key);
       tiers[tier]![key] = {
         kind: procedure.type,
         input: z.toJSONSchema(procedure.input, { io: "input" }),
@@ -50,6 +54,15 @@ export function generateProtocolSchema(
   if (missing.length || extra.length)
     throw new Error(
       `Schema/catalog mismatch: missing ${missing.map(({ key }) => key)}; extra ${extra}`,
+    );
+  // The desktop-only tier publishes exactly its declared entries, too.
+  const unpublished = desktopEntries.filter(({ key }) => !desktopKeys.has(key));
+  const undeclared = [...desktopKeys].filter(
+    (key) => !desktopEntries.some((entry) => entry.key === key),
+  );
+  if (unpublished.length || undeclared.length)
+    throw new Error(
+      `Schema/desktop-tier mismatch: missing ${unpublished.map(({ key }) => key)}; extra ${undeclared}`,
     );
   return {
     protocolVersion: HOST_PROTOCOL_VERSION,

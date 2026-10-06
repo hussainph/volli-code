@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { DESKTOP_IPC_EXPOSURE, DESKTOP_IPC_PATHS } from "./desktop-ipc";
 import { createBoardRouter } from "./board-router";
+import { createDesktopRouter } from "./desktop-router";
 import { createSessionRouter } from "./index";
 
 describe("the desktop's IPC exposure", () => {
@@ -9,19 +10,17 @@ describe("the desktop's IPC exposure", () => {
   // exactly the procedures they publish, so nothing is served or withheld by a
   // path that does not exist.
   it("classifies every procedure the desktop's routers publish, and nothing else", () => {
-    // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
-    const published = [
-      // oxlint-disable-next-line no-underscore-dangle -- as above.
-      ...Object.keys(createSessionRouter()._def.procedures),
-      // oxlint-disable-next-line no-underscore-dangle -- as above.
-      ...Object.keys(createBoardRouter()._def.procedures),
-    ].toSorted();
+    const published = [createSessionRouter(), createBoardRouter(), createDesktopRouter()]
+      // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
+      .flatMap((router) => Object.keys(router._def.procedures))
+      .toSorted();
     expect(Object.keys(DESKTOP_IPC_EXPOSURE).toSorted()).toEqual(published);
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge
-  // became router-generic, plus the board router VC-565 serves beside it.
-  it("serves the window exactly its Session, settings, Model Access and board procedures", () => {
+  // became router-generic, the board router VC-565 serves beside it, and the
+  // desktop-only tier.
+  it("serves the window its Session, settings, Model Access and board procedures, and the desktop-only tier", () => {
     expect(Object.isFrozen(DESKTOP_IPC_PATHS)).toBe(true);
     expect(DESKTOP_IPC_PATHS).toEqual([
       "settings.experiments",
@@ -75,6 +74,8 @@ describe("the desktop's IPC exposure", () => {
       "board.updateComment",
       "board.removeComment",
       "board.setLabelColor",
+      "project.reorder",
+      "worktree.trimSettings",
     ]);
   });
 

@@ -9,7 +9,7 @@
  * `reorder` stays a synchronous, optimistic local array move for live drag
  * feedback (the rail calls it on every pointer-cross) and does NOT persist —
  * persistence is the separate `commitReorder`, which the rail calls once, on
- * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
+ * drag end/cancel, so a single drag doesn't spam `project.reorder`.
  */
 import {
   errorMessage,
@@ -27,6 +27,7 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import {
   killProjectSessions,
@@ -134,7 +135,12 @@ const defaultGateway: ProjectsGateway = {
   remove: (id) => window.api.projects.remove(id),
   relink: (input) => window.api.projects.relink(input),
   checkFolder: (projectId) => boardApi().projects.checkFolder(projectId),
-  reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
+  // `project.reorder`, the desktop-only tier's write that replaced
+  // `volli:project-reorder` (VC-608).
+  reorder: async (orderedIds) => {
+    await sessionRpcClient().project.reorder.mutate({ orderedIds });
+    return { ok: true };
+  },
   setSelection: (selectedProjectId) =>
     window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, encodeProjectsUiState(selectedProjectId)),
 };
