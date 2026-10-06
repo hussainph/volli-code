@@ -41,6 +41,7 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readSync,
@@ -811,6 +812,90 @@ export interface StagedProfileSwap {
  * {@link DatabaseSwapFinalizeError}.
  */
 export function swapInStagedProfile(request: StagedProfileSwap): void {
+  swapStagedProfile(request);
+}
+
+/** Internal only: a rollback verifies an exact old schema without ever migrating it. */
+type SwapRequest = StagedProfileSwap & { restoreSchema?: number };
+
+export interface DatabaseFileRestore {
+  dbPath: string;
+  /** A checkpointed, closed source. Copied, never consumed or opened by SQLite. */
+  sourcePath: string;
+  /** The operator's explicit target schema, not this build's head. */
+  schemaVersion: number;
+  /** Crash tests only. */
+  faults?: DatabaseFileFaults;
+}
+
+/**
+ * Restore a cold copy or migration rollback point, keeping its exact schema.
+ * The current build must not migrate the file destined for an older binary.
+ * Stage and fully check a disposable copy, then use the same fenced swap as
+ * recovery. An interrupted attempt is retryable from the unchanged source;
+ * failed attempts retain the marker and evidence, so boot fails closed.
+ * Returns the directory preserving the displaced database family.
+ */
+export function restoreDatabaseFile(request: DatabaseFileRestore): string {
+  const { dbPath, sourcePath, schemaVersion } = request;
+  if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1 || schemaVersion > SCHEMA_HEAD)
+    throw new Error(`Restore needs a schema between 1 and ${SCHEMA_HEAD}. Nothing was restored.`);
+  regularFile(sourcePath);
+  if (exists(dbPath) && inode(sourcePath) === inode(dbPath))
+    throw new Error("Restore requires a separate source, never the live database.");
+  assertStandalone(sourcePath);
+  const staging = mkdtempSync(join(dirname(dbPath), ".database-restore-"));
+  const stagedPath = join(staging, basename(dbPath));
+  const asideDirectory = join(dirname(dbPath), `rolled-back-${randomUUID()}`);
+  try {
+    copyFileSync(sourcePath, stagedPath, constants.COPYFILE_EXCL);
+    checkExactRestore(stagedPath, schemaVersion);
+    swapStagedProfile({
+      dbPath,
+      stagedPath,
+      asideDirectory,
+      replacing: "damaged",
+      restoreSchema: schemaVersion,
+      faults: request.faults,
+    });
+    return asideDirectory;
+  } finally {
+    // Source and set-aside evidence stay. A staging cleanup failure must not
+    // turn a verified, durable install into a reported failed restore.
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch (error) {
+      console.error("[database file] staging cleanup failed", { staging, error });
+    }
+  }
+}
+
+function assertStandalone(path: string): void {
+  for (const suffix of SIDECARS) {
+    const sidecar = `${path}${suffix}`;
+    if (!exists(sidecar)) continue;
+    regularFile(sidecar);
+    if (suffix !== "-shm" && lstatSync(sidecar).size !== 0)
+      throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
+  }
+}
+
+/** Writable check includes CHECK constraints; only our disposable copy/live install is opened. */
+function checkExactRestore(path: string, schemaVersion: number): void {
+  if (stagedSchemaVersion(path) !== schemaVersion)
+    throw new Error(`The restore file is not at schema ${schemaVersion}. Nothing was restored.`);
+  const db = new Database(path, { fileMustExist: true });
+  try {
+    const rows = db.pragma("integrity_check") as { integrity_check: string }[];
+    if (rows.length !== 1 || rows[0]?.integrity_check !== "ok")
+      throw new Error("The restore file failed its integrity check.");
+    checkpoint(db);
+  } finally {
+    db.close();
+  }
+}
+
+function swapStagedProfile(request: SwapRequest): void {
   const { dbPath, stagedPath, asideDirectory } = request;
   if (resolve(dirname(asideDirectory)) !== resolve(dirname(dbPath)))
     throw new Error("A swap sets the live database aside beside it, never elsewhere.");
@@ -818,15 +903,14 @@ export function swapInStagedProfile(request: StagedProfileSwap): void {
     throw new Error("A swap installs a staged copy, never the live database itself.");
   regularFile(stagedPath);
   // A staged WAL with frames would be left behind and its data lost.
-  for (const suffix of SIDECARS) {
-    const sidecar = `${stagedPath}${suffix}`;
-    if (exists(sidecar) && suffix !== "-shm" && lstatSync(sidecar).size !== 0)
-      throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
-  }
+  assertStandalone(stagedPath);
   // The verification open must never migrate at the live path: that would
   // take a safety copy beside the live profile and could write the reader
   // floor there (VC-602). Callers migrate in staging; refuse anything older.
-  if (stagedSchemaVersion(stagedPath) < SCHEMA_HEAD)
+  if (request.restoreSchema !== undefined) {
+    if (stagedSchemaVersion(stagedPath) !== request.restoreSchema)
+      throw new Error("The staged restore schema changed. Nothing was swapped.");
+  } else if (stagedSchemaVersion(stagedPath) < SCHEMA_HEAD)
     throw new Error(
       `The staged database is not at this build's schema (${SCHEMA_HEAD}). Nothing was swapped.`,
     );
@@ -875,7 +959,7 @@ class Swap {
   private published = false;
   private verified = false;
 
-  constructor(private readonly request: StagedProfileSwap) {
+  constructor(private readonly request: SwapRequest) {
     this.faults = request.faults ?? noFaults;
     this.profile = dirname(request.dbPath);
     this.staging = dirname(request.stagedPath);
@@ -1028,6 +1112,10 @@ class Swap {
    * the current schema, so this runs no migration and writes no floor.
    */
   private verifyInstalled(): void {
+    if (this.request.restoreSchema !== undefined) {
+      checkExactRestore(this.request.dbPath, this.request.restoreSchema);
+      return;
+    }
     const restored = openVolliDb(this.request.dbPath, { allowPendingRecovery: true });
     try {
       if (!checksClean(restored))

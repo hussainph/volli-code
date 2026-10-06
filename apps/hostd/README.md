@@ -9,6 +9,8 @@ directory.
 ```sh
 volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>] [--operators <file>]
 volli-hostd status --data-dir /var/lib/volli-hostd
+# offline, explicit data loss confirmation; use the current/new install
+sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
 sudo volli-hostd operator-token --for <login> | --revoke <login>
 VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 ```
@@ -591,9 +593,9 @@ by the service user, so every step inside it runs as that user. The box
 runbook has the same steps:
 [`docs/runbooks/hostd-box.md`](../../docs/runbooks/hostd-box.md#upgrades).
 
-The rollback checks the database with the `sqlite3` command-line tool, which
-the archive doesn't include (it carries the `better-sqlite3` module, not the
-CLI). On Ubuntu:
+The rollback uses `sqlite3` only to read the live schema. Restore validation
+and the fenced swap run in `volli-hostd database restore`, using the packaged
+SQLite module. The archive does not include the `sqlite3` CLI. On Ubuntu:
 
 ```sh
 sudo apt-get update && sudo apt-get install -y sqlite3
@@ -630,56 +632,54 @@ You need two things before anything is stopped or moved:
   ```
 
 Then run the rollback as one block. It stops at the first failed step, and
-starts nothing until every check has passed:
+starts nothing until the database restore and install swap have succeeded:
 
 1. It checks `P` and stops both units.
-2. It reads the schema. At `N` the database was never migrated and is kept.
-   Above `N`, it first checks that the safety copy exists and isn't empty, and
-   that it reads `ok` and then `N`, read-only. `integrity_check` exits 0 even
-   when it finds damage, so the block compares the output.
-3. Only then does it set `volli.db` and its `-wal`, `-shm` and `-journal` aside
-   in a new `rolled-back-*` folder. Never delete that folder: it is the only
-   copy of what was written since the upgrade. It copies the safety copy in
-   (copy, don't move: it stays the rollback point) and checks the copy too.
-   The copy's check opens it read-write: over a read-only connection,
-   `integrity_check` skips CHECK constraints. The safety copy itself is only
-   ever opened read-only.
+2. A `volli.db.recovery-pending` marker means retry the restore, even if the
+   live database is missing or already at `N`. Without that marker, it keeps
+   a database at `N`, restores one above `N`, and refuses one below `N`.
+3. **The current/new install's** `database restore` command requires `--from`,
+   an exact `--schema` and `--yes`; without confirmation it refuses. It
+   validates a checkpointed source, acquires the hostd instance lock and then
+   host-core's database swap fence, and preserves the live database family in
+   a unique `rolled-back-*` directory. It atomically installs and verifies the
+   source at exactly `N`, **without migration**, leaving the source unchanged.
+   Keep that preservation directory: it holds what was written since the
+   upgrade. Do not replace the command with shell moves/copies of live database
+   or fence files.
 4. It swaps `P` in as `/opt/volli-hostd`, installs its units, reloads systemd
    and starts.
+
+An interrupted swap blocks boot with the pending marker. Retrying the command
+adopts that pending swap and installs the source again; schema equality alone
+is not recovery. Run it before swapping to the older install, which may not
+have this subcommand.
 
 ```sh
 P=/opt/volli-hostd.prev-20261004-120000   # example: replace with the install to return to
 N=59                                      # example: replace with the schema it left
 (
   set -eu
+  trap 'rc=$?; if [ "$rc" -ne 0 ]; then sudo systemctl stop volli-hostd.socket volli-hostd || true; fi; exit "$rc"' EXIT
   D=/var/lib/volli-hostd
   B="$D/volli.db.backup-v$N"
   T=$(date +%Y%m%d-%H%M%S)
-  check_db() {   # check_db FILE [-readonly]: it must read ok, then N
-    f=$1; shift
-    sudo -u volli test -s "$f" || { echo "missing or empty: $f" >&2; return 1; }
-    result=$(sudo -u volli sqlite3 "$@" "$f" 'PRAGMA integrity_check; PRAGMA user_version;') ||
-      return 1
-    [ "$result" = "$(printf 'ok\n%s' "$N")" ] ||
-      { printf 'check failed: %s:\n%s\n' "$f" "$result" >&2; return 1; }
-  }
+  case "$N" in ''|*[!0-9]*) echo "invalid N: $N" >&2; exit 1;; esac
   sudo test -x "$P/bin/volli-hostd"
   sudo systemctl stop volli-hostd.socket volli-hostd
-  now=$(sudo -u volli sqlite3 -readonly "$D/volli.db" 'PRAGMA user_version;')
-  if [ "$now" = "$N" ]; then
-    echo "volli.db is at schema $N: never migrated, kept as it is"
-  elif [ "$now" -gt "$N" ]; then
-    check_db "$B" -readonly           # the rollback point: never written to
-    aside=$(sudo -u volli mktemp -d "$D/rolled-back-$T.XXXXXX")
-    for f in volli.db volli.db-wal volli.db-shm volli.db-journal; do
-      if sudo -u volli test -e "$D/$f"; then sudo -u volli mv "$D/$f" "$aside/$f"; fi
-    done
-    sudo -u volli cp "$B" "$D/volli.db"
-    check_db "$D/volli.db"             # read-write: read-only skips CHECK constraints
-    echo "migrated database set aside in $aside"
+  if sudo -u volli test -e "$D/volli.db.recovery-pending" ||
+     sudo -u volli test -L "$D/volli.db.recovery-pending"; then
+    sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
   else
-    echo "volli.db is at schema $now, below N=$N: wrong N" >&2
-    exit 1
+    now=$(sudo -u volli sqlite3 -readonly "$D/volli.db" 'PRAGMA user_version;')
+    if [ "$now" = "$N" ]; then
+      echo "volli.db is at schema $N with no pending restore: kept as it is"
+    elif [ "$now" -gt "$N" ]; then
+      sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
+    else
+      echo "volli.db is at schema $now, below N=$N: wrong N" >&2
+      exit 1
+    fi
   fi
   sudo mv /opt/volli-hostd "/opt/volli-hostd.failed-$T"
   sudo mv "$P" /opt/volli-hostd
@@ -692,17 +692,26 @@ N=59                                      # example: replace with the schema it 
 sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
 ```
 
-**If the block stops on an error, it has started nothing.** Don't start the
-units by hand. A failed database step means the safety copy can't be used.
-Examples: no `volli.db`, a missing or empty copy, or a check that didn't read
-`ok` and then `N`. Restore the copy of the data directory you took before the
-upgrade instead ([runbook, Backups](../../docs/runbooks/hostd-box.md#backups),
-all but its start), then run the block again: it finds the database at `N`,
-keeps it and finishes the swap. Whether the new build migrated is read from
-the schema. The absence of a newer `volli.db.backup-v*` doesn't prove it.
-`/opt/volli-hostd.failed-*` is the new install; remove it once the old one
-serves. The read-only checks can leave empty `-wal`/`-shm` files beside the
-safety copy and the database; they are harmless.
+**On error, the block stops both units. Don't start them by hand.** Read the
+error first. For an interrupted database swap, keep the current/new install
+and retry its `database restore` command with the same `D`, `B` and `N`;
+never remove the pending marker to unblock boot. If the safety copy is missing,
+empty, damaged or at the wrong schema, restore the pre-upgrade cold copy
+([runbook, Backups](../../docs/runbooks/hostd-box.md#backups), omitting its start
+and status lines). That stages the archive in a root-owned temporary directory,
+cold-copies the current data and checkouts instead of moving the live data
+directory away, restores non-database entries (including secrets and worktrees)
+without displacing the database/fence families, and invokes the same command on
+the staged database at its recorded schema. Then run the rollback block again:
+it keeps the database at `N` with no pending marker and finishes the install
+swap. A cold restore replaces credentials too; separately preserve any secret
+key configured outside the archive and use the matching key.
+
+If an install swap failed partway through, inspect `/opt/volli-hostd`, `P` and
+`/opt/volli-hostd.failed-*` and finish that swap before starting; do not blindly
+rerun its moves. The absence of a newer `volli.db.backup-v*` doesn't prove no
+migration happened. `/opt/volli-hostd.failed-*` is the new install; remove it
+once the old one serves.
 
 Credential files (`host-credentials.*`, the secret key) are not in the
 database and stay where they are. The old build reads its keys from the
