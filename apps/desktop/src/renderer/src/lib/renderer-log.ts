@@ -118,3 +118,34 @@ export function installRendererLogForwarding(
     target.removeEventListener("unhandledrejection", onRejection);
   };
 }
+
+/** A host link's log event (`@volli/host-protocol/client-link`'s `HostLinkLogEvent`), structurally. */
+export interface HostLinkLogLine {
+  readonly kind: string;
+  readonly traceId: string;
+  readonly [field: string]: unknown;
+}
+
+const LINK_TROUBLE = new Set(["unreachable", "refused", "fenced"]);
+
+/**
+ * A host link's `log` option (VC-699): each state change, wake, resume and
+ * resnapshot as a `renderer:host-link` line under the link's trace, so the
+ * viewer shows a lid close and reopen beside the host's own lines. Pass it
+ * when creating a link: `createHostLink({ …, traceId, log: hostLinkLog("box") })`.
+ */
+export function hostLinkLog(
+  host: string,
+  target: () => RendererLogDoor | null = door,
+): (event: HostLinkLogLine) => void {
+  const log = rendererLog("host-link", target);
+  return ({ kind, traceId, ...fields }) => {
+    const trouble =
+      kind === "resnapshot" || (kind === "state" && LINK_TROUBLE.has(String(fields["to"])));
+    log[trouble ? "warn" : "info"](
+      kind === "state" ? "link state" : kind,
+      { host, ...fields },
+      traceId,
+    );
+  };
+}

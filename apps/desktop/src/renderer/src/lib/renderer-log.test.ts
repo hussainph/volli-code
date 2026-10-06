@@ -1,3 +1,4 @@
+import type { HostLinkLogEvent } from "@volli/host-protocol/client-link";
 import type { RendererLogEntry } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -78,5 +79,33 @@ describe("the renderer's lines for main's log", () => {
     expect(target.removeEventListener).toHaveBeenCalledTimes(2);
     target.console.warn("after");
     expect(sent).toHaveLength(5);
+  });
+});
+
+describe("a host link's lines", () => {
+  it("names each state change, wake and resnapshot, warning on trouble, under the link's trace", async () => {
+    const { hostLinkLog } = await import("./renderer-log");
+    const sent: RendererLogEntry[] = [];
+    const log = hostLinkLog("box", () => ({ write: (entry) => sent.push(entry) }));
+    const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    log({ kind: "state", from: "connecting", to: "ready", traceId });
+    log({ kind: "state", from: "ready", to: "unreachable", reason: "host-unreachable", traceId });
+    log({ kind: "wake", cause: "power-resume", status: "ready", traceId });
+    log({ kind: "resnapshot", path: "session.subscribe", traceId });
+    expect(sent.map(({ level, area, msg, traceId: trace }) => [level, area, msg, trace])).toEqual([
+      ["info", "host-link", "link state", traceId],
+      ["warn", "host-link", "link state", traceId],
+      ["info", "host-link", "wake", traceId],
+      ["warn", "host-link", "resnapshot", traceId],
+    ]);
+    // The link's own event type is what it takes.
+    const typed: (event: HostLinkLogEvent) => void = log;
+    expect(typed).toBe(log);
+    expect(sent[1]!.fields).toEqual({
+      host: "box",
+      from: "ready",
+      to: "unreachable",
+      reason: "host-unreachable",
+    });
   });
 });
