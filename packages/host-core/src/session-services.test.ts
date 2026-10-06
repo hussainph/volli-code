@@ -232,7 +232,7 @@ describe("host Session composition", () => {
       throw failure;
     });
     services.liveWork.observeShell({ shellId: "shell", state: "running" });
-    expect(sinks.log.warn).toHaveBeenCalledWith("[volli] live work:", failure);
+    expect(sinks.log.warn).toHaveBeenCalledWith("live work listener failed", { error: failure });
   });
 
   it("folds with nothing open and nothing scheduled until the runtime wires each in", async () => {

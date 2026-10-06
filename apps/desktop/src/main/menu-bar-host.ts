@@ -46,6 +46,7 @@
  * No Electron import: every native effect is a port, so the whole mode is
  * tested under plain Node and `menu-bar-electron.ts` stays a thin adapter.
  */
+import { hostLogger } from "@volli/host-core/log";
 import { hasLiveWork, NO_LIVE_WORK, type HostLiveWork } from "@volli/host-core/sessions";
 
 /** How long live work must stay drained before a resident host quits on its own. */
@@ -297,7 +298,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
   const settleMs = ports.settleMs ?? MENU_BAR_SETTLE_MS;
   const pollMs = ports.pollMs ?? MENU_BAR_POLL_MS;
   const shutdownLatchMs = ports.shutdownLatchMs ?? SYSTEM_SHUTDOWN_LATCH_MS;
-  const log = ports.log ?? ((line: string) => console.info(line));
+  const log = ports.log ?? ((line: string) => hostLogger("menu-bar").info(line));
 
   let resident = false;
   let quitRequested = false;

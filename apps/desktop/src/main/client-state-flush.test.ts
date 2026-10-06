@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { captureHostLog } from "@volli/host-core/testing";
 
 import {
   createClientStateFlush,
@@ -124,9 +125,9 @@ describe("client-state flush before a forced destroy (VC-577)", () => {
     expect(clock.pendingCount()).toBe(0);
   });
 
-  it("resolves at once with nothing to ask, and defaults to real timers and console", async () => {
+  it("resolves at once with nothing to ask, and defaults to real timers and the host log", async () => {
     vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const captured = captureHostLog();
     try {
       const flusher = createClientStateFlush({ newRequestId: () => "r" });
       await expect(flusher.flush([], SHUTDOWN_FLUSH_TIMEOUT_MS)).resolves.toEqual({
@@ -145,9 +146,9 @@ describe("client-state flush before a forced destroy (VC-577)", () => {
       const flushed = flusher.flush([target()], SHUTDOWN_FLUSH_TIMEOUT_MS);
       vi.advanceTimersByTime(SHUTDOWN_FLUSH_TIMEOUT_MS);
       await expect(flushed).resolves.toEqual({ acked: 0, unanswered: 1 });
-      expect(warn).toHaveBeenCalled();
+      expect(captured.of("client-state").map(({ level }) => level)).toContain("warn");
     } finally {
-      warn.mockRestore();
+      captured.restore();
       vi.useRealTimers();
     }
   });

@@ -2314,9 +2314,9 @@ const appStartup = app.whenReady().then(async () => {
           window.destroy();
         }).then(({ unanswered }) => {
           if (unanswered > 0) {
-            console.warn(
-              `[menu-bar] ${unanswered} window(s) still saving drafts; kept hidden, not destroyed`,
-            );
+            hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {
+              unanswered,
+            });
           }
         });
       },
@@ -2353,7 +2353,9 @@ const appStartup = app.whenReady().then(async () => {
           beginInstall: beginAcceptedUpdateInstall,
           abandonInstall: abandonAcceptedUpdateInstall,
         });
-        if (!started.ok) console.error("[menu-bar] update install failed:", started.error);
+        if (!started.ok) {
+          hostLogger("menu-bar").error("update install failed", { error: started.error });
+        }
         return started.ok;
       },
     },

@@ -141,7 +141,7 @@ export function createHostSessionServices(
     openSessionIds: () => new Set(runtime.openNativeBindings().map((binding) => binding.sessionId)),
     pendingStartSessionIds: () => runtime.pendingTurnStarts(),
     starts: { hold: () => runtime.holdTurnStarts(), release: () => runtime.releaseTurnStarts() },
-    onError: (error) => ports.log.warn("[volli] live work:", error),
+    onError: (error) => ports.log.warn("live work listener failed", { error }),
   });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
     publish: publishSessionActivity,
