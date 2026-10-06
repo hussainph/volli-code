@@ -339,6 +339,7 @@ describe("the renderer's forwarded lines are flat and safe (merge gate)", () => 
       nested: { password: "review-password-123" },
       list: ["a"],
       count: 3,
+      ratio: Infinity,
       ok: true,
       none: null,
       host: "box",
@@ -352,6 +353,7 @@ describe("the renderer's forwarded lines are flat and safe (merge gate)", () => 
     expect(fields).toEqual({
       token: LOG_REDACTED,
       count: 3,
+      ratio: "Infinity",
       ok: true,
       none: null,
       host: "box",
