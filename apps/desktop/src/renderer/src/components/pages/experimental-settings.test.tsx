@@ -121,6 +121,15 @@ describe("Settings → Experimental", () => {
     useExperimentsStore.setState({ snapshot: null });
   });
 
+  it("heals the app's flag readers from a load, even one this page cannot save", async () => {
+    useExperimentsStore.setState({ snapshot: null });
+    rpc.query.mockResolvedValueOnce(snapshot(true, "environment"));
+    await renderPane();
+
+    expect(isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")).toBe(true);
+    useExperimentsStore.setState({ snapshot: null });
+  });
+
   it("locks an environment-enabled flag and names its source", async () => {
     rpc.query.mockResolvedValueOnce(snapshot(true, "environment"));
     await renderPane();

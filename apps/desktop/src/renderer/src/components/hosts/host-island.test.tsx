@@ -6,7 +6,7 @@ import { useUiStore } from "@renderer/stores/ui";
 
 import { remoteHost } from "@renderer/stores/host-sources";
 
-import { HostIsland } from "./host-island";
+import { HostIsland, ISLAND_BOTTOM_PX, islandBottom } from "./host-island";
 import { hostSurface, type HostSurface } from "./host-surface-model";
 import { useGrace } from "./use-hosts";
 import { click, HETZNER_ID, hostWorld, type HostWorld } from "./hosts.test-support";
@@ -181,5 +181,83 @@ describe("connection Island", () => {
     expect(island()?.textContent).toContain("hetzner-1 no longer accepts this Mac · Read-only");
     await click(island() as HTMLElement, "Manage hosts…");
     expect(toast).toHaveBeenCalledWith("Managing hosts isn’t in this build yet");
+  });
+});
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return { left, top, width, height, right: left + width, bottom: top + height } as DOMRect;
+}
+
+describe("connection Island, per project and on chat pages", () => {
+  it("speaks for the current project's own link, not a fenced neighbour on the same box", async () => {
+    world = hostWorld();
+    act(() => {
+      const snapshot = world!.remote.getSnapshot();
+      world!.remote.set({
+        ...snapshot,
+        projects: {
+          ...snapshot.projects,
+          spare: { hostId: HETZNER_ID, link: { status: "incompatible", reason: "fenced" } },
+        },
+      });
+    });
+    await world.render(<HostIsland />);
+    expect(island()).toBeNull();
+    const { useProjectsStore } = await import("@renderer/stores/projects");
+    act(() => useProjectsStore.setState({ selectedProjectId: "spare" }));
+    expect(island()?.textContent).toContain("hetzner-1 no longer serves this project");
+  });
+
+  it("rests 88px above the card's foot, and rises above a chat composer under it", async () => {
+    world = hostWorld({
+      hetzner: { link: { status: "offline", since: NOW, retryAt: null } },
+    });
+    const card = document.createElement("div");
+    document.body.append(card);
+    const dock = document.createElement("div");
+    dock.dataset.slot = "chat-composer-dock";
+    card.append(dock);
+    const boxes = new Map<Element, DOMRect>([
+      [card, rect(0, 0, 1000, 800)],
+      [dock, rect(200, 600, 600, 200)],
+    ]);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        return boxes.get(this) ?? rect(0, 0, 0, 0);
+      },
+    );
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(card);
+    await act(async () => root.render(<HostIsland />));
+    card.append(dock);
+    await advance(500);
+    const lane = card.querySelector<HTMLElement>('[data-slot="host-island"]')!;
+    // The dock's top is 200px above the card's foot: the Island floats 12px over it.
+    expect(lane.style.bottom).toBe("212px");
+
+    boxes.set(dock, rect(0, 0, 0, 0));
+    await advance(500);
+    expect(lane.style.bottom).toBe("88px");
+    await act(async () => root.unmount());
+    card.remove();
+  });
+});
+
+describe("islandBottom", () => {
+  const card = rect(0, 100, 1000, 800);
+
+  it("rests at the lab's 88px with no composer, or one beside the lane", () => {
+    expect(islandBottom(card, [])).toBe(ISLAND_BOTTOM_PX);
+    expect(islandBottom(card, [rect(0, 700, 200, 200)])).toBe(88);
+    expect(islandBottom(card, [rect(800, 700, 200, 200)])).toBe(88);
+  });
+
+  it("rises above the tallest composer under its lane, and ignores one outside the card", () => {
+    expect(islandBottom(card, [rect(300, 800, 400, 100)])).toBe(112);
+    expect(islandBottom(card, [rect(300, 800, 400, 100), rect(0, 600, 1000, 300)])).toBe(312);
+    expect(islandBottom(card, [rect(300, 50, 400, 100)])).toBe(88);
+    expect(islandBottom(card, [rect(300, 880, 400, 100)])).toBe(88);
+    // A short composer low in the card stays under the 88px resting place.
+    expect(islandBottom(card, [rect(300, 860, 400, 40)])).toBe(88);
   });
 });

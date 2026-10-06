@@ -33,7 +33,61 @@ import { appApi, seedApp } from "../seed";
 export const title = "Host connection — chip, switcher, Island, Running on";
 export const note = "VC-576: the shipped host surfaces over the real shell, fed by a fake source";
 export const viewport = "window" as const;
-export const api = appApi;
+/**
+ * The app's own stubs plus what this window reaches on load and when a
+ * Session opens. Left unstubbed, their failure toasts sat over the Island this
+ * scratch exists to show, and a Session's stream died on a bridge the fake
+ * could not spread (`bridge.request is not a function`).
+ */
+export const api = {
+  ...appApi,
+  projects: {
+    syncRoots: () => Promise.resolve(),
+    checkFolder: (projectId: string) =>
+      Promise.resolve({ ok: true, path: `/lab/${projectId}`, state: "present" }),
+  },
+  shells: { list: () => Promise.resolve({ ok: true, shells: [] }) },
+  browser: { list: () => Promise.resolve({ ok: true, tabs: [] }) },
+  automations: {
+    list: () => Promise.resolve({ ok: true, automations: [] }),
+    armings: () => Promise.resolve({ ok: true, armings: [] }),
+    columnOrders: () => Promise.resolve({ ok: true, orders: [] }),
+    enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: [] }),
+    runsForTicket: () => Promise.resolve({ ok: true, runs: [] }),
+  },
+  notifications: { setActiveTarget: () => {} },
+  // What opening a Session reaches. Empty, and quiet, rather than a toast
+  // apiece over the composer and the Island above it.
+  sessions: {
+    ...(appApi["sessions"] as object),
+    setRead: () => Promise.resolve({ ok: true, read: { unreadSince: null } }),
+  },
+  files: {
+    ...(appApi["files"] as object),
+    index: () => Promise.resolve({ ok: true, files: [], truncated: false }),
+    promptTemplates: () => Promise.resolve({ ok: true, templates: [], skills: [] }),
+  },
+  attachments: {
+    list: () => Promise.resolve({ ok: true, blobs: [] }),
+    materialized: () => Promise.resolve({ ok: true, links: [] }),
+  },
+  // The Session RPC bridge, named so the client's `{ ...bridge }` keeps its
+  // members. There is no host behind the lab, so a Session's stream is
+  // acknowledged and then stays quiet, and a query waits: the Session reads
+  // as still loading — the truth here — instead of toasting a lost stream
+  // over the composer this scratch is reviewing.
+  sessionRpc: {
+    request: (request: { type: string }) =>
+      request.type === "subscription"
+        ? Promise.resolve({
+            ok: true,
+            subscriptionId: `lab-${Math.random().toString(36).slice(2)}`,
+          })
+        : new Promise(() => {}),
+    onEvent: () => () => {},
+    cancel: () => {},
+  },
+};
 export const seed = seedApp;
 
 const HETZNER = "host-hetzner";

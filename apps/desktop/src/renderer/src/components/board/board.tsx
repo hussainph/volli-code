@@ -15,8 +15,9 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
-  type SensorDescriptor,
-  type SensorOptions,
+  KeyboardCode,
+  type KeyboardSensorOptions,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
@@ -397,8 +398,21 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
-/** No sensor: what a read-only board's `DndContext` gets, so nothing can be dragged. */
-const NO_SENSORS: SensorDescriptor<SensorOptions>[] = [];
+const POINTER_DRAG: PointerSensorOptions = { activationConstraint: { distance: 4 } };
+/** A pointer that never travels far enough: a read-only board lifts nothing. */
+const POINTER_NEVER: PointerSensorOptions = {
+  activationConstraint: { distance: Number.POSITIVE_INFINITY },
+};
+const KEYBOARD_DRAG: KeyboardSensorOptions = { coordinateGetter: sortableKeyboardCoordinates };
+/** No key starts a keyboard drag on a read-only board. */
+const KEYBOARD_NEVER: KeyboardSensorOptions = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: {
+    start: [],
+    cancel: [KeyboardCode.Esc],
+    end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+  },
+};
 
 export const Board = React.memo(function Board({
   projectId,
@@ -684,13 +698,16 @@ export const Board = React.memo(function Board({
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after pointer travel through the browser event
   // pipeline. Keyboard drags come free with the sortable coordinate getter.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  //
   // Read-only (VC-576): a move is a write, so no drag can start while the
-  // project's host cannot serve. Cards still open and select.
+  // project's host cannot serve — the same two sensors, set never to
+  // activate (dnd-kit wants the sensor list's size fixed). Cards still open
+  // and select.
   const canWrite = useCanWrite(projectId);
+  const sensors = useSensors(
+    useSensor(PointerSensor, canWrite ? POINTER_DRAG : POINTER_NEVER),
+    useSensor(KeyboardSensor, canWrite ? KEYBOARD_DRAG : KEYBOARD_NEVER),
+  );
 
   const tickets = drag?.preview ?? storeTickets;
   // The other reads need no `drag?.` fallback of their own: during a gesture
@@ -1097,7 +1114,7 @@ export const Board = React.memo(function Board({
             list view has full drag parity with the board; only the layout and the
             drag overlay's shape differ. Escape-clears-selection (above) is shared. */}
           <DndContext
-            sensors={canWrite ? sensors : NO_SENSORS}
+            sensors={sensors}
             collisionDetection={boardCollision}
             // Stated rather than inherited — see `BOARD_MEASURING`.
             measuring={BOARD_MEASURING}
