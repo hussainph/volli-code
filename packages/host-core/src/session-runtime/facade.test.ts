@@ -62,6 +62,7 @@ function degradedHost(error: string): DegradedHostCore {
     databaseFailure: { kind: "other" },
     start: async () => {},
     stop: async (reason) => ({ reason, clean: true }),
+    warnIfFollowUpCleanCloseSkipped: () => {},
   };
 }
 async function proofFor(facade: RuntimeSessionFacade) {
