@@ -665,7 +665,10 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
           timeoutMs,
         );
       },
-      console: { warn },
+      // index.ts logs through the structured logger (VC-699).
+      hostLogger: (component: string) => ({
+        warn: (msg: string, fields?: unknown) => warn(`[${component}] ${msg}`, fields),
+      }),
       BrowserWindow: { getAllWindows: () => all.filter((each) => !each.isDestroyed()) },
       createOwnedWindow,
       revealWindow,
@@ -713,7 +716,10 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     entry.ack("a");
     entry.overdue();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(entry.warn).toHaveBeenCalledWith(expect.stringContaining("kept hidden, not destroyed"));
+    expect(entry.warn).toHaveBeenCalledWith(
+      "[menu-bar] windows still saving drafts; kept hidden, not destroyed",
+      { unanswered: 1 },
+    );
     expect(entry.b.isDestroyed()).toBe(false);
     expect(entry.retiringWindows.has(entry.b)).toBe(true);
     // The slow renderer finally saved its latest draft: now it may go.
