@@ -133,6 +133,13 @@ describe("the actor matrix (VC-564)", () => {
     const { caller, runtime } = fixture(sessionActor);
     for (const call of [
       caller.session.snapshot({ sessionId: "session-1" }),
+      caller.session.cancelQueued({ commandId: "cancel", sessionId: "session-1", messageId: "m" }),
+      caller.session.editQueued({
+        commandId: "edit",
+        sessionId: "session-1",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      }),
       caller.modelAccess.defaults(),
     ]) {
       expect(await refusal(call)).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
@@ -252,6 +259,37 @@ describe("the actor matrix (VC-564)", () => {
   });
 });
 
+describe("follow-up feature compatibility", () => {
+  it("does not widen sessions: edits/cancels require the new queue feature", async () => {
+    const runtime = {
+      command: vi.fn<SessionRuntime["command"]>(async () => {
+        throw new Error("not reached");
+      }),
+    };
+    const caller = createSessionRouter().createCaller({
+      ...sessionContext({
+        caller: device,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        resourceWorkspace: () => WORKSPACE,
+      }),
+      operations: new Set(["session.command"]),
+    });
+    await expect(
+      caller.session.cancelQueued({ commandId: "cancel", sessionId: "session-1", messageId: "m" }),
+    ).rejects.toMatchObject({ reason: "verb-refused" });
+    await expect(
+      caller.session.editQueued({
+        commandId: "edit",
+        sessionId: "session-1",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      }),
+    ).rejects.toMatchObject({ reason: "verb-refused" });
+    expect(runtime.command).not.toHaveBeenCalled();
+  });
+});
+
 describe("workspace scope, before any read", () => {
   it("answers a Session in another Workspace exactly as an absent one, and reads neither", async () => {
     const { caller, runtime } = fixture(device);
@@ -277,6 +315,14 @@ describe("workspace scope, before any read", () => {
           commandId: "c",
           sessionId,
           command: { kind: "executor.interrupt" },
+        }),
+      () => caller.session.cancelQueued({ commandId: "cancel", sessionId, messageId: "m" }),
+      () =>
+        caller.session.editQueued({
+          commandId: "edit",
+          sessionId,
+          messageId: "m",
+          message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
         }),
       () => caller.session.cancelInteraction({ sessionId, interactionId: "i" }),
       () => caller.session.reconcile({ sessionId, attachmentId: "a" }),

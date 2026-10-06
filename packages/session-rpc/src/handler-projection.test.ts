@@ -66,6 +66,13 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
     ...SESSION,
     command: { kind: "executor.interrupt" },
   },
+  "session.cancelQueued": { commandId: "cancel", ...SESSION, messageId: "m" },
+  "session.editQueued": {
+    commandId: "edit",
+    ...SESSION,
+    messageId: "m",
+    message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+  },
   "session.cancelInteraction": { ...SESSION, interactionId: "interaction-1" },
   "session.reconcile": { ...SESSION, attachmentId: "attachment-1" },
   "labDiagnostics.list": undefined,

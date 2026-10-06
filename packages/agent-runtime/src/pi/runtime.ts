@@ -2134,6 +2134,9 @@ async function attachSession(
     // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
+    // Pi keeps isStreaming true while awaited agent_end observers settle, but
+    // its loop has already stopped accepting steering for that attempt.
+    let acceptingSteer = false;
     let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
     let cancelled = false;
@@ -2243,6 +2246,7 @@ async function attachSession(
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
       resources: readonly PromptResource[];
+      accepted?: () => void;
     };
     type PendingRetryDelivery = {
       commandId: string | null;
@@ -2282,6 +2286,15 @@ async function attachSession(
      */
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
+    // Command ids are the host's immutable intent identities. A replay after
+    // acceptance must acknowledge the same marker, never open another turn.
+    const acceptedMessageCommands = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" && marker.operation === "message.submit"
+          ? [[marker.commandId, marker.delivery] as const]
+          : [],
+      ),
+    );
     const persistAcceptedDelivery = async (
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
@@ -2304,6 +2317,8 @@ async function attachSession(
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
         });
+        acceptedMessageCommands.set(delivery.commandId, delivery.delivery);
+        delivery.accepted?.();
       } else {
         await persistObservation({
           kind: "command-accepted",
@@ -3133,6 +3148,7 @@ async function attachSession(
 
     unsubscribe = agent.subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
+        acceptingSteer = true;
         // A resumed attempt is the same turn continuing, so it neither starts one
         // nor refreshes the budget it is spending.
         const resumed = resumingTurn;
@@ -3284,6 +3300,7 @@ async function attachSession(
       if (event.type !== "agent_end") {
         return;
       }
+      acceptingSteer = false;
       activityByToolCallId.clear();
       if (pendingReasoningDrop !== undefined) {
         const dropped = await persistObservation(pendingReasoningDrop);
@@ -3407,6 +3424,7 @@ async function attachSession(
         images = [],
         resources = [],
         settle = "turn",
+        targetTurnId,
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -3427,9 +3445,35 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
+        const accepted =
+          commandId === undefined ? undefined : acceptedMessageCommands.get(commandId);
+        if (accepted !== undefined)
+          return { kind: "delivered", delivery: accepted, turnOpened: false };
+        // Host queue release waits for durable acceptance, not Pi's volatile
+        // followUp array. Projected turn end arrives while agent_end observers
+        // are still awaited; wait out that closing window before prompting.
+        if (delivery === "queue" && settle === "opened") {
+          while (agent.state.isStreaming) await agent.waitForIdle();
+          if (closed || cancelled)
+            return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        // Revalidate after every wait and before touching Pi's volatile queue.
+        // A targeted command may only join that still-accepting turn; neither
+        // an idle prompt nor late-queue draining may give it another turn.
+        if (targetTurnId !== undefined && (!acceptingSteer || turnId !== targetTurnId)) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The targeted turn is no longer accepting steering.",
+          };
+        }
         const framedText = appendPromptResources(text, resources);
         if (agent.state.isStreaming) {
           const message = queuedUserMessage(framedText, images);
+          const acceptedBoundary =
+            delivery === "steer" && settle === "opened" && commandId !== undefined
+              ? Promise.withResolvers<void>()
+              : null;
           const pending = {
             commandId: commandId ?? null,
             operation: "message.submit" as const,
@@ -3437,9 +3481,20 @@ async function attachSession(
             message,
             resources,
           };
-          pendingQueuedDeliveries.set(message, pending);
+          const durablePending: PendingMessageDelivery = {
+            ...pending,
+            ...(acceptedBoundary === null ? {} : { accepted: acceptedBoundary.resolve }),
+          };
+          pendingQueuedDeliveries.set(message, durablePending);
           if (delivery === "steer") agent.steer(message);
           else agent.followUp(message);
+          if (acceptedBoundary !== null) {
+            // Host-owned steering cannot retire its durable payload on a
+            // volatile steer-array enqueue. Wait for the consumption marker.
+            await Promise.race([acceptedBoundary.promise, agent.waitForIdle()]);
+            if (!acceptedMessageCommands.has(commandId!))
+              throw new Error("Queued steering acceptance is uncertain; reconcile before retrying");
+          }
           // No `turnOpened`: this message joined a turn that was already
           // running, which is the distinction a supervisor reads (VC-324).
           return { kind: "delivered", delivery };

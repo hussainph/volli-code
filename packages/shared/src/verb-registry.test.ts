@@ -265,6 +265,8 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.projection": "coordination",
   "session.subscribe": "coordination",
   "session.command": "coordination",
+  "session.cancelQueued": "coordination",
+  "session.editQueued": "coordination",
   "session.cancelInteraction": "coordination",
   "session.reconcile": "coordination",
   // Declared and policed, projected by no door: no tier, like ticket.archive.
@@ -1303,6 +1305,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.projection": ["workspace", "read"],
     "session.subscribe": ["workspace", "read"],
     "session.command": ["workspace", "command-id"],
+    "session.cancelQueued": ["workspace", "command-id"],
+    "session.editQueued": ["workspace", "command-id"],
     "session.cancelInteraction": ["workspace", "natural"],
     "session.reconcile": ["workspace", "natural"],
     "labDiagnostics.list": ["host", "read"],
@@ -1369,6 +1373,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "session.projection"
       | "session.subscribe"
       | "session.command"
+      | "session.cancelQueued"
+      | "session.editQueued"
       | "session.cancelInteraction"
       | "session.reconcile"
     >();
@@ -1378,6 +1384,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expect(catalogEntry("session.command").catalog.refusedIntents).toEqual([
       "session.create",
       "adapter.attach",
+      "message.cancel",
+      "message.edit",
     ]);
   });
 

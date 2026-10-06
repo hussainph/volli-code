@@ -17,6 +17,7 @@ import {
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
+  type SessionStreamQueue,
   type SessionStreamFrame,
   type SessionStreamEmission,
   type SessionStreamOverlay,
@@ -159,12 +160,13 @@ export type RendererSessionStreamFrame = Omit<SessionStreamFrame, "event"> & {
 export type RendererSessionStreamEmission =
   | RendererSessionStreamFrame
   | SessionStreamOverlay
-  | SessionStreamCompactionProgress;
+  | SessionStreamCompactionProgress
+  | SessionStreamQueue;
 
 /** The durable arm carries no `kind` of its own, mirroring the runtime's own test. */
 function isRendererStreamTransient(
   emission: RendererSessionStreamEmission,
-): emission is SessionStreamOverlay | SessionStreamCompactionProgress {
+): emission is SessionStreamOverlay | SessionStreamCompactionProgress | SessionStreamQueue {
   return "kind" in emission;
 }
 
@@ -287,6 +289,14 @@ export interface SessionRouterHandlers {
   ) => Promise<() => void>;
   readonly "session.command": HostHandler<
     SessionRuntimeCommandRequest,
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.cancelQueued": HostHandler<
+    { commandId: string; sessionId: string; messageId: string },
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.editQueued": HostHandler<
+    { commandId: string; sessionId: string; messageId: string; message: RpcUiMessage },
     SessionRuntimeCommandResult
   >;
   readonly "session.cancelInteraction": HostHandler<
@@ -765,7 +775,43 @@ const commandSchema = z.discriminatedUnion("kind", [
     resumeAt: positiveSafeInteger,
   }),
   z.object({ kind: z.literal("resume.cancel"), scheduleId: nonEmptyString }),
+  z.object({ kind: z.literal("message.cancel"), messageId: nonEmptyString }),
+  z.object({
+    kind: z.literal("message.edit"),
+    messageId: nonEmptyString,
+    message: uiMessageSchema,
+  }),
 ]);
+
+// Queue mutations have public output validation; they do not return executor identity.
+const queueMutationResultSchema = z.object({
+  sessionId: nonEmptyString,
+  receipt: z
+    .discriminatedUnion("status", [
+      z.object({
+        status: z.literal("completed"),
+        result: z.object({ kind: nonEmptyString, sessionId: nonEmptyString }),
+      }),
+      z.object({
+        status: z.literal("accepted"),
+        acceptedAt: nonNegativeSafeInteger,
+        result: z.object({ kind: nonEmptyString, sessionId: nonEmptyString }),
+      }),
+      z.object({ status: z.literal("rejected"), code: nonEmptyString, detail: nullableString }),
+      z.object({ status: z.literal("unreconciled"), detail: nullableString }),
+    ])
+    .and(
+      z.object({
+        id: nonEmptyString,
+        commandId: nonEmptyString,
+        recordedAt: nonNegativeSafeInteger,
+        sequence: nonNegativeSafeInteger,
+      }),
+    )
+    .nullable(),
+  throughSequence: nonNegativeSafeInteger,
+  refusal: z.enum(["benign", "failure"]).nullable(),
+});
 
 const commandRequestSchema = z
   .object({
@@ -1259,8 +1305,8 @@ export function createSessionRouter() {
         // before this resolves; every other kind requires `sessionId`.
         (input) => sessionResource({ sessionId: input.sessionId! }),
       ).mutation(async ({ ctx, input }) => {
-        // The start kinds are refused before this line on every door: the
-        // catalog entry withholds them (`refusedIntents`), whoever asks.
+        // Start and queue-mutation kinds have their own entries and are
+        // withheld here (`refusedIntents`), whoever asks.
         try {
           return rendererCommandResult(
             await ctx.handlers["session.command"](toSessionRuntimeCommandRequest(input), ctx.call),
@@ -1272,6 +1318,33 @@ export function createSessionRouter() {
           throw error;
         }
       }),
+      cancelQueued: workspaceProcedure(
+        "session.cancelQueued",
+        z.object({
+          commandId: nonEmptyString,
+          sessionId: nonEmptyString,
+          messageId: nonEmptyString,
+        }),
+        sessionResource,
+      )
+        .output(queueMutationResultSchema)
+        .mutation(async ({ ctx, input }) =>
+          rendererCommandResult(await ctx.handlers["session.cancelQueued"](input, ctx.call)),
+        ),
+      editQueued: workspaceProcedure(
+        "session.editQueued",
+        z.object({
+          commandId: nonEmptyString,
+          sessionId: nonEmptyString,
+          messageId: nonEmptyString,
+          message: uiMessageSchema,
+        }),
+        sessionResource,
+      )
+        .output(queueMutationResultSchema)
+        .mutation(async ({ ctx, input }) =>
+          rendererCommandResult(await ctx.handlers["session.editQueued"](input, ctx.call)),
+        ),
       // A pending interaction the user walked away from. The handler fixes the
       // reason rather than taking it as input: a person's door can honestly
       // report only that they left it undecided.
@@ -1358,8 +1431,11 @@ function rendererFrame(frame: SessionStreamFrame): RendererSessionStreamFrame {
   return { ...frame, event: scrubSessionEvent(frame.event) };
 }
 
+export type RendererSessionProjection = SessionPresentationProjection &
+  Pick<SessionRuntimeProjectionSnapshot["projection"], "queue" | "queueRevision">;
+
 function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
-  projection: SessionPresentationProjection;
+  projection: RendererSessionProjection;
   throughSequence: number;
 } {
   const source = snapshot.projection;
@@ -1367,8 +1443,10 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   // so it drops the `readonly` the published type wears (VC-393). The value
   // leaves here as that type and nothing mutates it afterwards.
   const projection: {
-    -readonly [K in keyof SessionPresentationProjection]?: SessionPresentationProjection[K];
+    -readonly [K in keyof RendererSessionProjection]?: RendererSessionProjection[K];
   } = {};
+  if (source.queue !== undefined) projection.queue = source.queue;
+  if (source.queueRevision !== undefined) projection.queueRevision = source.queueRevision;
   if (source.session !== undefined) projection.session = source.session;
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {
@@ -1407,13 +1485,13 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
     projection.scheduledResume = presentedScheduledResume(source);
   }
   return {
-    projection: projection as SessionPresentationProjection,
+    projection: projection as RendererSessionProjection,
     throughSequence: snapshot.throughSequence,
   };
 }
 
 function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
-  projection: SessionPresentationProjection;
+  projection: RendererSessionProjection;
   frames: RendererSessionStreamFrame[];
   throughSequence: number;
 } {

@@ -14,7 +14,12 @@ describe("the cloud flag", () => {
 
 describe("what hostd offers", () => {
   it("is every v1 feature it composes, and not Model Access, which it does not", () => {
-    expect(HOSTD_FEATURES).toStrictEqual(["sessions", "sessions.subscribe", "session.read"]);
+    expect(HOSTD_FEATURES).toStrictEqual([
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "session.read",
+    ]);
   });
 });
 

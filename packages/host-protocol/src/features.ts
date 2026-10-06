@@ -27,6 +27,7 @@ export const HOST_FEATURE_OPERATIONS = {
     "session.cancelInteraction",
     "session.reconcile",
   ],
+  "sessions.queue": ["session.cancelQueued", "session.editQueued"],
   /** Following one Session's stream, resuming after a cursor (VC-663). */
   "sessions.subscribe": ["session.subscribe"],
   /** The socket's Session reads, scoped to the connection's Workspace (VC-663, D4). */

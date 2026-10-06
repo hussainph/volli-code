@@ -222,6 +222,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     }
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
+    // Release/reconcile durable follow-ups before any Client or producer can write.
+    // Recovery schedules turns; readiness does not wait for a model turn to finish.
+    await runtime?.recoverFollowUps();
+    if (closing)
+      throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     try {
       await notices?.recover();
     } catch (error) {

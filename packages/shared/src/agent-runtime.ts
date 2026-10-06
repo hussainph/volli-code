@@ -2027,6 +2027,11 @@ export interface RuntimeAttachmentHandle {
      * behaviour it was written against.
      */
     settle?: RuntimeMessageSettle,
+    /**
+     * A host-owned steer may only join this still-accepting turn. Refuse if
+     * it ended or changed while delivery waited; never open another turn.
+     */
+    targetTurnId?: string,
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

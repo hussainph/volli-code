@@ -331,6 +331,10 @@ async function callProcedure(
       return caller.session.projection(request.input as never);
     case "session.command":
       return caller.session.command(request.input as never);
+    case "session.cancelQueued":
+      return caller.session.cancelQueued(request.input as never);
+    case "session.editQueued":
+      return caller.session.editQueued(request.input as never);
     case "session.cancelInteraction":
       return caller.session.cancelInteraction(request.input as never);
     case "session.reconcile":

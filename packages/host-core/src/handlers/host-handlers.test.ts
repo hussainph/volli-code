@@ -197,6 +197,29 @@ describe("Session commands", () => {
     expect(emit).toHaveBeenCalledWith("emission");
     expect(fail).toHaveBeenCalledWith("failure");
     await expect(map["session.command"]({} as never, USER)).resolves.toBe("result");
+    await map["session.cancelQueued"](
+      { commandId: "cancel", sessionId: "s", messageId: "m" },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    const message = {
+      id: "m",
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "edited" }],
+    };
+    await map["session.editQueued"](
+      { commandId: "edit", sessionId: "s", messageId: "m", message },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "s",
+      command: { kind: "message.edit", messageId: "m", message },
+    });
     await map["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, USER);
     expect(runtime.cancelInteraction).toHaveBeenCalledWith({
       sessionId: "s",

@@ -4515,6 +4515,132 @@ describe("startSession", () => {
     await reopened.close();
   });
 
+  it("acknowledges an accepted message command after reattach without another provider turn", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const first = await runtime.startSession(attachment.spec);
+    await first.submitUserMessage("once", "queue", "command-once");
+    expect(
+      await first.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    const recovery = first.recovery;
+    await first.close();
+    const reopenedRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const reopened = await reopenedRuntime.startSession({ ...attachment.spec, recovery });
+    expect(
+      await reopened.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    expect(
+      (await reopened.reconcile(null)).receipts?.filter(
+        ({ commandId }) => commandId === "command-once",
+      ),
+    ).toHaveLength(1);
+    await reopened.close();
+  });
+
+  it("holds opened queue delivery through Pi's closing window until acceptance is durable", async () => {
+    const attachment = fixture();
+    const completing = Promise.withResolvers<void>();
+    const allowCompletion = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const finishSecond = Promise.withResolvers<void>();
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (
+        observation.kind === "turn" &&
+        observation.state === "completed" &&
+        !attachment.observations.some(
+          (entry) => entry.kind === "message-settled" && entry.message.text === "second done",
+        )
+      ) {
+        completing.resolve();
+        await allowCompletion.promise;
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("first done");
+            emit.finish();
+          },
+          async (emit) => {
+            secondStarted.resolve();
+            await finishSecond.promise;
+            emit.text("second done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first-command");
+    await completing.promise;
+    let accepted = false;
+    const second = handle
+      .submitUserMessage("second", "queue", "second-command", [], [], "opened")
+      .then((result) => {
+        accepted = true;
+        return result;
+      });
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "first-command",
+    ]);
+    allowCompletion.resolve();
+    await first;
+    await secondStarted.promise;
+    expect(await second).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "first-command",
+      "second-command",
+    ]);
+    finishSecond.resolve();
+    await handle.close();
+  });
+
+  it("refuses an opened queue wait if the attachment closes before becoming idle", async () => {
+    const attachment = fixture();
+    const started = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("active", started.resolve)])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first-command");
+    await started.promise;
+    const queued = handle.submitUserMessage(
+      "pending",
+      "queue",
+      "pending-command",
+      [],
+      [],
+      "opened",
+    );
+    await Promise.resolve();
+    await handle.close();
+    await first;
+    await expect(queued).resolves.toMatchObject({ kind: "rejected", reason: "closed" });
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("pending-command");
+  });
+
   it("recovers an accepted receipt for an interrupted open-tail command", async () => {
     const attachment = fixture();
     const streaming = Promise.withResolvers<void>();
@@ -5438,6 +5564,188 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  it("keeps host queued steering pending until Pi has durably consumed it", async () => {
+    const attachment = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const steerStarted = Promise.withResolvers<void>();
+    const finishSteer = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit) => {
+            started.resolve();
+            await release.promise;
+            emit.text("first done");
+            emit.finish();
+          },
+          async (emit) => {
+            steerStarted.resolve();
+            await finishSteer.promise;
+            emit.text("steered");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first");
+    await started.promise;
+    let settled = false;
+    const activeTurn = attachment.observations.find(
+      (observation) => observation.kind === "turn" && observation.state === "started",
+    );
+    if (activeTurn?.kind !== "turn") throw new Error("No active turn");
+    const steer = handle
+      .submitUserMessage("steer", "steer", "host-steer", [], [], "opened", activeTurn.turnId)
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("host-steer");
+    release.resolve();
+    await steerStarted.promise;
+    await expect(steer).resolves.toEqual({ kind: "delivered", delivery: "steer" });
+    const reconciled = await handle.reconcile(null);
+    expect(reconciled.receipts?.map(({ commandId }) => commandId)).toContain("host-steer");
+    expect(entryRecords(handle.recovery!.sessionFilePath)).toContainEqual(
+      expect.objectContaining({
+        customType: "volli.observation.v1",
+        data: expect.objectContaining({
+          kind: "command-accepted",
+          commandId: "host-steer",
+          delivery: "steer",
+        }),
+      }),
+    );
+    expect(
+      attachment.observations.filter(
+        (observation) => observation.kind === "turn" && observation.state === "started",
+      ),
+    ).toHaveLength(1);
+    // Replaying durable acceptance remains idempotent even after that turn ends.
+    finishSteer.resolve();
+    await first;
+    await expect(
+      handle.submitUserMessage("steer", "steer", "host-steer", [], [], "opened", activeTurn.turnId),
+    ).resolves.toEqual({
+      kind: "delivered",
+      delivery: "steer",
+      turnOpened: false,
+    });
+    await handle.close();
+  });
+
+  it("refuses targeted steering in Pi's streaming-but-completed observer window", async () => {
+    const attachment = fixture();
+    const completing = Promise.withResolvers<string>();
+    const release = Promise.withResolvers<void>();
+    const calls: ProviderCall[] = [];
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "turn" && observation.state === "completed") {
+        completing.resolve(observation.turnId);
+        await release.promise;
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("done"))])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first");
+    const endedTurnId = await completing.promise;
+    await expect(
+      handle.submitUserMessage("too late", "steer", "late-steer", [], [], "opened", endedTurnId),
+    ).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "busy-unsupported",
+    });
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("late-steer");
+    release.resolve();
+    await first;
+    expect(calls).toHaveLength(1);
+    await handle.close();
+  });
+
+  it("refuses targeted steering rather than joining a different live turn", async () => {
+    const attachment = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first done")),
+          recording(calls, async (emit) => {
+            started.resolve();
+            await release.promise;
+            emit.text("second done");
+            emit.finish();
+          }),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("first", "queue", "first");
+    const oldTurn = attachment.observations.find(
+      (observation) => observation.kind === "turn" && observation.state === "completed",
+    );
+    if (oldTurn?.kind !== "turn") throw new Error("No completed turn");
+    const second = handle.submitUserMessage("second", "queue", "second");
+    await started.promise;
+    await expect(
+      handle.submitUserMessage(
+        "wrong turn",
+        "steer",
+        "stale-steer",
+        [],
+        [],
+        "opened",
+        oldTurn.turnId,
+      ),
+    ).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "busy-unsupported",
+    });
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("stale-steer");
+    release.resolve();
+    await second;
+    expect(calls).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("never acknowledges volatile host steering discarded by close", async () => {
+    const attachment = fixture();
+    const started = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("active", started.resolve)])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first");
+    await started.promise;
+    const steer = handle.submitUserMessage("steer", "steer", "host-steer", [], [], "opened");
+    const refused = expect(steer).rejects.toThrow("acceptance is uncertain");
+    await Promise.resolve();
+    await handle.close();
+    await first;
+    await refused;
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("host-steer");
+  });
+
   it("steers before an ordinary queued follow-up", async () => {
     const { spec, sessionDataDir } = fixture();
     const started = Promise.withResolvers<void>();
@@ -6350,7 +6658,7 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     const first = handle.submitUserMessage("first", "queue", "command-first");
     await streaming.promise;
-    const delivered = await handle.submitUserMessage(
+    const delivered = handle.submitUserMessage(
       "read this now",
       "steer",
       "command-mid-turn",
@@ -6361,8 +6669,9 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     // Absent, not true: a supervisor tells "joined a running turn" from
     // "opened a new one" by this field alone.
-    expect(delivered).toEqual({ kind: "delivered", delivery: "steer" });
+    await Promise.resolve();
     release.resolve();
+    await expect(delivered).resolves.toEqual({ kind: "delivered", delivery: "steer" });
     await first;
     await handle.close();
   });
@@ -9098,6 +9407,50 @@ describe("compacting because somebody asked", () => {
     expect(turn).toContain("SECOND-MESSAGE-MARKER");
     expect(turn).not.toContain("first answer");
     expect(compactionEntries(handle.recovery!.sessionFilePath)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it("rechecks a completed steer target after awaiting a context rewrite", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        conversation(calls, async (emit) => {
+          summarizing.resolve();
+          await release.promise;
+          emit.text("## Goal\nsummarized");
+          emit.finish();
+        }),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    const oldTurn = attachment.observations.find(
+      (observation) => observation.kind === "turn" && observation.state === "completed",
+    );
+    if (oldTurn?.kind !== "turn") throw new Error("No completed turn");
+    const compacting = handle.compact();
+    await summarizing.promise;
+    let settled = false;
+    const steer = handle
+      .submitUserMessage("stale target", "steer", "stale-steer", [], [], "opened", oldTurn.turnId)
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
+    await expect(steer).resolves.toMatchObject({ kind: "rejected", reason: "busy-unsupported" });
+    expect(calls).toHaveLength(3); // two turns and the summary; no fresh turn
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId) ?? [],
+    ).not.toContain("stale-steer");
     await handle.close();
   });
 

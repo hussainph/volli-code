@@ -11,6 +11,7 @@ import {
 import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
 import { createSessionLocationResolver } from "./location";
+import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 export interface HostSessionRuntimeOptions {
@@ -48,6 +49,8 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
   const onProjectionCheckpointFailure = createCheckpointFailureReporter();
   return createSessionRuntime({
     engine: options.sessionEngine,
+    followUps: createSqliteSessionFollowUpLedger(options.db),
+    onFollowUpFailure: (error) => console.error("[volli] follow-up queue:", error),
     executor: options.executor,
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createSessionLocationResolver(

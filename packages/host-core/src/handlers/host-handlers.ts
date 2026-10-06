@@ -29,6 +29,7 @@
  */
 import type Database from "better-sqlite3";
 import type {
+  SessionClientCommand,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -143,6 +144,19 @@ export interface HostHandlerSignatures {
   >;
   readonly "session.command": HostHandler<
     SessionRuntimeCommandRequest,
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.cancelQueued": HostHandler<
+    { commandId: string; sessionId: string; messageId: string },
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.editQueued": HostHandler<
+    {
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+      message: Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
+    },
     SessionRuntimeCommandResult
   >;
   readonly "session.cancelInteraction": HostHandler<
@@ -368,6 +382,14 @@ function hostHandlerEntries(
         (error) => sink.fail(error),
       ),
     "session.command": (request) => runtime().command(request),
+    "session.cancelQueued": ({ commandId, sessionId, messageId }) =>
+      runtime().command({ commandId, sessionId, command: { kind: "message.cancel", messageId } }),
+    "session.editQueued": ({ commandId, sessionId, messageId, message }) =>
+      runtime().command({
+        commandId,
+        sessionId,
+        command: { kind: "message.edit", messageId, message },
+      }),
     // A person walked away from a pending interaction: the only reason a
     // person's door can honestly report is that they left it undecided.
     "session.cancelInteraction": (input) =>

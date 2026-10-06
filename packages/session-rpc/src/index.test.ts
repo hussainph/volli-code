@@ -604,6 +604,39 @@ describe("Session tRPC router", () => {
     );
   });
 
+  it("carries the host queue and its independent revision through projection reads", async () => {
+    const fixture = runtimeFixture();
+    const queue = [
+      {
+        id: "q",
+        commandId: "queued",
+        state: "queued" as const,
+        message: {
+          id: "q",
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: "follow up" }],
+        },
+      },
+    ];
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {
+          ...fixture.runtime,
+          projection: async (input) => {
+            const base = await fixture.runtime.projection(input);
+            return { ...base, projection: { ...base.projection, queue, queueRevision: 7 } };
+          },
+        },
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+    expect((await caller.session.projection({ sessionId: "session-1" })).projection).toMatchObject({
+      queue,
+      queueRevision: 7,
+    });
+  });
+
   it("preserves a minimal runtime projection without inventing attachment state", async () => {
     const fixture = runtimeFixture();
     const runtime: SessionRuntime = {
@@ -1876,6 +1909,56 @@ describe("Session tRPC router", () => {
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(fixture.calls.command).toEqual([]);
+  });
+
+  it("routes queue edit/cancel through their catalog entries and refuses the generic bypass", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+    const message = {
+      id: "m",
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "edited" }],
+    };
+    expect(
+      await caller.session.cancelQueued({
+        commandId: "cancel",
+        sessionId: "session-1",
+        messageId: "m",
+      }),
+    ).toMatchObject({ sessionId: "session-1", receipt: null });
+    await caller.session.editQueued({
+      commandId: "edit",
+      sessionId: "session-1",
+      messageId: "m",
+      message,
+    });
+    expect(fixture.calls.command).toEqual([
+      {
+        commandId: "cancel",
+        sessionId: "session-1",
+        command: { kind: "message.cancel", messageId: "m" },
+      },
+      {
+        commandId: "edit",
+        sessionId: "session-1",
+        command: { kind: "message.edit", messageId: "m", message },
+      },
+    ]);
+    for (const command of [
+      { kind: "message.cancel" as const, messageId: "m" },
+      { kind: "message.edit" as const, messageId: "m", message },
+    ]) {
+      await expect(
+        caller.session.command({ commandId: "bypass", sessionId: "session-1", command }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(fixture.calls.command).toHaveLength(2);
   });
 
   it("reattaches an existing Session with no Role in the request and no runtime identity out", async () => {

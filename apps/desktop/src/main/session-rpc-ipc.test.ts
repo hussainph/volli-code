@@ -357,6 +357,44 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("routes queue mutations through the same validated catalog on flag-off IPC", async () => {
+    const fixture = runtimeFixture();
+    const command = vi.fn(async () => ({
+      sessionId: "session-1",
+      command: {} as never,
+      receipt: null,
+      throughSequence: 1,
+      refusal: null,
+    }));
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: { ...fixture.runtime, command },
+    });
+    const message = { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] };
+    for (const [procedure, input] of [
+      ["session.cancelQueued", { commandId: "cancel", sessionId: "session-1", messageId: "m" }],
+      [
+        "session.editQueued",
+        { commandId: "edit", sessionId: "session-1", messageId: "m", message },
+      ],
+    ] as const) {
+      await expect(invoke(sender(), { procedure, input })).resolves.toMatchObject({
+        ok: true,
+        data: { sessionId: "session-1", throughSequence: 1 },
+      });
+    }
+    expect(command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "session-1",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    expect(command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "session-1",
+      command: { kind: "message.edit", messageId: "m", message },
+    });
+    await registration.close();
+  });
+
   it("rejects unknown procedures and lets tRPC validate known procedure input", async () => {
     const fixture = runtimeFixture();
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });

@@ -89,6 +89,9 @@ function fixture() {
     projection: vi.fn(async () => ({ projection: {} })),
     command: vi.fn(async () => ({})),
     openNativeBindings: vi.fn(() => []),
+    recoverFollowUps: vi.fn(async () => {
+      calls.push("follow-ups.recover");
+    }),
   } as unknown as HostedSessionRuntime;
   const rpc = {
     close: vi.fn(async () => {
@@ -190,6 +193,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       "attachments",
       "delegations.construct",
       "delegations.recover",
+      "follow-ups.recover",
       "notices.recover",
       "resume.start",
       "ready.services",
@@ -198,6 +202,26 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       expect.objectContaining({ outbox: f.options.host.hostNoticeOutbox, runtime: f.runtime }),
     );
     await owner.close();
+  });
+
+  it("a quit during follow-up recovery never exposes consumers", async () => {
+    const f = fixture();
+    const recovering = deferred();
+    const release = deferred();
+    vi.mocked(f.runtime.recoverFollowUps).mockImplementation(async () => {
+      recovering.resolve();
+      await release.promise;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    const ready = owner.ready();
+    const refused = expect(ready).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    await recovering.promise;
+    const closed = owner.close();
+    release.resolve();
+    await refused;
+    await closed;
+    expect(f.services).not.toHaveBeenCalled();
+    expect(f.delivery.recover).not.toHaveBeenCalled();
   });
 
   it("the installed one close stops producers/notices, drains both owners, then MCP and observability once", async () => {
