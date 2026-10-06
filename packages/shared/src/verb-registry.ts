@@ -356,13 +356,39 @@ export const VERB_IDEMPOTENCIES = [
 ] as const satisfies readonly VerbIdempotency[];
 
 /**
+ * What a ROUTER demands of its caller (HP § Command catalog; VC-564 A2). The
+ * agent doors (socket, tools, CLI) keep reading {@link VerbEntry.actor}; a
+ * router reads `catalog.actor`, defaulting to it, so one command can hold a
+ * different policy for the person's door than for the agent's.
+ *
+ * - `any`: every admitted actor, Sessions included, on any resource in the
+ *   caller's Workspace;
+ * - `user`: the person only (a paired device, the desktop's own window);
+ * - `session-own`: the person, or a Session the area's own policy lets act on
+ *   every SUBJECT the call names. After the Workspace check (which every named
+ *   resource gets, subjects and references alike), the router asks the
+ *   context's `sessionMayAct` predicate about each subject; any `false`, no
+ *   subject at all, or no predicate is `FORBIDDEN` / `verb-refused`. The area
+ *   implements the predicate from its real policy (ticket coordination rules,
+ *   per-project authority), never a single owner field. Workspace-scoped
+ *   entries only.
+ */
+export type CatalogActor = "any" | "user" | "session-own";
+export const CATALOG_ACTORS = [
+  "any",
+  "user",
+  "session-own",
+] as const satisfies readonly CatalogActor[];
+
+/**
  * The host-protocol catalog's half of an entry (VC-564, HP § Command catalog).
  *
  * An entry carrying this is a COMMAND some router projects: `@volli/session-rpc`
  * binds exactly one tRPC procedure to it, named by the entry's key, and the
- * procedure's policy middleware reads its actor requirement and this block —
- * nothing else. Its name is {@link VerbEntry.key}, its actor policy
- * {@link VerbEntry.actor}, and its one handler is that procedure's resolver.
+ * procedure's policy middleware reads this block and nothing else. Its name
+ * is {@link VerbEntry.key}, its router actor `actor` here, else
+ * {@link VerbEntry.actor} ({@link catalogActorOf}), and its one handler is
+ * that procedure's resolver.
  * Validators stay zod in the router (D2): data here, executable shape there.
  *
  * Present on an entry with a `hostApi` access mode, and on a procedure no
@@ -370,13 +396,21 @@ export const VERB_IDEMPOTENCIES = [
  * diagnostics): declared, policed, and projected onto nothing.
  */
 export interface VerbCatalogDeclaration {
+  /**
+   * The router's actor requirement, when it differs from the entry's `actor`
+   * (which the socket, tools and CLI keep reading unchanged). Absent: the
+   * entry's `actor`. Either way it must be a {@link CatalogActor}; `session`
+   * and `role` are agent-door policies a router cannot consult, refused at load.
+   */
+  readonly actor?: VerbActor | "session-own";
   readonly scope: VerbScope;
   readonly idempotency: VerbIdempotency;
   /**
    * Intent kinds no actor may send through this `command-id` entry, on any
    * door, because each has an entry of its own. The router refuses them
    * `FORBIDDEN` / `verb-refused` before the handler runs, reading
-   * `input.command.kind`.
+   * `input.command.kind`; its builder refuses an input schema with no such
+   * `command.kind` envelope, at the type and at construction.
    */
   readonly refusedIntents?: readonly string[];
 }
@@ -3581,6 +3615,22 @@ type HostApiProjected<E extends VerbEntry> = E extends VerbEntry
     : never
   : never;
 
+/** Every Verb Registry entry, as its literal type: the default catalog a router builds from. */
+export type VerbRegistryEntry = RegistryEntry;
+
+/** The catalog keys among some entries: a router family built from its own catalog types its keys by this. */
+export type CatalogKeyOf<E extends VerbEntry> = Catalogued<E>;
+
+/** The catalog keys of one scope among some entries. */
+export type CatalogKeyOfScope<E extends VerbEntry, Scope extends VerbScope> = ScopedTo<E, Scope>;
+
+/** The catalog keys among some entries that withhold intents, whose input must carry `command.kind`. */
+export type CatalogKeyRefusingIntents<E extends VerbEntry> = E extends {
+  catalog: { refusedIntents: readonly string[] };
+}
+  ? E["key"]
+  : never;
+
 /** Every key the catalog declares: exactly the procedures the routers may publish. */
 export type CatalogKey = Catalogued<RegistryEntry>;
 
@@ -3599,10 +3649,13 @@ export type HostApiCatalogCoverage = AssertNever<Exclude<HostApiKey, CatalogKey>
  * in declaration order. Throws on an entry no router could police:
  *
  * - a `hostApi` access mode with no declaration;
- * - an actor requirement other than `any` or `user`. A router judges a
- *   paired device as the person and refuses every worker (D10); a `session`
- *   requirement would need the per-project authority policy the socket reads,
- *   which no router consults yet, and a `role` verb is tool-only;
+ * - a router actor ({@link catalogActorOf}) other than a {@link CatalogActor}.
+ *   A router judges a paired device as the person and refuses every worker
+ *   (D10); a `session` requirement is the per-project authority policy the
+ *   socket reads, which no router consults, and a `role` verb is tool-only. A
+ *   socket verb whose agent actor is `session` declares its router actor in
+ *   `catalog.actor` instead;
+ * - `session-own` on a host entry, which names no subject a Session could act on;
  * - `refusedIntents` on anything but a workspace `command-id` entry, the one
  *   shape whose router judges intents with the parsed input.
  */
@@ -3615,10 +3668,14 @@ export function catalogEntriesFrom(entries: readonly VerbEntry[]): readonly Cata
       }
       continue;
     }
-    if (entry.actor !== "any" && entry.actor !== "user") {
+    const routerActor = entry.catalog.actor ?? entry.actor;
+    if (!(CATALOG_ACTORS as readonly string[]).includes(routerActor)) {
       throw new Error(
-        `Catalog entry ${entry.key} requires a ${entry.actor} actor; a router judges only any and user`,
+        `Catalog entry ${entry.key} requires a ${routerActor} actor; a router judges only any, user and session-own (declare catalog.actor)`,
       );
+    }
+    if (routerActor === "session-own" && entry.catalog.scope !== "workspace") {
+      throw new Error(`Catalog entry ${entry.key} is session-own but names no subject to act on`);
     }
     if (
       entry.catalog.refusedIntents !== undefined &&
@@ -3631,18 +3688,32 @@ export function catalogEntriesFrom(entries: readonly VerbEntry[]): readonly Cata
   return declared;
 }
 
+/** The actor a router judges an entry by: `catalog.actor`, else the entry's own. */
+export function catalogActorOf(entry: CatalogEntry): CatalogActor {
+  // `catalogEntriesFrom` admitted only CatalogActors.
+  return (entry.catalog.actor ?? entry.actor) as CatalogActor;
+}
+
 /** Every catalog entry this build declares, checked once at load. */
 export const CATALOG_ENTRIES: readonly CatalogEntry[] = catalogEntriesFrom(VERB_REGISTRY);
 
-const CATALOG_BY_KEY: ReadonlyMap<string, CatalogEntry> = new Map(
-  CATALOG_ENTRIES.map((entry) => [entry.key, entry]),
-);
+/** A by-key lookup over checked catalog entries; throws for a key they do not declare. */
+export function catalogLookup(entries: readonly CatalogEntry[]): (key: string) => CatalogEntry {
+  const byKey: ReadonlyMap<string, CatalogEntry> = new Map(
+    entries.map((entry) => [entry.key, entry]),
+  );
+  return (key) => {
+    const entry = byKey.get(key);
+    if (entry === undefined) throw new Error(`No catalog entry declares ${key}`);
+    return entry;
+  };
+}
+
+const lookupCatalogEntry = catalogLookup(CATALOG_ENTRIES);
 
 /** One catalog entry. Throws for a key the catalog does not declare. */
 export function catalogEntry(key: CatalogKey): CatalogEntry {
-  const entry = CATALOG_BY_KEY.get(key);
-  if (entry === undefined) throw new Error(`No catalog entry declares ${key}`);
-  return entry;
+  return lookupCatalogEntry(key);
 }
 
 /**

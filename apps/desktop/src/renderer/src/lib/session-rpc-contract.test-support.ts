@@ -34,7 +34,7 @@ import { createSessionRpcClient } from "./session-rpc-ipc-link";
  */
 export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
   caller: RouterCaller;
-  sessionWorkspace?: SessionRouterContext["sessionWorkspace"];
+  resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
 };
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
@@ -66,8 +66,8 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
     async open(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
-      const { caller, sessionWorkspace, ...options } = host;
-      judgeNextRegistrationAs({ caller, sessionWorkspace });
+      const { caller, resourceWorkspace, ...options } = host;
+      judgeNextRegistrationAs({ caller, resourceWorkspace });
       const registration = registerSessionRpcIpcHandlers(options);
       assertIdentityConsumed();
       // Taken now: the next registration replaces the fake's map entries.

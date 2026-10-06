@@ -7,7 +7,9 @@ import {
   agentCommandBindingsFrom,
   agentCommandsFrom,
   CATALOG_ENTRIES,
+  catalogActorOf,
   catalogEntriesFrom,
+  catalogLookup,
   catalogEntry,
   cliVerbName,
   VERB_IDEMPOTENCIES,
@@ -1232,6 +1234,33 @@ describe("verb result details (VC-471)", () => {
 });
 
 describe("the host-protocol command catalog (VC-564)", () => {
+  // VC-564 A2: one entry serves both doors, each with its own actor policy.
+  it("lets a socket verb's agent actor and its router actor differ", () => {
+    const socketVerb: VerbEntry = {
+      key: "area.write",
+      accessModes: ["cli", "hostApi"],
+      actor: "session",
+      handler: { site: "main", id: "area.write" },
+      listed: true,
+      group: "App",
+      summary: "A synthetic both-doors write.",
+      options: [],
+      catalog: { actor: "session-own", scope: "workspace", idempotency: "command-id" },
+    };
+    const [declared] = catalogEntriesFrom([socketVerb]);
+    // The router reads its own; the socket, tools and CLI still read `actor`.
+    expect(catalogActorOf(declared!)).toBe("session-own");
+    expect(declared!.actor).toBe("session");
+    expect(verbTier(socketVerb)).toBe("coordination");
+    for (const entry of CATALOG_ENTRIES) expect(catalogActorOf(entry)).toBe(entry.actor);
+  });
+
+  it("looks a key up in any checked catalog", () => {
+    const lookup = catalogLookup(CATALOG_ENTRIES);
+    expect(lookup("session.snapshot")).toBe(catalogEntry("session.snapshot"));
+    expect(() => lookup("rogue.verb")).toThrow("No catalog entry declares rogue.verb");
+  });
+
   /** The Session router, procedure by procedure: the catalog's first area. */
   const SESSION_ROUTER = {
     "sessions.create": ["workspace", "command-id"],
@@ -1333,11 +1362,24 @@ describe("the host-protocol command catalog (VC-564)", () => {
       "Verb area.verb declares a hostApi access mode with no catalog entry",
     );
     for (const actor of ["session", "role"] as const) {
-      expect(() => catalogEntriesFrom([{ ...base, actor }])).toThrow(
-        `Catalog entry area.verb requires a ${actor} actor; a router judges only any and user`,
-      );
+      const refusal = `Catalog entry area.verb requires a ${actor} actor; a router judges only any, user and session-own (declare catalog.actor)`;
+      expect(() => catalogEntriesFrom([{ ...base, actor }])).toThrow(refusal);
+      expect(() =>
+        catalogEntriesFrom([
+          {
+            ...base,
+            actor: "user",
+            catalog: { scope: "workspace", idempotency: "natural", actor },
+          },
+        ]),
+      ).toThrow(refusal);
     }
     expect(catalogEntriesFrom([{ ...base, actor: "any" }])).toHaveLength(1);
+    expect(() =>
+      catalogEntriesFrom([
+        { ...base, catalog: { actor: "session-own", scope: "host", idempotency: "natural" } },
+      ]),
+    ).toThrow("Catalog entry area.verb is session-own but names no subject to act on");
     for (const catalog of [
       { scope: "workspace", idempotency: "natural", refusedIntents: ["x"] },
       { scope: "host", idempotency: "command-id", refusedIntents: ["x"] },

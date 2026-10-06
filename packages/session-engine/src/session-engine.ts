@@ -1,3 +1,4 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
@@ -242,7 +243,12 @@ export class SessionEngineConflictError extends Error {
  * `CONFLICT` / `command-conflict` (HP § Commands, VC-564). Every other
  * {@link SessionEngineConflictError} is a fact about the ledger, not the request.
  */
-export class SessionEngineCommandConflictError extends SessionEngineConflictError {
+export class SessionEngineCommandConflictError
+  extends SessionEngineConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
   constructor(message: string) {
     super(message);
     this.name = "SessionEngineCommandConflictError";
