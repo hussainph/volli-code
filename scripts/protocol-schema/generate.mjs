@@ -6,6 +6,9 @@ import { createServer } from "vite-plus";
 
 import { unapprovedChanges } from "./compatibility.mjs";
 
+/** Room to read the base's committed schema back (about 1 MiB today). */
+const SCHEMA_READ_BYTES = 64 * 1024 * 1024;
+
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const schemaPath = "docs/protocol/protocol.schema.json";
 const exceptionPath = "docs/protocol/compatibility-allowlist.json";
@@ -57,7 +60,13 @@ try {
     }).trim();
     if (paths) {
       const previous = JSON.parse(
-        execFileSync("git", ["show", `${base}:${schemaPath}`], { cwd: root, encoding: "utf8" }),
+        execFileSync("git", ["show", `${base}:${schemaPath}`], {
+          cwd: root,
+          encoding: "utf8",
+          // The committed schema is past 1 MiB, execFileSync's default buffer;
+          // a truncated read would be ENOBUFS, never a silent pass.
+          maxBuffer: SCHEMA_READ_BYTES,
+        }),
       );
       const allowlist = JSON.parse(
         await readFile(new URL(`../../${exceptionPath}`, import.meta.url), "utf8"),
