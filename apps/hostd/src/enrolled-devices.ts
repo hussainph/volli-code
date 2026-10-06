@@ -46,6 +46,7 @@ import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from 
 import {
   closeSync,
   fchmodSync,
+  fstatSync,
   fsyncSync,
   openSync,
   readFileSync,
@@ -210,9 +211,15 @@ export function readDeviceStore(store: DeviceStore): DeviceStoreRead {
   let stamp: string;
   let text: string;
   try {
-    const stat = statSync(store.path);
-    stamp = `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
-    text = readFileSync(store.path, "utf8");
+    // One descriptor, judged and read: the stamp is of the bytes read.
+    const fd = openSync(store.path, "r");
+    try {
+      const stat = fstatSync(fd);
+      stamp = `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+      text = readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT"
       ? { ok: true, devices: [], stamp: "absent" }
