@@ -128,6 +128,7 @@ function fakeTransport() {
           return { projection: hostProjection, frames: [], throughSequence: 0 };
         },
       },
+      history: { query: async () => ({ frames: [], before: null }) },
       projection: { query: async () => ({ projection: hostProjection }) },
       subscribe: {
         subscribe: (input) => {

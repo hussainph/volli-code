@@ -59,6 +59,7 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
   "modelAccess.pickerView": undefined,
   "modelAccess.setPickerView": "all",
   "session.snapshot": SESSION,
+  "session.history": { ...SESSION, before: 2 },
   "session.projection": SESSION,
   "session.subscribe": SESSION,
   "session.subscribeQueue": SESSION,

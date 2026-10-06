@@ -19,9 +19,11 @@ import type {
 import {
   applyProjection,
   applyQueue,
+  applySnapshotWindow,
   foldStreamBatch,
   markAttaching,
   markDelivered,
+  prependSliceHistory,
   seedSlice,
   settleSlice,
 } from "./session-slice";
@@ -77,6 +79,12 @@ export function createSurfaceStore(): SessionSurfaceStore {
       update(sessionId, (slice) =>
         foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
       );
+    },
+    applySnapshot(sessionId, window, projection) {
+      update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+    },
+    prependHistory(sessionId, requested, page) {
+      update(sessionId, (slice) => prependSliceHistory(slice, requested, page));
     },
     setProjection(sessionId, projection) {
       update(sessionId, (slice) => applyProjection(slice, projection));

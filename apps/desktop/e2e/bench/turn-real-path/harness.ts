@@ -484,6 +484,11 @@ async function compose(
   const artifacts: TranscriptArtifactStore = {
     write: (artifact) => timedArtifact("write", () => innerArtifacts.write(artifact)),
     read: (reference) => timedArtifact("read", () => innerArtifacts.read(reference)),
+    // A window is chosen from persisted sizes (VC-315); forwarded so the
+    // bench measures the path the host takes, not the read-to-measure fallback.
+    ...(innerArtifacts.byteLength === undefined
+      ? {}
+      : { byteLength: innerArtifacts.byteLength.bind(innerArtifacts) }),
   };
 
   // `createHostSessionRuntime`, port for port, except:
