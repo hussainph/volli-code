@@ -20,6 +20,8 @@ describe("what hostd offers", () => {
       "sessions.subscribe",
       "sessions.history",
       "session.read",
+      "board.read",
+      "board.write",
     ]);
   });
 });

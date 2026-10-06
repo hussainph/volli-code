@@ -441,7 +441,7 @@ test("the committed public feature/bootstrap sets are frozen independently of de
     assert.ok(unapprovedChanges(old, after).length);
   }
   const additive = structuredClone(old);
-  additive.features["board.read"] = ["new.area.read"];
+  additive.features["new.area"] = ["new.area.read"];
   additive.tiers.public["new.area.read"] = { kind: "query", input: {}, output: text };
   assert.deepEqual(unapprovedChanges(old, additive), []);
 });

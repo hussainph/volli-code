@@ -11,15 +11,18 @@
  *   long-lived bearer and is never accepted here. VC-575 (pairing), VC-577
  *   (the same-machine bootstrap) and a hosted control plane each plug a
  *   verifier into the one port.
- * - **What it serves.** The Session router's commands, its stream and the
- *   socket's Session reads, from the host's one handler map (VC-668) under
- *   the router's policy: the same handlers the agent socket answers through.
+ * - **What it serves.** The composed host router (VC-565): the Session
+ *   router's commands, its stream and the socket's Session reads, and the
+ *   board's reads, writes and change feed, all from the host's one handler map
+ *   (VC-668) under the router's policy: the same handlers the agent socket
+ *   answers through.
  *   `model-access` is not offered yet: VC-572 decides its policy for a
  *   paired device.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
+import { boardResourceWorkspace } from "@volli/host-core/board";
 import { getProjectById, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import {
@@ -29,7 +32,7 @@ import {
 } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import {
-  createSessionRouter,
+  createHostRouter,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
   type WorkspaceResource,
@@ -59,6 +62,8 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.subscribe",
   "sessions.history",
   "session.read",
+  "board.read",
+  "board.write",
 ];
 
 /** Whether the `cloud` flag is on for this host: the environment's opt-in list. */
@@ -110,6 +115,22 @@ export function sessionWorkspace(
       : null;
 }
 
+/**
+ * Every family's resource port in one (VC-565): a Session's Workspace from its
+ * ledger, a ticket's, comment's or label's from the board. The kinds are
+ * disjoint across families (`HostRouterResourceKindsDisjoint`), so each kind
+ * has exactly one answer.
+ */
+export function hostResourceWorkspace(
+  db: Database.Database,
+  sessionEngine: Pick<SessionEngine, "getSession">,
+): (resource: WorkspaceResource) => Promise<string | null> {
+  const sessions = sessionWorkspace(sessionEngine);
+  const board = boardResourceWorkspace(db);
+  return async (resource) =>
+    resource.kind === SESSION_RESOURCE ? sessions(resource) : board(resource);
+}
+
 /** What the listener needs from the composed host. */
 export interface HostdProtocolPorts {
   readonly db: Database.Database;
@@ -134,7 +155,7 @@ export function startHostdProtocolListener(
   const diagnostics = new RpcDiagnosticLog();
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
-    router: createSessionRouter(),
+    router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
     features: HOSTD_FEATURES,
@@ -143,7 +164,7 @@ export function startHostdProtocolListener(
     context: () => ({
       handlers,
       diagnostics,
-      resourceWorkspace: sessionWorkspace(sessionEngine),
+      resourceWorkspace: hostResourceWorkspace(db, sessionEngine),
     }),
     log: (event) => logListenerEvent(logger, event),
   });

@@ -51,6 +51,7 @@ export * from "./session-host-notice";
 export * from "./session-todo";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
+export * from "./board-change";
 export * from "./blob";
 export * from "./markdown-image";
 export * from "./ticket-events";

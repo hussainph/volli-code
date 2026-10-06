@@ -1,13 +1,35 @@
 /**
- * The routers a host serves, checked as one set (HP § Command catalog, "Where
- * area routers live"). The second router, the board's, landed with VC-668, so
- * the binding assertion over the union of every router's paths lives here.
- * Composing the families into one served router (each has its own tRPC
- * instance) is VC-565's, when the board router gains its other commands.
+ * The routers a host serves, composed into one and checked as one set (HP §
+ * Command catalog, "Where area routers live").
+ *
+ * Each area family builds its procedures with its own tRPC instance and its
+ * own provenance (`createCatalogBuilders`), and its `catalogRouter` has
+ * already refused anything its builders did not make. This module joins the
+ * families' procedure records under one tRPC instance that answers with the
+ * same error envelope ({@link catalogErrorFormatter}), so a door (hostd's
+ * WebSocket, the desktop's board bridge) serves one router. It adds no
+ * procedure and no middleware of its own.
+ *
+ * The assertions below are over the union of every family's paths: every
+ * catalog key is some router's procedure, no path is two families', every
+ * feature grants only served paths, and every family's resource kinds are its
+ * own.
  */
-import type { CatalogMismatch, ProcedurePaths } from "./catalog";
-import type { BoardRouter } from "./board-router";
-import type { AppRouter } from "./index";
+import { initTRPC } from "@trpc/server";
+import type { HostOperation, JsonUnsafeProcedures } from "@volli/host-protocol";
+
+import type { BoardResourceKind } from "@volli/shared";
+
+import { createBoardRouter, type BoardRouter, type BoardRouterContext } from "./board-router";
+import {
+  catalogErrorFormatter,
+  type CatalogMismatch,
+  type CatalogCallerContext,
+  type ProcedurePaths,
+  type PROJECT_RESOURCE,
+} from "./catalog";
+import type { SESSION_RESOURCE } from "./session-catalog";
+import { createSessionRouter, type AppRouter, type SessionRouterContext } from "./index";
 
 type AssertNever<Type extends never> = Type;
 
@@ -29,3 +51,57 @@ export type HostRouterPathsDisjoint = AssertNever<
     ProcedurePaths<BoardRouter["_def"]["record"]>
   >
 >;
+
+/**
+ * No resource kind is two families' (VC-565): a composition root answers one
+ * `resourceWorkspace` port for every family, so a kind two families named
+ * would be resolved by whichever answered first. `project` is the catalog's
+ * own (a Workspace), and no family may name it as an area kind.
+ */
+export type HostRouterResourceKindsDisjoint = AssertNever<
+  | Extract<typeof SESSION_RESOURCE, BoardResourceKind>
+  | Extract<typeof PROJECT_RESOURCE, typeof SESSION_RESOURCE | BoardResourceKind>
+>;
+
+/**
+ * Every operation a v1 feature grants is a procedure some router serves
+ * (`HOST_FEATURE_OPERATIONS`, VC-663/VC-669): a feature naming a key no
+ * router has fails `pnpm typecheck` here.
+ */
+export type HostRouterFeatureBinding = AssertNever<Exclude<HostOperation, HostRouterPaths>>;
+
+/**
+ * The context a composed router is called with: the catalog's ports, plus the
+ * union of every family's slice of the host's one handler map (the router
+ * policy's view, `admittedHandlers(map, ROUTER_POLICY)`).
+ */
+export interface HostRouterContext extends CatalogCallerContext {
+  handlers: SessionRouterContext["handlers"] & BoardRouterContext["handlers"];
+}
+
+const t = initTRPC.context<HostRouterContext>().create({
+  isDev: false,
+  errorFormatter: catalogErrorFormatter,
+});
+
+/**
+ * The one router a host serves: every family's procedures, each still behind
+ * its own entry's policy. Top-level namespaces are disjoint by
+ * {@link HostRouterPathsDisjoint}; this throws at construction if a family
+ * ever reuses one, rather than letting a spread silently shadow it.
+ */
+export function createHostRouter() {
+  const session = createSessionRouter()._def.record;
+  const board = createBoardRouter()._def.record;
+  for (const namespace of Object.keys(board)) {
+    if (Object.hasOwn(session, namespace)) {
+      throw new Error(`Router namespace ${namespace} belongs to two families`);
+    }
+  }
+  return t.router({ ...session, ...board } as typeof session & typeof board);
+}
+
+export type HostRouter = ReturnType<typeof createHostRouter>;
+
+/** The composed seam, checked once more: every path survives JSON (BOUNDARIES rule 3). */
+export type HostRouterJsonSafety = AssertNever<JsonUnsafeProcedures<HostRouter>>;

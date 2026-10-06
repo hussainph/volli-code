@@ -59,6 +59,15 @@ export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOp
             rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
           ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
           ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),
+          // The board's commands own these effects now (VC-565): the archive's
+          // tool-output release and the sidebar's Session signals.
+          ...(rest.piSessionsDirectory === undefined
+            ? {}
+            : { piSessionsDirectory: rest.piSessionsDirectory }),
+          ticketSignals:
+            rest.sessionEngine === null
+              ? null
+              : (projectId: string) => rest.sessionEngine!.listLatestTicketSignals({ projectId }),
         },
       ),
   });

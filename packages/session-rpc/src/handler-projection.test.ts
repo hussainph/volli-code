@@ -19,7 +19,12 @@ import {
 } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { createBoardRouter, TICKET_RESOURCE, type BoardRouterContextPorts } from "./board-router";
+import {
+  createBoardRouter,
+  TICKET_RESOURCE,
+  type BoardRouterContextPorts,
+  type BoardRouterHandlersCoverage,
+} from "./board-router";
 import {
   createCatalogBuilders,
   handlerCallOf,
@@ -39,6 +44,7 @@ import {
 
 const SESSION = { sessionId: "session-1" };
 const PROJECT = "project-1";
+const COMMAND = "00000000-0000-4000-8000-000000000001";
 
 /** One valid input per served procedure path. */
 const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
@@ -84,6 +90,37 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
   "session.show": { projectId: PROJECT, session: "s-1" },
   "session.peek": { projectId: PROJECT, session: "s-1", lines: 5 },
   "session.answer": { projectId: PROJECT, session: "s-1" },
+  "board.snapshot": { projectId: PROJECT },
+  "board.roster": { projectId: PROJECT },
+  "board.changes": { projectId: PROJECT },
+  "board.projectFolder": { projectId: PROJECT },
+  "board.ticketBody": { ticketId: "ticket-1" },
+  "board.archivedTickets": { projectId: PROJECT },
+  "board.ticketEvents": { ticketId: "ticket-1" },
+  "board.latestSignals": { projectId: PROJECT },
+  "board.statusEntries": { projectId: PROJECT },
+  "board.comments": { ticketId: "ticket-1" },
+  "board.updateProject": { commandId: COMMAND, projectId: PROJECT, baseBranch: null },
+  "board.setSkillModes": { commandId: COMMAND, projectId: PROJECT, modes: {} },
+  "board.setSessionDefaults": { commandId: COMMAND, projectId: PROJECT, model: null },
+  "board.createTicket": { commandId: COMMAND, projectId: PROJECT, status: "todo", title: "T" },
+  "board.moveTickets": {
+    commandId: COMMAND,
+    projectId: PROJECT,
+    ticketIds: ["ticket-1"],
+    toStatus: "done",
+    toIndex: 0,
+  },
+  "board.setPriority": { commandId: COMMAND, ticketId: "ticket-1", priority: "high" },
+  "board.updateTicket": { commandId: COMMAND, ticketId: "ticket-1", title: "T" },
+  "board.setLabels": { commandId: COMMAND, ticketId: "ticket-1", labels: ["ui"] },
+  "board.archiveTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.unarchiveTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.deleteTicket": { commandId: COMMAND, ticketId: "ticket-1" },
+  "board.createComment": { commandId: COMMAND, ticketId: "ticket-1", body: "hi" },
+  "board.updateComment": { commandId: COMMAND, commentId: "comment-1", body: "hi" },
+  "board.removeComment": { commandId: COMMAND, commentId: "comment-1" },
+  "board.setLabelColor": { commandId: COMMAND, labelId: "label-1", color: null },
 };
 
 class Reached extends Error {}
@@ -135,12 +172,14 @@ describe("every router procedure projects its own handler (VC-668)", () => {
     expectTypeOf<BoardRouterContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<ExampleAreaContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<SessionRouterHandlersCoverage>().toEqualTypeOf<never>();
+    expectTypeOf<BoardRouterHandlersCoverage>().toEqualTypeOf<never>();
   });
 
   it.each(HOST_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
     const { handlers, reached } = recordingHandlers();
     const callers = routerCallers(handlers);
-    const caller = key === "ticket.move" ? callers.board : callers.session;
+    const caller =
+      key === "ticket.move" || key.startsWith("board.") ? callers.board : callers.session;
     await drive(procedureAt(caller, key), SAMPLE_INPUTS[key]);
     expect(reached).toEqual([key]);
   });
@@ -267,11 +306,11 @@ describe("the board router's ticket.move", () => {
       resourceWorkspace: (resource) =>
         resource.kind === TICKET_RESOURCE && resource.id === "ticket-1" ? WORKSPACE : null,
       handlers: {
-        "ticket.move": (input, call) => {
+        "ticket.move": (input: unknown, call: HandlerCall) => {
           calls.push({ input, call });
           return [{ id: "ticket-0", status: "todo", order: 0 } as Ticket, moved];
         },
-      },
+      } as never,
     });
     return { router, calls };
   }

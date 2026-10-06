@@ -56,11 +56,19 @@ import {
   startAgentSocket,
   createHostAgentCommands,
 } from "@volli/host-core/agents";
+import { createBoardChangeFeed } from "@volli/host-core/board";
+import { getTicketRow, listProjects } from "@volli/host-core/db";
+import type Database from "better-sqlite3";
 
 import type { HostCredentialVerifier } from "@volli/host-protocol";
 import type { HostProtocolListener } from "@volli/session-rpc/websocket";
 
-import { cloudEnabled, startHostdProtocolListener, type HostProtocolBind } from "./host-protocol";
+import {
+  cloudEnabled,
+  servedWorkspace,
+  startHostdProtocolListener,
+  type HostProtocolBind,
+} from "./host-protocol";
 import {
   createHeadlessSessionRuntime,
   headlessModelAccess,
@@ -278,15 +286,30 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     };
     let sessionRuntime: HeadlessSessionRuntime | undefined;
     let listener: HostProtocolListener | undefined;
+    /**
+     * The board's change feeds (VC-565), one per Workspace this host serves:
+     * its handlers stamp their rows, and the bus feeds it every other
+     * writer's `data-changed`. The database is read once it is open.
+     */
+    let boardDb: Database.Database | undefined;
+    const boardFeed = createBoardChangeFeed({
+      epochOf: (workspaceId) =>
+        boardDb === undefined ? 0 : (servedWorkspace(boardDb, workspaceId)?.epoch ?? 0),
+      projectOfTicket: (ticketId) =>
+        boardDb === undefined ? undefined : getTicketRow(boardDb, ticketId)?.project_id,
+      workspaces: () => (boardDb === undefined ? [] : listProjects(boardDb).map(({ id }) => id)),
+    });
 
     /** Settles what every verb answers with, and publishes the state that goes with it. */
     const serve = async (host: HostCore, ports: HostCorePorts): Promise<void> => {
       if (isLiveHost(host)) {
         database = { ok: true, path: host.dbPath };
         const venue = hostdVenue(host.database.db);
+        boardDb = host.database.db;
         sessionRuntime = createHeadlessSessionRuntime({
           host,
           ports,
+          boardFeed,
           secrets,
           env: options.env,
           version: options.version,
@@ -378,7 +401,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     let host: HostCore | undefined;
     try {
       publish("starting");
-      const ports = headlessPorts(logger);
+      const ports = headlessPorts(logger, (scope) => boardFeed.noteDataChanged(scope));
       const booting = createHostCore(ports, {
         dataDir,
         onTransactionViolation: throwTransactionViolation,

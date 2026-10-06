@@ -26,7 +26,7 @@ import {
   type HostCredentialVerifier,
 } from "@volli/host-protocol";
 import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
-import type { AppRouter } from "@volli/session-rpc";
+import type { HostRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
@@ -1025,6 +1025,7 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
 
 describe("the host protocol listener (VC-663)", () => {
   const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+  const OTHER_WORKSPACE = "7a2e3d4c-5b6f-4071-9b8c-0d1e2f3a4b5c";
   const DEVICE = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";
   const CLOUD = { VOLLI_EXPERIMENTAL: "cloud" };
   const LOOPBACK = { host: "127.0.0.1", port: 0 };
@@ -1069,9 +1070,97 @@ describe("the host protocol listener (VC-663)", () => {
           }),
         ),
     });
-    const trpc = createTRPCClient<AppRouter>({ links: [wsLink({ client: socket })] });
+    const trpc = createTRPCClient<HostRouter>({ links: [wsLink({ client: socket })] });
     return { trpc, close: () => socket.close() };
   }
+
+  it("serves the board to a verified device: reads, receipted writes and the change feed (VC-565)", async () => {
+    const lever = device();
+    const host = await boot(
+      { env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier },
+      logger(),
+    );
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const { db } = host.host.database;
+    insertProject(db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    insertProject(db, { ...project(OTHER_WORKSPACE), path: join(root, "other") });
+    const { trpc, close } = client(host.status().hostProtocol!.url);
+    try {
+      const empty = await trpc.board.snapshot.query({ projectId: WORKSPACE });
+      expect(empty).toMatchObject({ project: { id: WORKSPACE }, tickets: [], labels: [] });
+      const feed = recordSubscription((handlers) =>
+        trpc.board.changes.subscribe({ projectId: WORKSPACE, lastEventId: empty.cursor }, handlers),
+      );
+      await feed.started;
+      const commandId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+      const created = await trpc.board.createTicket.mutate({
+        commandId,
+        projectId: WORKSPACE,
+        status: "todo",
+        title: "Over the wire",
+        labels: ["remote"],
+      });
+      expect(created.receipt).toEqual({ commandId, status: "completed", replayed: false });
+      expect(created.ticket).toMatchObject({ title: "Over the wire", labels: ["remote"] });
+      // A retry of the same command answers its receipt and writes nothing.
+      const retried = await trpc.board.createTicket.mutate({
+        commandId,
+        projectId: WORKSPACE,
+        status: "todo",
+        title: "Over the wire",
+        labels: ["remote"],
+      });
+      expect(retried).toEqual({ ...created, receipt: { ...created.receipt, replayed: true } });
+      expect((await trpc.board.roster.query({ projectId: WORKSPACE })).tickets).toHaveLength(1);
+      // The same id for another intent is the Client's conflict.
+      expect(
+        await expectHostError(
+          trpc.board.createTicket.mutate({
+            commandId,
+            projectId: WORKSPACE,
+            status: "todo",
+            title: "Something else",
+          }),
+        ),
+      ).toMatchObject({ code: "CONFLICT", reason: "command-conflict" });
+      // The feed carries the committed row, naming the command behind it.
+      await vi.waitFor(() =>
+        expect(
+          feed.frames.flatMap((frame) => (frame as { data: { changes: unknown[] } }).data.changes),
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "ticket",
+              op: "upsert",
+              id: created.ticket.id,
+              commandId,
+              ticket: expect.objectContaining({ title: "Over the wire" }),
+            }),
+            expect.objectContaining({ kind: "label", commandId }),
+          ]),
+        ),
+      );
+      // Another Workspace's board answers exactly as an absent one.
+      expect(
+        await expectHostError(trpc.board.snapshot.query({ projectId: OTHER_WORKSPACE })),
+      ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      // A cursor this feed never minted resnapshots instead of pretending to resume.
+      const stale = recordSubscription((handlers) =>
+        trpc.board.changes.subscribe(
+          { projectId: WORKSPACE, lastEventId: "0:not-this-instance:4" },
+          handlers,
+        ),
+      );
+      expect(await stale.ended).toMatchObject({
+        kind: "error",
+        error: { code: "PRECONDITION_FAILED", reason: "subscription-resnapshot-required" },
+      });
+      feed.unsubscribe();
+    } finally {
+      await close();
+      await host.stop("test over");
+    }
+  });
 
   it("serves nothing with the flag off, whatever --listen says, and says why", async () => {
     const log = logger();
@@ -1149,6 +1238,8 @@ describe("the host protocol listener (VC-663)", () => {
           "sessions.subscribe",
           "sessions.history",
           "session.read",
+          "board.read",
+          "board.write",
         ],
       });
       // The socket's own handler, scoped to this Workspace.
