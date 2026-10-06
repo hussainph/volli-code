@@ -14,6 +14,7 @@ export type HostdBootFailure =
   | "socket"
   | "already-running"
   | "operators"
+  | "devices"
   | "host-protocol";
 
 export class HostdBootError extends Error {

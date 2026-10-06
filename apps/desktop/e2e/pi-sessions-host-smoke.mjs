@@ -408,7 +408,8 @@ async function main() {
             const snapshot = await page.evaluate(
               async (sessionId) =>
                 window.api.sessionRpc.request({
-                  procedure: "session.snapshot",
+                  path: "session.snapshot",
+                  type: "query",
                   input: { sessionId },
                 }),
               chat.record.sessionId,

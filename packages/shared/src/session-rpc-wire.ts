@@ -1,15 +1,9 @@
-import type { TraceContext } from "./structured-log";
-
-// The wire protocol for the native Session tRPC edge over Electron IPC.
+// The Electron channels of the desktop's router-generic IPC bridge (VC-608).
 //
-// It lives here rather than beside its main-process handler because BOTH ends
-// need it and neither can reach the other: `tsconfig.web.json` excludes
-// `src/main`, so a renderer import of that file is TS6307 under composite, and
-// this package cannot import `@volli/session-rpc` without a dependency cycle.
-// So the procedure allow-list is written down here as a plain literal array and
-// main re-asserts it `satisfies readonly SessionRouterProcedure[]` — the
-// router-coverage check keeps working where the router is visible, and the
-// renderer gets the same names without pulling the router in.
+// The wire itself (requests, replies, frames) is `@volli/host-protocol/ipc`,
+// and what crosses is `DESKTOP_IPC_PATHS` in `@volli/session-rpc`, beside the
+// routers it classifies. Only the channel names live here, because main,
+// preload and the contract all open them.
 
 // The three channel names carry no `satisfies` because the Electron channel
 // catalog is not visible from here — it is app knowledge, in
@@ -24,103 +18,3 @@ export const SESSION_RPC_IPC_CHANNEL = "volli:session-rpc";
 export const SESSION_RPC_EVENT_CHANNEL = "volli:session-rpc-event";
 /** Ends one subscription previously started through {@link SESSION_RPC_IPC_CHANNEL}. */
 export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
-
-/**
- * Procedures intentionally exposed over Electron IPC. Lab diagnostics stay on
- * the development-only HTTP surface; production clients only receive Session
- * data and stream frames.
- *
- * Frozen because it is the request guard's allow-list: `isRequest` in main
- * decides what may reach the router by membership here, and a renderer holds a
- * live reference to it through `@volli/shared`.
- */
-export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
-  "settings.experiments",
-  "settings.setExperiment",
-  "modelAccess.inspect",
-  "modelAccess.defaults",
-  "modelAccess.setDefault",
-  "modelAccess.hiddenModels",
-  "modelAccess.setHiddenModels",
-  "modelAccess.compactionPolicy",
-  "modelAccess.setCompactionPolicy",
-  "modelAccess.codeModePolicy",
-  "modelAccess.setCodeModePolicy",
-  "modelAccess.pickerView",
-  "modelAccess.setPickerView",
-  "sessions.create",
-  "sessions.attach",
-  "session.snapshot",
-  "session.history",
-  "session.projection",
-  "session.subscribe",
-  "session.command",
-  "session.cancelQueued",
-  "session.editQueued",
-  "session.cancelInteraction",
-  "session.reconcile",
-  // This Mac's own log (VC-699): the dev log viewer's local stream, the same
-  // `host.logs` operations a remote host serves over the WebSocket.
-  "logs.tail",
-  "logs.follow",
-] as const);
-
-export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
-
-export type SessionRpcIpcRequest = {
-  [Procedure in SessionRpcIpcProcedure]: {
-    procedure: Procedure;
-    input: unknown;
-    /**
-     * The operation this request belongs to (VC-699): the renderer mints one
-     * per request unless the caller names the operation's own. Main handles
-     * the request inside it, so every line it logs carries it. Optional and
-     * beside the input, never in it: an older main ignores it.
-     */
-    trace?: TraceContext;
-  };
-}[SessionRpcIpcProcedure];
-
-/**
- * A failure as it crosses this wire: the host protocol's `HostError`
- * (`@volli/host-protocol`), restated as plain strings because this package
- * cannot import it. `reason` is present exactly when the router named one, so
- * a renderer reads the same `{code, message, reason}` the WebSocket link puts
- * on `data.hostError` (VC-564).
- */
-export interface SessionRpcIpcError {
-  code: string;
-  message: string;
-  reason?: string;
-}
-
-/**
- * One main-to-renderer subscription frame. `data` carries the tracked event id
- * the router minted, so a consumer can resume from it after a re-subscribe.
- */
-export type SessionRpcIpcEvent =
-  | {
-      kind: "data";
-      subscriptionId: string;
-      eventId: string;
-      data: unknown;
-    }
-  | {
-      kind: "done";
-      subscriptionId: string;
-    }
-  | {
-      kind: "error";
-      subscriptionId: string;
-      error: SessionRpcIpcError;
-    };
-
-/**
- * The reply to one request. A subscription acknowledges with the id its frames
- * will carry; everything else answers with its data. Failures cross as data —
- * an `ipcMain.handle` rejection serializes into a useless string.
- */
-export type SessionRpcIpcResponse =
-  | { ok: true; data: unknown }
-  | { ok: true; subscriptionId: string }
-  | { ok: false; error: SessionRpcIpcError };

@@ -28,6 +28,7 @@
     "@types/node": "catalog:",
     "@volli/agent-runtime": "workspace:*",
     "@volli/host-core": "workspace:*",
+    "@volli/host-install": "workspace:*",
     "@volli/host-protocol": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/session-rpc": "workspace:*",

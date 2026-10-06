@@ -1,0 +1,28 @@
+{
+  "name": "@volli/host-install",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Add a host over SSH: the system-ssh runner, the probe, the checksummed upload, the resumable provisioning steps and the tunnel. No Electron.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./contract": {
+      "types": "./src/contract.ts",
+      "import": "./src/contract.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
