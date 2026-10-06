@@ -180,7 +180,14 @@ async function serve(
     ignoresCancel?: boolean;
   } = {},
 ) {
-  const limits = { refusedCloseMs: 20, ...options.limits };
+  // The production refusal window (1 s) unless a test asks otherwise. The
+  // stock client sends a call one timer tick after its socket opens, so a
+  // window as short as a busy machine's tick would close a refused connection
+  // before that call is even sent, and the client would answer "Active
+  // connection is not open" instead of the refusal under test. A test that
+  // waits for the close shortens the window and speaks over a raw socket,
+  // whose calls are on the wire behind the hello before the window starts.
+  const limits = { ...options.limits };
   const events: HostProtocolListenerEvent[] = [];
   const source = ledger({ ignoresCancel: options.ignoresCancel === true });
   const grants = options.grants ?? { "device-token": credential(device).grant };
@@ -320,13 +327,28 @@ describe("the handshake, before any procedure", () => {
 
   it("refuses a version range the host does not speak", async () => {
     const { listener, reads } = await serve();
-    const { client, closes } = connect(listener.url, { protocol: { min: 2, max: 3 } });
+    const { client } = connect(listener.url, { protocol: { min: 2, max: 3 } });
     expect(await expectHostError(client.protocol.welcome.query())).toMatchObject({
       code: "PRECONDITION_FAILED",
       reason: "protocol-version-unsupported",
     });
     expect(reads).toStrictEqual([]);
-    await until(() => closes.includes(HOST_PROTOCOL_CLOSE_CODES.handshakeRefused), "the close");
+  });
+
+  it("answers what was queued behind a refused hello, then closes with the reason", async () => {
+    const { listener, reads } = await serve({ limits: { refusedCloseMs: 20 } });
+    const { socket, messages, closed } = await raw(
+      listener.url,
+      buildHostHello({ ...HELLO, protocol: { min: 2, max: 3 } }),
+    );
+    socket.send(request(1, "query", "protocol.welcome", null));
+    const [code, reason] = await closed;
+    expect([code, reason.toString()]).toStrictEqual([
+      HOST_PROTOCOL_CLOSE_CODES.handshakeRefused,
+      "protocol-version-unsupported",
+    ]);
+    expect(messages.map(reasonOf)).toStrictEqual(["protocol-version-unsupported"]);
+    expect(reads).toStrictEqual([]);
   });
 
   it("refuses a Workspace this host does not serve, and an epoch the client saw moved on", async () => {
@@ -387,7 +409,7 @@ describe("the handshake, before any procedure", () => {
   });
 
   it("ships no stack and no cause in a refusal, nor in a handler's failure", async () => {
-    const { listener } = await serve();
+    const { listener } = await serve({ limits: { refusedCloseMs: 20 } });
     const refused = await raw(listener.url, buildHostHello({ ...HELLO, credential: "stolen" }));
     refused.socket.send(
       JSON.stringify({ id: 1, method: "query", params: { path: "protocol.welcome", input: null } }),
