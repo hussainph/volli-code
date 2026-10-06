@@ -551,12 +551,10 @@ describe("adding a host end to end", () => {
           hostIsNewer: false,
           deviceId: DEVICE_ID,
           addedAt: new Date(NOW).toISOString(),
-          link: { state: { status: "ready" }, everReady: true, droppedAt: null },
           liveSessions: null,
         },
       ],
       projects: {},
-      projectLinks: {},
     });
     expect(h.snapshots.at(-1)).toBe(snapshot);
 
@@ -809,7 +807,7 @@ describe("failures", () => {
     expect(h.tunnels.made[0]!.closed).toBe(true);
     h.tunnels.control.mode = "up";
     await h.engine.retryAdd(flowId);
-    expect(h.engine.snapshot().hosts[0]?.link.state).toEqual({ status: "ready" });
+    expect(h.engine.hostLink(h.engine.snapshot().hosts[0]!.id).state).toEqual({ status: "ready" });
   });
 
   it("fails at the end when the host's key cannot be stored, and retries the link", async () => {
@@ -1011,14 +1009,13 @@ describe("a host's lifecycle", () => {
       label: "box",
     });
     const snapshot = h.engine.snapshot();
-    expect(snapshot.hosts.map((host) => host.link)).toEqual([
+    expect(snapshot.hosts.map((host) => h.engine.hostLink(host.id))).toEqual([
       { state: { status: "connecting", attempt: 0 }, everReady: false, droppedAt: null },
       { state: { status: "connecting", attempt: 0 }, everReady: false, droppedAt: null },
     ]);
-    expect(snapshot.projects).toEqual({ [WS1]: HOST_ID });
     // A Workspace with no link yet reads as its host's tunnel.
-    expect(snapshot.projectLinks).toEqual({
-      [WS1]: { state: { status: "connecting", attempt: 0 }, everReady: false, droppedAt: null },
+    expect(snapshot.projects).toEqual({
+      [WS1]: { hostId: HOST_ID, link: { status: "connecting", attempt: 0 } },
     });
     expect(h.links.made).toHaveLength(0);
   });
@@ -1026,7 +1023,7 @@ describe("a host's lifecycle", () => {
   it("derives the link from the tunnel while no Workspace is open", () => {
     const h = harness({ tunnelMode: "hold", registry: registry(hostEntry()) });
     const tunnel = h.tunnels.made[0]!;
-    const link = () => h.engine.snapshot().hosts[0]!.link;
+    const link = () => h.engine.hostLink(h.engine.snapshot().hosts[0]!.id);
     tunnel.set({ status: "up", url: tunnel.url, localPort: 1 });
     expect(link()).toEqual({ state: { status: "ready" }, everReady: true, droppedAt: null });
     h.clock.now = NOW + 10_000;
@@ -1057,14 +1054,14 @@ describe("a host's lifecycle", () => {
     const h = harness({ tunnelMode: "fail", registry: registry(hostEntry()) });
     const tunnel = h.tunnels.made[0]!;
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.engine.snapshot().hosts[0]!.link.state).toMatchObject({
+    expect(h.engine.hostLink(h.engine.snapshot().hosts[0]!.id).state).toMatchObject({
       status: "unreachable",
       attempt: 1,
       retryAt: NOW + 1_000,
     });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(tunnel.starts).toBe(2);
-    expect(h.engine.snapshot().hosts[0]!.link.state).toMatchObject({
+    expect(h.engine.hostLink(h.engine.snapshot().hosts[0]!.id).state).toMatchObject({
       attempt: 2,
       retryAt: NOW + 2_000,
     });
@@ -1098,7 +1095,7 @@ describe("a host's lifecycle", () => {
       client: { kind: "desktop", version: "1.1.0" },
       features: ["queue"],
     });
-    expect(host().link.state).toEqual({ status: "connecting", attempt: 0 });
+    expect(h.engine.hostLink(host().id).state).toEqual({ status: "connecting", attempt: 0 });
     const [one, two] = h.links.made as [FakeLink, FakeLink];
 
     one.set({
@@ -1106,32 +1103,35 @@ describe("a host's lifecycle", () => {
       error: { code: "UNAUTHORIZED", reason: "credential-invalid", message: "Unknown device." },
       closeCode: 4401,
     });
-    expect(host().link.state).toMatchObject({ status: "refused", closeCode: 4401 });
+    expect(h.engine.hostLink(host().id).state).toMatchObject({
+      status: "refused",
+      closeCode: 4401,
+    });
     two.set({
       status: "fenced",
       error: { code: "CONFLICT", reason: "workspace-split-brain", message: "Two hosts." },
     });
-    expect(host().link.state.status).toBe("refused");
+    expect(h.engine.hostLink(host().id).state.status).toBe("refused");
     one.set({ status: "connecting", attempt: 1 });
-    expect(host().link.state.status).toBe("fenced");
+    expect(h.engine.hostLink(host().id).state.status).toBe("fenced");
 
     // Each Workspace keeps its own link: one refused, one fenced.
-    expect(h.engine.snapshot().projectLinks).toMatchObject({
-      [WS1]: { state: { status: "connecting", attempt: 1 } },
-      [WS2]: { state: { status: "fenced" } },
+    expect(h.engine.snapshot().projects).toMatchObject({
+      [WS1]: { link: { status: "connecting", attempt: 1 } },
+      [WS2]: { link: { status: "fenced" } },
     });
 
     h.clock.now = NOW + 1_000;
     two.set(ready("1.2.0"));
-    expect(h.engine.snapshot().projectLinks).toEqual({
-      [WS1]: { state: { status: "connecting", attempt: 1 }, everReady: false, droppedAt: null },
-      [WS2]: { state: { status: "ready" }, everReady: true, droppedAt: null },
+    expect(h.engine.snapshot().projects).toEqual({
+      [WS1]: { hostId: HOST_ID, link: { status: "connecting", attempt: 1 } },
+      [WS2]: { hostId: HOST_ID, link: { status: "ready" } },
     });
-    expect(host()).toMatchObject({
-      version: "1.2.0",
-      availableUpdate: null,
-      hostIsNewer: true,
-      link: { state: { status: "ready" }, everReady: true, droppedAt: null },
+    expect(host()).toMatchObject({ version: "1.2.0", availableUpdate: null, hostIsNewer: true });
+    expect(h.engine.hostLink(HOST_ID)).toEqual({
+      state: { status: "ready" },
+      everReady: true,
+      droppedAt: null,
     });
     expect(h.store.saves.at(-1)?.hosts[0]?.version).toBe("1.2.0");
     const saves = h.store.saves.length;
@@ -1148,7 +1148,7 @@ describe("a host's lifecycle", () => {
     };
     one.set(unreachable);
     two.set(unreachable);
-    expect(host().link).toEqual({
+    expect(h.engine.hostLink(host().id)).toEqual({
       state: {
         status: "unreachable",
         attempt: 2,
@@ -1170,9 +1170,9 @@ describe("a host's lifecycle", () => {
       "ws://127.0.0.1:60000",
     ]);
     // A closed link no longer moves the host.
-    const before = host().link;
+    const before = h.engine.hostLink(host().id);
     one.set(ready());
-    expect(host().link).toBe(before);
+    expect(h.engine.hostLink(host().id)).toBe(before);
   });
 
   it("mints a fresh credential per handshake, signed with the host's device key", async () => {
@@ -1227,7 +1227,9 @@ describe("a host's lifecycle", () => {
     const tunnel = h.tunnels.made[0]!;
     h.engine.openWorkspace(HOST_ID, WS1);
     expect(h.links.made).toHaveLength(0);
-    expect(h.engine.snapshot().projects).toEqual({ [WS1]: HOST_ID });
+    expect(h.engine.snapshot().projects).toEqual({
+      [WS1]: { hostId: HOST_ID, link: { status: "connecting", attempt: 0 } },
+    });
     expect(h.store.saves.at(-1)?.hosts[0]?.workspaceIds).toEqual([WS1]);
     tunnel.set({ status: "up", url: tunnel.url, localPort: 1 });
     expect(h.links.made.map((link) => link.workspaceId)).toEqual([WS1]);
@@ -1254,7 +1256,7 @@ describe("a host's lifecycle", () => {
     expect(h.links.made[0]!.closed).toBe(true);
     expect(h.store.saves.at(-1)).toEqual(registry());
     expect(h.keys.keys.size).toBe(0);
-    expect(snapshots.at(-1)).toEqual({ v: 1, hosts: [], projects: {}, projectLinks: {} });
+    expect(snapshots.at(-1)).toEqual({ v: 1, hosts: [], projects: {} });
     expect(h.box.scripts).toEqual([]);
     await expect(h.engine.forget(HOST_ID)).rejects.toMatchObject({ code: "unknown-host" });
     stop();
@@ -1350,7 +1352,9 @@ describe("the registry file", () => {
     const h = harness({ registry: registry(hostEntry()) });
     h.store.state.saveFails = true;
     h.engine.openWorkspace(HOST_ID, WS1);
-    expect(h.engine.snapshot().projects).toEqual({ [WS1]: HOST_ID });
+    expect(h.engine.snapshot().projects).toEqual({
+      [WS1]: { hostId: HOST_ID, link: { status: "connecting", attempt: 0 } },
+    });
     expect(h.log.lines).toContainEqual(
       expect.objectContaining({ level: "error", msg: "remote host registry not saved" }),
     );

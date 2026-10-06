@@ -82,24 +82,28 @@ export interface RemoteHost {
   /** This Mac's device id on the host (its enrollment). */
   readonly deviceId: string;
   readonly addedAt: string;
-  readonly link: RemoteHostLink;
   /** Sessions running there now, `null` while nothing reports it. */
   readonly liveSessions: number | null;
 }
 
-/** Every remote host, and which serves each project this desktop knows to live remotely. */
+/**
+ * One remote project: the host that serves it, and that project's own
+ * Workspace connection (VC-670: one link, and one authority fence, per
+ * Workspace; the tunnel's state until its link exists). VC-576's store words
+ * it per project and aggregates a host's link from its projects'.
+ */
+export interface RemoteProjectLink {
+  readonly hostId: string;
+  readonly link: RemoteHostLinkState;
+}
+
+/** Every remote host, and each remote project with its own link. */
 export interface RemoteHostsSnapshot {
   readonly v: 1;
+  /** A host has no link of its own: its projects each have one. */
   readonly hosts: readonly RemoteHost[];
-  /** Project id → remote host id. Empty until a remote project is opened (VC-700 PR 3). */
-  readonly projects: Readonly<Record<string, string>>;
-  /**
-   * Project id → that project's own Workspace connection (VC-670: one link,
-   * and one authority fence, per Workspace), for every project in
-   * {@link projects}. A host's `link` aggregates its projects' links, or is
-   * its tunnel's while it serves none.
-   */
-  readonly projectLinks?: Readonly<Record<string, RemoteHostLink>>;
+  /** Project id → its host and its link. Empty until a remote project is opened (VC-700 PR 3). */
+  readonly projects: Readonly<Record<string, RemoteProjectLink>>;
 }
 
 /* ── Adding a host ──────────────────────────────────────────────────────── */

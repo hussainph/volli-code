@@ -4,29 +4,35 @@
  * desktop-only tier (`hosts.subscribe`), turned into VC-576's
  * {@link HostConnectionSource}.
  *
- * Main holds the registry, the SSH tunnels and the client host links
- * (`@volli/host-install`'s `createRemoteHosts`); it sends a host's link as
- * the facts {@link hostLinkView} reads, and this source words them, so a
- * remote host's link reads exactly as any other source's would. Between two
- * snapshots time still passes: a dropped link reads `reconnecting` for
- * {@link HOST_OFFLINE_AFTER_MS}, then `offline`, so the source re-words its
- * hosts when that grace ends even though main sent nothing new.
+ * One link per project. Main sends each remote project's own Workspace
+ * connection state (VC-670; the tunnel's until its link exists), and this
+ * source feeds each into its own {@link createHostLinkTracker}, which keeps
+ * `everReady`/`droppedAt` and says when the wording changes on its own (a
+ * drop reads `reconnecting`, then `offline` once its grace ends). One timer,
+ * at the soonest such moment, re-words them. A host has no link of its own:
+ * the store aggregates it from its projects'.
  *
- * Actions are the person's intent, sent once: none queues for a host that is
- * away (Ruling 1). One that fails (a v1 refusal of Update host, a host
- * forgotten meanwhile) says so in a toast.
+ * Unchanged records and link views keep their identity across snapshots, so
+ * `useSyncExternalStore` readers re-render only for what moved. Actions are
+ * the person's intent, sent once (Ruling 1); one that fails says so in a
+ * toast.
  */
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import type { RemoteHost, RemoteHostLinkState, RemoteHostsSnapshot } from "@volli/shared";
 import { toast } from "sonner";
 
+import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
+import { isExperimentOn, useExperimentsStore } from "./experiments";
 import {
-  HOST_OFFLINE_AFTER_MS,
-  hostLinkView,
+  createHostLinkTracker,
+  useHostConnectionStore,
   type HostConnectionSource,
   type HostId,
-  type HostRecord,
+  type HostLinkTracker,
+  type HostLinkView,
+  type HostSourceRecord,
   type HostSourceSnapshot,
+  type ProjectLink,
 } from "./host-connection";
 
 /** What the source needs of the desktop tier: one subscription and four actions. */
@@ -56,7 +62,7 @@ export interface RemoteHostSource extends HostConnectionSource {
 const EMPTY: HostSourceSnapshot = Object.freeze({ hosts: [], projects: {} });
 
 /**
- * A wire link state as the client host link's own: `hostLinkView` reads only
+ * A wire link state as the client host link's own: the tracker reads only
  * the status and, per status, `retryAt` and `error.reason`. A `ready` link's
  * welcome stays in main; nothing here reads it.
  */
@@ -64,21 +70,14 @@ function asLinkState(state: RemoteHostLinkState): HostLinkState {
   return state as unknown as HostLinkState;
 }
 
-/** One remote host as VC-576's record. */
-export function remoteHostRecord(host: RemoteHost, now: number): HostRecord {
+/** One remote host as VC-576's record: no link, which is its projects'. */
+export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
   return {
     id: host.id,
     name: host.name,
     local: false,
     os: host.os,
     version: host.version,
-    link: hostLinkView(asLinkState(host.link.state), {
-      everReady: host.link.everReady,
-      droppedAt: host.link.droppedAt,
-      now,
-      availableUpdate: host.availableUpdate,
-      hostIsNewer: host.hostIsNewer,
-    }),
     liveSessions: host.liveSessions,
     // Updating a host over SSH, and its sign-ins, come with later tickets.
     update: null,
@@ -86,16 +85,15 @@ export function remoteHostRecord(host: RemoteHost, now: number): HostRecord {
   };
 }
 
-/** When the soonest `reconnecting` host turns `offline`, or `null` when none will. */
-function nextGraceEnd(hosts: readonly RemoteHost[], now: number): number | null {
-  let soonest: number | null = null;
-  for (const { link } of hosts) {
-    if (link.state.status !== "unreachable" || !link.everReady || link.droppedAt === null) continue;
-    const end = link.droppedAt + HOST_OFFLINE_AFTER_MS;
-    if (end > now && (soonest === null || end < soonest)) soonest = end;
-  }
-  return soonest;
-}
+const sameRecord = (a: HostSourceRecord, b: HostSourceRecord): boolean =>
+  a.id === b.id &&
+  a.name === b.name &&
+  a.os === b.os &&
+  a.version === b.version &&
+  a.liveSessions === b.liveSessions;
+
+const sameView = (a: HostLinkView, b: HostLinkView): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 const defaultTimer = (run: () => void, ms: number): (() => void) => {
   const timer = setTimeout(run, ms);
@@ -110,25 +108,65 @@ export function createRemoteHostSource(
   const setTimer = options.setTimer ?? defaultTimer;
   const onActionError = options.onActionError ?? ((message: string) => void toast.error(message));
   const listeners = new Set<() => void>();
+  /** One tracker per project, kept while main keeps naming the project. */
+  const trackers = new Map<string, HostLinkTracker>();
   let wire: RemoteHostsSnapshot | null = null;
   let snapshot: HostSourceSnapshot = EMPTY;
   let cancelTimer: (() => void) | null = null;
   let closed = false;
 
+  /** Words every project's link now; arms one timer for the soonest change. */
   function publish(): void {
     cancelTimer?.();
     cancelTimer = null;
+    if (wire === null) {
+      trackers.clear();
+      if (snapshot !== EMPTY) {
+        snapshot = EMPTY;
+        for (const listener of listeners) listener();
+      }
+      return;
+    }
     const at = now();
-    snapshot =
-      wire === null
-        ? EMPTY
-        : {
-            hosts: wire.hosts.map((host) => remoteHostRecord(host, at)),
-            projects: { ...wire.projects },
-          };
-    const graceEnd = wire === null ? null : nextGraceEnd(wire.hosts, at);
-    if (graceEnd !== null) cancelTimer = setTimer(publish, graceEnd - at);
-    for (const listener of listeners) listener();
+    const factsOf = new Map(wire.hosts.map((host) => [host.id, host]));
+    let soonest: number | null = null;
+    const projects: Record<string, ProjectLink> = {};
+    for (const [projectId, { hostId, link }] of Object.entries(wire.projects)) {
+      let tracker = trackers.get(projectId);
+      if (tracker === undefined) {
+        tracker = createHostLinkTracker();
+        trackers.set(projectId, tracker);
+      }
+      const host = factsOf.get(hostId);
+      const worded = tracker.view(asLinkState(link), at, {
+        availableUpdate: host?.availableUpdate ?? null,
+        hostIsNewer: host?.hostIsNewer ?? false,
+      });
+      if (worded.recheckAt !== null && (soonest === null || worded.recheckAt < soonest)) {
+        soonest = worded.recheckAt;
+      }
+      const before = snapshot.projects[projectId];
+      projects[projectId] =
+        before !== undefined && before.hostId === hostId && sameView(before.link, worded.link)
+          ? before
+          : { hostId, link: worded.link };
+    }
+    for (const projectId of trackers.keys()) {
+      if (!(projectId in wire.projects)) trackers.delete(projectId);
+    }
+    const hosts = wire.hosts.map((host) => {
+      const record = remoteHostRecord(host);
+      const before = snapshot.hosts.find((entry) => entry.id === host.id);
+      return before !== undefined && sameRecord(before, record) ? before : record;
+    });
+    const changed =
+      hosts.length !== snapshot.hosts.length ||
+      hosts.some((host, index) => host !== snapshot.hosts[index]) ||
+      Object.keys(projects).length !== Object.keys(snapshot.projects).length ||
+      Object.entries(projects).some(([id, project]) => snapshot.projects[id] !== project);
+    if (changed) snapshot = { hosts, projects };
+    if (soonest !== null) cancelTimer = setTimer(publish, Math.max(0, soonest - at));
+    if (changed) for (const listener of listeners) listener();
   }
 
   const unsubscribe = client.subscribe({
@@ -167,5 +205,84 @@ export function createRemoteHostSource(
       cancelTimer = null;
       unsubscribe();
     },
+  };
+}
+
+/** What the tier client offers this source: `hosts.*`, as tRPC types it. */
+export interface RemoteHostsRpc {
+  readonly hosts: {
+    readonly subscribe: {
+      subscribe(
+        input: undefined,
+        handlers: { onData(data: RemoteHostsSnapshot): void; onError(error: unknown): void },
+      ): { unsubscribe(): void };
+    };
+    readonly retry: { mutate(input: { hostId: string }): Promise<unknown> };
+    readonly updateHost: {
+      mutate(input: { hostId: string; when: "now" | "when-idle" }): Promise<unknown>;
+    };
+    readonly cancelScheduledUpdate: { mutate(input: { hostId: string }): Promise<unknown> };
+    readonly signIn: { mutate(input: { hostId: string; providerId: string }): Promise<unknown> };
+  };
+}
+
+/** The desktop-only tier (`hosts.*`) as {@link RemoteHostsClient}. */
+export function remoteHostsClient(rpc: RemoteHostsRpc): RemoteHostsClient {
+  return {
+    subscribe(handlers) {
+      const subscription = rpc.hosts.subscribe.subscribe(undefined, {
+        onData: (data) => handlers.onData(data),
+        onError: (error) => handlers.onError(error),
+      });
+      return () => subscription.unsubscribe();
+    },
+    retry: (hostId) => rpc.hosts.retry.mutate({ hostId }),
+    updateHost: (hostId, when) => rpc.hosts.updateHost.mutate({ hostId, when }),
+    cancelScheduledUpdate: (hostId) => rpc.hosts.cancelScheduledUpdate.mutate({ hostId }),
+    signIn: (hostId, providerId) => rpc.hosts.signIn.mutate({ hostId, providerId }),
+  };
+}
+
+/** The stores {@link attachRemoteHostsWhileCloud} reads and writes, and its source. */
+export interface RemoteHostsBinding {
+  readonly experiments: {
+    getState(): { readonly snapshot: Parameters<typeof isExperimentOn>[0] };
+    subscribe(listener: () => void): () => void;
+  };
+  readonly hosts: { getState(): { attach(source: HostConnectionSource): () => void } };
+  readonly createSource: () => RemoteHostSource;
+}
+
+/**
+ * Remote hosts feed the host-connection store beside This Mac only while
+ * `cloud` is on, as This Mac does (`attachThisMacWhileCloud`): off, there is
+ * no subscription to main at all. Turning the flag off detaches the source
+ * and ends its subscription. The returned function stops the binding.
+ */
+export function attachRemoteHostsWhileCloud({
+  experiments = useExperimentsStore,
+  hosts = useHostConnectionStore,
+  createSource = () => createRemoteHostSource(remoteHostsClient(sessionRpcClient())),
+}: Partial<RemoteHostsBinding> = {}): () => void {
+  let attached: { source: RemoteHostSource; detach: () => void } | null = null;
+  const stop = () => {
+    attached?.detach();
+    attached?.source.close();
+    attached = null;
+  };
+  const sync = () => {
+    const on = isExperimentOn(experiments.getState().snapshot, "cloud");
+    if (on && attached === null) {
+      const source = createSource();
+      attached = { source, detach: hosts.getState().attach(source) };
+    } else if (!on) {
+      stop();
+    }
+  };
+  const unsubscribe = experiments.subscribe(sync);
+  sync();
+  return () => {
+    unsubscribe();
+    stop();
   };
 }

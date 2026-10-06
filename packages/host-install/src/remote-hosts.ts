@@ -35,6 +35,7 @@ import {
   type AddHostView,
   type RemoteHost,
   type RemoteHostLink,
+  type RemoteProjectLink,
   type RemoteHostsSnapshot,
 } from "@volli/shared";
 
@@ -158,6 +159,12 @@ export interface RemoteHostsPorts {
 
 export interface RemoteHosts {
   snapshot(): RemoteHostsSnapshot;
+  /**
+   * The host's own link, off the wire: its Workspaces' links aggregated, or
+   * its tunnel's while it serves none. For the app's log and the add flow;
+   * the UI words each project's link and aggregates them itself (VC-576).
+   */
+  hostLink(hostId: string): RemoteHostLink;
   /** Called on every change with a new snapshot, not with the current one. */
   subscribe(listener: (snapshot: RemoteHostsSnapshot) => void): () => void;
   /** Reconnect now: the tunnel, and every Workspace link. */
@@ -290,22 +297,22 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       ...versionFacts(entry.version, ports.appVersion),
       deviceId: entry.deviceId,
       addedAt: entry.addedAt,
-      link: runtimes.get(entry.id)!.link,
       liveSessions: null,
     };
   }
 
   function publish(): void {
-    const projects: Record<string, string> = {};
-    const projectLinks: Record<string, RemoteHostLink> = {};
+    const projects: Record<string, RemoteProjectLink> = {};
     for (const entry of entries.values()) {
       const runtime = runtimes.get(entry.id)!;
       for (const workspaceId of entry.workspaceIds) {
-        projects[workspaceId] = entry.id;
-        projectLinks[workspaceId] = runtime.projectLinks.get(workspaceId)!;
+        projects[workspaceId] = {
+          hostId: entry.id,
+          link: runtime.projectLinks.get(workspaceId)!.state,
+        };
       }
     }
-    current = { v: 1, hosts: [...entries.values()].map(hostJson), projects, projectLinks };
+    current = { v: 1, hosts: [...entries.values()].map(hostJson), projects };
     for (const listener of listeners) {
       try {
         listener(current);
@@ -741,6 +748,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     snapshot() {
       guard();
       return current;
+    },
+    hostLink(hostId) {
+      guard();
+      hostOf(hostId);
+      return runtimes.get(hostId)!.link;
     },
     subscribe(listener) {
       guard();

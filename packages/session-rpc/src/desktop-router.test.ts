@@ -59,23 +59,21 @@ const SNAPSHOT: RemoteHostsSnapshot = {
       hostIsNewer: false,
       deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
       addedAt: "2026-10-06T00:00:00.000Z",
-      link: {
-        state: {
-          status: "unreachable",
-          attempt: 2,
-          error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "down" },
-          closeCode: null,
-          retryAt: 1_000,
-        },
-        everReady: true,
-        droppedAt: 500,
-      },
       liveSessions: null,
     },
   ],
-  projects: { "project-1": HOST },
-  projectLinks: {
-    "project-1": { state: { status: "connecting", attempt: 1 }, everReady: false, droppedAt: null },
+  projects: {
+    "project-1": {
+      hostId: HOST,
+      link: {
+        status: "unreachable",
+        attempt: 2,
+        error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "down" },
+        closeCode: null,
+        retryAt: 1_000,
+      },
+    },
+    "project-2": { hostId: HOST, link: { status: "connecting", attempt: 1 } },
   },
 };
 const NEXT: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {} };

@@ -16,7 +16,7 @@ import type {
   AddHostStepStatus,
   AddHostView,
   RemoteHost,
-  RemoteHostLink,
+  RemoteProjectLink,
   RemoteHostsSnapshot,
 } from "@volli/shared";
 import { z } from "zod";
@@ -112,11 +112,6 @@ const linkState = z.discriminatedUnion("status", [
   z.object({ status: z.literal("fenced"), error: linkError }),
   z.object({ status: z.literal("closed") }),
 ]);
-const remoteHostLink = z.object({
-  state: linkState,
-  everReady: z.boolean(),
-  droppedAt: z.number().nullable(),
-});
 const remoteHost = z.object({
   id: z.string(),
   name: z.string(),
@@ -130,16 +125,15 @@ const remoteHost = z.object({
   hostIsNewer: z.boolean(),
   deviceId: z.string(),
   addedAt: z.string(),
-  link: remoteHostLink,
   liveSessions: z.number().int().nonnegative().nullable(),
 });
+const remoteProjectLink = z.object({ hostId: z.string(), link: linkState });
 /** `RemoteHostsSnapshot`. Its arrays are read-only, as the registry hands them over. */
 export const remoteHostsSnapshotSchema = z.object({
   v: z.literal(1),
   hosts: z.array(remoteHost).readonly(),
-  projects: z.record(z.string(), z.string()),
-  /** Project id → that project's own Workspace link (VC-670), for each of `projects`. */
-  projectLinks: z.record(z.string(), remoteHostLink).optional(),
+  /** Project id → its host and that project's own Workspace link (VC-670). */
+  projects: z.record(z.string(), remoteProjectLink),
 });
 
 /** A question's `kind` and `step`, and its own fields as open JSON. */
@@ -190,7 +184,7 @@ type MissingKeys<Wire, Schema> = Exclude<keyof Wire, keyof Schema>;
 export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteHostsSnapshot, z.output<typeof remoteHostsSnapshotSchema>>
   | MissingKeys<RemoteHost, z.output<typeof remoteHost>>
-  | MissingKeys<RemoteHostLink, z.output<typeof remoteHostLink>>
+  | MissingKeys<RemoteProjectLink, z.output<typeof remoteProjectLink>>
   | MissingKeys<AddHostView, z.output<typeof addHostView>>
   | MissingKeys<AddHostFailure, z.output<typeof addHostFailure>>
   | MissingKeys<AddHostLogLine, z.output<typeof addHostLogLine>>
