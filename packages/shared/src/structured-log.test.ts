@@ -248,3 +248,144 @@ describe("the renderer's forwarded lines", () => {
     }
   });
 });
+
+/*
+ * Review blockers 1 and 2 (VC-699), permanent: what the reviewer's probes
+ * showed leaking, now shown not to.
+ */
+describe("errors are scrubbed and bounded in every string (merge gate)", () => {
+  const SECRETS = {
+    bearer: "Bearer opaque-review-token-abcdef",
+    sk: "sk-test-1234567890abcdefghijklmnop",
+    jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZXZpZXcifQ.c2lnbmF0dXJlLXJldmlldw",
+    url: "https://hooks.example.test/callback?token=opaque-query-token&ok=1",
+  } as const;
+  const LEAKS = [
+    "opaque-review-token-abcdef",
+    "1234567890abcdefghijklmnop",
+    "c2lnbmF0dXJlLXJldmlldw",
+    "opaque-query-token",
+  ];
+
+  it("scrubs a bearer, an sk- key, a JWT and a URL token query from name, message and stack", async () => {
+    const { LOG_ERROR_BOUNDS } = await import("./structured-log");
+    for (const secret of Object.values(SECRETS)) {
+      const error = new Error(`request failed: ${secret}`);
+      error.name = secret;
+      error.stack = `${secret}: request failed: ${secret}\n    at handler (${secret})`;
+      const out = JSON.stringify(redactLogFields({ error }));
+      for (const leak of LEAKS) expect(out).not.toContain(leak);
+      expect(out).toContain(LOG_REDACTED);
+    }
+    // The reviewer's probe: Error.name = "Bearer …" survived whole.
+    const probe = new Error("Invalid file JSON");
+    probe.name = "Bearer opaque-review-token";
+    expect(JSON.stringify(redactLogFields({ error: probe }))).not.toContain("opaque-review-token");
+    expect(LOG_ERROR_BOUNDS).toEqual({ maxName: 120, maxMessage: 1_000, maxStack: 2_000 });
+  });
+
+  it("cuts an error's name, message, code and stack to their bounds", async () => {
+    const { LOG_ERROR_BOUNDS } = await import("./structured-log");
+    const error = Object.assign(new Error("m".repeat(50_000)), {
+      name: "N".repeat(10_000),
+      code: "C".repeat(10_000),
+      stack: "s".repeat(50_000),
+    });
+    const out = redactLogValue(error) as Record<string, string>;
+    expect(out["name"]!.length).toBeLessThanOrEqual(LOG_ERROR_BOUNDS.maxName);
+    expect(out["message"]!.length).toBeLessThanOrEqual(LOG_ERROR_BOUNDS.maxMessage);
+    expect(out["stack"]!.length).toBeLessThanOrEqual(LOG_ERROR_BOUNDS.maxStack);
+    expect(out["code"]!.length).toBeLessThanOrEqual(120);
+  });
+
+  it("scrubs JSON-quoted credential assignments a stringified object leaves", () => {
+    const text = JSON.stringify({
+      token: "opaque-review-token-123",
+      nested: { password: "review-password-123", count: 2 },
+      apiKey: 42,
+      ok: "kept",
+    });
+    const out = redactLogText(text);
+    expect(out).not.toContain("opaque-review-token-123");
+    expect(out).not.toContain("review-password-123");
+    expect(out).toContain('"ok":"kept"');
+    expect(out).toContain('"count":2');
+    expect(out).toContain('"token":"[redacted]"');
+  });
+
+  it("summarises an error for a generic door: class name and code, never its message", async () => {
+    const { logErrorSummary } = await import("./structured-log");
+    const error = Object.assign(new TypeError("Invalid file JSON: customer-private-content"), {
+      code: "ERR_INVALID",
+    });
+    expect(logErrorSummary(error)).toEqual({ name: "TypeError", code: "ERR_INVALID" });
+    const named = Object.assign(new Error("x"), { name: "Bearer opaque-review-token", code: 7 });
+    expect(logErrorSummary(named)).toEqual({ name: "Error", code: 7 });
+    expect(logErrorSummary(Object.assign(new Error("x"), { code: "has space: secret" }))).toEqual({
+      name: "Error",
+    });
+    expect(logErrorSummary("a string reason with content")).toEqual({ name: "string" });
+    expect(logErrorSummary(undefined)).toEqual({ name: "undefined" });
+    expect(logErrorSummary(null)).toEqual({ name: "object" });
+    expect(logErrorSummary({ name: "AbortError" })).toEqual({ name: "AbortError" });
+  });
+});
+
+describe("the renderer's forwarded lines are flat and safe (merge gate)", () => {
+  it("redacts and flattens fields structurally, before anything is serialised", async () => {
+    const { rendererLogFields } = await import("./structured-log");
+    const fields = rendererLogFields({
+      token: "opaque-review-token-123",
+      nested: { password: "review-password-123" },
+      list: ["a"],
+      count: 3,
+      ok: true,
+      none: null,
+      host: "box",
+      note: "Bearer opaque-bearer-value",
+      error: new Error("Invalid file JSON: customer-private-content"),
+      summary: { name: "TypeError", code: "E1" },
+      "bad key": "x",
+      skipped: undefined,
+      fn: () => 1,
+    });
+    expect(fields).toEqual({
+      token: LOG_REDACTED,
+      count: 3,
+      ok: true,
+      none: null,
+      host: "box",
+      note: `Bearer ${LOG_REDACTED}`,
+      error: { name: "Error" },
+      summary: { name: "TypeError", code: "E1" },
+      droppedFields: 4,
+    });
+    expect(JSON.stringify(fields)).not.toMatch(/review-|customer-private|opaque-bearer/u);
+  });
+
+  it("keeps a message's first line, scrubbed and cut", async () => {
+    const { rendererLogMessage, RENDERER_LOG_BOUNDS } = await import("./structured-log");
+    expect(rendererLogMessage("first line\nsecond: private")).toBe("first line");
+    expect(rendererLogMessage('{"token":"opaque-review-token-123"}')).toBe(
+      '{"token":"[redacted]"}',
+    );
+    expect(rendererLogMessage("x".repeat(5_000)).length).toBe(RENDERER_LOG_BOUNDS.maxMsg);
+  });
+
+  it("main re-applies the same rules to whatever a window sends", async () => {
+    const { readRendererLogEntry, RENDERER_LOG_BOUNDS } = await import("./structured-log");
+    const many = Object.fromEntries(
+      Array.from({ length: RENDERER_LOG_BOUNDS.maxFields + 5 }, (_, i) => [`f${i}`, i]),
+    );
+    const entry = readRendererLogEntry({
+      level: "warn",
+      area: "console",
+      msg: '{"token":"opaque-review-token-123"}\nmore',
+      fields: { ...many, nested: { password: "review-password-123" } },
+    });
+    expect(JSON.stringify(entry)).not.toMatch(/review-/u);
+    expect(entry?.msg).toBe('{"token":"[redacted]"}');
+    expect(Object.keys(entry?.fields ?? {})).toHaveLength(RENDERER_LOG_BOUNDS.maxFields + 1);
+    expect(entry?.fields?.["droppedFields"]).toBe(6);
+  });
+});

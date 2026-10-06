@@ -4,11 +4,18 @@
  * A door (the WebSocket, Electron IPC, the agent socket) opens a context for
  * each request with {@link withTrace}: the trace the client minted when it
  * started the operation, or one minted here when it sent none, plus the door
- * and its connection. Every line logged inside that request, including the
- * Session runtime, the agent turn it opens, git and the follow-up queue,
- * carries those fields, because `AsyncLocalStorage` follows the promise
- * chains and timers the request starts. Code deeper in adds what it knows
- * with {@link withLogContext} (`sessionId`, `turnId`, `commandId`).
+ * and its connection. Lines logged on that request's own promise chain carry
+ * those fields, because `AsyncLocalStorage` follows the promise chains and
+ * timers the request starts. Code deeper in adds what it knows with
+ * {@link withLogContext} (`sessionId`, `turnId`, `commandId`).
+ *
+ * **What it does not do on its own.** Anything long-lived a request happens
+ * to start (an executor's attachment, its event listeners, an interval)
+ * would inherit that request's trace forever, and log later, unrelated work
+ * under it. Such producers start detached ({@link withRootLogContext}: their
+ * own identifiers, no trace), and the work they do on a command's behalf is
+ * joined to that command's trace explicitly (`./correlation`), or carries no
+ * trace at all. A line never claims a trace it cannot vouch for.
  *
  * Only identifiers ride here, never content.
  */
@@ -32,6 +39,17 @@ export function logContext(): LogContextFields {
 export function withLogContext<Result>(fields: LogContextFields, fn: () => Result): Result {
   const current = storage.getStore();
   return storage.run(current === undefined ? { ...fields } : { ...current, ...fields }, fn);
+}
+
+/**
+ * Runs `fn` in a fresh root context holding only `fields`: nothing of the
+ * operation running now (its trace, span, door or connection) is inherited,
+ * by `fn` or by anything it starts. For a long-lived producer a request
+ * happens to start, and for work done on behalf of a different operation
+ * than the one running.
+ */
+export function withRootLogContext<Result>(fields: LogContextFields, fn: () => Result): Result {
+  return storage.run({ ...fields }, fn);
 }
 
 /** A fresh trace id: 16 random bytes, W3C `trace-id` shaped. */

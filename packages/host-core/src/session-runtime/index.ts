@@ -11,6 +11,7 @@ import {
 import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
 import type { Logger } from "../log/logger";
+import { correlatedExecutor } from "./correlated-executor";
 import { createSessionLocationResolver } from "./location";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
@@ -59,7 +60,8 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
     // The payload stays durable and the Session raises Attention; this is the
     // operator's record of why an automatic release did not go out.
     onFollowUpFailure: (error) => options.log.error("follow-up queue release failed", { error }),
-    executor: options.executor,
+    // Attachments start detached, commands run under their own trace (VC-699).
+    executor: correlatedExecutor(options.executor),
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createSessionLocationResolver(
       options.db,
@@ -76,6 +78,7 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
   });
 }
 
+export { correlatedExecutor } from "./correlated-executor";
 export { createSessionLocationResolver } from "./location";
 export {
   createFileTranscriptArtifactStore,

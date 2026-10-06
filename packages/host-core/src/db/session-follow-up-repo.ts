@@ -5,6 +5,8 @@ import {
   type SessionFollowUpLedger,
   type SessionFollowUpState,
 } from "@volli/session-engine";
+import { logContext, withRootLogContext } from "../log/context";
+import { commandTrace, rememberCommandTrace } from "../log/correlation";
 import { hostLogger } from "../log/root";
 import { prepared } from "./prepared";
 import { settleTransaction } from "./transaction-gate";
@@ -84,6 +86,12 @@ function rowsOf(state: SessionFollowUpState): ReadonlyMap<string, FollowUpRow> {
  * One line per queue transition: queued, claimed for release (and on which
  * idle boundary), a claim returned, delivered (with its receipt) or withdrawn.
  * Identifiers only; the message itself is never logged.
+ *
+ * A queued message's trace is the request that queued it, and it stays the
+ * message's (VC-699): its release happens later, when some other turn ends,
+ * so every later line about it, and its delivery command, is joined to that
+ * trace by id (`log/correlation`), never to whichever operation happened to
+ * release it.
  */
 export function logQueueChanges(
   sessionId: string,
@@ -92,32 +100,52 @@ export function logQueueChanges(
 ): void {
   const now = rowsOf(after);
   const base = { sessionId, revision: after.revision, pending: after.entries.length };
+  const ambient = logContext()["traceId"];
+  const underTrace = (commandId: string, write: () => void): void => {
+    const owner = commandTrace(commandId);
+    if (owner === undefined || owner === ambient) write();
+    else withRootLogContext({ traceId: owner }, write);
+  };
   for (const [messageId, row] of now) {
     const was = before.get(messageId);
     const ids = { ...base, messageId, commandId: row.commandId };
-    if (was === undefined) log.info("follow-up queued", ids);
-    else if (was.state === "queued" && row.state === "releasing") {
-      log.info("follow-up release claimed", {
-        ...ids,
-        deliveryCommandId: row.deliveryCommandId,
-        reason: "idle-boundary",
-        boundary: after.releasedBoundary,
-      });
+    if (was === undefined) {
+      if (typeof ambient === "string") {
+        rememberCommandTrace(row.commandId, ambient);
+        rememberCommandTrace(row.deliveryCommandId, commandTrace(row.commandId) ?? ambient);
+      }
+      underTrace(row.commandId, () => log.info("follow-up queued", ids));
+    } else if (was.state === "queued" && row.state === "releasing") {
+      underTrace(row.commandId, () =>
+        log.info("follow-up release claimed", {
+          ...ids,
+          deliveryCommandId: row.deliveryCommandId,
+          reason: "idle-boundary",
+          boundary: after.releasedBoundary,
+        }),
+      );
     } else if (was.state === "releasing" && row.state === "queued") {
-      log.info("follow-up claim returned", { ...ids, reason: "not-sent" });
+      underTrace(row.commandId, () =>
+        log.info("follow-up claim returned", { ...ids, reason: "not-sent" }),
+      );
     }
   }
   for (const [messageId, row] of before) {
     if (now.has(messageId)) continue;
     const release = after.releases[row.deliveryCommandId];
     const ids = { ...base, messageId, commandId: row.commandId };
-    if (release === undefined) log.info("follow-up withdrawn", { ...ids, reason: "cancelled" });
-    else {
-      log.info("follow-up delivered", {
-        ...ids,
-        deliveryCommandId: row.deliveryCommandId,
-        status: release.receipt.status,
-      });
+    if (release === undefined) {
+      underTrace(row.commandId, () =>
+        log.info("follow-up withdrawn", { ...ids, reason: "cancelled" }),
+      );
+    } else {
+      underTrace(row.commandId, () =>
+        log.info("follow-up delivered", {
+          ...ids,
+          deliveryCommandId: row.deliveryCommandId,
+          status: release.receipt.status,
+        }),
+      );
     }
   }
 }

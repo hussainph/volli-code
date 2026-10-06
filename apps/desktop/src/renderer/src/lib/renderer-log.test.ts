@@ -1,7 +1,7 @@
 import type { RendererLogEntry } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { consoleText, installRendererLogForwarding, rendererLog } from "./renderer-log";
+import { consoleEntry, installRendererLogForwarding, rendererLog } from "./renderer-log";
 
 describe("the renderer's lines for main's log", () => {
   it("sends a feature's lines with its area and trace, and never throws", () => {
@@ -31,12 +31,23 @@ describe("the renderer's lines for main's log", () => {
     expect(() => rendererLog("x").warn("no window api")).not.toThrow();
   });
 
-  it("writes console arguments as one line", () => {
+  it("takes a console call's message and an error's summary, never its other arguments", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic["self"] = cyclic;
-    expect(consoleText(["a", 1, { b: 2 }, new TypeError("bad"), undefined, cyclic])).toBe(
-      'a 1 {"b":2} TypeError: bad undefined [object Object]',
-    );
+    expect(consoleEntry(["a %s", 1, { b: 2 }, new TypeError("bad"), undefined, cyclic])).toEqual({
+      msg: "a %s",
+      fields: { args: 5, error: { name: "TypeError" } },
+    });
+    expect(consoleEntry([{ token: "opaque" }])).toEqual({
+      msg: "console message",
+      fields: { args: 1 },
+    });
+    expect(consoleEntry([new RangeError("private")])).toEqual({
+      msg: "console error object",
+      fields: { args: 1, error: { name: "RangeError" } },
+    });
+    // A message known to quote a file is not forwarded at all.
+    expect(consoleEntry(["Time limit reached when tokenizing line: const secret = 1"])).toBeNull();
   });
 
   it("forwards console warnings and errors, uncaught errors and rejections, and undoes it", () => {
@@ -67,13 +78,17 @@ describe("the renderer's lines for main's log", () => {
     listeners.get("unhandledrejection")!({ reason: new Error("lost") });
     expect(printed).toHaveLength(2);
     expect(sent.map(({ level, area, msg }) => [level, area, msg])).toEqual([
-      ["warn", "console", "careful 2"],
-      ["error", "console", "Error: broke"],
-      ["error", "window", "boom"],
-      ["error", "window", "script"],
+      ["warn", "console", "careful"],
+      ["error", "console", "console error object"],
+      ["error", "window", "uncaught error"],
+      ["error", "window", "uncaught error"],
       ["error", "window", "unhandled rejection"],
     ]);
-    expect(sent[4]!.fields).toEqual({ reason: "Error: lost" });
+    expect(sent[0]!.fields).toEqual({ args: 1 });
+    expect(sent[2]!.fields).toEqual({ error: { name: "Error" }, source: "app.js", line: 3 });
+    expect(sent[3]!.fields).toEqual({ error: { name: "object" }, source: "", line: 0 });
+    expect(sent[4]!.fields).toEqual({ reason: { name: "Error" } });
+    expect(JSON.stringify(sent)).not.toMatch(/broke|boom|lost/u);
     undo();
     expect(target.removeEventListener).toHaveBeenCalledTimes(2);
     target.console.warn("after");

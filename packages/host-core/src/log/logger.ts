@@ -134,7 +134,17 @@ export function buildLogRecord(input: {
   };
 }
 
-/** A line within {@link MAX_LOG_LINE_BYTES}, or the record cut to what correlates it. */
+/** Characters a correlation identifier may have in a cut line: every real id is far shorter. */
+const MAX_CUT_IDENTIFIER = 128;
+
+/**
+ * A line within {@link MAX_LOG_LINE_BYTES}, or the record cut to what
+ * correlates it. The cut line is bounded by construction: the four named
+ * keys (component and message cut), and each correlation field only when it
+ * is a number or a short identifier. Every part is bounded in characters, and
+ * UTF-8 spends at most three bytes on one, so the cut line fits the ceiling
+ * whatever the fields held.
+ */
 function bounded(record: LogRecord, line: string): [LogRecord, string] {
   // UTF-8 spends at most three bytes per UTF-16 unit: a short line needs no count.
   if (line.length * 3 <= MAX_LOG_LINE_BYTES) return [record, line];
@@ -143,12 +153,13 @@ function bounded(record: LogRecord, line: string): [LogRecord, string] {
   const kept: Record<string, LogValue> = {};
   for (const key of LOG_CORRELATION_FIELDS) {
     const value = record[key];
-    if (value !== undefined) kept[key] = value;
+    if (typeof value === "number" || typeof value === "boolean") kept[key] = value;
+    else if (typeof value === "string" && value.length <= MAX_CUT_IDENTIFIER) kept[key] = value;
   }
   const cut: LogRecord = {
     ts: record.ts,
     level: record.level,
-    component: record.component,
+    component: record.component.slice(0, MAX_CUT_IDENTIFIER),
     msg: record.msg.slice(0, 512),
     ...kept,
     truncated: true,
