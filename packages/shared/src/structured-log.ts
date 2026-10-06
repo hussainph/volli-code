@@ -217,25 +217,101 @@ export function redactLogFields(
 }
 
 /** A string a log may hold: credential-shaped text replaced, then cut to the bound. */
-export function redactLogText(text: string): string {
-  const scrubbed = redactPayloadSecrets(text);
-  return scrubbed.length <= LOG_FIELD_BOUNDS.maxString
-    ? scrubbed
-    : `${scrubbed.slice(0, LOG_FIELD_BOUNDS.maxString - 1)}…`;
+export function redactLogText(
+  text: string,
+  maxLength: number = LOG_FIELD_BOUNDS.maxString,
+): string {
+  // Scrubbed whole, then cut: cutting first could split a PEM block or a
+  // token, and leave a half the scrubber no longer recognises.
+  const scrubbed = redactQuotedAssignments(redactPayloadSecrets(text));
+  return scrubbed.length <= maxLength ? scrubbed : `${scrubbed.slice(0, maxLength - 1)}…`;
+}
+
+/**
+ * JSON-quoted credential assignments (`"token":"…"`, `"password": 123`): what
+ * a stringified object leaves behind, which the shell-shaped scrubber does not
+ * read as an assignment. Linear: the value is one JSON string or one bare
+ * token; an object or array value is not consumed, so its own keys are read.
+ */
+const QUOTED_ASSIGNMENT =
+  /"([A-Za-z_][\w.-]{0,63})"(\s*:\s*)("(?:[^"\\]|\\.)*"|[^\s,{}[\]"][^\s,}\]]*)/gu;
+
+function redactQuotedAssignments(text: string): string {
+  if (!text.includes('"')) return text;
+  return text.replace(QUOTED_ASSIGNMENT, (match, name: string, separator: string) =>
+    isSensitiveLogKey(name) ? `"${name}"${separator}"${LOG_REDACTED}"` : match,
+  );
 }
 
 function isCountLike(value: unknown): boolean {
   return value === null || typeof value === "number" || typeof value === "boolean";
 }
 
+/**
+ * Bounds on an `Error`'s strings in a log line. Each is scrubbed like any
+ * other string (bearer tokens, prefixed keys, JWTs, URL credentials and query
+ * tokens, quoted assignments) and cut: an error's text is the commonest way a
+ * payload reaches a log.
+ */
+export const LOG_ERROR_BOUNDS = Object.freeze({
+  /** `error.name`: a class name, normally a word. */
+  maxName: 120,
+  /** `error.message`. */
+  maxMessage: 1_000,
+  /** `error.stack`: where it was thrown. The first line repeats the message, scrubbed the same way. */
+  maxStack: 2_000,
+});
+
+/**
+ * An `Error` as a log field: `{name, message, code?, stack?}`, every string
+ * scrubbed and cut ({@link LOG_ERROR_BOUNDS}). Never its cause, never any
+ * other property: an error object is a common carrier of request payloads.
+ *
+ * The stack is kept on purpose (where it was thrown is the point of logging
+ * an error), scrubbed and cut like the message it repeats.
+ */
 function redactError(error: Error, depth: number): LogValue {
-  const out: Record<string, LogValue> = { name: error.name, message: redactLogText(error.message) };
+  const out: Record<string, LogValue> = {
+    name: redactLogText(String(error.name), LOG_ERROR_BOUNDS.maxName),
+    message: redactLogText(String(error.message), LOG_ERROR_BOUNDS.maxMessage),
+  };
   const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" || typeof code === "number")
-    out["code"] = redactLogValue(code, depth);
-  // Where it was thrown: scrubbed and cut like any string, so a log still says.
-  if (typeof error.stack === "string") out["stack"] = redactLogText(error.stack);
+  if (typeof code === "string" || typeof code === "number") {
+    out["code"] = typeof code === "number" ? redactLogValue(code, depth) : redactLogText(code, 120);
+  }
+  if (typeof error.stack === "string") {
+    out["stack"] = redactLogText(error.stack, LOG_ERROR_BOUNDS.maxStack);
+  }
   return out;
+}
+
+/** What a generic door keeps of an error it cannot vouch for: a class name and a stable code. */
+export interface LogErrorSummary {
+  readonly name: string;
+  readonly code?: string | number;
+}
+
+const ERROR_NAME = /^[A-Za-z_$][\w$.]{0,63}$/u;
+const ERROR_CODE = /^[A-Za-z0-9_.:-]{1,64}$/u;
+
+/**
+ * An error, reduced to what is safe to log when nothing is known about where
+ * its message came from: its class name when it looks like one, and its code
+ * when it is a short identifier. Never its message, its stack or anything it
+ * carries. For generic doors (an IPC failure, a renderer's console, a socket
+ * request), whose errors may quote a file, a prompt or a request.
+ */
+export function logErrorSummary(error: unknown): LogErrorSummary {
+  if (typeof error !== "object" || error === null) {
+    return { name: typeof error === "string" ? "string" : typeof error };
+  }
+  const { name, code } = error as { name?: unknown; code?: unknown };
+  const summary: { name: string; code?: string | number } = {
+    name: typeof name === "string" && ERROR_NAME.test(name) ? name : "Error",
+  };
+  if (typeof code === "number" && Number.isFinite(code)) summary.code = code;
+  else if (typeof code === "string" && ERROR_CODE.test(code)) summary.code = code;
+  return summary;
 }
 
 /* ------------------------------------------------------- host.logs (wire) */
@@ -274,20 +350,94 @@ export interface HostLogsBatch {
  * A line the renderer forwards to main's log (VC-699): its warnings, errors
  * and the host link's state changes. Main names it `renderer:<area>`, adds
  * the time, redacts it like any line, and bounds how many a window may send.
+ *
+ * Its shape is narrow on purpose. A message (one line, cut), and flat fields
+ * of identifiers and counts: a string, a number, a boolean, or an error's
+ * summary ({@link LogErrorSummary}). Nothing nested, nothing of unknown shape:
+ * a console argument is never forwarded as data.
  */
 export interface RendererLogEntry {
   readonly level: LogLevel;
   /** Where in the renderer: `console`, `window`, `host-link`, a feature's name. Lowercase, dotted or dashed. */
   readonly area: string;
   readonly msg: string;
-  readonly fields?: Readonly<Record<string, unknown>>;
+  readonly fields?: Readonly<Record<string, RendererLogFieldValue>>;
   /** The operation it belongs to, when the renderer knows it. */
   readonly traceId?: string;
 }
 
-const RENDERER_AREA = /^[a-z][a-z0-9.-]{0,63}$/u;
+export type RendererLogFieldValue = string | number | boolean | null | LogErrorSummary;
 
-/** The entry a renderer sent, when it is one; null otherwise. Main trusts nothing else. */
+/** The renderer's bounds, applied on both sides of the IPC door. */
+export const RENDERER_LOG_BOUNDS = Object.freeze({
+  /** Characters of the message, its first line only. */
+  maxMsg: 300,
+  /** Characters of one string field. */
+  maxString: 200,
+  /** Fields kept from one entry. */
+  maxFields: 24,
+});
+
+const RENDERER_AREA = /^[a-z][a-z0-9.-]{0,63}$/u;
+const RENDERER_FIELD = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+
+/**
+ * A renderer line's message: its first line, scrubbed, cut. A message is a
+ * diagnostic sentence; whatever followed a newline (a stack, a dump) is not.
+ */
+export function rendererLogMessage(msg: string): string {
+  const newline = msg.search(/[\r\n]/u);
+  return redactLogText(newline === -1 ? msg : msg.slice(0, newline), RENDERER_LOG_BOUNDS.maxMsg);
+}
+
+/**
+ * A renderer line's fields, made flat and safe: a credential-named field
+ * loses its value, a string is scrubbed and cut, an `Error` (or anything
+ * error-shaped) becomes its summary, and anything else (an object, an array,
+ * a function) is dropped and counted. Run before the entry is serialised, in
+ * the renderer, and again by main, which trusts nothing a window sends.
+ */
+export function rendererLogFields(
+  fields: Readonly<Record<string, unknown>>,
+): Record<string, RendererLogFieldValue> {
+  const out: Record<string, RendererLogFieldValue> = {};
+  let kept = 0;
+  let dropped = 0;
+  for (const name of Object.keys(fields)) {
+    const value = fields[name];
+    if (value === undefined) continue;
+    if (kept >= RENDERER_LOG_BOUNDS.maxFields || !RENDERER_FIELD.test(name)) {
+      dropped += 1;
+      continue;
+    }
+    const safe = rendererFieldValue(name, value);
+    if (safe === undefined) {
+      dropped += 1;
+      continue;
+    }
+    out[name] = safe;
+    kept += 1;
+  }
+  if (dropped > 0) out["droppedFields"] = dropped;
+  return out;
+}
+
+function rendererFieldValue(name: string, value: unknown): RendererLogFieldValue | undefined {
+  if (isSensitiveLogKey(name) && !isCountLike(value)) return LOG_REDACTED;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (typeof value === "string") return redactLogText(value, RENDERER_LOG_BOUNDS.maxString);
+  if (value instanceof Error || isErrorShaped(value)) return logErrorSummary(value);
+  return undefined;
+}
+
+function isErrorShaped(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.includes("name") && keys.every((key) => key === "name" || key === "code");
+}
+
+/** The entry a renderer sent, made safe; null when it is not one. Main trusts nothing else. */
 export function readRendererLogEntry(value: unknown): RendererLogEntry | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const { level, area, msg, fields, traceId } = value as Record<string, unknown>;
@@ -302,8 +452,10 @@ export function readRendererLogEntry(value: unknown): RendererLogEntry | null {
   return {
     level,
     area,
-    msg,
-    ...(fields === undefined ? {} : { fields: fields as Record<string, unknown> }),
+    msg: rendererLogMessage(msg),
+    ...(fields === undefined
+      ? {}
+      : { fields: rendererLogFields(fields as Record<string, unknown>) }),
     ...(isTraceId(traceId) ? { traceId } : {}),
   };
 }

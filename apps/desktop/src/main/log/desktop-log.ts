@@ -20,6 +20,7 @@ import {
   createRotatingFileSink,
   hostLogger,
   installHostLog,
+  reportToStderr,
   teeSinks,
   type LogRing,
   type LogSink,
@@ -61,7 +62,19 @@ export function desktopLogDirectory(userData: string): string {
 /** Installs the desktop's log root: every host logger writes here from now on. */
 export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   const directory = desktopLogDirectory(options.userData);
-  const file = createRotatingFileSink({ directory });
+  // Never fatal (VC-699): a directory that cannot be made, a file that cannot
+  // be opened or a full disk stops the file, once, said on stderr and to the
+  // other destinations; the app starts and runs regardless.
+  const file = createRotatingFileSink({
+    directory,
+    onFailure: (failure) => {
+      reportToStderr(failure);
+      hostLogger("log").warn("log file disabled: lines are dropped from here on", {
+        stage: failure.stage,
+        code: failure.code,
+      });
+    },
+  });
   const level = logLevelFrom(options.env["VOLLI_LOG_LEVEL"], options.dev ? "debug" : "info");
   const ring = createLogRing();
   const sinks: LogSink[] = [file, ring, ...(options.sinks ?? [])];

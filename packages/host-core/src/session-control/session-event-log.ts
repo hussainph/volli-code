@@ -4,15 +4,31 @@
  * The ledger is the one place every Session fact passes, so a line here is
  * the one place a viewer sees a Session's turns, attachments, commands and
  * Attention, whichever door, executor or background job caused them. Lines
- * are written after the transaction commits, inside the operation that
- * appended the facts: a turn a Client's message opened carries that
- * message's trace.
+ * are written after the transaction commits.
+ *
+ * **Which trace a fact carries**, in order:
+ * 1. its command's, when this host recorded that command under a trace (a
+ *    receipt reconciled later, a follow-up's delivery);
+ * 2. its turn's, when this host saw the turn start under one (a turn's end,
+ *    reported from the executor's own listener);
+ * 3. the ambient one: the operation whose promise chain committed it. The
+ *    executor's long-lived producers start detached
+ *    (`session-runtime/correlated-executor`), so an ambient trace here is the
+ *    request's own, not one inherited by a background listener;
+ * 4. none. A fact is never filed under a trace it cannot be joined to.
  *
  * Identifiers, kinds and counts only: never a title, a message, a transcript
  * reference's content or a reason a person typed.
  */
 import type { SessionEvent } from "@volli/shared";
 
+import { logContext, withRootLogContext } from "../log/context";
+import {
+  commandTrace,
+  rememberCommandTrace,
+  rememberTurnTrace,
+  turnTrace,
+} from "../log/correlation";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("session");
@@ -43,12 +59,27 @@ const INFO_KINDS: ReadonlySet<string> = new Set([
   "interaction.cancelled",
 ]);
 
-/** One line per committed fact. */
+/** One line per committed fact, each under the trace it can be joined to. */
 export function logSessionEvents(events: readonly SessionEvent[]): void {
+  const ambient = logContext()["traceId"];
+  const ambientTrace = typeof ambient === "string" ? ambient : undefined;
   for (const event of events) {
+    const fields = sessionEventFields(event);
+    const commandId = typeof fields["commandId"] === "string" ? fields["commandId"] : undefined;
+    const turnId = typeof fields["turnId"] === "string" ? fields["turnId"] : undefined;
+    const traceId = commandTrace(commandId) ?? turnTrace(event.sessionId, turnId) ?? ambientTrace;
+    // Joined whatever the level: a later `info` line may need the join.
+    if (traceId !== undefined) {
+      if (commandId !== undefined) rememberCommandTrace(commandId, traceId);
+      if (turnId !== undefined && event.payload.kind === "turn.started") {
+        rememberTurnTrace(event.sessionId, turnId, traceId);
+      }
+    }
     const level = INFO_KINDS.has(event.payload.kind) ? "info" : "debug";
     if (!log.enabled(level)) continue;
-    log[level](`session ${event.payload.kind}`, sessionEventFields(event));
+    const write = () => log[level](`session ${event.payload.kind}`, fields);
+    if (traceId === ambientTrace) write();
+    else withRootLogContext(traceId === undefined ? {} : { traceId }, write);
   }
 }
 

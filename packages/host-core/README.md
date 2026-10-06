@@ -273,10 +273,21 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
   `VOLLI_LOG_LEVEL`.
 - **Every line is redacted** (`redactLogFields`, `@volli/shared`): credential-named
   fields lose any value but a count, and strings lose credential-shaped text.
-- **Correlation is ambient.** A door opens `withTrace(peerTrace, { door, … }, handle)`
-  per request; code deeper in adds what it knows with `withLogContext({ sessionId })`.
-  Lines carry both without a parameter threaded through.
-- **Cheap.** The level check runs before anything is built; sinks buffer.
+- **Correlation is ambient, for a request's own chain.** A door opens
+  `withTrace(peerTrace, { door, … }, handle)` per request; code deeper in adds
+  what it knows with `withLogContext({ sessionId })`. Lines carry both without a
+  parameter threaded through.
+- **Background work never inherits it.** Anything long-lived a request starts
+  (an executor's attachment, a listener, an interval) starts detached with
+  `withRootLogContext({ sessionId, … })`, and joins a trace only by identifier
+  (`log/correlation`: a command's trace, a turn's trace). The Session runtime's
+  executor is wrapped so (`correlatedExecutor`). A line with no such join
+  carries its ids and no trace.
+- **Generic doors log error summaries** (`logErrorSummary`: class name and
+  code), never an error's message.
+- **Cheap, and never fatal.** The level check runs before anything is built;
+  the file sink only queues on the caller's stack, and a disk failure disables
+  it with one warning.
 - **No bare console.** Production code in host-core and Electron main logs only
   through a host logger; `src/log/no-console.test.ts` (and its twin in
   `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
