@@ -16,6 +16,7 @@
  */
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
 import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
 import {
   LOCKED_FINGERPRINTS,
@@ -2789,6 +2790,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 60,
     name: "migration history — each applied version with its lock fingerprint (VC-633)",
     sql: MIGRATION_HISTORY_MIGRATION,
+  },
+  {
+    version: 61,
+    name: "session follow-up queue — host-owned commands and release evidence (VC-675)",
+    sql: SESSION_FOLLOW_UP_MIGRATION,
   },
 ];
 

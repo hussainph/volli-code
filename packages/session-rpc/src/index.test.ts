@@ -604,6 +604,75 @@ describe("Session tRPC router", () => {
     );
   });
 
+  it("carries the host queue and its independent revision through projection reads", async () => {
+    const fixture = runtimeFixture();
+    const queue = [
+      {
+        id: "q",
+        commandId: "queued",
+        state: "queued" as const,
+        message: {
+          id: "q",
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: "follow up" }],
+        },
+      },
+    ];
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {
+          ...fixture.runtime,
+          projection: async (input) => {
+            const base = await fixture.runtime.projection(input);
+            return { ...base, projection: { ...base.projection, queue, queueRevision: 7 } };
+          },
+        },
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+    expect((await caller.session.projection({ sessionId: "session-1" })).projection).toMatchObject({
+      queue,
+      queueRevision: 7,
+    });
+  });
+
+  it.each([false, true])(
+    "only publishes queue fields to negotiated network peers (queue=%s)",
+    async (queueAware) => {
+      const fixture = runtimeFixture();
+      const base = snapshot();
+      const queuedSnapshot = {
+        ...base,
+        projection: { ...base.projection, queue: [], queueRevision: 7 },
+      };
+      const caller = createSessionRouter().createCaller({
+        ...sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          diagnostics: new RpcDiagnosticLog(),
+          runtime: {
+            ...fixture.runtime,
+            snapshot: async () => queuedSnapshot,
+            projection: async () => queuedSnapshot,
+          },
+        }),
+        operations: new Set([
+          "session.snapshot",
+          "session.projection",
+          ...(queueAware ? ["session.cancelQueued"] : []),
+        ]),
+      });
+      for (const read of [caller.session.snapshot, caller.session.projection]) {
+        const answer = await read({ sessionId: "session-1" });
+        if (queueAware) expect(answer.projection).toMatchObject({ queue: [], queueRevision: 7 });
+        else {
+          expect(answer.projection).not.toHaveProperty("queue");
+          expect(answer.projection).not.toHaveProperty("queueRevision");
+        }
+      }
+    },
+  );
+
   it("preserves a minimal runtime projection without inventing attachment state", async () => {
     const fixture = runtimeFixture();
     const runtime: SessionRuntime = {
@@ -1878,6 +1947,73 @@ describe("Session tRPC router", () => {
     expect(fixture.calls.command).toEqual([]);
   });
 
+  it("routes queue edit/cancel through their catalog entries and refuses the generic bypass", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+    const message = {
+      id: "m",
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "edited" }],
+    };
+    expect(
+      await caller.session.cancelQueued({
+        commandId: "cancel",
+        sessionId: "session-1",
+        messageId: "m",
+        expectedRevision: 3,
+      }),
+    ).toMatchObject({ sessionId: "session-1", receipt: null });
+    await caller.session.editQueued({
+      commandId: "edit",
+      sessionId: "session-1",
+      messageId: "m",
+      message,
+      expectedRevision: 4,
+    });
+    expect(fixture.calls.command).toEqual([
+      {
+        commandId: "cancel",
+        sessionId: "session-1",
+        command: { kind: "message.cancel", messageId: "m", expectedRevision: 3 },
+      },
+      {
+        commandId: "edit",
+        sessionId: "session-1",
+        command: { kind: "message.edit", messageId: "m", message, expectedRevision: 4 },
+      },
+    ]);
+    for (const command of [
+      { kind: "message.cancel" as const, messageId: "m" },
+      { kind: "message.edit" as const, messageId: "m", message },
+    ]) {
+      await expect(
+        caller.session.command({ commandId: "bypass", sessionId: "session-1", command }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(fixture.calls.command).toHaveLength(2);
+    for (const expectedRevision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const input = {
+        commandId: "invalid-revision",
+        sessionId: "session-1",
+        messageId: "m",
+        expectedRevision,
+      };
+      await expect(caller.session.cancelQueued(input)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      await expect(caller.session.editQueued({ ...input, message })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+    }
+    expect(fixture.calls.command).toHaveLength(2);
+  });
+
   it("reattaches an existing Session with no Role in the request and no runtime identity out", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
@@ -2483,6 +2619,49 @@ describe("Session tRPC router", () => {
     expect(diagnosticTracked.id).toBe("2");
     expect(diagnosticTracked.data).toEqual(expect.objectContaining({ id: 2 }));
   });
+
+  it.each([
+    { operation: "subscribe" as const, transport: "websocket" as const, queueAware: false },
+    { operation: "subscribe" as const, transport: "electron-ipc" as const, queueAware: true },
+    { operation: "subscribeQueue" as const, transport: "websocket" as const, queueAware: true },
+  ])(
+    "$operation on $transport preserves its negotiated stream vocabulary",
+    async ({ operation, transport, queueAware }) => {
+      const fixture = runtimeFixture();
+      const queued: SessionStreamEmission = {
+        kind: "queue",
+        sessionId: "session-1",
+        throughSequence: 4,
+        revision: 2,
+        queue: [],
+      };
+      fixture.runtime.subscribe = async (_input, emit) => {
+        await emit(queued);
+        await emit(frame(5));
+        return () => {};
+      };
+      const caller = createSessionRouter().createCaller(
+        sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: fixture.runtime,
+          diagnostics: new RpcDiagnosticLog(),
+          transport,
+        }),
+      );
+      const stream = await caller.session[operation]({ sessionId: "session-1" });
+      const iterator = stream[Symbol.asyncIterator]();
+      try {
+        const first = trackedValue((await iterator.next()).value);
+        expect(first.data).toEqual(queueAware ? queued : expect.objectContaining({ sequence: 5 }));
+        if (queueAware)
+          expect(trackedValue((await iterator.next()).value).data).toEqual(
+            expect.objectContaining({ sequence: 5 }),
+          );
+      } finally {
+        await iterator.return?.();
+      }
+    },
+  );
 
   it("records a sanitized diagnostic when either bounded subscription queue overflows", async () => {
     const fixture = runtimeFixture();

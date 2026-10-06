@@ -22,7 +22,14 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -349,7 +356,7 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     db.close();
   });
 
-  it("refuses, cleanly, a bundle this build made: N-1 knows no schema 59", async () => {
+  it("refuses, cleanly, a bundle this build made: N-1 knows no follow-up queue table", async () => {
     const db = openDb();
     (await current(db)).settings.saveKey("brave", BRAVE);
     db.close();
@@ -369,10 +376,25 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     writeFileSync(bundlePath, bytes);
     const targetDb = join(target, "volli.db");
     emptyProfileDb(targetDb);
+    const targetBefore = readFileSync(targetDb);
+    const entriesBefore = readdirSync(target).toSorted();
     const run = await n1(targetDb, [{ kind: "restore", profileRoot: target, bundle: bundlePath }]);
-    expect(run.results[0]).toMatchObject({
-      ok: false,
-      problems: [{ kind: "unsupported-version" }],
-    });
+    // The pinned schema-58 backup decisions do not include migration 061's
+    // additive queue table. The reader rejects its shape before restore can
+    // report the newer schema version, and before staging or mutating a target.
+    expect(run.results).toEqual([
+      {
+        ok: false,
+        problems: [
+          {
+            kind: "shape",
+            message:
+              "Data document carries session_follow_up_queue, which no backup decision includes.",
+          },
+        ],
+      },
+    ]);
+    expect(readFileSync(targetDb)).toEqual(targetBefore);
+    expect(readdirSync(target).toSorted()).toEqual(entriesBefore);
   });
 });

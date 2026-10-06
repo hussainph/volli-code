@@ -29,6 +29,7 @@
  */
 import type Database from "better-sqlite3";
 import type {
+  SessionClientCommand,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -141,8 +142,30 @@ export interface HostHandlerSignatures {
     { sessionId: string; afterSequence: number; signal?: AbortSignal },
     SessionStreamEmission
   >;
+  readonly "session.subscribeQueue": HostSubscriptionHandler<
+    { sessionId: string; afterSequence: number; signal?: AbortSignal },
+    SessionStreamEmission
+  >;
   readonly "session.command": HostHandler<
     SessionRuntimeCommandRequest,
+    SessionRuntimeCommandResult
+  >;
+  /**
+   * `expectedRevision`, when given, is the queue revision the Client acted on;
+   * the Sessions module refuses a stale one with a typed queue-revision conflict.
+   */
+  readonly "session.cancelQueued": HostHandler<
+    { commandId: string; sessionId: string; messageId: string; expectedRevision?: number },
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.editQueued": HostHandler<
+    {
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+      message: Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
+      expectedRevision?: number;
+    },
     SessionRuntimeCommandResult
   >;
   readonly "session.cancelInteraction": HostHandler<
@@ -367,7 +390,36 @@ function hostHandlerEntries(
         (emission) => sink.emit(emission),
         (error) => sink.fail(error),
       ),
+    "session.subscribeQueue": (input, _call, sink) =>
+      runtime().subscribe(
+        input,
+        (emission) => sink.emit(emission),
+        (error) => sink.fail(error),
+      ),
     "session.command": (request) => runtime().command(request),
+    // An absent revision stays absent: the command's idempotency signature is
+    // unchanged for a Client that does not send one.
+    "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
+      runtime().command({
+        commandId,
+        sessionId,
+        command: {
+          kind: "message.cancel",
+          messageId,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+        },
+      }),
+    "session.editQueued": ({ commandId, sessionId, messageId, message, expectedRevision }) =>
+      runtime().command({
+        commandId,
+        sessionId,
+        command: {
+          kind: "message.edit",
+          messageId,
+          message,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+        },
+      }),
     // A person walked away from a pending interaction: the only reason a
     // person's door can honestly report is that they left it undecided.
     "session.cancelInteraction": (input) =>

@@ -268,7 +268,7 @@ type ChatCommand =
   | {
       kind: "message.submit";
       message: UIMessage;
-      delivery: ChatMessageDelivery;
+      delivery?: ChatMessageDelivery;
     }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
@@ -906,7 +906,14 @@ export class ChatSessionClient {
           })),
         ],
       };
-      const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
+      // This renderer still owns its local queue. Its drain is an immediate
+      // submission, not another host queue admission (safe while the client
+      // migration lands in the next stacked change).
+      const command: ChatCommand = {
+        kind: "message.submit",
+        message: wireMessage,
+        ...(delivery === "queue" ? {} : { delivery }),
+      };
       const deliveryResult = this.#rpc.session.command.mutate({
         commandId: message.id,
         sessionId: this.sessionId,

@@ -1,11 +1,18 @@
 import type { z } from "zod";
 import type { RendererSessionEvent, SessionPresentationProjection } from "@volli/shared";
 import type {
+  SessionFollowUpItem,
   SessionTranscriptArtifact,
   SessionStreamOverlay,
   SessionStreamCompactionProgress,
+  SessionStreamQueue,
 } from "@volli/session-engine";
-import type { RendererSessionCommandResult, RendererSessionStreamFrame } from "./index";
+import type {
+  RendererSessionCommandResult,
+  RendererSessionProjection,
+  RendererSessionStreamEmission,
+  RendererSessionStreamFrame,
+} from "./index";
 import type * as schemas from "./output-schema";
 
 // These assertions use only uncast inferred schemas. Comparing the public
@@ -67,6 +74,15 @@ type Accepted<T, Z> = [DeepMutable<T>] extends [Z] ? true : false;
 export type Projection = NoMissing<
   Missing<SessionPresentationProjection, z.output<typeof schemas.projectionWireSchema>>
 >;
+// The projection the router actually returns: the presentation projection plus
+// the engine's follow-up queue extension (VC-675). Checked against the engine
+// type, so a queue field the engine adds cannot be stripped at this edge.
+export type EngineProjection = NoMissing<
+  Missing<RendererSessionProjection, z.output<typeof schemas.projectionWireSchema>>
+>;
+export type FollowUpItem = NoMissing<
+  Missing<SessionFollowUpItem, z.output<typeof schemas.followUpItemWireSchema>>
+>;
 export type FullProjection = NoMissing<
   Missing<SessionPresentationProjection, z.output<typeof schemas.fullProjectionSchema>>
 >;
@@ -86,6 +102,20 @@ export type Overlay = NoMissing<
 export type Compaction = NoMissing<
   Missing<SessionStreamCompactionProgress, z.output<typeof schemas.streamEmissionWireSchema>>
 >;
+export type Queue = NoMissing<
+  Missing<SessionStreamQueue, z.output<typeof schemas.streamEmissionWireSchema>>
+>;
+// Every arm the router can yield has a wire arm; the frozen legacy union is the
+// one deliberate exception, and it must still miss exactly the queue arm.
+export type Emission = NoMissing<
+  Missing<RendererSessionStreamEmission, z.output<typeof schemas.streamEmissionWireSchema>>
+>;
+type LegacyMissingQueue = Missing<
+  SessionStreamQueue,
+  z.output<typeof schemas.legacyStreamEmissionWireSchema>
+>;
+// @ts-expect-error the legacy stream union deliberately has no queue arm
+export type LegacyQueue = NoMissing<LegacyMissingQueue>;
 // Complement key presence with domain-to-wire acceptance (enums/nullability).
 // SDK transcript/overlay values can contain unknown non-JSON data in TypeScript;
 // their JSON safety restriction is intentional, so only keys are checked there.
@@ -95,6 +125,26 @@ export type ValuesAccepted = [
   Assert<Accepted<RendererSessionCommandResult, z.output<typeof schemas.sessionCommandWireSchema>>>,
   Assert<
     Accepted<SessionStreamCompactionProgress, z.output<typeof schemas.streamEmissionWireSchema>>
+  >,
+  // Queue values: the UIMessage is key-checked above (SDK parts may hold
+  // non-JSON TypeScript values); every other queue value is value-checked.
+  Assert<
+    Accepted<
+      Omit<SessionFollowUpItem, "message">,
+      Omit<z.output<typeof schemas.followUpItemWireSchema>, "message">
+    >
+  >,
+  Assert<
+    Accepted<
+      Omit<SessionStreamQueue, "queue">,
+      Omit<Extract<z.output<typeof schemas.streamEmissionWireSchema>, { kind: "queue" }>, "queue">
+    >
+  >,
+  Assert<
+    Accepted<
+      Pick<RendererSessionProjection, "queueRevision">,
+      Pick<z.output<typeof schemas.projectionWireSchema>, "queueRevision">
+    >
   >,
 ];
 

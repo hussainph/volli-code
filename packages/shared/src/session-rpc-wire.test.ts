@@ -39,6 +39,8 @@ describe("Session RPC wire protocol", () => {
       "session.projection",
       "session.subscribe",
       "session.command",
+      "session.cancelQueued",
+      "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
     ]);

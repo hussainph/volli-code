@@ -2607,8 +2607,11 @@ describe("the queued message", () => {
     expect(rpc.submissions()).toHaveLength(1);
     expect(rpc.submissions()[0]).toMatchObject({
       commandId: "q1",
-      command: { message: { id: "q1" }, delivery: "queue" },
+      command: { message: { id: "q1" } },
     });
+    // The legacy renderer already drained this row; do not enqueue it again
+    // on a host that supports durable follow-ups.
+    expect(rpc.submissions()[0]?.command).not.toHaveProperty("delivery");
     expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
 
     store.getState().settle(sessionId, null);
@@ -2617,8 +2620,9 @@ describe("the queued message", () => {
     expect(rpc.submissions()).toHaveLength(2);
     expect(rpc.submissions()[1]).toMatchObject({
       commandId: "q1",
-      command: { message: { id: "q1" }, delivery: "queue" },
+      command: { message: { id: "q1" } },
     });
+    expect(rpc.submissions()[1]?.command).not.toHaveProperty("delivery");
     expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
   });
 

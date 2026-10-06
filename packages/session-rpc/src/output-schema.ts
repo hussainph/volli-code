@@ -23,7 +23,11 @@ import {
   TOOL_ROUTES,
 } from "@volli/shared";
 import type { RendererSessionEventPayload, SessionPresentationProjection } from "@volli/shared";
-import type { RendererSessionCommandResult, RendererSessionStreamFrame } from "./index";
+import type {
+  RendererSessionCommandResult,
+  RendererSessionProjection,
+  RendererSessionStreamFrame,
+} from "./index";
 
 const text = z.string();
 const nullableText = text.nullable();
@@ -454,6 +458,20 @@ export const uiMessageWireSchema = z.object({
   metadata: z.json().optional(),
   parts: z.array(uiPartWireSchema),
 });
+/**
+ * One host-owned follow-up (VC-675): the complete queued UIMessage, the command
+ * that queued it, and whether it is still editable or already being released.
+ * Delivery bookkeeping (origin, model, steer target) stays behind the edge.
+ */
+export const followUpItemWireSchema = z.object({
+  id: text,
+  message: uiMessageWireSchema,
+  commandId: text,
+  state: z.enum(["queued", "releasing"]),
+});
+/** Queue order is by this revision, never by the event cursor; safe-integer bounded. */
+export const queueRevisionWireSchema = sequence;
+export const followUpQueueWireSchema = z.array(followUpItemWireSchema);
 export const transcriptWireSchema = z.object({
   version: z.literal(1),
   threadId: text,
@@ -505,10 +523,15 @@ export const fullProjectionSchema = z.object({
 // rendererProjection deliberately carries only fields its source contains (the
 // established minimal-projection contract). Retain the existing published TS
 // type, but describe that absence faithfully rather than inventing defaults.
-export const projectionWireSchema = fullProjectionSchema.partial();
+// The host's follow-up queue and its revision ride beside the presentation
+// projection (VC-675); both stay optional, so a host without a queue is valid.
+export const projectionWireSchema = fullProjectionSchema.partial().extend({
+  queue: followUpQueueWireSchema.optional(),
+  queueRevision: queueRevisionWireSchema.optional(),
+});
 export const projectionSchema = projectionWireSchema as unknown as z.ZodType<
-  SessionPresentationProjection,
-  SessionPresentationProjection
+  RendererSessionProjection,
+  RendererSessionProjection
 >;
 export const sessionProjectionOutputSchema = z.object({
   projection: projectionSchema,
@@ -591,8 +614,34 @@ export const streamEmissionWireSchema = z.union([
     state: z.enum(["started", "finished"]),
     reason: z.enum(COMPACTION_WORK_REASONS),
   }),
+  // The whole host queue after a change. It does not advance the event
+  // cursor: `throughSequence` is the durable history it was emitted beside,
+  // and consumers order queue snapshots by `revision`.
+  z.object({
+    kind: z.literal("queue"),
+    sessionId: text,
+    throughSequence: sequence,
+    revision: queueRevisionWireSchema,
+    queue: followUpQueueWireSchema,
+  }),
 ]);
 export const streamEmissionSchema = z.union([
+  frameSchema,
+  streamEmissionWireSchema.options[1],
+  streamEmissionWireSchema.options[2],
+  streamEmissionWireSchema.options[3],
+]);
+/**
+ * The VC-669 frozen vocabulary: a published operation's closed output union
+ * never gains an arm, so the pre-queue stream keeps exactly these three and a
+ * queue-aware peer reads {@link streamEmissionSchema} through its own feature.
+ */
+export const legacyStreamEmissionWireSchema = z.union([
+  streamEmissionWireSchema.options[0],
+  streamEmissionWireSchema.options[1],
+  streamEmissionWireSchema.options[2],
+]);
+export const legacyStreamEmissionSchema = z.union([
   frameSchema,
   streamEmissionWireSchema.options[1],
   streamEmissionWireSchema.options[2],

@@ -1,10 +1,20 @@
 import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
+import { canonicalJson } from "./transcript-artifacts";
+import {
+  projectSessionFollowUps,
+  sessionFollowUpDeliveryCommandId,
+  type SessionFollowUpCommand,
+  type SessionFollowUpItem,
+  type SessionFollowUpLedger,
+  type StoredSessionFollowUp,
+} from "./session-follow-ups";
 import type { SessionOrigin } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  QueueRevisionConflictError,
   shortSessionId,
   sanitizeSessionInteraction,
   turnQueueEvent,
@@ -113,6 +123,16 @@ export interface SessionRuntimeIds {
 
 export interface SessionRuntimePorts {
   engine: SessionEngine;
+  /** Durable host queue. Explicit queue commands fail closed when not composed. */
+  followUps?: SessionFollowUpLedger;
+  /** Diagnostics for an automatic release failure; the item remains durable. */
+  onFollowUpFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Backoff for retrying a release that failed before any delivery intent was
+   * recorded (nothing was sent, so a retry cannot duplicate it). One entry per
+   * attempt; once spent, the row waits, visibly, for the next ordinary wake.
+   */
+  followUpRetryDelaysMs?: readonly number[];
   /** The one structured executor this runtime attaches. */
   executor: NativeHarnessAdapter;
   artifacts: TranscriptArtifactStore;
@@ -177,6 +197,12 @@ export type SessionClientCommand =
       agent?: string | null;
       variant?: string | null;
     }
+  /**
+   * `expectedRevision`: the queue revision the caller acted on. A mismatch is
+   * a typed conflict ({@link QueueRevisionConflictError}), never a mutation.
+   */
+  | { kind: "message.cancel"; messageId: string; expectedRevision?: number }
+  | { kind: "message.edit"; messageId: string; message: UIMessage; expectedRevision?: number }
   /** `tier`: the named tier this selection resolved from, when a start named one (VC-259). */
   /** `auto`: the decision model's pick and why, when it chose this selection at birth (VC-432). */
   | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
@@ -214,6 +240,12 @@ type AttachCommandRequest = ExistingSessionCommandRequest & {
 };
 type MessageCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "message.submit" }>;
+};
+type FollowUpCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<
+    SessionClientCommand,
+    { kind: "message.submit" | "message.edit" | "message.cancel" }
+  >;
 };
 type SelectModelCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "model.select" }>;
@@ -309,7 +341,7 @@ type ReleaseCommandRequest = ExistingSessionCommandRequest & {
 
 export interface SessionRuntimeCommandResult {
   sessionId: string;
-  command: SessionCommand;
+  command: SessionCommand | SessionFollowUpCommand;
   receipt: CommandReceipt | null;
   throughSequence: number;
   /**
@@ -389,7 +421,25 @@ export interface SessionStreamCompactionProgress {
   reason: CompactionWorkReason;
 }
 
-export type SessionStreamTransient = SessionStreamOverlay | SessionStreamCompactionProgress;
+export interface SessionStreamQueue {
+  kind: "queue";
+  sessionId: string;
+  throughSequence: number;
+  /** Queue changes do not advance the event cursor. Order them by this revision. */
+  revision: number;
+  queue: readonly SessionFollowUpItem[];
+}
+
+export type SessionStreamTransient =
+  | SessionStreamOverlay
+  | SessionStreamCompactionProgress
+  | SessionStreamQueue;
+
+export function isSessionStreamQueue(
+  emission: SessionStreamEmission,
+): emission is SessionStreamQueue {
+  return "kind" in emission && emission.kind === "queue";
+}
 
 /**
  * What a subscriber receives.
@@ -431,7 +481,10 @@ export function isSessionStreamFrame(
  * rather than a field a caller is trusted to ignore.
  */
 export interface SessionRuntimeProjectionSnapshot {
-  projection: SessionProjection;
+  projection: SessionProjection & {
+    queue?: readonly SessionFollowUpItem[];
+    queueRevision?: number;
+  };
   throughSequence: number;
 }
 
@@ -506,6 +559,8 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /** Host startup/recovery sweep, independent of attached Clients. */
+  recoverFollowUps(): Promise<void>;
   /**
    * Make a message refusal that happened after attach durable and visible.
    *
@@ -828,6 +883,21 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #compactionProgress = new Map<string, SessionStreamCompactionProgress>();
   #closed = false;
 
+  #followUpDrains = new Map<string, Promise<void>>();
+  #followUpDrainAgain = new Set<string>();
+  #followUpDeliveryBoundaries = new Map<string, string>();
+  /**
+   * Delivery command ids a drain in this process holds from claim to outcome.
+   * Taken inside the claim transaction, so a cancel can never remove a row a
+   * drain is about to send. A `releasing` row held by nobody (and not in
+   * `#inFlight`) is a claim whose sender is gone.
+   */
+  readonly #followUpOwned = new Set<string>();
+  readonly #followUpRetries = new Map<
+    string,
+    { attempt: number; timer: ReturnType<typeof setTimeout> | undefined }
+  >();
+
   constructor(private readonly ports: SessionRuntimePorts) {}
 
   openNativeBindings(): readonly OpenNativeBinding[] {
@@ -885,6 +955,18 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
+    // This namespace is host-owned, including attach child commands. Otherwise
+    // a caller could preseed an unrelated receipt and falsely settle a queue row.
+    if (request.commandId.startsWith("follow-up:"))
+      return Promise.reject(
+        new SessionRuntimeCommandConflictError(
+          "The follow-up command namespace is reserved for the host",
+        ),
+      );
+    return this.#admitCommand(request);
+  }
+
+  #admitCommand(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
     this.#assertOpen();
     const { origin: _origin, ...intentRequest } = request;
     const signature = stableJson(intentRequest);
@@ -909,15 +991,22 @@ class DefaultSessionRuntime implements SessionRuntime {
     // while both remain in the ledger and on screen. Unlike a message, a
     // compaction holds this tail for its whole run, because it is not finished
     // when it starts and there is no earlier moment that is safe.
+    const isFollowUp =
+      request.command.kind === "message.cancel" ||
+      request.command.kind === "message.edit" ||
+      (request.command.kind === "message.submit" && request.command.delivery === "queue");
     const serializesAdmission =
+      !isFollowUp &&
       "sessionId" in request &&
       (request.command.kind === "message.submit" ||
         request.command.kind === "model.select" ||
         request.command.kind === "context.compact");
     const previous =
-      "sessionId" in request ? this.#sessionAdmissionTails.get(request.sessionId) : null;
+      !isFollowUp && "sessionId" in request
+        ? this.#sessionAdmissionTails.get(request.sessionId)
+        : null;
     const admission =
-      "sessionId" in request && request.command.kind === "message.submit"
+      !isFollowUp && "sessionId" in request && request.command.kind === "message.submit"
         ? Promise.withResolvers<void>()
         : null;
     // The message's arrival, for the queue measurement: read here, before it
@@ -945,6 +1034,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     const operation = previous ? previous.then(run) : run();
     const promise = operation.finally(async () => {
       this.#inFlight.delete(request.commandId);
+      // A queue held behind this start (VC-675) is released once the start is
+      // over, whichever way it went: the claim refused while it was pending.
+      // A drain's own attach is excluded: the drain handles that outcome, and
+      // waking itself on a failed attach would retry with no backoff.
+      if (
+        "sessionId" in request &&
+        request.command.kind === "adapter.attach" &&
+        !request.commandId.startsWith("follow-up:")
+      )
+        this.#scheduleFollowUps(request.sessionId);
       await this.#releaseBindingsAfterClose();
     });
     this.#inFlight.set(request.commandId, { signature, promise });
@@ -1017,11 +1116,44 @@ class DefaultSessionRuntime implements SessionRuntime {
       };
     }
 
+    if (
+      request.command.kind === "message.cancel" ||
+      request.command.kind === "message.edit" ||
+      (request.command.kind === "message.submit" && request.command.delivery === "queue")
+    ) {
+      return this.#followUpCommand(request as FollowUpCommandRequest);
+    }
+
+    if (request.command.kind === "message.submit" && request.command.delivery === "steer") {
+      const queued = await this.#steerFollowUp(request as MessageCommandRequest);
+      if (queued) return queued;
+    }
+
+    if (
+      this.ports.followUps &&
+      (await this.ports.followUps.transaction(request.sessionId, (state) =>
+        Object.hasOwn(state.commands, request.commandId),
+      ))
+    ) {
+      throw new SessionRuntimeCommandConflictError(
+        `Command ${request.commandId} already belongs to the follow-up ledger`,
+      );
+    }
     // A stop owns its own named refusals and must not depend on workspace resolution.
     if (request.command.kind === "session.stop") {
       return this.#stop(request as StopCommandRequest);
     }
     const projection = await this.#requireSession(request.sessionId);
+    const boundary = this.#followUpDeliveryBoundaries.get(request.commandId);
+    if (
+      boundary !== undefined &&
+      (projection.turnActive ||
+        projection.stopped !== null ||
+        projection.status !== "open" ||
+        boundary !== `idle:${projection.latestTurnId ?? "birth"}`)
+    ) {
+      throw new FollowUpBoundaryMovedError();
+    }
     const location = await this.ports.locations.resolve(projection.session);
     const existed = this.#commandExists(projection, request.commandId);
 
@@ -1526,28 +1658,40 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    const attention = await this.ports.engine.observe({
-      id: this.#id("event"),
-      sessionId: input.request.sessionId,
-      occurredAt: this.ports.clock.now(),
-      provenance: adapterProvenance(input.adapter, input.location.venue),
-      kind: "attention.raised",
-      attention: {
-        id: freshAttachAttentionId(input.request.sessionId, input.adapter.id, input.attentionKind),
-        // The attachment attempt is already a closed fact. This Attention
-        // belongs to the Session until a fresh attach succeeds, rather
-        // than pretending a failed binding can receive recovery work.
-        attachmentId: null,
-        detail: input.detail,
-        diagnostic: null,
-        // An attach that failed never reached a provider, so no allowance is
-        // spent and there is no reset to resume at.
-        ...(input.attentionKind === "adapter_unrecoverable"
-          ? { kind: input.attentionKind, resetsAt: null }
-          : { kind: input.attentionKind }),
-      },
-    });
-    await this.#publish([failed, attention]);
+    // A queue-owned attach that ran nothing reports through the queue's own
+    // retryable Attention. A second, fresh-attach Attention would block its
+    // backoff forever. Configuration failures still require the person.
+    const retryableQueueAttach =
+      input.request.commandId.startsWith("follow-up:") &&
+      input.attentionKind === "adapter_unrecoverable";
+    const attention = retryableQueueAttach
+      ? null
+      : await this.ports.engine.observe({
+          id: this.#id("event"),
+          sessionId: input.request.sessionId,
+          occurredAt: this.ports.clock.now(),
+          provenance: adapterProvenance(input.adapter, input.location.venue),
+          kind: "attention.raised",
+          attention: {
+            id: freshAttachAttentionId(
+              input.request.sessionId,
+              input.adapter.id,
+              input.attentionKind,
+            ),
+            // The attachment attempt is already a closed fact. This Attention
+            // belongs to the Session until a fresh attach succeeds, rather
+            // than pretending a failed binding can receive recovery work.
+            attachmentId: null,
+            detail: input.detail,
+            diagnostic: null,
+            // An attach that failed never reached a provider, so no allowance is
+            // spent and there is no reset to resume at.
+            ...(input.attentionKind === "adapter_unrecoverable"
+              ? { kind: input.attentionKind, resetsAt: null }
+              : { kind: input.attentionKind }),
+          },
+        });
+    await this.#publish(attention === null ? [failed] : [failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
@@ -1565,11 +1709,836 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(input.request.sessionId, input.submitted.command, receipt);
   }
 
+  async #followUpCommand(request: FollowUpCommandRequest): Promise<SessionRuntimeCommandResult> {
+    const ledger = this.ports.followUps;
+    if (!ledger) throw new SessionRuntimeConflictError("Host follow-up storage is unavailable");
+    const projection = await this.#requireSession(request.sessionId);
+    if (projection.commands.some(({ id }) => id === request.commandId)) {
+      throw new SessionRuntimeCommandConflictError(
+        `Command ${request.commandId} already belongs to the event ledger`,
+      );
+    }
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = canonicalJson(intentRequest);
+    const command = request.command;
+    // A `releasing` row nobody is sending can be withdrawn unless there is proof
+    // it was delivered. Proof is async (the event ledger), so it is read here
+    // and re-checked against the same claim inside the transaction.
+    const orphanedClaim =
+      command.kind === "message.cancel"
+        ? await this.#orphanedFollowUpClaim(request.sessionId, command.messageId)
+        : null;
+    const throughSequence = await this.#latestSequence(request.sessionId);
+    const now = this.ports.clock.now();
+    let withdrewClaim = false;
+    const result = await ledger.transaction(request.sessionId, (state) => {
+      const prior = Object.hasOwn(state.commands, request.commandId)
+        ? state.commands[request.commandId]
+        : undefined;
+      if (prior) {
+        if (prior.signature !== signature)
+          throw new SessionRuntimeCommandConflictError(
+            `Command ${request.commandId} has different intent`,
+          );
+        return prior.result;
+      }
+      // After the replay check: an accepted command answers the same forever,
+      // even once the revision it acted on has moved.
+      if (
+        command.kind !== "message.submit" &&
+        command.expectedRevision !== undefined &&
+        command.expectedRevision !== state.revision
+      )
+        throw new QueueRevisionConflictError(command.expectedRevision, state.revision);
+      const queuedCommand: SessionFollowUpCommand = {
+        id: request.commandId,
+        sessionId: request.sessionId,
+        createdAt: now,
+        route: null,
+        intent:
+          command.kind === "message.submit"
+            ? { kind: "message.queue", message: command.message }
+            : command,
+      };
+      let rejection: { code: string; detail: string } | null = null;
+      if (command.kind === "message.submit") {
+        if (projection.status !== "open")
+          rejection = {
+            code: "session_archived",
+            detail: "An archived Session cannot queue messages",
+          };
+        else if (command.message.role !== "user")
+          rejection = { code: "invalid_message", detail: "Only user messages can be queued" };
+        else if (state.entries.some(({ id }) => id === command.message.id))
+          rejection = { code: "message_exists", detail: "This message is already queued" };
+        else
+          state.entries.push({
+            id: command.message.id,
+            message: command.message,
+            commandId: request.commandId,
+            state: "queued",
+            deliveryCommandId: sessionFollowUpDeliveryCommandId(
+              request.sessionId,
+              request.commandId,
+            ),
+            ...(request.origin === undefined ? {} : { origin: request.origin }),
+            ...(command.model === undefined ? {} : { model: command.model }),
+            ...(command.agent === undefined ? {} : { agent: command.agent }),
+            ...(command.variant === undefined ? {} : { variant: command.variant }),
+          });
+      } else {
+        const index = state.entries.findIndex(({ id }) => id === command.messageId);
+        const entry = state.entries[index];
+        if (!entry)
+          rejection = { code: "message_not_queued", detail: "This message is no longer queued" };
+        else if (entry.state !== "queued") {
+          if (
+            command.kind === "message.cancel" &&
+            orphanedClaim?.deliveryCommandId === entry.deliveryCommandId &&
+            !orphanedClaim.delivered &&
+            !this.#followUpBusy(entry.deliveryCommandId)
+          ) {
+            // Nothing proves it ran: hand it back. It may still have run, which
+            // the Attention says; a resend is the person's call, never ours.
+            state.entries.splice(index, 1);
+            state.releasedBoundary = null;
+            withdrewClaim = true;
+          } else
+            rejection = {
+              code: "message_releasing",
+              detail: orphanedClaim?.delivered
+                ? "This message was already delivered"
+                : "This message is already being delivered",
+            };
+        } else if (command.kind === "message.cancel") {
+          state.entries.splice(index, 1);
+          if (entry.refused) state.releasedBoundary = null;
+        } else if (command.message.id !== command.messageId || command.message.role !== "user")
+          rejection = {
+            code: "invalid_message",
+            detail: "An edit must retain the user message identity",
+          };
+        else {
+          entry.message = command.message;
+          entry.deliveryCommandId = sessionFollowUpDeliveryCommandId(
+            request.sessionId,
+            request.commandId,
+          );
+          if (entry.refused) state.releasedBoundary = null;
+          delete entry.refused;
+          delete entry.steer;
+        }
+      }
+      const receipt: CommandReceipt = {
+        id: `${sessionFollowUpDeliveryCommandId(request.sessionId, request.commandId)}:receipt`,
+        commandId: request.commandId,
+        recordedAt: now,
+        sequence: throughSequence,
+        ...(rejection
+          ? { status: "rejected" as const, ...rejection }
+          : {
+              status: "accepted" as const,
+              acceptedAt: now,
+              result: { kind: "message.submitted" as const, sessionId: request.sessionId },
+            }),
+      };
+      const reply: SessionRuntimeCommandResult = {
+        sessionId: request.sessionId,
+        command: queuedCommand,
+        receipt,
+        throughSequence,
+        refusal: null,
+      };
+      Object.defineProperty(state.commands, request.commandId, {
+        value: { signature, result: reply },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      state.revision += 1;
+      return reply;
+    });
+    if (withdrewClaim) await this.#clearFollowUpFailure(request.sessionId);
+    // Acceptance depends on storage alone, never a running turn or Client.
+    this.#notifyFollowUps(request.sessionId);
+    // A person acting on the queue earns it a fresh retry budget.
+    this.#resetFollowUpRetry(request.sessionId);
+    this.#scheduleFollowUps(request.sessionId);
+    return result;
+  }
+
+  #followUpBusy(deliveryCommandId: string): boolean {
+    return this.#inFlight.has(deliveryCommandId) || this.#followUpOwned.has(deliveryCommandId);
+  }
+
+  /** A `releasing` row no sender in this process holds, and whether it is proven delivered. */
+  async #orphanedFollowUpClaim(
+    sessionId: string,
+    messageId: string,
+  ): Promise<{ deliveryCommandId: string; delivered: boolean } | null> {
+    const deliveryCommandId = await this.ports.followUps!.transaction(sessionId, (state) => {
+      const entry = state.entries.find(({ id }) => id === messageId);
+      return entry?.state === "releasing" ? entry.deliveryCommandId : null;
+    });
+    if (deliveryCommandId === null || this.#followUpBusy(deliveryCommandId)) return null;
+    const current = await this.#requireSession(sessionId);
+    const intent = current.commands.find(({ id }) => id === deliveryCommandId);
+    return {
+      deliveryCommandId,
+      delivered:
+        intent !== undefined && (await this.#deliveryEvidence(sessionId, intent, current)) !== null,
+    };
+  }
+
+  async #withFollowUps(
+    projection: SessionProjection,
+  ): Promise<SessionRuntimeProjectionSnapshot["projection"]> {
+    if (!this.ports.followUps) return projection;
+    const queued = await this.ports.followUps.transaction(projection.session.id, (state) => ({
+      queue: projectSessionFollowUps(state),
+      queueRevision: state.revision,
+    }));
+    return { ...projection, ...queued };
+  }
+
+  async #queueEmission(sessionId: string): Promise<SessionStreamQueue> {
+    const queued = await this.ports.followUps!.transaction(sessionId, (state) => ({
+      queue: projectSessionFollowUps(state),
+      revision: state.revision,
+    }));
+    return {
+      kind: "queue",
+      sessionId,
+      throughSequence: await this.#latestSequence(sessionId),
+      ...queued,
+    };
+  }
+
+  async #publishFollowUps(sessionId: string): Promise<void> {
+    const emission = await this.#queueEmission(sessionId);
+    await Promise.all(
+      [...(this.#subscribers.get(sessionId) ?? [])].map((subscriber) =>
+        this.#appendTransient(subscriber, emission),
+      ),
+    );
+  }
+
+  #notifyFollowUps(sessionId: string): void {
+    void this.#publishFollowUps(sessionId).catch((error: unknown) => this.#followUpFailure(error));
+  }
+
+  async #followUpFailure(error: unknown): Promise<void> {
+    try {
+      await this.ports.onFollowUpFailure?.(error);
+    } catch {
+      /* Diagnostics cannot erase durable queue state. */
+    }
+  }
+
+  #scheduleFollowUps(sessionId: string): void {
+    if (this.#closed || !this.ports.followUps) return;
+    if (this.#followUpDrains.has(sessionId)) {
+      this.#followUpDrainAgain.add(sessionId);
+      return;
+    }
+    const operation = Promise.resolve()
+      .then(() => this.#drainFollowUp(sessionId))
+      .catch(async (error: unknown) => {
+        try {
+          await this.reportMessageDeliveryFailure({
+            sessionId,
+            commandId: `follow-up:${sessionId}`,
+            detail: followUpFailureDetail(error),
+          });
+        } catch (attentionError) {
+          await this.#followUpFailure(attentionError);
+        }
+        await this.#followUpFailure(error);
+      })
+      .finally(() => {
+        this.#followUpDrains.delete(sessionId);
+        if (this.#followUpDrainAgain.delete(sessionId)) this.#scheduleFollowUps(sessionId);
+      });
+    this.#followUpDrains.set(sessionId, operation);
+  }
+
+  /**
+   * Bounded backoff for a release that failed before its intent was recorded.
+   * Only that failure is retried: nothing reached the executor, so a retry
+   * cannot run the prompt twice. One timer per Session; a spent budget waits
+   * for the next ordinary wake (turn end, Attention cleared, queue command).
+   */
+  #scheduleFollowUpRetry(sessionId: string): void {
+    const retry = this.#followUpRetries.get(sessionId) ?? { attempt: 0, timer: undefined };
+    const delay = (this.ports.followUpRetryDelaysMs ?? FOLLOW_UP_RETRY_DELAYS_MS)[retry.attempt];
+    if (this.#closed || retry.timer !== undefined || delay === undefined) return;
+    retry.attempt += 1;
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined;
+      this.#scheduleFollowUps(sessionId);
+    }, delay);
+    this.#followUpRetries.set(sessionId, retry);
+  }
+
+  #resetFollowUpRetry(sessionId: string): void {
+    clearTimeout(this.#followUpRetries.get(sessionId)?.timer);
+    this.#followUpRetries.delete(sessionId);
+  }
+
+  async recoverFollowUps(): Promise<void> {
+    this.#assertOpen();
+    for (const sessionId of (await this.ports.followUps?.pendingSessionIds()) ?? []) {
+      this.#scheduleFollowUps(sessionId);
+    }
+    // Drains can request one more pass when reconciliation observes a turn end.
+    while (this.#followUpDrains.size > 0) await Promise.all(this.#followUpDrains.values());
+  }
+
+  #followUpFailureAttentionId(sessionId: string): string {
+    return messageDeliveryFailureAttentionId(
+      sessionId,
+      this.ports.executor.id,
+      `follow-up:${sessionId}`,
+    );
+  }
+
+  /**
+   * An executor start that has not finished, durably pending or still being
+   * admitted in this process. The engine refuses a second start meanwhile, and
+   * the start's own completion wakes the queue (see `#admitCommand`).
+   */
+  #executorStartPending(projection: SessionProjection): boolean {
+    return (
+      projection.pendingExecutorStart !== null ||
+      projection.commands.some(
+        ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
+      )
+    );
+  }
+
+  async #drainFollowUp(sessionId: string): Promise<void> {
+    const ledger = this.ports.followUps!;
+    const projection = await this.#requireSession(sessionId);
+    const startPending = this.#executorStartPending(projection);
+    const ownFailureId = this.#followUpFailureAttentionId(sessionId);
+    // Set inside the claim transaction, so no cancel can interleave.
+    const hold: { deliveryCommandId: string | null } = { deliveryCommandId: null };
+    try {
+      const entry = await ledger.transaction(sessionId, (state) => {
+        const releasing = state.entries.filter((candidate) => candidate.state === "releasing");
+        // Recovery assumes one delivery per Session. Two claims is a corrupt
+        // ledger, and guessing which one is real could send a prompt twice.
+        if (releasing.length > 1)
+          throw new SessionRuntimeConflictError(
+            "More than one queued message is being delivered; refusing to guess",
+          );
+        const recovering = releasing[0];
+        if (recovering) {
+          // An explicit steer owns its claim through dispatch and settlement.
+          if (this.#followUpBusy(recovering.deliveryCommandId)) return null;
+          // A claim whose intent is recorded is only ever reconciled and
+          // settled here, never sent again, so a person may withdraw it
+          // meanwhile; only a claim this drain may still send is held.
+          if (!projection.commands.some(({ id }) => id === recovering.deliveryCommandId)) {
+            hold.deliveryCommandId = recovering.deliveryCommandId;
+            this.#followUpOwned.add(recovering.deliveryCommandId);
+          }
+          return recovering;
+        }
+        if (
+          projection.turnActive ||
+          projection.status !== "open" ||
+          projection.stopped !== null ||
+          // A Client's start in flight would refuse this drain's own attach.
+          startPending ||
+          projection.attention.active.some(({ id }) => id !== ownFailureId)
+        )
+          return null;
+        const boundary = `idle:${projection.latestTurnId ?? "birth"}`;
+        if (state.releasedBoundary === boundary) return null;
+        const head = state.entries[0];
+        if (!head || head.refused) return null;
+        head.state = "releasing";
+        state.releasedBoundary = boundary;
+        state.revision += 1;
+        hold.deliveryCommandId = head.deliveryCommandId;
+        this.#followUpOwned.add(head.deliveryCommandId);
+        return head;
+      });
+      if (!entry || this.#closed) return;
+      // Publish on a separate chain: an unresponsive Client cannot delay release.
+      this.#notifyFollowUps(sessionId);
+      await this.#releaseFollowUp(sessionId, entry, projection);
+    } finally {
+      if (hold.deliveryCommandId !== null) this.#followUpOwned.delete(hold.deliveryCommandId);
+    }
+  }
+
+  async #releaseFollowUp(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    projection: SessionProjection,
+  ): Promise<void> {
+    const ledger = this.ports.followUps!;
+    let current = projection;
+    const prior = current.commands.find(({ id }) => id === entry.deliveryCommandId);
+    if (prior) {
+      await this.#recoverFollowUpDelivery(sessionId, entry, prior, current);
+      return;
+    }
+    if (entry.steer) {
+      // A crash before recording intent cannot turn a steer into a fresh prompt.
+      // Recover through the same targeted-turn preflight; never auto-convert it.
+      await this.#deliverQueuedSteer(sessionId, entry, current);
+      return;
+    }
+    if (current.turnActive || current.status !== "open" || current.stopped !== null) return;
+    let result: SessionRuntimeCommandResult;
+    try {
+      if (!current.liveExecutor) {
+        if (this.#executorStartPending(current)) {
+          // Someone else's start: give the row back; that start wakes the queue.
+          await this.#returnFollowUp(sessionId, entry);
+          return;
+        }
+        // One id per attempt. A crash after an accepted attach must not replay
+        // that attach under a different continuity — the engine refuses the
+        // reused id, which used to strand the row for good.
+        const attachPrefix = `${entry.deliveryCommandId}:attach`;
+        const attempt = current.commands.filter(
+          ({ id }) => id === attachPrefix || id.startsWith(`${attachPrefix}:`),
+        ).length;
+        const attached = await this.#admitCommand({
+          commandId: `${attachPrefix}:${attempt}`,
+          sessionId,
+          origin: entry.origin,
+          command: {
+            kind: "adapter.attach",
+            continuity: current.attachments.length === 0 ? "fresh" : "context_replay",
+          },
+        });
+        if (attached.receipt?.status !== "accepted" && attached.receipt?.status !== "completed") {
+          // A fresh attempt id always answers terminally, so this is a refusal.
+          const { code, detail } = attached.receipt as Extract<
+            CommandReceipt,
+            { status: "rejected" }
+          >;
+          const failure = new SessionRuntimeConflictError(
+            `Could not attach an executor for the queued message (${code}): ${detail}`,
+          );
+          if (code === "executor_start_pending") {
+            // Nothing was sent, and the other start's completion is the wake.
+            await this.#returnFollowUp(sessionId, entry);
+            await this.#followUpFailure(failure);
+            return;
+          }
+          // The pre-intent catch returns the claim and schedules backoff. The
+          // queue's own Attention cannot block that retry, unlike configuration
+          // Attention raised by the attach itself.
+          throw failure;
+        }
+      }
+      current = await this.#requireSession(sessionId);
+      const boundary = `idle:${current.latestTurnId ?? "birth"}`;
+      this.#followUpDeliveryBoundaries.set(entry.deliveryCommandId, boundary);
+      await ledger.transaction(sessionId, (state) => {
+        state.releasedBoundary = boundary;
+      });
+      result = await this.#admitCommand({
+        commandId: entry.deliveryCommandId,
+        sessionId,
+        origin: entry.origin,
+        command: {
+          kind: "message.submit",
+          message: entry.message,
+          settle: "opened",
+          model: entry.model,
+          agent: entry.agent,
+          variant: entry.variant,
+        },
+      });
+    } catch (error) {
+      if (error instanceof FollowUpBoundaryMovedError) {
+        await this.#returnFollowUp(sessionId, entry);
+        return;
+      }
+      // Nothing was sent unless this delivery's intent reached the event
+      // ledger. Then a retry is safe; otherwise only evidence may settle it.
+      const after = await this.#requireSession(sessionId);
+      const intent = after.commands.find(({ id }) => id === entry.deliveryCommandId);
+      if (!intent) {
+        await this.#returnFollowUp(sessionId, entry);
+        this.#scheduleFollowUpRetry(sessionId);
+        throw error;
+      }
+      await this.#followUpFailure(error);
+      await this.#settleFromEvidence(sessionId, entry, intent, after);
+      return;
+    } finally {
+      this.#followUpDeliveryBoundaries.delete(entry.deliveryCommandId);
+    }
+    if (!result.receipt || result.receipt.status === "unreconciled") {
+      await this.#settleFromEvidence(
+        sessionId,
+        entry,
+        result.command as SessionCommand,
+        await this.#requireSession(sessionId),
+      );
+      return;
+    }
+    await this.#settleFollowUp(
+      sessionId,
+      entry.commandId,
+      result.command as SessionCommand,
+      result.receipt,
+    );
+  }
+
+  /** A claim whose intent is already in the event ledger: settle it, never resend it. */
+  async #recoverFollowUpDelivery(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    prior: SessionCommand,
+    projection: SessionProjection,
+  ): Promise<void> {
+    // Recovery must prove the receipt belongs to this exact payload, not
+    // merely to a matching id in an older or corrupt event ledger.
+    if (
+      prior.intent.kind !== "message.submit" ||
+      canonicalJson((await this.ports.artifacts.read(prior.intent.reference)).message) !==
+        canonicalJson(entry.message)
+    )
+      throw new SessionRuntimeCommandConflictError(
+        "Queued delivery intent does not match its retained payload",
+      );
+    let current = projection;
+    let receipt = current.receipts.findLast(({ commandId }) => commandId === prior.id);
+    if (!receipt || receipt.status === "unreconciled") {
+      /* v8 ignore next 2 -- an unrouted message is atomically saved with a terminal rejection by the engine. */
+      if (!prior.route?.attachmentId)
+        throw new SessionRuntimeConflictError("Queued delivery has no recoverable route");
+      try {
+        await this.reconcile({ sessionId, attachmentId: prior.route.attachmentId });
+      } catch (error) {
+        // An executor that cannot answer is no evidence either way.
+        await this.#followUpFailure(error);
+      }
+      current = await this.#requireSession(sessionId);
+      receipt = current.receipts.findLast(({ commandId }) => commandId === prior.id);
+    }
+    if (!receipt || receipt.status === "unreconciled") {
+      await this.#settleFromEvidence(sessionId, entry, prior, current);
+      return;
+    }
+    await this.#settleFollowUp(sessionId, entry.commandId, prior, receipt);
+  }
+
+  /**
+   * Settle as delivered on proof, or retain it: no evidence is NOT evidence of
+   * no delivery, and redispatch here could run the same prompt twice. The row
+   * stays visible and cancellable, with Attention saying so.
+   */
+  async #settleFromEvidence(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    command: SessionCommand,
+    projection: SessionProjection,
+  ): Promise<void> {
+    const evidence = await this.#deliveryEvidence(sessionId, command, projection);
+    if (evidence === null) throw new FollowUpAmbiguousError();
+    await this.#settleFollowUp(sessionId, entry.commandId, command, evidence);
+  }
+
+  /**
+   * Proof that a recorded delivery reached the executor: its own accepted
+   * receipt, or the turn it opened. The turn must match the delivery command
+   * explicitly, or carry the derived turn id written with its message intent.
+   * Ordering alone cannot prove acceptance: a previously ambiguous command
+   * may open a late turn on that same attachment. A turn ENDING first means
+   * the message joined running work (a steer), so it proves nothing.
+   * The synthetic receipt is release evidence only; the event ledger
+   * keeps its own (unreconciled) account.
+   */
+  async #deliveryEvidence(
+    sessionId: string,
+    command: SessionCommand,
+    projection: SessionProjection,
+  ): Promise<CommandReceipt | null> {
+    const accepted = projection.receipts.findLast(
+      ({ commandId, status }) =>
+        commandId === command.id && (status === "accepted" || status === "completed"),
+    );
+    if (accepted) return accepted;
+    const events = await this.#listEventsPaged({ sessionId });
+    const recorded = events.findIndex(
+      ({ payload }) => payload.kind === "command.recorded" && payload.command.id === command.id,
+    );
+    /* v8 ignore next -- the projection that named this command was folded from these events. */
+    if (recorded < 0) return null;
+    for (const event of events.slice(recorded + 1)) {
+      const { payload } = event;
+      if (payload.kind === "turn.started") {
+        if (
+          payload.attachmentId !== command.route?.attachmentId ||
+          (event.commandId != null
+            ? event.commandId !== command.id
+            : payload.turnId !== `turn:${command.id}`)
+        )
+          return null;
+        return {
+          id: `${command.id}:turn-evidence`,
+          commandId: command.id,
+          status: "accepted",
+          acceptedAt: event.occurredAt,
+          result: { kind: "message.submitted", sessionId },
+          recordedAt: event.recordedAt,
+          sequence: event.sequence,
+        };
+      }
+      if (
+        payload.kind === "turn.completed" ||
+        payload.kind === "turn.interrupted" ||
+        (payload.kind === "command.recorded" &&
+          (payload.command.intent.kind === "message.submit" ||
+            payload.command.intent.kind === "executor.retry"))
+      )
+        return null;
+    }
+    return null;
+  }
+
+  /** Give an owned claim back, unsent; it releases again at the next idle boundary. */
+  async #returnFollowUp(sessionId: string, entry: StoredSessionFollowUp): Promise<void> {
+    await this.ports.followUps!.transaction(sessionId, (state) => {
+      // Held by this drain since the claim, so nothing else can have moved it.
+      const pending = state.entries.find(({ commandId }) => commandId === entry.commandId)!;
+      pending.state = "queued";
+      state.releasedBoundary = null;
+      state.revision += 1;
+    });
+    this.#notifyFollowUps(sessionId);
+  }
+
+  async #clearFollowUpFailure(sessionId: string): Promise<void> {
+    const projection = await this.#requireSession(sessionId);
+    const failureId = this.#followUpFailureAttentionId(sessionId);
+    if (!projection.attention.active.some(({ id }) => id === failureId)) return;
+    const cleared = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(this.ports.executor, projection.liveExecutor?.venue ?? null),
+      kind: "attention.cleared",
+      attentionId: failureId,
+    });
+    await this.#publish([cleared]);
+  }
+
+  /** Matching a queued identity is an atomic claim, not cancel-then-send. */
+  async #steerFollowUp(
+    request: MessageCommandRequest,
+  ): Promise<SessionRuntimeCommandResult | null> {
+    const ledger = this.ports.followUps;
+    if (!ledger) return null;
+    const projection = await this.#requireSession(request.sessionId);
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = canonicalJson(intentRequest);
+    const claim = await ledger.transaction<
+      { result: SessionRuntimeCommandResult } | { entry: StoredSessionFollowUp } | null
+    >(request.sessionId, (state) => {
+      const prior = Object.hasOwn(state.commands, request.commandId)
+        ? state.commands[request.commandId]
+        : undefined;
+      if (prior) {
+        if (prior.signature !== signature)
+          throw new SessionRuntimeCommandConflictError(
+            `Command ${request.commandId} has different intent`,
+          );
+        return { result: prior.result };
+      }
+      const entry = state.entries.find(({ id }) => id === request.command.message.id);
+      if (!entry) {
+        // A turn-end release that already won must not be followed by a second send.
+        if (
+          Object.values(state.commands).some(
+            ({ result }) =>
+              result.command.intent.kind === "message.queue" &&
+              result.command.intent.message.id === request.command.message.id,
+          )
+        )
+          throw new SessionRuntimeConflictError(
+            "This queued message has already been delivered or removed",
+          );
+        return null;
+      }
+      if (entry.state !== "queued")
+        throw new SessionRuntimeConflictError("This queued message is already being delivered");
+      if (entry.refused)
+        throw new SessionRuntimeConflictError("Edit the refused queued message before retrying");
+      // Identity selects the host's canonical payload, including parts/metadata
+      // a Client cannot faithfully reconstruct. Steering is never an edit.
+      if (
+        !projection.turnActive ||
+        !projection.latestTurnId ||
+        projection.stopped !== null ||
+        projection.status !== "open"
+      )
+        throw new SessionRuntimeConflictError("The targeted turn has ended");
+      if (projection.commands.some(({ id }) => id === request.commandId))
+        throw new SessionRuntimeCommandConflictError(
+          `Command ${request.commandId} already belongs to the event ledger`,
+        );
+      entry.state = "releasing";
+      entry.deliveryCommandId = request.commandId;
+      entry.steer = { signature, targetTurnId: projection.latestTurnId };
+      state.revision += 1;
+      return { entry };
+    });
+    if (!claim) return null;
+    if ("result" in claim) return claim.result;
+    this.#notifyFollowUps(request.sessionId);
+    return this.#deliverQueuedSteer(request.sessionId, claim.entry, projection);
+  }
+
+  async #deliverQueuedSteer(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    projection: SessionProjection,
+  ): Promise<SessionRuntimeCommandResult> {
+    try {
+      const location = await this.ports.locations.resolve(projection.session);
+      const result = await this.#submitMessage(
+        {
+          commandId: entry.deliveryCommandId,
+          sessionId,
+          origin: entry.origin,
+          command: {
+            kind: "message.submit",
+            delivery: "steer",
+            message: entry.message,
+            settle: "opened",
+            model: entry.model,
+            agent: entry.agent,
+            variant: entry.variant,
+          },
+        },
+        projection,
+        location,
+        false,
+        entry.steer!.targetTurnId,
+      );
+      // A steer joins running work, so no turn it opened can prove it arrived.
+      if (!result.receipt || result.receipt.status === "unreconciled")
+        throw new FollowUpAmbiguousError();
+      await this.#settleFollowUp(
+        sessionId,
+        entry.commandId,
+        result.command as SessionCommand,
+        result.receipt,
+        true,
+      );
+      return result;
+    } catch (error) {
+      // Once its intent is recorded the steer may have arrived; never invite a
+      // resend by calling that a plain failure.
+      const maybeDelivered =
+        error instanceof FollowUpAmbiguousError ||
+        (await this.#requireSession(sessionId)).commands.some(
+          ({ id }) => id === entry.deliveryCommandId,
+        );
+      await this.reportMessageDeliveryFailure({
+        sessionId,
+        commandId: `follow-up:${sessionId}`,
+        detail: maybeDelivered ? FOLLOW_UP_AMBIGUOUS_DETAIL : followUpFailureDetail(error),
+      });
+      throw error;
+    }
+  }
+
+  async #settleFollowUp(
+    sessionId: string,
+    commandId: string,
+    command: SessionCommand,
+    receipt: CommandReceipt,
+    returnRefusal = false,
+  ): Promise<void> {
+    if (receipt.status === "rejected") {
+      // Definitive non-acceptance is safe to edit/cancel. Keep the payload, but
+      // never retry a terminally refused command id with different content.
+      const retained = await this.ports.followUps!.transaction(sessionId, (state) => {
+        // A person may have withdrawn an unproven claim while this was read.
+        const entry = state.entries.find((candidate) => candidate.commandId === commandId);
+        if (!entry) return false;
+        entry.state = "queued";
+        entry.refused = true;
+        if (entry.steer)
+          Object.defineProperty(state.commands, command.id, {
+            value: {
+              signature: entry.steer.signature,
+              result: {
+                sessionId,
+                command,
+                receipt,
+                throughSequence: receipt.sequence,
+                refusal: null,
+              },
+            },
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        state.revision += 1;
+        return true;
+      });
+      if (!retained) return;
+      this.#notifyFollowUps(sessionId);
+      if (!returnRefusal)
+        throw new SessionRuntimeConflictError(`Queued delivery refused: ${receipt.code}`);
+      return;
+    }
+    await this.ports.followUps!.transaction(sessionId, (state) => {
+      // Absent when a person withdrew the unproven claim meanwhile; the
+      // evidence is still recorded, and nothing is left to remove.
+      const entry = state.entries.find((candidate) => candidate.commandId === commandId);
+      if (entry?.steer)
+        Object.defineProperty(state.commands, command.id, {
+          value: {
+            signature: entry.steer.signature,
+            result: {
+              sessionId,
+              command,
+              receipt,
+              throughSequence: receipt.sequence,
+              refusal: null,
+            },
+          },
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      state.entries = state.entries.filter((candidate) => candidate.commandId !== commandId);
+      Object.defineProperty(state.releases, commandId, {
+        value: { command, receipt },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      state.revision += 1;
+    });
+    this.#resetFollowUpRetry(sessionId);
+    await this.#clearFollowUpFailure(sessionId);
+    this.#notifyFollowUps(sessionId);
+    // Recovery may settle a completed prior turn with no live observation left
+    // to wake the next row. The durable boundary still admits only one release.
+    this.#scheduleFollowUps(sessionId);
+  }
+
   async #submitMessage(
     request: MessageCommandRequest,
     projection: SessionProjection,
     location: SessionLocation,
     existed: boolean,
+    targetTurnId?: string,
   ): Promise<SessionRuntimeCommandResult> {
     const artifact = await this.ports.artifacts.write({
       version: 1,
@@ -1619,6 +2588,32 @@ class DefaultSessionRuntime implements SessionRuntime {
     // documented to be.
     if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
 
+    if (targetTurnId !== undefined) {
+      const current = await this.#requireSession(request.sessionId);
+      if (
+        !current.turnActive ||
+        current.latestTurnId !== targetTurnId ||
+        current.stopped !== null ||
+        current.status !== "open"
+      ) {
+        const receipt = await this.#recordDelivery(
+          request.sessionId,
+          binding.spec.attachmentId,
+          binding.adapter,
+          binding.venue,
+          {
+            commandId: request.commandId,
+            status: "rejected",
+            code: "steer_turn_ended",
+            detail: "The targeted turn has ended",
+            native: null,
+          },
+          "message.submitted",
+        );
+        return this.#result(request.sessionId, submitted.command, receipt);
+      }
+    }
+
     // From here a turn that opens can be this message's (VC-455). Matched by
     // command id, because an admission released early by some other turn's
     // start may already belong to the next message.
@@ -1631,6 +2626,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: binding.spec.attachmentId,
       message: request.command.message,
       delivery: request.command.delivery ?? "queue",
+      ...(targetTurnId === undefined ? {} : { targetTurnId }),
       ...(request.command.settle === undefined ? {} : { settle: request.command.settle }),
       model: request.command.model ?? null,
       agent: request.command.agent ?? null,
@@ -2230,7 +3226,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       if (frame.transcript) transcript.push(frame.transcript);
     }
     return {
-      projection: history.projection,
+      projection: await this.#withFollowUps(history.projection),
       throughSequence: history.throughSequence,
       frames,
       transcript,
@@ -2240,7 +3236,10 @@ class DefaultSessionRuntime implements SessionRuntime {
   async projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
-    return { projection: history.projection, throughSequence: history.throughSequence };
+    return {
+      projection: await this.#withFollowUps(history.projection),
+      throughSequence: history.throughSequence,
+    };
   }
 
   async subscribe(
@@ -2283,6 +3282,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       await this.#enqueue(subscriber, replay);
       await this.#enqueueOverlayBaselines(subscriber);
       await this.#enqueueCompactionProgressBaseline(subscriber);
+      if (this.ports.followUps)
+        await this.#appendTransient(subscriber, await this.#queueEmission(input.sessionId));
     } catch (error) {
       signal?.removeEventListener("abort", cancel);
       subscribers.delete(subscriber);
@@ -2375,11 +3376,30 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
       await this.#publish([cleared]);
     }
+    if (this.ports.followUps) {
+      const current = await this.#requireSession(input.sessionId);
+      const accepted = new Set(
+        current.receipts
+          .filter((receipt) => receipt.status === "accepted" || receipt.status === "completed")
+          .map(({ commandId }) => commandId),
+      );
+      const canSettle = await this.ports.followUps.transaction(input.sessionId, (state) =>
+        state.entries.some(
+          (entry) => entry.state === "releasing" && accepted.has(entry.deliveryCommandId),
+        ),
+      );
+      // Reconciliation can supply the missing acceptance long after a failed
+      // release. Only positive evidence schedules a drain, avoiding a retry
+      // loop when a reconciliation still cannot answer the question.
+      if (canSettle) this.#scheduleFollowUps(input.sessionId);
+    }
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    for (const { timer } of this.#followUpRetries.values()) clearTimeout(timer);
+    this.#followUpRetries.clear();
     // The cache is derived and best-effort: a failed shutdown write only makes
     // the next launch refold. Capture before clearing so even an attachment
     // that has not emitted its close yet leaves a reusable prefix. The results
@@ -2676,6 +3696,13 @@ class DefaultSessionRuntime implements SessionRuntime {
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
     await this.#publish([event]);
+    if (
+      source === "live" &&
+      (observation.kind === "turn.completed" || observation.kind === "turn.interrupted")
+    ) {
+      // Never await dispatch from the sink that dispatch itself may emit into.
+      this.#scheduleFollowUps(spec.sessionId);
+    }
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
       await this.#saveProjectionCheckpoint(spec.sessionId);
       // The executor closed itself, so the stop is the same one `#release`
@@ -3104,6 +4131,15 @@ class DefaultSessionRuntime implements SessionRuntime {
       bySession.set(event.sessionId, items);
     }
     for (const [sessionId, sessionEvents] of bySession) {
+      // Release pauses on Attention and a Stop; nothing else would wake a held
+      // queue when they lift (a new attachment is what lifts a Stop).
+      if (
+        sessionEvents.some(
+          ({ payload }) =>
+            payload.kind === "attention.cleared" || payload.kind === "attachment.opened",
+        )
+      )
+        this.#scheduleFollowUps(sessionId);
       const subscribers = this.#subscribers.get(sessionId);
       if (!subscribers) continue;
       await Promise.all(
@@ -3593,6 +4629,35 @@ class DefaultSessionRuntime implements SessionRuntime {
     return `runtime-${kind}:${this.ports.ids.next(kind)}`;
   }
 }
+
+class FollowUpBoundaryMovedError extends Error {
+  constructor() {
+    super("The queued message's idle boundary moved before admission");
+  }
+}
+
+/**
+ * What a person reads when a release has no proof either way (VC-675). It must
+ * not say "failed": the prompt may have run, and a resend would run it twice.
+ */
+const FOLLOW_UP_AMBIGUOUS_DETAIL =
+  "This follow-up may have been delivered. Check the transcript before resending.";
+
+/** Delivery may have happened; the row is retained, cancellable, never resent. */
+class FollowUpAmbiguousError extends SessionRuntimeConflictError {
+  constructor() {
+    super(FOLLOW_UP_AMBIGUOUS_DETAIL);
+  }
+}
+
+function followUpFailureDetail(error: unknown): string {
+  return error instanceof FollowUpAmbiguousError
+    ? FOLLOW_UP_AMBIGUOUS_DETAIL
+    : `Queued message delivery failed: ${errorMessage(error)}`;
+}
+
+/** Pre-intent release retries: quick for a blip, then sparse, then visible and waiting. */
+const FOLLOW_UP_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000, 600_000];
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);

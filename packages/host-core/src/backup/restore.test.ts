@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { blobFilePath, blobsRoot } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "../db/migrations";
+import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { openRawDb } from "../db/test-helpers";
 import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
 import {
@@ -96,6 +97,60 @@ function restoredDb(root: string) {
 }
 
 describe("restoreBackupBundle — a clean restore", () => {
+  it("preserves pending host follow-ups and their release boundary", async () => {
+    source = createFixtureProfile();
+    await createSqliteSessionFollowUpLedger(source.db).transaction("session-root", (state) => {
+      state.entries.push({
+        id: "pending",
+        commandId: "queue-command",
+        deliveryCommandId: "follow-up:session-root:queue-command",
+        state: "queued",
+        message: {
+          id: "pending",
+          role: "user",
+          parts: [{ type: "text", text: "Pending after restore" }],
+        },
+      });
+      state.releasedBoundary = "idle:previous-turn";
+      state.revision += 1;
+    });
+    const bytes = createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "test",
+      now: 1_700_000_000_000,
+    }).bytes;
+    const target = targetProfile();
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+    expect(result.ok).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      expect(
+        await createSqliteSessionFollowUpLedger(db).transaction("session-root", (state) => ({
+          entries: state.entries,
+          boundary: state.releasedBoundary,
+        })),
+      ).toMatchObject({
+        entries: [
+          {
+            id: "pending",
+            state: "queued",
+            deliveryCommandId: "follow-up:session-root:queue-command",
+          },
+        ],
+        boundary: "idle:previous-turn",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("puts back every record, in order, with its fields and artifacts intact", async () => {
     const bytes = bundleBytes();
     const target = targetProfile();
