@@ -1,0 +1,610 @@
+/**
+ * The host-protocol command catalog's tRPC projection (VC-564; HP § Command
+ * catalog).
+ *
+ * The declaration half of every command is a Verb Registry entry in
+ * `@volli/shared`: its key, router actor, scope and idempotency. This module
+ * is the only place a catalog procedure can be built, and it builds each one
+ * FROM its entry. {@link createCatalogBuilders} makes one family of builders
+ * for one router context (the Session router's, an area router's):
+ *
+ * - `hostProcedure` and `workspaceProcedure` take the entry's key, typed to
+ *   the catalog's keys of that scope, so a procedure with no entry, or a
+ *   workspace procedure with no resources to authorize, does not compile;
+ * - every call is then judged by the entry, at dispatch: the caller's grant is
+ *   still current, its actor is admitted, any withheld intent is refused, and
+ *   every workspace resource the call names is authorized (and, for a
+ *   `session-own` entry called by a Session, every subject is one the area's
+ *   policy lets it act on) before the handler runs;
+ * - `catalogRouter` refuses, at construction, a procedure whose middleware
+ *   chain does not begin with the exact chain one of ITS builders minted for
+ *   the entry at its path (private provenance, never metadata a caller can
+ *   set), whose tRPC type contradicts the entry's idempotency, or that binds
+ *   no output validator without being a named legacy exception;
+ * - {@link CatalogMismatch} fails `pnpm typecheck` until the routers'
+ *   procedure paths and the catalog's keys are one set (D2).
+ *
+ * Each family's tRPC instance never leaves its factory call, so there is no
+ * bare procedure builder to reach for.
+ */
+import {
+  initTRPC,
+  TRPCError,
+  type AnyProcedure,
+  type AnyRouter,
+  type TRPCCreateRouterOptions,
+} from "@trpc/server";
+import {
+  HOST_ERROR_REASON_CODES,
+  isHostActor,
+  isHostErrorCode,
+  isLocalDeviceActor,
+  LOCAL_DEVICE_ACTOR,
+  type CallerActor,
+  type HostActor,
+  type HostActorKind,
+  type HostError,
+  type HostErrorReason,
+  type LocalDeviceActor,
+  type SessionId,
+  type WorkspaceId,
+} from "@volli/host-protocol";
+import {
+  CATALOG_ENTRIES,
+  catalogActorAdmits,
+  catalogActorOf,
+  catalogEntriesFrom,
+  catalogLookup,
+  HOST_ACTOR_POLICY,
+  isCommandIntentConflict,
+  isolatePerformanceObserver,
+  readOptionalPerformanceClock,
+  type CatalogEntry,
+  type CatalogKey,
+  type CatalogKeyOf,
+  type CatalogKeyOfScope,
+  type CatalogKeyRefusingIntents,
+  type HostActorKindName,
+  type VerbEntry,
+  type VerbRegistryEntry,
+  type VerbScope,
+} from "@volli/shared";
+import { z } from "zod";
+
+import { sanitizeDiagnosticText } from "./diagnostic-text";
+import type {
+  RpcDiagnosticEntry,
+  RpcProcedurePerformanceObserver,
+  RpcProcedurePerformanceSample,
+} from "./index";
+
+/**
+ * Who is calling, as the door that accepted the connection authenticated it.
+ * The router reads it from context only; no input field can name or widen it
+ * (HP § Auth and workspace authorization).
+ */
+export type RouterCaller = LocalRouterCaller | NetworkRouterCaller;
+
+/** The desktop's own window, which every Workspace on its host authorizes (D7). */
+export interface LocalRouterCaller {
+  readonly actor: LocalDeviceActor;
+  /** Nothing can revoke the in-process desktop, so it alone may omit the check. */
+  readonly current?: () => boolean;
+}
+
+/** A network actor, bound to one Workspace by the credential its door verified. */
+export interface NetworkRouterCaller {
+  readonly actor: HostActor;
+  /**
+   * Asked again at every dispatch, never only at connect, and required: a
+   * network caller is admitted only while this answers `true`. `false`, or a
+   * door that supplied no checker at all, is `UNAUTHORIZED` /
+   * `credential-invalid` before the actor, the input or the handler is read.
+   */
+  readonly current: () => boolean;
+}
+
+/** The desktop's own window over in-process IPC: the person, in every Workspace (D7). */
+export const LOCAL_DESKTOP_CALLER: RouterCaller = Object.freeze({ actor: LOCAL_DEVICE_ACTOR });
+
+/**
+ * One resource a workspace-scoped call names: an area's noun and its id.
+ *
+ * `kind` is open, so an area adds its own (`ticket`, `terminal`, …) without
+ * editing a closed union here; its router context's `resourceWorkspace` port
+ * and `sessionMayAct` predicate answer for the kinds that area names. A
+ * Workspace is a project (HI § Workspace), so `project` is answered here: a
+ * project id is its own Workspace. A kind no port answers resolves to no
+ * Workspace, which is refused exactly as a foreign or absent resource is.
+ */
+export interface WorkspaceResource {
+  readonly kind: string;
+  readonly id: string;
+  /**
+   * What the command does to it. A `subject` (the default) is what it acts
+   * on, judged by `sessionMayAct` for a Session on a `session-own` entry. A
+   * `reference` is only pointed at (the ticket a move lands after): it gets
+   * the same Workspace check, but no Session needs authority over it.
+   */
+  readonly relation?: ResourceRelation;
+}
+
+/** A named resource is acted on, or only pointed at. */
+export type ResourceRelation = "subject" | "reference";
+
+/** The kind this module answers itself: a project is its own Workspace. */
+export const PROJECT_RESOURCE = "project";
+
+/** What a resolver names: every resource the input addresses, or nothing. */
+export type WorkspaceResources = readonly WorkspaceResource[] | WorkspaceResource | null;
+
+/** Where the instrumentation records a procedure's route, never its payload. */
+export interface CatalogDiagnostics {
+  record(entry: Omit<RpcDiagnosticEntry, "id" | "timestamp">): unknown;
+}
+
+/**
+ * What every router context carries for its catalog builders: the caller, the
+ * two resource ports Workspace authorization reads, and instrumentation. An
+ * area router's context extends it with that area's own ports.
+ */
+export interface CatalogCallerContext {
+  /**
+   * Who is calling and what it is authorized for, as the door authenticated
+   * it (VC-564). Every procedure's policy reads it; no input can override it.
+   * The desktop's own window is {@link LOCAL_DESKTOP_CALLER}.
+   */
+  caller: RouterCaller;
+  /**
+   * The Workspace (project) a named resource belongs to, or null when there
+   * is no such resource: the one read a workspace-scoped call makes before
+   * its handler, and only for a caller bound to one Workspace. Absent, such a
+   * caller is refused every resource but a project (`NOT_FOUND` /
+   * `workspace-unknown`).
+   */
+  resourceWorkspace?: (
+    resource: WorkspaceResource,
+  ) => WorkspaceId | null | Promise<WorkspaceId | null>;
+  /**
+   * Whether the area's policy lets this Session act on a subject resource:
+   * the one question a `session-own` entry asks, after the Workspace check,
+   * when a Session calls it. The area implements it from its real policy
+   * (ticket coordination rules, per-project authority), never a single owner
+   * field: several Sessions may work one ticket. Absent, no Session may act.
+   */
+  sessionMayAct?: (resource: WorkspaceResource, sessionId: SessionId) => boolean | Promise<boolean>;
+  diagnostics: CatalogDiagnostics;
+  transport?: "electron-ipc" | "unknown";
+  performanceObserver?: RpcProcedurePerformanceObserver;
+}
+
+/** A refusal the host protocol names: the reason travels to every client as `data.hostError`. */
+export class HostProcedureError extends TRPCError {
+  readonly reason: HostErrorReason;
+
+  constructor(reason: HostErrorReason, message: string, cause?: unknown) {
+    super({ code: HOST_ERROR_REASON_CODES[reason], message, cause });
+    this.reason = reason;
+  }
+}
+
+/**
+ * The one client-visible error, built the same way for every link: the tRPC
+ * `errorFormatter` attaches it as `data.hostError`, and the Electron bridge
+ * sends it as its failure payload. The message is sanitized and nothing else of
+ * the error crosses: no stack, no cause, no secret.
+ */
+export function hostErrorOf(error: unknown, fallback = "Session RPC request failed"): HostError {
+  // A subscription's generator throws through the Electron bridge raw, so a
+  // code is read from the error itself, and only a code tRPC knows survives.
+  const code =
+    error instanceof TRPCError
+      ? error.code
+      : typeof error === "object" && error !== null && isHostErrorCode(Reflect.get(error, "code"))
+        ? (Reflect.get(error, "code") as HostError["code"])
+        : "INTERNAL_SERVER_ERROR";
+  const message = error instanceof Error ? sanitizeDiagnosticText(error.message) : fallback;
+  return error instanceof HostProcedureError
+    ? { code, message, reason: error.reason }
+    : { code, message };
+}
+
+/** Same message for a foreign and an absent resource, so neither reveals the other. */
+const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
+
+/** Pins host-protocol's actor kinds to the shared mapping's, in both directions. */
+type AssertNever<Type extends never> = Type;
+export type CallerActorKindCoverage = AssertNever<
+  Exclude<HostActorKind, HostActorKindName> | Exclude<HostActorKindName, HostActorKind>
+>;
+
+/** What a withholding entry's input must carry, so its builder can read the intent's kind. */
+export interface CommandKindEnvelope {
+  readonly command: { readonly kind: string };
+}
+
+/** The input schema a key's builder accepts: a `command.kind` envelope for a withholding entry. */
+type InputSchemaFor<Key, Entry extends VerbEntry> =
+  Key extends CatalogKeyRefusingIntents<Entry> ? z.ZodType<CommandKindEnvelope> : z.ZodType;
+
+/** Whether a schema parses to a `{ command: { kind } }` envelope a builder can read at dispatch. */
+function carriesCommandKind(schema: z.ZodType): boolean {
+  const command = schema instanceof z.ZodObject ? schema.shape.command : undefined;
+  if (command instanceof z.ZodObject) return command.shape.kind !== undefined;
+  return command instanceof z.ZodDiscriminatedUnion && command.def.discriminator === "kind";
+}
+
+/**
+ * Whether the caller is one this router can judge and its grant is current
+ * now. Only the local desktop may come without a checker; a network caller
+ * that lacks one is refused, never waved through (the type demands it too,
+ * and this holds for a door that cast its way past the type).
+ */
+function callerAffirmed({ actor, current }: { actor: CallerActor; current?: unknown }): boolean {
+  if (!isLocalDeviceActor(actor) && !isHostActor(actor)) return false;
+  return typeof current === "function" ? current() === true : isLocalDeviceActor(actor);
+}
+
+function namedResources(named: WorkspaceResources): readonly WorkspaceResource[] {
+  if (named === null) return [];
+  return "kind" in named ? [named] : named;
+}
+
+/**
+ * Authorizes every resource a call names, before its handler reads anything:
+ * each must resolve to the caller's Workspace, or the call is `NOT_FOUND` /
+ * `workspace-unknown`, the one answer for foreign, absent and unanswerable
+ * alike, subjects and references both. Then, for a Session calling a
+ * `session-own` entry, the area's `sessionMayAct` must answer `true` for every
+ * subject, or the call is `FORBIDDEN` / `verb-refused`; with no subject or no
+ * predicate it is refused too (fail closed). Each resource is already known
+ * to be in the Session's Workspace, so saying so reveals nothing.
+ */
+async function authorizeWorkspace(
+  ctx: CatalogCallerContext,
+  entry: CatalogEntry,
+  named: WorkspaceResources,
+): Promise<void> {
+  const { actor } = ctx.caller;
+  // Every Workspace on this host is the desktop window's, so there is nothing
+  // to authorize and nothing new to read: with the flag off, a call answers
+  // exactly as it did before the catalog existed.
+  if (isLocalDeviceActor(actor)) return;
+  const resources = namedResources(named);
+  // A call that names nothing names nothing this caller could own.
+  if (resources.length === 0) {
+    throw new HostProcedureError("workspace-unknown", WORKSPACE_UNKNOWN_MESSAGE);
+  }
+  for (const resource of resources) {
+    if ((await workspaceOf(ctx, resource)) !== actor.workspaceId) {
+      throw new HostProcedureError("workspace-unknown", WORKSPACE_UNKNOWN_MESSAGE);
+    }
+  }
+  if (actor.kind !== "session" || catalogActorOf(entry) !== "session-own") return;
+  const subjects = resources.filter((resource) => (resource.relation ?? "subject") === "subject");
+  const mayAct = ctx.sessionMayAct;
+  let admitted = mayAct !== undefined && subjects.length > 0;
+  for (const subject of subjects) {
+    if (!admitted) break;
+    admitted = (await mayAct!(subject, actor.sessionId)) === true;
+  }
+  if (!admitted) {
+    throw new HostProcedureError(
+      "verb-refused",
+      `${entry.key} is open to a Session only on what its policy lets it act on.`,
+    );
+  }
+}
+
+async function workspaceOf(
+  ctx: CatalogCallerContext,
+  resource: WorkspaceResource,
+): Promise<WorkspaceId | null> {
+  if (resource.kind === PROJECT_RESOURCE) return resource.id;
+  // No port, no proof: a network caller is refused every resource it names.
+  return ctx.resourceWorkspace === undefined ? null : ctx.resourceWorkspace(resource);
+}
+
+function refuseWithheldIntent(entry: CatalogEntry, input: unknown): void {
+  const refused = entry.catalog.refusedIntents;
+  if (refused === undefined) return;
+  // The builder refused any schema without this envelope at construction.
+  const { kind } = (input as CommandKindEnvelope).command;
+  if (refused.includes(kind)) {
+    throw new HostProcedureError(
+      "verb-refused",
+      `${entry.key} does not carry ${kind}; it has a catalog entry of its own.`,
+    );
+  }
+}
+
+function recordProcedurePerformance(
+  observer: RpcProcedurePerformanceObserver | undefined,
+  input: {
+    procedure: string;
+    startedAt: number | null;
+    endedAt: number | null;
+    outcome: RpcProcedurePerformanceSample["outcome"];
+  },
+): void {
+  // A missing clock endpoint means this sample has no trustworthy duration.
+  // Skipping it is preferable to publishing a plausible-looking zero.
+  if (!observer || input.startedAt === null || input.endedAt === null) return;
+  const durationMs = Math.max(0, input.endedAt - input.startedAt);
+  isolatePerformanceObserver(() => {
+    observer.record({ procedure: input.procedure, durationMs, outcome: input.outcome });
+  });
+}
+
+/** How one family of builders is configured. */
+export interface CatalogBuildersOptions<Entry extends VerbEntry> {
+  /**
+   * The entries these builders bind, checked by `catalogEntriesFrom`. Absent:
+   * the Verb Registry's catalog, which every production router uses. A test
+   * passes its own, so an example router needs no registry row.
+   */
+  readonly entries?: readonly Entry[];
+  /**
+   * The queries and mutations that bind no output validator yet, named so the
+   * list can only shrink: one that gains a validator is refused until struck
+   * from it. Every new command binds `.output(zod)`.
+   */
+  readonly legacyUnvalidatedOutputs?: readonly CatalogKeyOf<Entry>[];
+}
+
+/** Which builder made a procedure, recorded where no caller can forge it. */
+interface Provenance {
+  readonly key: string;
+  readonly chain: readonly object[];
+}
+
+interface BuilderWithChain {
+  // oxlint-disable-next-line no-underscore-dangle -- tRPC's builder state.
+  readonly _def: { readonly middlewares: readonly object[] };
+}
+
+/**
+ * One family of catalog builders for one router context (HP § Command
+ * catalog, "Where area routers live"). Each call has its own tRPC instance
+ * and its own private provenance, so a family's `catalogRouter` accepts only
+ * procedures its own builders made.
+ *
+ * `Ctx` is the router's context: {@link CatalogCallerContext} plus the area's
+ * ports. `Entry` types the keys; it defaults to the Verb Registry.
+ */
+export function createCatalogBuilders<
+  Ctx extends CatalogCallerContext,
+  Entry extends VerbEntry = VerbRegistryEntry,
+>(options: CatalogBuildersOptions<Entry> = {}) {
+  const entries =
+    options.entries === undefined ? CATALOG_ENTRIES : catalogEntriesFrom(options.entries);
+  const entryOf = catalogLookup(entries);
+  const legacyOutputs: readonly string[] = options.legacyUnvalidatedOutputs ?? [];
+  for (const key of legacyOutputs) entryOf(key);
+
+  const t = initTRPC.context<Ctx>().create({
+    // Never ship a stack, whatever NODE_ENV says.
+    isDev: false,
+    errorFormatter: ({ shape, error }) => ({
+      code: shape.code,
+      message: sanitizeDiagnosticText(shape.message),
+      data: {
+        code: shape.data.code,
+        httpStatus: shape.data.httpStatus,
+        ...(shape.data.path === undefined ? {} : { path: shape.data.path }),
+        hostError: hostErrorOf(error),
+      },
+    }),
+  });
+
+  /**
+   * Each builder call registers the middleware that completes its entry's
+   * policy (admission for a host entry; Workspace authorization for a
+   * workspace entry), keyed to that entry and to the exact middleware chain
+   * built up to and including it. `assertCatalogBound` accepts a procedure
+   * only when its chain begins with that chain, at that entry's path. tRPC
+   * metadata proves nothing: any module can `initTRPC` and set it.
+   */
+  const provenance = new WeakMap<object, Provenance>();
+
+  function stamped<Builder extends BuilderWithChain>(builder: Builder, key: string): Builder {
+    // oxlint-disable-next-line no-underscore-dangle -- as above.
+    const chain = [...builder._def.middlewares];
+    provenance.set(chain.at(-1)!, { key, chain });
+    return builder;
+  }
+
+  /** The named entry, refused unless it is declared with the scope the builder serves. */
+  function entryScopedTo(key: string, scope: VerbScope): CatalogEntry {
+    const entry = entryOf(key);
+    if (entry.catalog.scope !== scope) {
+      throw new Error(`Catalog entry ${key} is ${entry.catalog.scope}-scoped, not ${scope}-scoped`);
+    }
+    return entry;
+  }
+
+  /** Records route metadata and a payload-free timing for every procedure. */
+  const instrumented = t.procedure.use(async function instrument({ ctx, path, next }) {
+    const transport = ctx.transport ?? "unknown";
+    ctx.diagnostics.record({
+      procedure: path,
+      phase: "start",
+      transport,
+      code: null,
+      message: null,
+    });
+    const performanceStartedAt = readOptionalPerformanceClock(ctx.performanceObserver);
+    const result = await next();
+    if (result.ok) {
+      ctx.diagnostics.record({
+        procedure: path,
+        phase: "success",
+        transport,
+        code: null,
+        message: null,
+      });
+    } else {
+      ctx.diagnostics.record({
+        procedure: path,
+        phase: "error",
+        transport,
+        code: result.error.code,
+        message: result.error.message,
+      });
+    }
+    const performanceEndedAt = readOptionalPerformanceClock(ctx.performanceObserver);
+    recordProcedurePerformance(ctx.performanceObserver, {
+      procedure: path,
+      startedAt: performanceStartedAt,
+      endedAt: performanceEndedAt,
+      outcome: result.ok ? "success" : "error",
+    });
+    return result;
+  });
+
+  /**
+   * The base every catalog procedure is built on: instrumented, then admitted
+   * by its entry before input is even parsed.
+   */
+  function policed(entry: CatalogEntry) {
+    const requirement = catalogActorOf(entry);
+    return instrumented.use(async function admit({ ctx, next }) {
+      if (!callerAffirmed(ctx.caller)) {
+        throw new HostProcedureError(
+          "credential-invalid",
+          "This connection's credential is no longer valid.",
+        );
+      }
+      const { actor } = ctx.caller;
+      const policyActor = HOST_ACTOR_POLICY[actor.kind];
+      const admitted =
+        policyActor !== null &&
+        // `per-subject` is admitted here and judged per subject after the
+        // Workspace check, in `authorizeWorkspace`.
+        catalogActorAdmits(requirement, policyActor) !== "refused" &&
+        // The desktop's own window reaches every declared entry; a network
+        // actor only the ones the WebSocket projects.
+        (isLocalDeviceActor(actor) || entry.accessModes.includes("hostApi"));
+      if (!admitted) {
+        throw new HostProcedureError("verb-refused", `${entry.key} is not open to this caller.`);
+      }
+      const result = await next();
+      // A command id reused for a different intent is the client's conflict,
+      // and the one the wire names; every other ledger conflict stays what it
+      // was. Any area's ledger opts in by the shared brand.
+      if (!result.ok && isCommandIntentConflict(result.error.cause)) {
+        throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
+      }
+      return result;
+    });
+  }
+
+  /** A host-scoped procedure: host-level state, no Workspace resource to resolve (D8). */
+  function hostProcedure<Key extends CatalogKeyOfScope<Entry, "host">>(key: Key) {
+    return stamped(policed(entryScopedTo(key, "host")), key);
+  }
+
+  /**
+   * A workspace-scoped procedure. `resources` names EVERY resource the parsed
+   * input addresses; the router authorizes each one's Workspace before the
+   * handler runs, and a resource in another Workspace answers exactly as an
+   * absent one does (`NOT_FOUND` / `workspace-unknown`). A withholding entry's
+   * input must be a `command.kind` envelope, at the type and at construction.
+   */
+  function workspaceProcedure<
+    Key extends CatalogKeyOfScope<Entry, "workspace">,
+    Schema extends InputSchemaFor<Key, Entry>,
+  >(key: Key, input: Schema, resources: (input: z.output<Schema>) => WorkspaceResources) {
+    const entry = entryScopedTo(key, "workspace");
+    if (entry.catalog.refusedIntents !== undefined && !carriesCommandKind(input)) {
+      throw new Error(`Catalog entry ${key} withholds intents, but its input has no command.kind`);
+    }
+    return stamped(
+      policed(entry)
+        .input(input)
+        .use(async function authorize({ ctx, input: parsed, next }) {
+          refuseWithheldIntent(entry, parsed);
+          await authorizeWorkspace(ctx, entry, resources(parsed as z.output<Schema>));
+          return next();
+        }),
+      key,
+    );
+  }
+
+  /**
+   * Every procedure is its entry's, at its entry's path, with its entry's
+   * shape: its middleware chain begins with the chain one of these builders
+   * minted for that entry, so its policy and (for a workspace entry) its
+   * Workspace authorization run before anything else.
+   */
+  function assertCatalogBound(router: AnyRouter): void {
+    // oxlint-disable-next-line no-underscore-dangle -- tRPC's only introspection door.
+    const procedures = router._def.procedures as Readonly<Record<string, AnyProcedure>>;
+    for (const [path, procedure] of Object.entries(procedures)) {
+      // oxlint-disable-next-line no-underscore-dangle -- as above.
+      const { middlewares, type, output } = procedure._def as unknown as {
+        middlewares: readonly object[];
+        type: string;
+        output?: unknown;
+      };
+      const completes = middlewares.findIndex((middleware) => provenance.has(middleware));
+      const minted = completes === -1 ? undefined : provenance.get(middlewares[completes]!);
+      if (
+        minted?.key !== path ||
+        minted.chain.length !== completes + 1 ||
+        minted.chain.some((middleware, index) => middlewares[index] !== middleware)
+      ) {
+        throw new Error(`Procedure ${path} was not built from its catalog entry`);
+      }
+      const reads = entryOf(minted.key).catalog.idempotency === "read";
+      if (reads !== (type !== "mutation")) {
+        throw new Error(
+          `Procedure ${path} is a ${type}, but its catalog entry ${reads ? "reads" : "writes"}`,
+        );
+      }
+      // tRPC's `.output()` does not validate a subscription's yields, so the
+      // rule covers queries and mutations.
+      const legacy = legacyOutputs.includes(path);
+      if (type !== "subscription" && legacy === (output !== undefined)) {
+        throw new Error(
+          legacy
+            ? `Procedure ${path} binds an output validator; strike it from the legacy exceptions`
+            : `Procedure ${path} binds no output validator`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Builds a router from these builders' procedures, refusing at construction
+   * a procedure they did not build or the catalog does not describe. The
+   * type-level half is {@link CatalogMismatch}; this half catches what a type
+   * cannot see.
+   */
+  function catalogRouter<Procedures extends TRPCCreateRouterOptions>(record: Procedures) {
+    const built = t.router(record);
+    assertCatalogBound(built);
+    return built;
+  }
+
+  return { hostProcedure, workspaceProcedure, catalogRouter, assertCatalogBound };
+}
+
+/** Every procedure path of a router record, dotted the way the catalog keys them. */
+export type ProcedurePaths<Record> = {
+  [Key in keyof Record & string]: Record[Key] extends AnyProcedure
+    ? Key
+    : `${Key}.${ProcedurePaths<Record[Key]>}`;
+}[keyof Record & string];
+
+/**
+ * The keys on which the routers' procedures and the catalog disagree: a
+ * procedure with no entry, or an entry with no procedure (D2). A router seam
+ * asserts this is `never`, so either drift fails `pnpm typecheck` and names
+ * the key. `Paths` is the union over every router the host serves (the
+ * composition root's assertion), and `Keys` the catalog's keys: the Verb
+ * Registry's by default, an example's own in a test.
+ */
+export type CatalogMismatch<Paths extends string, Keys extends string = CatalogKey> =
+  | Exclude<Paths, Keys>
+  | Exclude<Keys, Paths>;

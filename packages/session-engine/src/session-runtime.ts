@@ -1,3 +1,4 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import type { SessionOrigin } from "@volli/shared";
 import {
   advanceSessionProjection,
@@ -542,6 +543,23 @@ export class SessionRuntimeConflictError extends Error {
   }
 }
 
+/**
+ * A command id already in flight, sent again with a different intent: the
+ * runtime's half of `SessionEngineCommandConflictError`, answered
+ * `CONFLICT` / `command-conflict` on the wire.
+ */
+export class SessionRuntimeCommandConflictError
+  extends SessionRuntimeConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionRuntimeCommandConflictError";
+  }
+}
+
 interface BindingRecord {
   adapter: NativeHarnessAdapter;
   handle: BindingHandle;
@@ -866,7 +884,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (existing) {
       if (existing.signature !== signature) {
         return Promise.reject(
-          new SessionRuntimeConflictError(
+          new SessionRuntimeCommandConflictError(
             `Command ${request.commandId} is already in flight with different intent`,
           ),
         );

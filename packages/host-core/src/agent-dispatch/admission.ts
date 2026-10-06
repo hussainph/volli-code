@@ -77,6 +77,7 @@
 import {
   coordinationVerbAllowed,
   DEFAULT_AUTHORITY_POLICY,
+  DOOR_ACTOR_POLICY,
   pathContains,
   verbEntry,
 } from "@volli/shared";
@@ -110,20 +111,14 @@ export type ReadAuthorityPolicy = (projectId: string) => AuthorityPolicy;
  * Two vocabularies on purpose, and VC-44 said why: `TicketEventActor` is who a
  * ticket event is attributed to, written after the fact;
  * {@link AuthorityActorKind} is who a caller is at the door, asked before
- * anything happens. They overlap without being the same list — and `user`,
- * which exists in both, can no longer arrive over this door at all.
+ * anything happens. They overlap without being the same list. The mapping
+ * itself is `@volli/shared`'s `DOOR_ACTOR_POLICY`, the one table every door
+ * shares (VC-564): the person at a headless host's shell (VC-623) is the
+ * person the app's writes come from, so a project's `user` policy governs
+ * them, exactly as it governs a paired device on a router.
  */
 function actorKind(actor: DoorActor): AuthorityActorKind {
-  switch (actor.kind) {
-    case "session":
-      return "session";
-    // The person at a headless host's shell (VC-623) is the person the app's
-    // writes come from, so a project's `user` policy governs them.
-    case "operator":
-      return "user";
-    case "unauthenticated":
-      return "unauthenticated";
-  }
+  return DOOR_ACTOR_POLICY[actor.kind];
 }
 
 /**
@@ -135,7 +130,7 @@ function actorKind(actor: DoorActor): AuthorityActorKind {
  * a policy yet. That is the whole of "no Session can register a project".
  */
 function personOnlyRefusal(request: AgentRequest, actor: DoorActor): AgentResponse | null {
-  if (actor.kind === "operator") return null;
+  if (actorKind(actor) === "user") return null;
   if (actor.kind === "session") {
     return failure(
       "FORBIDDEN_ACTOR",

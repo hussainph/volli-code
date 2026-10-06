@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import type { TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { isHostActor } from "./actor";
+import { isHostActor, isLocalDeviceActor, LOCAL_DEVICE_ACTOR, LOCAL_DEVICE_ID } from "./actor";
 import {
   HOST_ERROR_CODES,
   HOST_ERROR_REASON_CODES,
@@ -125,5 +125,34 @@ describe("identity and actor guards", () => {
     );
     expect(isHostActor(null)).toBe(false);
     expect(isHostActor([])).toBe(false);
+  });
+
+  // VC-564 D7: the desktop's own window is the person, over no handshake. A
+  // network verifier must never be able to hand that identity to a socket.
+  it("reserves the local device id for the in-process desktop", () => {
+    expect(isHostActor({ kind: "device", deviceId: LOCAL_DEVICE_ID, workspaceId: WORKSPACE })).toBe(
+      false,
+    );
+    expect(isHostActor({ ...LOCAL_DEVICE_ACTOR, workspaceId: WORKSPACE })).toBe(false);
+    expect(isLocalDeviceActor(LOCAL_DEVICE_ACTOR)).toBe(true);
+    expect(isLocalDeviceActor({ kind: "device", deviceId: ID, workspaceId: WORKSPACE })).toBe(
+      false,
+    );
+    expect(Object.isFrozen(LOCAL_DEVICE_ACTOR)).toBe(true);
+  });
+
+  it("recognizes the desktop by identity, never by shape", () => {
+    const malformed = [
+      { kind: "session", sessionId: "agent" },
+      { kind: "worker", workerId: ID },
+      { kind: "device", deviceId: ID },
+      // Spelled exactly like the desktop, or with extra fields: still not it.
+      { kind: "device", deviceId: LOCAL_DEVICE_ID },
+      { ...LOCAL_DEVICE_ACTOR },
+      { kind: "device", deviceId: LOCAL_DEVICE_ID, network: true, workerId: ID },
+    ];
+    for (const actor of malformed) {
+      expect(isLocalDeviceActor(actor as never)).toBe(false);
+    }
   });
 });

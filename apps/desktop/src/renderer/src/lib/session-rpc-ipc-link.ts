@@ -13,6 +13,7 @@
  * with `SessionRouterJsonSafety` before either transport can expose it.
  */
 import { createTRPCClient, TRPCClientError, type TRPCClient, type TRPCLink } from "@trpc/client";
+import type { inferRouterError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
 // The same module tRPC's own first-party links read their status mapping from;
@@ -32,6 +33,7 @@ import {
   type SessionPresentationProjection,
 } from "@volli/shared";
 import type {
+  SessionRpcIpcError,
   SessionRpcIpcEvent,
   SessionRpcIpcProcedure,
   SessionRpcIpcRequest,
@@ -77,6 +79,8 @@ export interface SessionRpcPerformanceObserver {
 }
 
 type AppSessionRpcClient = TRPCClient<AppRouter>;
+/** The envelope the router's error formatter attaches as `data.hostError` (VC-564). */
+type RouterHostError = inferRouterError<AppRouter>["data"]["hostError"];
 type AppSessionProcedures = AppSessionRpcClient["session"];
 type AppSessionSubscribeParameters = Parameters<AppSessionProcedures["subscribe"]["subscribe"]>;
 type AppSessionSubscribeOptions = NonNullable<AppSessionSubscribeParameters[1]>;
@@ -240,7 +244,9 @@ export function sessionRpcIpcLink(
                 return;
               }
               if (!reply.ok) {
-                observer.error(failure(reply.error.code, reply.error.message, op.path));
+                observer.error(
+                  failure(reply.error.code, reply.error.message, op.path, reply.error),
+                );
                 return;
               }
               if ("subscriptionId" in reply) {
@@ -278,7 +284,7 @@ export function sessionRpcIpcLink(
           }
           if (event.kind === "error") {
             retire(event.subscriptionId);
-            observer.error(failure(event.error.code, event.error.message, op.path));
+            observer.error(failure(event.error.code, event.error.message, op.path, event.error));
             return;
           }
           // The router mints these ids with `tracked()`. They ride out as the
@@ -297,7 +303,7 @@ export function sessionRpcIpcLink(
           try {
             const reply = await measuredRequest(request);
             if (!reply.ok) {
-              observer.error(failure(reply.error.code, reply.error.message, op.path));
+              observer.error(failure(reply.error.code, reply.error.message, op.path, reply.error));
               return;
             }
             if (!("subscriptionId" in reply)) {
@@ -440,15 +446,31 @@ function routedRequest(path: string, input: unknown): SessionRpcIpcRequest | nul
  * error response whose `code` is the NUMERIC JSON-RPC one, and this wire
  * carries the string key. A string falls to its generic branch, which drops
  * `data` — taking the code a caller branches on with it.
+ *
+ * `wire` is main's envelope when main sent one. Its `reason` rides on
+ * `data.hostError`, exactly where the WebSocket link's error formatter puts it,
+ * so one `readHostError` reads both links alike (VC-564). A failure this link
+ * raises itself has no reason, and carries the code alone.
  */
-function failure(code: string, message: string, path: string): TRPCClientError<AppRouter> {
+function failure(
+  code: string,
+  message: string,
+  path: string,
+  wire?: SessionRpcIpcError,
+): TRPCClientError<AppRouter> {
   const key = isErrorCode(code) ? code : "INTERNAL_SERVER_ERROR";
+  // Forwarded, not judged: `readHostError` checks a reason against its code
+  // and drops one that does not belong to it, on this link as on the other.
+  const hostError: RouterHostError =
+    wire?.reason === undefined
+      ? { code: key, message }
+      : { code: key, message, reason: wire.reason as NonNullable<RouterHostError["reason"]> };
   return new TRPCClientError(message, {
     result: {
       error: {
         code: TRPC_ERROR_CODES_BY_KEY[key],
         message,
-        data: { code: key, httpStatus: getStatusCodeFromKey(key), path },
+        data: { code: key, httpStatus: getStatusCodeFromKey(key), path, hostError },
       },
     },
   });

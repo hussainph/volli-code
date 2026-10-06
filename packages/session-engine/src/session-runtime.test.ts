@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { isCommandIntentConflict } from "@volli/shared";
 import type {
   ObservabilityEvent,
   ObservabilitySink,
@@ -22,7 +23,9 @@ import {
   isSessionStreamFrame,
   isSessionStreamOverlay,
   NativeAttachmentError,
+  SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
+  SessionEngineCommandConflictError,
   SessionRuntimeNotFoundError,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
@@ -5873,6 +5876,33 @@ describe("SessionRuntime person's stop command", () => {
     ).toHaveLength(1);
     await runtime.close();
   });
+});
+
+// VC-564: the host protocol answers these two, and only these, `command-conflict`.
+it("names a command id reused for a different intent, in flight or durable, as a command conflict", async () => {
+  const { runtime } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = {
+    commandId: "stop",
+    sessionId,
+    command: { kind: "session.stop" as const, reason: "Runaway" },
+  };
+  const first = runtime.command(request);
+  const inFlight = runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed" } })
+    .catch((error: unknown) => error);
+  await first;
+  const durable = await runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed again" } })
+    .catch((error: unknown) => error);
+
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeCommandConflictError);
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeConflictError);
+  expect(durable).toBeInstanceOf(SessionEngineCommandConflictError);
+  expect(isCommandIntentConflict(await inFlight)).toBe(true);
+  expect(isCommandIntentConflict(durable)).toBe(true);
+  expect(isCommandIntentConflict(new SessionRuntimeConflictError("ledger fact"))).toBe(false);
+  expect(isCommandIntentConflict(new Error("different intent"))).toBe(false);
 });
 
 it("replays a completed stop after release and across a runtime restart without touching an executor", async () => {

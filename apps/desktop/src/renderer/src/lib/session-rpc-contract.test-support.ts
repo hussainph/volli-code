@@ -1,7 +1,13 @@
 /** Real Session IPC bridge/link (structured clone) and stock WS router (JSON), for tests only. */
 import type { TRPCClient } from "@trpc/client";
 import { webSocketContractLink, type ContractLink } from "@volli/host-protocol/testing";
-import { createSessionRouter, RpcDiagnosticLog, type AppRouter } from "@volli/session-rpc";
+import {
+  createSessionRouter,
+  RpcDiagnosticLog,
+  type AppRouter,
+  type RouterCaller,
+  type SessionRouterContext,
+} from "@volli/session-rpc";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -12,10 +18,24 @@ import {
 } from "@volli/shared";
 
 import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
+import {
+  assertIdentityConsumed,
+  judgeNextRegistrationAs,
+} from "./session-rpc-harness-identity.test-support";
 import { createSessionRpcClient } from "./session-rpc-ipc-link";
 
-/** Everything a contract case can hand the Session router: the runtime and its optional facades. */
-export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver">;
+/**
+ * Everything a contract case can hand the Session router: who is calling, the
+ * runtime and its optional facades. The caller is required here because both
+ * links must judge the same actor. Production IPC is always the desktop's own
+ * window and takes no caller, so the IPC link applies this one through the
+ * test's mocked router (`withHarnessIdentity`); part B's handshake will mint
+ * it on the WebSocket.
+ */
+export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
+  caller: RouterCaller;
+  resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
+};
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
 
@@ -46,7 +66,10 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
     async open(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
-      const registration = registerSessionRpcIpcHandlers({ ...host });
+      const { caller, resourceWorkspace, ...options } = host;
+      judgeNextRegistrationAs({ caller, resourceWorkspace });
+      const registration = registerSessionRpcIpcHandlers(options);
+      assertIdentityConsumed();
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
       const cancel = fakeElectron.listeners.get(SESSION_RPC_CANCEL_CHANNEL)!;
@@ -91,7 +114,11 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
   };
 }
 
-/** The same router behind tRPC's WebSocket adapter, as a host would serve it. */
+/**
+ * The same router behind tRPC's WebSocket adapter, as a host would serve it.
+ * Until part B's handshake mints the caller from a credential, the case names
+ * it, exactly as it names it to the IPC link.
+ */
 export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRouter> {
   return webSocketContractLink({
     router: createSessionRouter(),
