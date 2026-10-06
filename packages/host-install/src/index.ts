@@ -9,6 +9,7 @@ export * from "./failures";
 export * from "./logger";
 export * from "./probe";
 export * from "./provision";
+export * from "./ssh-provider";
 export * from "./ssh";
 export * from "./target";
 export * from "./tunnel";

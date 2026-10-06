@@ -12,25 +12,30 @@
 import type { HostdFailureCode, InstallMode } from "./contract";
 import type { HostKeyOffer } from "./ssh";
 
-export type StepId = "connect" | "probe" | "upload" | "install" | "start" | "enroll" | "tunnel";
+/**
+ * The steps every provider answers. `deliver` is an upload over SSH, an image
+ * for a provider that runs containers; `link` is an SSH tunnel, or a
+ * provider's own route.
+ */
+export type StepId = "connect" | "probe" | "deliver" | "install" | "start" | "enroll" | "link";
 
 export const STEP_ORDER: readonly StepId[] = [
   "connect",
   "probe",
-  "upload",
+  "deliver",
   "install",
   "start",
   "enroll",
-  "tunnel",
+  "link",
 ];
 
 /** The lab's five checklist rows, and the steps behind each. */
 export const CHECKLIST_ROWS = {
   connect: ["connect"],
   check: ["probe"],
-  install: ["upload", "install"],
+  install: ["deliver", "install"],
   start: ["start"],
-  pair: ["enroll", "tunnel"],
+  pair: ["enroll", "link"],
 } as const satisfies Record<string, readonly StepId[]>;
 
 export type ProvisionFailure =
@@ -49,6 +54,8 @@ export type ProvisionFailure =
   | { readonly code: "probe-failed"; readonly step: "probe"; readonly detail: string }
   | { readonly code: "unsupported-system"; readonly step: "probe"; readonly system: string }
   | { readonly code: "unsupported-arch"; readonly step: "probe"; readonly arch: string }
+  /** A known target this build has no hostd for: `linux-arm64`, `darwin-arm64`… */
+  | { readonly code: "target-unavailable"; readonly step: "probe"; readonly target: string }
   | { readonly code: "no-systemd"; readonly step: "probe" }
   | { readonly code: "no-user-manager"; readonly step: "probe" }
   | { readonly code: "glibc-too-old"; readonly step: "probe"; readonly glibc: string }
@@ -63,12 +70,12 @@ export type ProvisionFailure =
   // upload
   | {
       readonly code: "artifact-unavailable" | "artifact-checksum" | "artifact-fetch-failed";
-      readonly step: "upload";
+      readonly step: "deliver";
       readonly detail: string;
     }
-  | { readonly code: "upload-failed"; readonly step: "upload"; readonly detail: string }
-  | { readonly code: "remote-checksum"; readonly step: "upload"; readonly detail: string }
-  | { readonly code: "unpack-failed"; readonly step: "upload"; readonly detail: string }
+  | { readonly code: "upload-failed"; readonly step: "deliver"; readonly detail: string }
+  | { readonly code: "remote-checksum"; readonly step: "deliver"; readonly detail: string }
+  | { readonly code: "unpack-failed"; readonly step: "deliver"; readonly detail: string }
   // install, start, enroll: what hostd answered
   | {
       readonly code: "hostd-refused";
@@ -78,7 +85,7 @@ export type ProvisionFailure =
       readonly detail: readonly string[];
     }
   // tunnel
-  | { readonly code: "tunnel-failed"; readonly step: "tunnel"; readonly detail: string };
+  | { readonly code: "tunnel-failed"; readonly step: "link"; readonly detail: string };
 
 export type ProvisionQuestion =
   /** An unknown host key: compare and accept, or go back. */
@@ -124,6 +131,13 @@ export type ProvisionAnswer =
 export type Recovery =
   | { readonly action: "retry"; readonly label: string; readonly from: StepId }
   | { readonly action: "back"; readonly label: string };
+
+const TARGET_NAMES: Readonly<Record<string, string>> = {
+  "linux-arm64": "arm64 Linux",
+  "linux-x64": "x86-64 Linux",
+  "darwin-arm64": "Apple silicon Mac",
+  "darwin-x64": "Intel Mac",
+};
 
 function retry(label: string, from: StepId): Recovery {
   return { action: "retry", label, from };
@@ -171,9 +185,14 @@ export function describeFailure(
     case "probe-failed":
       return { line: `Couldn’t check ${host}`, recovery: retry("Check again", step) };
     case "unsupported-system":
-      return { line: `Volli hosts run on Linux, not ${failure.system}`, recovery: back };
+      return { line: `Volli hosts run on Linux or a Mac, not ${failure.system}`, recovery: back };
     case "unsupported-arch":
       return { line: `${failure.arch} Linux isn’t supported yet`, recovery: back };
+    case "target-unavailable":
+      return {
+        line: `${TARGET_NAMES[failure.target] ?? failure.target} hosts aren’t supported by this build yet`,
+        recovery: back,
+      };
     case "no-systemd":
       return { line: `${host} doesn’t run systemd`, recovery: back };
     case "no-user-manager":
@@ -207,7 +226,7 @@ export function describeFailure(
     case "remote-checksum":
       return {
         line: "The download didn’t match its checksum",
-        recovery: retry("Try again", "upload"),
+        recovery: retry("Try again", "deliver"),
       };
     case "artifact-fetch-failed":
       return { line: "Couldn’t download Volli host", recovery: retry("Try again", step) };

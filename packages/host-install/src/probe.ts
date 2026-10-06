@@ -2,8 +2,9 @@
  * The probe (VC-700 flow step 3): one POSIX `sh` script over the shared SSH
  * connection, answering `key=value` lines, read into typed facts.
  *
- * It looks; it changes nothing. OS, architecture and glibc (the artifact
- * needs 2.36+), systemd and the user manager, lingering, free disk where a
+ * It looks; it changes nothing. Linux and macOS are both first-class
+ * branches: OS, architecture and glibc (a Linux artifact needs 2.36+),
+ * systemd and the user manager or launchd, lingering, free disk where a
  * system or a user install would go, memory, what sudo allows without a
  * prompt, and any hostd already here: where, which version, and its
  * `status --json` when it speaks one (VC-700 hostds and later), which says
@@ -41,6 +42,8 @@ export interface ProbeFacts {
   readonly home: string;
   /** systemd's version, or `null` when systemd is not PID 1. */
   readonly systemd: number | null;
+  /** A Mac: hostd runs as a launchd user agent. */
+  readonly launchd: boolean;
   /** Whether this login has a systemd user manager (user units run in it). */
   readonly userManager: boolean;
   readonly linger: boolean | null;
@@ -52,6 +55,12 @@ export interface ProbeFacts {
   readonly existing: ExistingHostd | null;
 }
 
+/**
+ * Where a hostd may already be, first match wins: a managed system unit, the
+ * M1 runbook's hand-made one, then a user install. A Mac's launchd agent
+ * keeps its releases where a Linux user unit does (`$XDG_DATA_HOME` or
+ * `~/.local/share`); only its data directory and its agent differ.
+ */
 const CANDIDATES = [
   ["/opt/volli-hostd/current/bin/volli-hostd", "system", "managed"],
   ["/opt/volli-hostd/bin/volli-hostd", "system", "flat"],
@@ -62,10 +71,20 @@ const CANDIDATES = [
 export const PROBE_SCRIPT = [
   'echo "kernel=$(uname -s)"',
   'echo "arch=$(uname -m)"',
-  "if [ -r /etc/os-release ]; then . /etc/os-release; fi",
-  'echo "os_id=${ID:-}"',
-  'echo "os_version=${VERSION_ID:-}"',
-  'echo "os_name=${PRETTY_NAME:-}"',
+  'if [ "$(uname -s)" = Darwin ]; then',
+  "  v=$(sw_vers -productVersion 2>/dev/null)",
+  '  echo "os_id=macos"',
+  '  echo "os_version=$v"',
+  '  echo "os_name=macOS $v"',
+  '  echo "launchd=yes"',
+  '  echo "mem_bytes=$(sysctl -n hw.memsize 2>/dev/null)"',
+  "else",
+  "  if [ -r /etc/os-release ]; then . /etc/os-release; fi",
+  '  echo "os_id=${ID:-}"',
+  '  echo "os_version=${VERSION_ID:-}"',
+  '  echo "os_name=${PRETTY_NAME:-}"',
+  "  echo \"mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)\"",
+  "fi",
   'echo "user=$(id -un)"',
   'echo "home=$HOME"',
   'echo "groups=$(id -nG)"',
@@ -77,7 +96,6 @@ export const PROBE_SCRIPT = [
   "echo \"glibc=$(ldd --version 2>/dev/null | awk 'NR==1{print $NF}')\"",
   'echo "disk_home=$(df -Pk "$HOME" 2>/dev/null | awk \'NR==2{print $4}\')"',
   "echo \"disk_system=$(df -Pk /opt 2>/dev/null | awk 'NR==2{print $4}')\"",
-  "echo \"mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)\"",
   'if sudo -n true >/dev/null 2>&1; then echo "sudo=nopasswd"; fi',
   "found=",
   ...CANDIDATES.flatMap(([path, mode, layout]) => [
@@ -139,11 +157,14 @@ export function parseProbe(stdout: string): ProbeFacts {
     user: one("user"),
     home: one("home"),
     systemd,
+    launchd: one("launchd") === "yes",
     userManager: one("user_manager") === "yes",
     linger: linger === "yes" ? true : linger === "no" ? false : null,
     glibc: /^\d+\.\d+/u.test(one("glibc")) ? one("glibc") : null,
     disk: { home: kib(map.get("disk_home")?.[0]), system: kib(map.get("disk_system")?.[0]) },
-    memoryBytes: kib(map.get("mem_kb")?.[0]),
+    memoryBytes: /^\d+$/u.test(one("mem_bytes"))
+      ? Number(one("mem_bytes"))
+      : kib(map.get("mem_kb")?.[0]),
     sudo:
       one("sudo") === "nopasswd"
         ? "nopasswd"
@@ -167,11 +188,12 @@ export async function probeHost(
   return { ok: true, facts: parseProbe(result.stdout) };
 }
 
-/** The artifact target for an architecture: `linux-x64`, `linux-arm64`, or `null`. */
+/** The artifact target: `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, or `null`. */
 export function artifactTarget(facts: Pick<ProbeFacts, "kernel" | "arch">): string | null {
-  if (facts.kernel !== "Linux") return null;
-  if (facts.arch === "x86_64" || facts.arch === "amd64") return "linux-x64";
-  if (facts.arch === "aarch64" || facts.arch === "arm64") return "linux-arm64";
+  const platform = { Linux: "linux", Darwin: "darwin" }[facts.kernel];
+  if (platform === undefined) return null;
+  if (facts.arch === "x86_64" || facts.arch === "amd64") return `${platform}-x64`;
+  if (facts.arch === "aarch64" || facts.arch === "arm64") return `${platform}-arm64`;
   return null;
 }
 

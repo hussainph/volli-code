@@ -52,6 +52,7 @@ describe("the probe", () => {
       user: "deploy",
       home: "/home/deploy",
       systemd: 255,
+      launchd: false,
       userManager: true,
       linger: false,
       glibc: "2.39",
@@ -103,6 +104,25 @@ describe("the probe", () => {
     expect(parseProbe("=junk\nnoequals").kernel).toBe("");
   });
 
+  it("reads a Mac as a launchd host with its memory in bytes", () => {
+    const mac = parseProbe(
+      [
+        "kernel=Darwin",
+        "arch=arm64",
+        "os_id=macos",
+        "os_version=26.5.1",
+        "os_name=macOS 26.5.1",
+        "launchd=yes",
+        "mem_bytes=17179869184",
+        "groups=staff admin",
+        "linger=",
+        "glibc=",
+      ].join("\n"),
+    );
+    expect(mac).toMatchObject({ launchd: true, systemd: null, glibc: null, sudo: "password" });
+    expect(describeSystem(mac)).toEqual(["macOS 26.5", "arm64", "16 GB"]);
+  });
+
   it("runs over the transport, and says when it could not", async () => {
     expect(await probeHost(transport(0, UBUNTU))).toMatchObject({
       ok: true,
@@ -118,7 +138,9 @@ describe("the probe", () => {
     expect(artifactTarget({ kernel: "Linux", arch: "aarch64" })).toBe("linux-arm64");
     expect(artifactTarget({ kernel: "Linux", arch: "arm64" })).toBe("linux-arm64");
     expect(artifactTarget({ kernel: "Linux", arch: "riscv64" })).toBeNull();
-    expect(artifactTarget({ kernel: "Darwin", arch: "arm64" })).toBeNull();
+    expect(artifactTarget({ kernel: "Darwin", arch: "arm64" })).toBe("darwin-arm64");
+    expect(artifactTarget({ kernel: "Darwin", arch: "x86_64" })).toBe("darwin-x64");
+    expect(artifactTarget({ kernel: "FreeBSD", arch: "amd64" })).toBeNull();
     const facts = parseProbe(UBUNTU);
     expect(describeSystem(facts)).toEqual(["Ubuntu 24.04", "x86-64", "8 GB"]);
     expect(

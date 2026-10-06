@@ -4,8 +4,19 @@ Add a host over SSH (VC-700, VC-615 flow 1). Electron-free: desktop main runs
 it today; a CLI or a control plane can run it unchanged.
 
 ```
-connect → probe → upload → install → start → enroll → tunnel
+connect → probe → deliver → install → start → enroll → link
 ```
+
+The step machine (`provision.ts`) is provider-neutral: a `HostProvider`
+answers each step. SSH (`ssh-provider.ts`) is the first and only adapter:
+deliver is an upload, link is an `ssh -L` tunnel. A bring-your-own-account
+provider (a Fly Sprite, a Cloudflare container) would deliver an image and
+link over its own route, plugging in without touching the engine.
+
+Linux (systemd) and macOS (a launchd user agent, always as the person) are
+both first-class branches of the probe and the SSH steps. Which targets a
+build installs is `supportedTargets(pin)`; a Mac is refused until a darwin
+hostd and hostd's launchd install ship.
 
 | Module                      | What                                                                                                                                                                                                                                                                                                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
