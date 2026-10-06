@@ -211,6 +211,18 @@ jobs:
           apps/desktop/e2e/lib/shutdown-trace.test.mjs
           apps/desktop/e2e/lib/screenshot-trace.test.mjs
 
+      # volli-drive (VC-703): its safety rules — the one launch gate (packed
+      # refused), home containment parity with the app, scratch-only fixture
+      # repos, identity-exact stop — plus the fake provider. No Electron. The
+      # sshd fixture test runs only on macOS and reports itself skipped here.
+      - name: Test volli-drive harness rules
+        run: >-
+          node --test apps/desktop/e2e/volli-drive/lib/core.test.mjs
+          apps/desktop/e2e/volli-drive/lib/launch-gate.test.mjs
+          apps/desktop/e2e/volli-drive/lib/stop.test.mjs
+          apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
+          apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
+
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
       #
