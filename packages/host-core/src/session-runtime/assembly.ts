@@ -58,7 +58,7 @@ export interface RuntimeAssemblyOptions {
   dataDir: string;
   binDir: string;
   venue: SessionExecutionVenue;
-  hostPorts: Pick<HostCorePorts, "events" | "connectivity">;
+  hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
   decisions: HostDecisions | null;
   webAccess: WebAccessSettings | null;
@@ -419,6 +419,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           venue,
           db: dbHandle.db,
           events: options.hostPorts.events,
+          log: options.hostPorts.log,
           dataDir,
           transcriptDirectory,
           executor: piRuntimeHost.adapter,

@@ -19,7 +19,16 @@ import {
   type AppRouter,
 } from "./index";
 import { sessionHandlersFrom } from "./session-handlers.test-support";
-import { frameSchema, receiptSchema, uiMessageWireSchema } from "./output-schema";
+import {
+  followUpItemWireSchema,
+  frameSchema,
+  legacyStreamEmissionSchema,
+  legacyStreamEmissionWireSchema,
+  receiptSchema,
+  streamEmissionSchema,
+  streamEmissionWireSchema,
+  uiMessageWireSchema,
+} from "./output-schema";
 
 const session = {
   id: "session",
@@ -280,6 +289,18 @@ describe("publishable Session procedure schemas", () => {
     expect(document.required).toContain("sessionId");
     expect(document.properties?.commandId).toMatchObject({ maxLength: 8 });
     expect(document.properties?.added).toMatchObject({ type: "boolean" });
+    const malformedEdit = {
+      _def: {
+        procedures: {
+          "session.editQueued": {
+            _def: { type: "mutation", inputs: [z.string()], output: z.null() },
+          },
+        },
+      },
+    } as unknown as AppRouter;
+    expect(() => sessionProcedureSchemas(malformedEdit)).toThrow(
+      "session.editQueued needs a structural message envelope",
+    );
     for (const unsupported of [undefined, z.string(), z.object({ command: z.string() })]) {
       expect(() => sessionProcedureSchemas(commandRouter(unsupported))).toThrow(
         "structural command envelope",
@@ -406,9 +427,11 @@ describe("publishable Session procedure schemas", () => {
       projection: {},
       throughSequence: 2,
     });
-    expect(
-      sessionSnapshotOutputSchema.parse({ projection: {}, frames: [], throughSequence: 2 }),
-    ).toEqual({ projection: {}, frames: [], throughSequence: 2 });
+    // A window that reaches the first event, with no reply: what an older host sent.
+    const snapshot = { projection: {}, frames: [], throughSequence: 2 };
+    expect(sessionSnapshotOutputSchema.parse(snapshot)).toEqual(snapshot);
+    const paged = { ...snapshot, before: 2, latestReply: { sequence: 1, text: "Done." } };
+    expect(sessionSnapshotOutputSchema.parse(paged)).toEqual(paged);
   });
 
   it("rejects malformed envelopes, receipt variants and non-JSON transcript payloads", () => {
@@ -493,5 +516,132 @@ describe("publishable Session procedure schemas", () => {
         command: { kind: "executor.retry" },
       }),
     ).rejects.toThrow("Output validation failed");
+  });
+});
+
+/** The `kind` constants of a stream union's published alternatives. */
+function emissionKinds(schema: z.ZodType) {
+  return ((z.toJSONSchema(schema).anyOf ?? []) as { properties?: { kind?: { const?: string } } }[])
+    .map((variant) => variant.properties?.kind?.const)
+    .filter((kind) => kind !== undefined);
+}
+
+describe("the host follow-up queue on the wire (VC-675)", () => {
+  const item = {
+    id: "queued",
+    commandId: "submit-queued",
+    state: "queued" as const,
+    message: {
+      id: "queued",
+      role: "user" as const,
+      metadata: { origin: ["kept", null] },
+      parts: [
+        { type: "text", text: "follow up" },
+        { type: "file", mediaType: "text/plain", url: "data:,x" },
+      ],
+    },
+  };
+  const queued = {
+    kind: "queue" as const,
+    sessionId: "session",
+    throughSequence: 2,
+    revision: 3,
+    queue: [item, { ...item, id: "second", commandId: "submit-second", state: "releasing" }],
+  };
+
+  it("keeps every row field and the revision through projection and snapshot outputs", () => {
+    const projection = { turnActive: true, queue: queued.queue, queueRevision: 3 };
+    expect(sessionProjectionOutputSchema.parse({ projection, throughSequence: 2 })).toEqual({
+      projection,
+      throughSequence: 2,
+    });
+    const snapshot = { projection, frames: [], throughSequence: 2 };
+    expect(sessionSnapshotOutputSchema.parse(JSON.parse(JSON.stringify(snapshot)))).toEqual(
+      snapshot,
+    );
+    // Both stay optional: a host with no queue still answers a valid projection.
+    expect(
+      sessionProjectionOutputSchema.parse({ projection: { queue: [] }, throughSequence: 0 }),
+    ).toEqual({ projection: { queue: [] }, throughSequence: 0 });
+  });
+
+  it("refuses a malformed row or an unbounded, negative or fractional revision", () => {
+    const { parts: _parts, ...partless } = item.message;
+    const { role: _role, ...roleless } = item.message;
+    const rows = [
+      { ...item, state: "delivered" },
+      { ...item, commandId: undefined },
+      { ...item, id: 1 },
+      { ...item, message: partless },
+      { ...item, message: roleless },
+      { ...item, message: { ...item.message, parts: [{ text: "untyped" }] } },
+      { ...item, message: { ...item.message, parts: [{ type: "data-x", data: Number.NaN }] } },
+    ];
+    for (const row of rows) {
+      expect(followUpItemWireSchema.safeParse(row).success, JSON.stringify(row)).toBe(false);
+      expect(
+        sessionProjectionOutputSchema.safeParse({
+          projection: { queue: [row] },
+          throughSequence: 2,
+        }).success,
+      ).toBe(false);
+      expect(streamEmissionSchema.safeParse({ ...queued, queue: [row] }).success).toBe(false);
+    }
+    for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "3"]) {
+      expect(
+        sessionProjectionOutputSchema.safeParse({
+          projection: { queueRevision: revision },
+          throughSequence: 2,
+        }).success,
+      ).toBe(false);
+      expect(streamEmissionSchema.safeParse({ ...queued, revision }).success).toBe(false);
+    }
+    expect(streamEmissionSchema.safeParse({ ...queued, throughSequence: -1 }).success).toBe(false);
+    expect(followUpItemWireSchema.parse({ ...item, state: "releasing" }).state).toBe("releasing");
+  });
+
+  it("carries queue emissions on the current stream union and keeps the legacy union frozen", () => {
+    expect(streamEmissionSchema.parse(queued)).toEqual(queued);
+    expect(streamEmissionWireSchema.parse(JSON.parse(JSON.stringify(queued)))).toEqual(queued);
+    expect(legacyStreamEmissionSchema.safeParse(queued).success).toBe(false);
+    expect(legacyStreamEmissionWireSchema.safeParse(queued).success).toBe(false);
+    const sample = frame(payloads["session.created"]);
+    for (const schema of [streamEmissionSchema, legacyStreamEmissionSchema]) {
+      expect(schema.parse(sample)).toEqual(sample);
+    }
+    expect(emissionKinds(streamEmissionWireSchema)).toEqual(["overlay", "compaction", "queue"]);
+    expect(emissionKinds(legacyStreamEmissionWireSchema)).toEqual(["overlay", "compaction"]);
+  });
+
+  it("publishes the queue grammar wherever the router returns it", () => {
+    const schemas = sessionProcedureSchemas();
+    for (const key of ["session.projection", "session.snapshot"]) {
+      const output = schemas[key]!.output;
+      const result = { projection: { queue: queued.queue, queueRevision: 3 }, throughSequence: 2 };
+      expect(
+        output.parse(key === "session.snapshot" ? { ...result, frames: [] } : result),
+      ).toMatchObject(result);
+      expect(() => z.toJSONSchema(output)).not.toThrow();
+    }
+    expect(schemas["session.subscribe"]!.output.safeParse(queued).success).toBe(false);
+    expect(schemas["session.subscribeQueue"]?.output.parse(queued)).toEqual(queued);
+  });
+
+  it("retains the row and revision at actual projection and snapshot dispatch", async () => {
+    const projection = { queue: queued.queue, queueRevision: 3 };
+    const caller = callerWithResults({ projection });
+    expect(await caller.session.projection({ sessionId: "session" })).toEqual({
+      projection,
+      throughSequence: 2,
+    });
+    expect(await caller.session.snapshot({ sessionId: "session" })).toEqual({
+      projection,
+      frames: [],
+      throughSequence: 2,
+    });
+    const malformed = callerWithResults({ projection: { queue: queued.queue, queueRevision: -1 } });
+    await expect(malformed.session.projection({ sessionId: "session" })).rejects.toThrow(
+      "Output validation failed",
+    );
   });
 });

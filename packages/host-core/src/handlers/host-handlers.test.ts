@@ -173,6 +173,7 @@ describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {
       snapshot: vi.fn(async () => "snapshot"),
+      history: vi.fn(async () => "history"),
       projection: vi.fn(async () => "projection"),
       subscribe: vi.fn(async (_input, listener, onFailure) => {
         await listener("emission");
@@ -185,10 +186,14 @@ describe("Session commands", () => {
     } as unknown as SessionRuntime;
     const map = handlers({ runtime });
     await expect(map["session.snapshot"]({ sessionId: "s" }, USER)).resolves.toBe("snapshot");
+    await expect(map["session.history"]({ sessionId: "s", before: 2 }, USER)).resolves.toBe(
+      "history",
+    );
     await expect(map["session.projection"]({ sessionId: "s" }, USER)).resolves.toBe("projection");
     const emit = vi.fn();
     const fail = vi.fn();
     await map["session.subscribe"]({ sessionId: "s", afterSequence: 3 }, USER, { emit, fail });
+    await map["session.subscribeQueue"]({ sessionId: "s", afterSequence: 3 }, USER, { emit, fail });
     expect(runtime.subscribe).toHaveBeenCalledWith(
       { sessionId: "s", afterSequence: 3 },
       expect.any(Function),
@@ -197,6 +202,48 @@ describe("Session commands", () => {
     expect(emit).toHaveBeenCalledWith("emission");
     expect(fail).toHaveBeenCalledWith("failure");
     await expect(map["session.command"]({} as never, USER)).resolves.toBe("result");
+    await map["session.cancelQueued"](
+      { commandId: "cancel", sessionId: "s", messageId: "m" },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    const message = {
+      id: "m",
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: "edited" }],
+    };
+    await map["session.editQueued"](
+      { commandId: "edit", sessionId: "s", messageId: "m", message },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "s",
+      command: { kind: "message.edit", messageId: "m", message },
+    });
+    // A Client that read the queue at a revision passes it through unchanged.
+    await map["session.cancelQueued"](
+      { commandId: "cancel-at", sessionId: "s", messageId: "m", expectedRevision: 4 },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel-at",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m", expectedRevision: 4 },
+    });
+    await map["session.editQueued"](
+      { commandId: "edit-at", sessionId: "s", messageId: "m", message, expectedRevision: 0 },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit-at",
+      sessionId: "s",
+      command: { kind: "message.edit", messageId: "m", message, expectedRevision: 0 },
+    });
     await map["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, USER);
     expect(runtime.cancelInteraction).toHaveBeenCalledWith({
       sessionId: "s",

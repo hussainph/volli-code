@@ -55,7 +55,9 @@ export interface HostProtocolBind {
 /** The features hostd offers: everything it composes. */
 export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions",
+  "sessions.queue",
   "sessions.subscribe",
+  "sessions.history",
   "session.read",
 ];
 

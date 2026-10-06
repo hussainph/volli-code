@@ -13,11 +13,11 @@
  * Each function takes a slice and returns one. The batch and queue
  * transitions return THE SAME slice when a write had nothing for them,
  * because callers publish on identity: an unchanged slice is what keeps a
- * no-op write from repainting a chat or re-running the client's
- * queue-release rule.
+ * no-op write from repainting a chat.
  */
 import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@volli/session-engine";
-import type { SessionPresentationProjection } from "@volli/shared";
+import type { SessionStreamQueue } from "@volli/session-engine";
+import type { ChatSessionProjection } from "./client";
 
 import {
   isWorking,
@@ -25,8 +25,15 @@ import {
   type ChatSessionLifecycle,
   type ChatSessionSlice,
 } from "./client";
-import { enqueueMessage, removeQueued, type QueuedMessage } from "./session-model";
-import { appendFrames, EMPTY_TRANSCRIPT, type ChatSessionFrame } from "./transcript";
+import { queuedMessageFromHost } from "./session-model";
+import {
+  appendFrames,
+  EMPTY_TRANSCRIPT,
+  prependTranscriptHistory,
+  seedTranscriptWindow,
+  type ChatSessionFrame,
+  type TranscriptWindow,
+} from "./transcript";
 
 /** A slice as a Session first appears: undescribed, empty, and `lifecycle` as seeded. */
 export function seedSlice(lifecycle: ChatSessionLifecycle): ChatSessionSlice {
@@ -61,12 +68,48 @@ export function foldStreamBatch(
   return { ...next, lifecycle: settledLifecycle(slice, next) };
 }
 
+/**
+ * A snapshot: its window of frames and the projection checkpoint they end at,
+ * applied as one write so nothing reads the frames against an older projection.
+ */
+export function applySnapshotWindow(
+  slice: ChatSessionSlice,
+  window: TranscriptWindow,
+  projection: ChatSessionProjection,
+): ChatSessionSlice {
+  const transcript = seedTranscriptWindow(slice.transcript, window, projection);
+  // The queue is host-projected state, not transcript: the window bounds the
+  // frames and leaves the follow-ups the projection carries untouched (VC-675).
+  const next = {
+    ...applyQueue(slice, projection.queue ?? [], projection.queueRevision ?? -1),
+    transcript,
+    projection,
+  };
+  return { ...next, lifecycle: settledLifecycle(slice, next) };
+}
+
+/**
+ * Older history above the transcript (VC-315). Lifecycle is not consulted: a
+ * page is the past, and it moves nothing about the turn running now.
+ */
+export function prependSliceHistory(
+  slice: ChatSessionSlice,
+  requested: number,
+  page: TranscriptWindow,
+): ChatSessionSlice {
+  const transcript = prependTranscriptHistory(slice.transcript, requested, page);
+  return transcript === slice.transcript ? slice : { ...slice, transcript };
+}
+
 /** A fresh durable projection, and the lifecycle it settles the slice to. */
 export function applyProjection(
   slice: ChatSessionSlice,
-  projection: SessionPresentationProjection,
+  projection: ChatSessionProjection,
 ): ChatSessionSlice {
-  const next = { ...slice, projection };
+  const next = {
+    ...applyQueue(slice, projection.queue ?? [], projection.queueRevision ?? -1),
+    projection,
+  };
   return { ...next, lifecycle: settledLifecycle(slice, next) };
 }
 
@@ -106,16 +149,14 @@ export function settleSlice(slice: ChatSessionSlice, error: string | null): Chat
     : { ...slice, lifecycle: "error", sessionError: error };
 }
 
-export function enqueueSlice(slice: ChatSessionSlice, message: QueuedMessage): ChatSessionSlice {
-  const queue = enqueueMessage(slice.queue, message);
-  // Blank text never reaches the queue, and an unchanged queue must not
-  // hand the client a store change to re-run its release rule against.
-  return queue.length === slice.queue.length ? slice : { ...slice, queue };
-}
-
-export function dequeueSlice(slice: ChatSessionSlice, id: string): ChatSessionSlice {
-  const queue = removeQueued(slice.queue, id);
-  return queue.length === slice.queue.length ? slice : { ...slice, queue };
+/** Queue revisions are independent of transcript sequence; stale snapshots cannot undo mutations. */
+export function applyQueue(
+  slice: ChatSessionSlice,
+  queue: SessionStreamQueue["queue"],
+  revision: number,
+): ChatSessionSlice {
+  if (revision <= (slice.queueRevision ?? -1)) return slice;
+  return { ...slice, queue: queue.map(queuedMessageFromHost), queueRevision: revision };
 }
 
 /**

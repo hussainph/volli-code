@@ -228,6 +228,12 @@ jobs:
       - name: Check excluded dependencies
         run: vp run check:excluded-dependencies
 
+      - name: Test hostd release safety and desktop pin
+        run: >-
+          node --test scripts/release-workflow.test.mjs
+          scripts/hostd-release-manifest.test.mjs
+          apps/desktop/scripts/copy-hostd-manifest.test.mjs
+
       - name: Check host Electron boundary and CI gate policy
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
@@ -688,7 +694,7 @@ jobs:
   # Node = .nvmrc and bookworm's glibc, natives compiled there, then booted
   # from the archive alone against an empty data directory, driven by the
   # volli CLI, stopped with SIGTERM and its database integrity-checked. A CI
-  # artifact only: release.yml and desktop packaging never see it.
+  # artifact only; release.yml builds its own matching x64/arm64 asset set.
   host-container:
     name: Build (host container)
     needs: changes

@@ -118,8 +118,11 @@ function hostFixture() {
       projection: sparse,
       throughSequence: 4,
       frames: [frame(4)],
+      before: null,
       transcript: [],
+      latestReply: null,
     }),
+    history: async () => ({ frames: [], before: null }),
     command: async (input) => {
       if (input.command.kind !== "model.select")
         throw new Error("Recording supports only model.select");

@@ -154,6 +154,66 @@ describe("FileTranscriptArtifactStore", () => {
     await expect(artifacts.read(reference)).rejects.toThrow();
   });
 
+  // VC-315: a history window is chosen from these sizes before any body is read.
+  it("says an artifact's canonical size from its metadata, without reading the body", async () => {
+    const artifacts = await store();
+    const value = artifact("sized ".repeat(500));
+    const reference = await artifacts.write(value);
+    const canonical = canonicalBytes(value).length;
+    // What it adds to a frame on the wire: the body's JSON, byte for byte.
+    expect(canonical).toBe(Buffer.byteLength(JSON.stringify(value)));
+    await expect(artifacts.byteLength(reference)).resolves.toBe(canonical);
+
+    const legacyValue = artifact("legacy sized");
+    const legacy = referenceFor(legacyValue);
+    await writeFile(
+      join(directory!, `${legacy.reference.id.slice("sha256:".length)}.json`),
+      legacy.bytes,
+    );
+    await expect(artifacts.byteLength(legacy.reference)).resolves.toBe(legacy.bytes.length);
+  });
+
+  it("answers a size even when the body is corrupt, and null when it cannot say", async () => {
+    const artifacts = await store();
+    const value = artifact("corrupt but sized");
+    const reference = await artifacts.write(value);
+    const path = join(directory!, `${reference.id.slice("sha256:".length)}.json.gz`);
+    const packed = await readFile(path);
+    // A damaged body with its trailer intact: unreadable, and still sized.
+    packed.fill(0, 10, packed.length - 8);
+    await writeFile(path, packed);
+    await expect(artifacts.read(reference)).rejects.toThrow();
+    const fresh = createFileTranscriptArtifactStore(directory!);
+    await expect(fresh.byteLength(reference)).resolves.toBe(canonicalBytes(value).length);
+
+    // Too short to hold a trailer, missing, a symlink, an invalid reference: null.
+    await writeFile(path, Buffer.from([0x1f, 0x8b, 0x08]));
+    await expect(createFileTranscriptArtifactStore(directory!).byteLength(reference)).resolves.toBe(
+      null,
+    );
+    const missing = referenceFor(artifact("never written")).reference;
+    await expect(fresh.byteLength(missing)).resolves.toBe(null);
+    const external = join(directory!, "outside.json.gz");
+    await writeFile(external, packed);
+    await rm(path);
+    await symlink(external, path);
+    await expect(createFileTranscriptArtifactStore(directory!).byteLength(reference)).resolves.toBe(
+      null,
+    );
+    await expect(
+      fresh.byteLength({ id: "sha256:nope", digest: "sha256:nope", mediaType: null }),
+    ).resolves.toBe(null);
+  });
+
+  it("remembers a size once read: the artifact it names cannot change", async () => {
+    const artifacts = await store();
+    const value = artifact("remembered");
+    const reference = await artifacts.write(value);
+    await expect(artifacts.byteLength(reference)).resolves.toBe(canonicalBytes(value).length);
+    await rm(join(directory!, `${reference.id.slice("sha256:".length)}.json.gz`));
+    await expect(artifacts.byteLength(reference)).resolves.toBe(canonicalBytes(value).length);
+  });
+
   it("deduplicates concurrent identical writes", async () => {
     const artifacts = await store();
     const value = artifact();

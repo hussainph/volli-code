@@ -513,7 +513,7 @@ export async function startTicketChat(
   // whose client was disposed, and an opening turn queued onto it would be
   // words nothing will ever release.
   if (sessionId !== null && message !== undefined) {
-    useChatSessionsStore.getState().enqueue(sessionId, {
+    await useChatSessionsStore.getState().enqueue(sessionId, {
       id: newMessageId(),
       text: message,
       ...(refineTitle === true && typeof title === "string" ? { autoTitleBaseline: title } : {}),

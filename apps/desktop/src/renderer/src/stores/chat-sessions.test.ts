@@ -11,16 +11,23 @@ import {
   getChatClient,
   type ChatCommandRequest,
   type ChatSessionRpc,
+  type ChatSessionProjection,
   type ChatSessionTransport,
   type ChatStreamCursor,
 } from "@volli/session-presentation";
 import { useChatDraftsStore } from "./chat-drafts";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
+import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 
 // Callable AND `.error`: VC-141's neutral compact toast is a plain `toast(...)`
 // call, while every other notify stays `toast.error(...)`.
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
+
+vi.mock("@renderer/lib/app-state-storage", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  flushPendingAppStateKey: vi.fn(async () => true),
+}));
 
 const noop = (): void => undefined;
 
@@ -112,15 +119,17 @@ function fakeTransport() {
       releaseAttach = resolve;
     });
   };
+  let hostProjection: ChatSessionProjection = { ...projection, queue: [], queueRevision: 0 };
   const rpc: ChatSessionRpc = {
     session: {
       snapshot: {
         query: async () => {
           if (state.snapshotError !== null) throw state.snapshotError;
-          return { projection, frames: [], throughSequence: 0 };
+          return { projection: hostProjection, frames: [], throughSequence: 0 };
         },
       },
-      projection: { query: async () => ({ projection }) },
+      history: { query: async () => ({ frames: [], before: null }) },
+      projection: { query: async () => ({ projection: hostProjection }) },
       subscribe: {
         subscribe: (input) => {
           subscriptions.push(input);
@@ -130,9 +139,31 @@ function fakeTransport() {
       command: {
         mutate: async (input) => {
           commands.push(input);
-          return state.answer(input);
+          const answer = state.answer(input);
+          if (
+            input.command.kind === "message.submit" &&
+            input.command.delivery === "queue" &&
+            answer.receipt?.status !== "rejected"
+          ) {
+            hostProjection = {
+              ...hostProjection,
+              queueRevision: (hostProjection.queueRevision ?? 0) + 1,
+              queue: [
+                ...(hostProjection.queue ?? []),
+                {
+                  id: input.command.message.id,
+                  commandId: input.commandId,
+                  message: input.command.message,
+                  state: "queued",
+                },
+              ],
+            };
+          }
+          return answer;
         },
       },
+      cancelQueued: { mutate: async () => ACCEPTED },
+      editQueued: { mutate: async () => ACCEPTED },
       cancelInteraction: { mutate: async () => ACCEPTED },
       reconcile: { mutate: async () => ACCEPTED },
     },
@@ -349,7 +380,7 @@ describe("createChatSession", () => {
     // No React view is rendered before or after the asynchronous failure.
     store.getState().openChatTab("t1", sessionId!);
     const kickoff = { id: "kickoff-1", text: "Begin work on this ticket." };
-    store.getState().enqueue(sessionId!, kickoff);
+    await store.getState().enqueue(sessionId!, kickoff);
     expect(toast.error).not.toHaveBeenCalled();
 
     releaseAttach();
@@ -357,14 +388,14 @@ describe("createChatSession", () => {
       expect(store.getState().sessions[SESSION.id]).toMatchObject({
         lifecycle: "error",
         sessionError: "Could not start Session: socket hang up",
-        queue: [kickoff],
+        queue: [expect.objectContaining(kickoff)],
       });
       expect(toast.error).toHaveBeenCalledWith(
         "Could not start Session: socket hang up",
         expect.anything(),
       );
     });
-    expect(commands).toEqual([]);
+    expect(commands).toMatchObject([{ command: { kind: "message.submit", delivery: "queue" } }]);
     expect(ticketStarts).toHaveLength(1);
     expect(toast.error).toHaveBeenCalledOnce();
     expect(store.getState().openTabs).toEqual({ t1: [SESSION.id] });
@@ -869,8 +900,9 @@ describe("promoteChatSession", () => {
     await vi.waitFor(() => expect(attaches).toHaveLength(1));
 
     // Both messages reach the one Session, in the order they were pressed.
-    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first" });
-    store.getState().enqueue(DRAFT_ID, { id: "m2", text: "second" });
+    await store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first" });
+    await store.getState().enqueue(DRAFT_ID, { id: "m2", text: "second" });
+    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.queue).toHaveLength(2));
     expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
       "first",
       "second",
@@ -951,7 +983,8 @@ describe("promoteChatSession", () => {
     openDraft();
 
     await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
-    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+    await store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.queue).toHaveLength(1));
 
     // Settle everything the attach and the stream can still write, then count.
     await vi.waitFor(() => expect(attaches.length).toBeGreaterThanOrEqual(1));
@@ -980,13 +1013,14 @@ describe("promoteChatSession", () => {
     ]);
     expect(store.getState().sessions[DRAFT_ID]).toBeDefined();
 
-    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+    await store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.queue).toHaveLength(1));
     expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
       "first message",
     ]);
     // And it stays there. Nothing drops a queued message because an attach was
     // refused — the queue is what a Retry releases once the worktree exists.
-    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.lifecycle).toBe("error"));
+    expect(store.getState().sessions[DRAFT_ID]?.lifecycle).not.toBe("working");
     expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
       "first message",
     ]);
@@ -1508,7 +1542,7 @@ describe("writes addressed to a Session that is gone", () => {
     store.getState().attaching("ghost");
     store.getState().settle("ghost", "gone");
     store.getState().enqueue("ghost", { id: "q1", text: "hello" });
-    store.getState().dequeue("ghost", "q1");
+    store.getState().setQueue("ghost", [], 1);
     store.getState().retitle("ghost", "Parser");
 
     expect(store.getState().sessions).toEqual({});
@@ -1684,52 +1718,56 @@ describe("the slice", () => {
   });
 });
 
-describe("the queue", () => {
-  function seeded() {
-    const edge = fixture();
-    edge.store.getState().adoptChatSession("durable-9");
-    return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
-  }
-
-  it("holds what was typed, in the order it was typed", () => {
-    const { store, slice } = seeded();
-
-    store.getState().enqueue("durable-9", { id: "q1", text: " first " });
-    store.getState().enqueue("durable-9", { id: "q2", text: "second" });
-
-    expect(slice().queue).toEqual([
-      { id: "q1", text: "first" },
-      { id: "q2", text: "second" },
+describe("the host-owned queue with cloud off", () => {
+  it("submits ordered durable queue commands without a live executor", async () => {
+    const { store, commands } = fixture();
+    store.getState().adoptChatSession("durable-9");
+    await expect(store.getState().enqueue("durable-9", { id: "q1", text: "first" })).resolves.toBe(
+      "delivered",
+    );
+    await expect(store.getState().enqueue("durable-9", { id: "q2", text: "second" })).resolves.toBe(
+      "delivered",
+    );
+    await vi.waitFor(() =>
+      expect(store.getState().sessions["durable-9"]?.queue.map((row) => row.id)).toEqual([
+        "q1",
+        "q2",
+      ]),
+    );
+    expect(commands.map((row) => row.command)).toMatchObject([
+      { delivery: "queue" },
+      { delivery: "queue" },
     ]);
+    expect(store.getState().sessions["durable-9"]?.lifecycle).toBe("ready");
+    expect(useChatDraftsStore.getState().drafts["durable-9"]?.held ?? []).toEqual([]);
+  });
+  it("preserves an existing persisted recovery copy until durable acceptance", async () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("durable-9");
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage("durable-9", { id: "q1", text: "first" });
+    vi.mocked(flushPendingAppStateKey).mockResolvedValueOnce(false);
+    await expect(store.getState().enqueue("durable-9", { id: "q1", text: "first" })).resolves.toBe(
+      "refused",
+    );
+    expect(useChatDraftsStore.getState().drafts["durable-9"]?.held).toMatchObject([
+      { id: "q1", state: "unsent" },
+    ]);
+    store.getState().setQueue("durable-9", [], 2);
+    expect(store.getState().sessions["durable-9"]?.queueRevision).toBe(2);
   });
 
-  it("never takes blank text, and never republishes the slice for it", () => {
-    const { store, slice } = seeded();
-    const before = slice();
-
-    store.getState().enqueue("durable-9", { id: "q1", text: "   " });
-
-    expect(slice()).toBe(before);
-  });
-
-  it("takes one entry back out", () => {
-    const { store, slice } = seeded();
-    store.getState().enqueue("durable-9", { id: "q1", text: "first" });
-    store.getState().enqueue("durable-9", { id: "q2", text: "second" });
-
-    store.getState().dequeue("durable-9", "q1");
-
-    expect(slice().queue).toEqual([{ id: "q2", text: "second" }]);
-  });
-
-  it("keeps its identity when the entry to drop was never there", () => {
-    const { store, slice } = seeded();
-    store.getState().enqueue("durable-9", { id: "q1", text: "first" });
-    const before = slice();
-
-    store.getState().dequeue("durable-9", "q9");
-
-    expect(slice()).toBe(before);
+  it("retains a refused kickoff as local unsent recovery", async () => {
+    const { store, state } = fixture();
+    store.getState().adoptChatSession("durable-9");
+    state.answer = () => REFUSED;
+    await expect(store.getState().enqueue("durable-9", { id: "q1", text: "first" })).resolves.toBe(
+      "refused",
+    );
+    expect(useChatDraftsStore.getState().drafts["durable-9"]?.held).toMatchObject([
+      { id: "q1", text: "first", state: "unsent" },
+    ]);
+    expect(store.getState().sessions["durable-9"]?.queue).toEqual([]);
   });
 });
 

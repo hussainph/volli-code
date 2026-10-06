@@ -20,10 +20,15 @@ import {
   SESSION_ROLES,
   SESSION_STOP_CATEGORIES,
   SESSION_USAGE_CAUSES,
+  TODO_STATUSES,
   TOOL_ROUTES,
 } from "@volli/shared";
 import type { RendererSessionEventPayload, SessionPresentationProjection } from "@volli/shared";
-import type { RendererSessionCommandResult, RendererSessionStreamFrame } from "./index";
+import type {
+  RendererSessionCommandResult,
+  RendererSessionProjection,
+  RendererSessionStreamFrame,
+} from "./index";
 
 const text = z.string();
 const nullableText = text.nullable();
@@ -51,6 +56,13 @@ const auto = z.object({
   alternatives: z.array(z.object({ selection: model, probability: z.number().min(0).max(1) })),
 });
 const reference = z.object({ id: text, mediaType: nullableText, digest: nullableText });
+const todoList = z.array(z.object({ content: text, status: z.enum(TODO_STATUSES) }));
+/** What a settled message means for current state (VC-315); absent before it. */
+const transcriptDigest = z.object({
+  role: z.enum(["user", "assistant", "system"]),
+  reply: z.literal(true).optional(),
+  todoList: todoList.optional(),
+});
 const stopActor = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("session"), sessionId: text }),
   z.object({ kind: z.enum(["user", "watchdog"]) }),
@@ -365,6 +377,7 @@ const payloads = {
     attachmentId: nullableText,
     turnId: nullableText,
     reference,
+    digest: transcriptDigest.optional(),
   }),
   "attention.raised": z.object({ kind: z.literal("attention.raised"), attention: attentionSchema }),
   "attention.cleared": z.object({ kind: z.literal("attention.cleared"), attentionId: text }),
@@ -454,6 +467,20 @@ export const uiMessageWireSchema = z.object({
   metadata: z.json().optional(),
   parts: z.array(uiPartWireSchema),
 });
+/**
+ * One host-owned follow-up (VC-675): the complete queued UIMessage, the command
+ * that queued it, and whether it is still editable or already being released.
+ * Delivery bookkeeping (origin, model, steer target) stays behind the edge.
+ */
+export const followUpItemWireSchema = z.object({
+  id: text,
+  message: uiMessageWireSchema,
+  commandId: text,
+  state: z.enum(["queued", "releasing"]),
+});
+/** Queue order is by this revision, never by the event cursor; safe-integer bounded. */
+export const queueRevisionWireSchema = sequence;
+export const followUpQueueWireSchema = z.array(followUpItemWireSchema);
 export const transcriptWireSchema = z.object({
   version: z.literal(1),
   threadId: text,
@@ -499,23 +526,42 @@ export const fullProjectionSchema = z.object({
   turnActive: z.boolean(),
   lastActivityAt: integer,
   bornTicketless: z.boolean(),
+  todoList: todoList.optional(),
   liveExecutor: z.object({ id: text }).nullable(),
   scheduledResume: z.object({ id: text, attentionId: text, resumeAt: integer }).nullable(),
 }) satisfies z.ZodType<SessionPresentationProjection>;
 // rendererProjection deliberately carries only fields its source contains (the
 // established minimal-projection contract). Retain the existing published TS
 // type, but describe that absence faithfully rather than inventing defaults.
-export const projectionWireSchema = fullProjectionSchema.partial();
+// The host's follow-up queue and its revision ride beside the presentation
+// projection (VC-675); both stay optional, so a host without a queue is valid.
+export const projectionWireSchema = fullProjectionSchema.partial().extend({
+  queue: followUpQueueWireSchema.optional(),
+  queueRevision: queueRevisionWireSchema.optional(),
+});
 export const projectionSchema = projectionWireSchema as unknown as z.ZodType<
-  SessionPresentationProjection,
-  SessionPresentationProjection
+  RendererSessionProjection,
+  RendererSessionProjection
 >;
 export const sessionProjectionOutputSchema = z.object({
   projection: projectionSchema,
   throughSequence: sequence,
 });
+/**
+ * VC-315's two snapshot fields ride only when they say something: `before`
+ * the cursor for history above the window (absent: it reaches the first
+ * event, or the host predates the bound), `latestReply` the current turn's
+ * reply (absent: it has said nothing, or the host predates it).
+ */
 export const sessionSnapshotOutputSchema = sessionProjectionOutputSchema.extend({
   frames: z.array(frameSchema),
+  before: integer.positive().optional(),
+  latestReply: z.object({ sequence, text }).optional(),
+});
+/** One page of older transcript (VC-315): frames in order, and the cursor above them. */
+export const sessionHistoryOutputSchema = z.object({
+  frames: z.array(frameSchema),
+  before: integer.positive().nullable(),
 });
 export const sessionCommandWireSchema = z.object({
   sessionId: text,
@@ -591,8 +637,34 @@ export const streamEmissionWireSchema = z.union([
     state: z.enum(["started", "finished"]),
     reason: z.enum(COMPACTION_WORK_REASONS),
   }),
+  // The whole host queue after a change. It does not advance the event
+  // cursor: `throughSequence` is the durable history it was emitted beside,
+  // and consumers order queue snapshots by `revision`.
+  z.object({
+    kind: z.literal("queue"),
+    sessionId: text,
+    throughSequence: sequence,
+    revision: queueRevisionWireSchema,
+    queue: followUpQueueWireSchema,
+  }),
 ]);
 export const streamEmissionSchema = z.union([
+  frameSchema,
+  streamEmissionWireSchema.options[1],
+  streamEmissionWireSchema.options[2],
+  streamEmissionWireSchema.options[3],
+]);
+/**
+ * The VC-669 frozen vocabulary: a published operation's closed output union
+ * never gains an arm, so the pre-queue stream keeps exactly these three and a
+ * queue-aware peer reads {@link streamEmissionSchema} through its own feature.
+ */
+export const legacyStreamEmissionWireSchema = z.union([
+  streamEmissionWireSchema.options[0],
+  streamEmissionWireSchema.options[1],
+  streamEmissionWireSchema.options[2],
+]);
+export const legacyStreamEmissionSchema = z.union([
   frameSchema,
   streamEmissionWireSchema.options[1],
   streamEmissionWireSchema.options[2],

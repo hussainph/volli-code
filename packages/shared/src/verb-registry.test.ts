@@ -262,9 +262,13 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "modelAccess.pickerView": "coordination",
   "modelAccess.setPickerView": "coordination",
   "session.snapshot": "coordination",
+  "session.history": "coordination",
   "session.projection": "coordination",
   "session.subscribe": "coordination",
+  "session.subscribeQueue": "coordination",
   "session.command": "coordination",
+  "session.cancelQueued": "coordination",
+  "session.editQueued": "coordination",
   "session.cancelInteraction": "coordination",
   "session.reconcile": "coordination",
   // Declared and policed, projected by no door: no tier, like ticket.archive.
@@ -1300,9 +1304,13 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "modelAccess.pickerView": ["host", "read"],
     "modelAccess.setPickerView": ["host", "natural"],
     "session.snapshot": ["workspace", "read"],
+    "session.history": ["workspace", "read"],
     "session.projection": ["workspace", "read"],
     "session.subscribe": ["workspace", "read"],
+    "session.subscribeQueue": ["workspace", "read"],
     "session.command": ["workspace", "command-id"],
+    "session.cancelQueued": ["workspace", "command-id"],
+    "session.editQueued": ["workspace", "command-id"],
     "session.cancelInteraction": ["workspace", "natural"],
     "session.reconcile": ["workspace", "natural"],
     "labDiagnostics.list": ["host", "read"],
@@ -1366,9 +1374,13 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "sessions.create"
       | "sessions.attach"
       | "session.snapshot"
+      | "session.history"
       | "session.projection"
       | "session.subscribe"
+      | "session.subscribeQueue"
       | "session.command"
+      | "session.cancelQueued"
+      | "session.editQueued"
       | "session.cancelInteraction"
       | "session.reconcile"
     >();
@@ -1378,6 +1390,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expect(catalogEntry("session.command").catalog.refusedIntents).toEqual([
       "session.create",
       "adapter.attach",
+      "message.cancel",
+      "message.edit",
     ]);
   });
 

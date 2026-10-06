@@ -96,6 +96,7 @@ function runtimeFixture(): {
   runtime: SessionRuntime;
   calls: {
     snapshot: string[];
+    history: number[];
     projection: string[];
     subscribe: number[];
     cancelled: { sessionId: string; interactionId: string; reason: string }[];
@@ -106,6 +107,7 @@ function runtimeFixture(): {
 } {
   const calls = {
     snapshot: [] as string[],
+    history: [] as number[],
     projection: [] as string[],
     subscribe: [] as number[],
     cancelled: [] as { sessionId: string; interactionId: string; reason: string }[],
@@ -122,7 +124,12 @@ function runtimeFixture(): {
           throughSequence: 0,
           frames: [],
           transcript: [],
+          latestReply: null,
         } as never;
+      },
+      history: async ({ before }) => {
+        calls.history.push(before);
+        return { frames: [], before: null };
       },
       projection: async ({ sessionId }) => {
         calls.projection.push(sessionId);
@@ -317,6 +324,13 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
+        path: "session.history", type: "query",
+        input: { sessionId: "session-1", before: 7 },
+      }),
+    ).resolves.toEqual({ ok: true, data: { frames: [], before: null } });
+    expect(fixture.calls.history).toEqual([7]);
+    await expect(
+      invoke(sender(), {
         path: "session.cancelInteraction", type: "mutation",
         input: { sessionId: "session-1", interactionId: "question-1" },
       }),
@@ -360,6 +374,44 @@ describe("registerSessionRpcIpcHandlers", () => {
         origin: { kind: "user" },
       },
     ]);
+    await registration.close();
+  });
+
+  it("routes queue mutations through the same validated catalog on flag-off IPC", async () => {
+    const fixture = runtimeFixture();
+    const command = vi.fn(async () => ({
+      sessionId: "session-1",
+      command: {} as never,
+      receipt: null,
+      throughSequence: 1,
+      refusal: null,
+    }));
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: { ...fixture.runtime, command },
+    });
+    const message = { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] };
+    for (const [path, input] of [
+      ["session.cancelQueued", { commandId: "cancel", sessionId: "session-1", messageId: "m" }],
+      [
+        "session.editQueued",
+        { commandId: "edit", sessionId: "session-1", messageId: "m", message },
+      ],
+    ] as const) {
+      await expect(invoke(sender(), { path, type: "mutation", input })).resolves.toMatchObject({
+        ok: true,
+        data: { sessionId: "session-1", throughSequence: 1 },
+      });
+    }
+    expect(command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "session-1",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    expect(command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "session-1",
+      command: { kind: "message.edit", messageId: "m", message },
+    });
     await registration.close();
   });
 

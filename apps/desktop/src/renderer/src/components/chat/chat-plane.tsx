@@ -5,15 +5,9 @@
  * There is no header: the tab already names the Session and carries its liveness
  * dot, and a second band here would repeat it.
  *
- * Nothing about the Session lives in this component. The stream, the fold, the
- * queue and the lifecycle belong to the resident client
- * (@volli/session-presentation) and the store beside it, both of which
- * outlive every mount — so a chat left for
- * the board keeps folding and releases its queued message whether or not this is
- * on screen. Nor does the half-typed message: it is part of the Session too, so
- * it lives in `stores/chat-drafts.ts` and survives both a tab switch and a
- * relaunch. What is local is what should be: the measured composer height, and
- * which cards have a decision in flight.
+ * The host owns work and ordered follow-ups. Resident clients fold the stream;
+ * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
+ * owns only measurements and which controls have a command in flight.
  */
 import * as React from "react";
 import { toast } from "sonner";
@@ -70,6 +64,7 @@ import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   groupTurns,
   isAwaitingFirstOutput,
+  currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
   segmentTurn,
@@ -100,13 +95,11 @@ import {
   composerModelSelection,
   composerPress,
   coordinateQueuedMutation,
-  coordinateQueuedSteerStart,
   detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
-  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -117,9 +110,8 @@ import {
   sessionBlocker,
   sessionModelStanding,
   visibleBlocker,
-  steerRollbackState,
-  steerQueuedMessage,
   settledHeldIds,
+  steerTurnIsCurrent,
   withdrawInteraction,
   type ComposerVerbPress,
   type CatalogState,
@@ -149,6 +141,7 @@ import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
   rememberTranscriptView,
+  TRANSCRIPT_PAGE_ROWS,
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
@@ -191,7 +184,6 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
-const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
 const NO_HIDDEN: readonly HiddenModelRef[] = [];
@@ -337,15 +329,13 @@ export function ChatPlane({
   );
   const sessionsStore = store ?? useChatSessionsStore;
   const {
-    claimQueued,
+    cancelQueued,
+    steerQueued,
     compactContext,
-    dequeueClaimed,
-    enqueue,
     cancelInteraction,
     interrupt,
     recover,
     retryRuntime,
-    releaseQueuedClaim,
     resolveInteraction,
     selectModel,
     submit,
@@ -367,7 +357,6 @@ export function ChatPlane({
   const setDraft = useChatDraftsStore((state) => state.setDraft);
   const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
-  const beginQueuedSteer = useChatDraftsStore((state) => state.beginQueuedSteer);
   const markHeld = useChatDraftsStore((state) => state.markHeld);
   const dropHeld = useChatDraftsStore((state) => state.dropHeld);
   const onInputChange = React.useCallback(
@@ -408,11 +397,14 @@ export function ChatPlane({
     messages,
     durableMessages,
     queue,
+    queueRevision,
     working,
     turnActive,
     deliverable,
     projection,
     liveCompaction,
+    historyBefore,
+    latestReply,
   } = session;
   const projectModel = useProjectsStore(
     (state) => state.projects.find((project) => project.id === projectId)?.sessionModel ?? null,
@@ -593,13 +585,11 @@ export function ChatPlane({
   /**
    * The one road out of this surface for anything a person typed.
    *
-   * Says what became of the words, which is not the same question as whether
-   * they arrived: `held` means the Session's queue has them and nothing durable
-   * does. A redirection typed on a card takes the same road, so it is never
-   * dropped while the executor is coming up.
+   * Both queued and immediate messages are host commands. A redirection typed
+   * on a card takes the same road, including while an executor is coming up.
    */
   const deliver = React.useCallback(
-    async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
+    async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery> => {
       if (provisional !== undefined) {
         // First Send cannot defer a still-unknown model choice into main: doing
         // so would let a Settings change between retries alter one create
@@ -629,29 +619,15 @@ export function ChatPlane({
           drafts.completePromotion(sessionId);
           return "refused";
         }
-        sessionsStore.getState().enqueue(sessionId, message);
-        // Queue first, then remove the recovery marker. If the renderer exits
-        // before this synchronous handoff finishes, hydration turns the held
-        // `sending` row into a visible `unsent` retry instead of stranding it.
-        drafts.completePromotion(sessionId);
-        return "held";
+        const outcome = await sessionsStore.getState().enqueue(sessionId, message);
+        // The persisted recovery copy is dropped by dispatch only after host acceptance.
+        if (outcome !== "refused") drafts.completePromotion(sessionId);
+        return outcome;
       }
-      if (messageRoute(intent, deliverable) === "hold") {
-        enqueue(message);
-        return "held";
-      }
-      return submit(message, intent === "steer" ? "steer" : "queue");
+      if (messageRoute(intent, deliverable) === "hold") return submit(message, "queue");
+      return submit(message, intent === "steer" ? "steer" : undefined);
     },
-    [
-      deliverable,
-      enqueue,
-      provisional,
-      provisionalModel,
-      sessionId,
-      sessionsStore,
-      setSettingsOpen,
-      submit,
-    ],
+    [deliverable, provisional, provisionalModel, sessionId, sessionsStore, setSettingsOpen, submit],
   );
 
   /**
@@ -847,12 +823,11 @@ export function ChatPlane({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
         deliver: () => road(message),
         finish: async (outcome) => {
-          if (outcome === "held") markHeld(sessionId, message.id, "queued");
           // `recorded` is the message the runtime committed before the executor
           // refused it: it is in the ledger and on screen in the transcript, so
           // handing it back would be inviting a second copy of it. The blocker
           // row owns that recovery.
-          else if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
+          if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
           else dropHeld(sessionId, message.id);
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
@@ -1002,118 +977,153 @@ export function ChatPlane({
   // its words back in the box, removing one drops it — so the whole of this is
   // which ids it stopped naming. Both records are told; neither minds an id it
   // never had.
+  const queuedMutations = React.useRef(new Set<string>());
   const onQueuedChange = React.useCallback(
-    (next: readonly QueuedMessage[]) => {
+    async (
+      next: readonly QueuedMessage[],
+      options?: { restoreAttachments?: readonly BlobLinkView[]; restoreDraft?(): void },
+    ) => {
       const kept = new Set(next.map((entry) => entry.id));
       const removed = strip.filter((entry) => !kept.has(entry.id));
       if (removed.length === 0) return true;
       if (removed.length !== 1) return false;
       const entry = removed[0]!;
-      const current = sessionsStore.getState().sessions[sessionId];
-      const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
-      const gone = coordinateQueuedMutation({
-        queueBacked,
-        claim: () => claimQueued(entry.id),
-        consumeClaim: () => dequeueClaimed(entry.id),
-        releaseClaim: () => releaseQueuedClaim(entry.id),
-        dropHeld: () => dropHeld(sessionId, entry.id),
-      });
-      if (!gone) return false;
-      // A removed row's files lose their links too (VC-137) — which of them,
-      // and why an edited row's do not, is `detachableRowAttachments`.
-      for (const attachment of detachableRowAttachments(
-        entry.attachments,
-        attachmentsRef.current,
-      )) {
-        void removeAttachment(attachment);
+      if (queuedMutations.current.has(entry.id) || steeringQueued.current.has(entry.id))
+        return false;
+      // The revision of the snapshot this strip was drawn from — this render's,
+      // never `getState()` after the durability wait below. Another Client can
+      // edit the row while the recovery copy persists; reading the revision
+      // afterwards would cancel the edited words while restoring the old ones.
+      // A mismatch is a typed conflict and refuses like any other refusal.
+      const expectedRevision = queueRevision;
+      queuedMutations.current.add(entry.id);
+      try {
+        const current = sessionsStore.getState().sessions[sessionId];
+        const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
+        const heldEntry = useChatDraftsStore
+          .getState()
+          .drafts[sessionId]?.held.find((row) => row.id === entry.id);
+        // A stale host row must still ask the host; disappearance never grants local ownership.
+        const hostOwned = queueBacked || entry.commandId !== undefined;
+        if (options?.restoreDraft !== undefined && hostOwned) {
+          // Cancel removes the host's last copy. Keep recovery durable before
+          // asking, then restore the draft before retiring it after acceptance.
+          // `holdMessage` empties the box (it was built for Send, where the
+          // box IS the message); here the box holds words typed before Edit,
+          // and they must survive the wait and a refusal. Put them back in
+          // the same tick, so no render — and no durable write — sees them gone.
+          const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
+          holdMessage(sessionId, entry);
+          if (typed.length > 0) setDraft(sessionId, typed);
+          if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) {
+            markHeld(sessionId, entry.id, "unsent");
+            return false;
+          }
+        }
+        const gone = await coordinateQueuedMutation({
+          queueBacked: hostOwned,
+          cancel: () => cancelQueued(entry.id, expectedRevision),
+          localMutable: heldEntry?.state === "unsent",
+          dropHeld: () => {
+            options?.restoreDraft?.();
+            dropHeld(sessionId, entry.id);
+          },
+        });
+        if (!gone) {
+          if (options?.restoreDraft !== undefined)
+            markHeld(sessionId, entry.id, heldEntry?.state ?? "unsent");
+          return false;
+        }
+        if (options?.restoreAttachments === undefined) {
+          for (const attachment of detachableRowAttachments(
+            entry.attachments,
+            attachmentsRef.current,
+          )) {
+            void removeAttachment(attachment);
+          }
+        }
+        await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+        return true;
+      } catch (failure) {
+        if (options?.restoreDraft !== undefined) markHeld(sessionId, entry.id, "unsent");
+        toast.error(`Message not removed: ${errorMessage(failure)}`);
+        return false;
+      } finally {
+        queuedMutations.current.delete(entry.id);
       }
-      return true;
     },
     [
-      claimQueued,
-      dequeueClaimed,
+      cancelQueued,
       dropHeld,
+      holdMessage,
+      markHeld,
+      queueRevision,
       removeAttachment,
-      releaseQueuedClaim,
       sessionId,
       sessionsStore,
+      setDraft,
       strip,
     ],
   );
 
   const onSteerQueued = React.useCallback(
     (id: string) => {
-      void steerQueuedMessage(id, steeringQueued.current, {
-        read: () => {
-          const current = sessionsStore.getState().sessions[sessionId];
-          return {
-            held: useChatDraftsStore.getState().drafts[sessionId]?.held ?? NO_HELD,
-            queue: current?.queue ?? NO_QUEUE,
-            steerable: current?.lifecycle === "working" && isDeliverable(current),
-          };
-        },
-        start: async (visible, targetId) => {
-          const before = sessionsStore.getState().sessions[sessionId];
-          const targetedTurnEpoch = before?.transcript.turnEpoch;
-          const queueBacked = before?.queue.some((entry) => entry.id === targetId) ?? false;
-          const heldBefore = useChatDraftsStore
-            .getState()
-            .drafts[sessionId]?.held.find((entry) => entry.id === targetId);
-          const restoreState = steerRollbackState(queueBacked, heldBefore?.state);
-          return coordinateQueuedSteerStart(targetedTurnEpoch, {
-            queueBacked,
-            claim: () => claimQueued(targetId),
-            persist: async () => {
-              // The claim freezes the entire ordered resident queue. Its
-              // selected row and visible neighbors become durable first.
-              beginQueuedSteer(sessionId, visible, targetId);
-              return flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
-            },
-            current: () => {
-              const current = sessionsStore.getState().sessions[sessionId];
-              return current === undefined
+      if (steeringQueued.current.has(id) || queuedMutations.current.has(id)) return;
+      const current = sessionsStore.getState().sessions[sessionId];
+      const queued = current?.queue.find((entry) => entry.id === id);
+      if (
+        queued !== undefined ||
+        strip.some((entry) => entry.id === id && entry.commandId !== undefined)
+      ) {
+        // The host claims the queued identity atomically. Never cancel then resubmit.
+        void steerQueued(id);
+        return;
+      }
+      const entry = useChatDraftsStore
+        .getState()
+        .drafts[sessionId]?.held.find((row) => row.id === id);
+      if (entry?.state !== "unsent" || current?.lifecycle !== "working" || !isDeliverable(current))
+        return;
+      const targetedTurnEpoch = current.transcript.turnEpoch;
+      steeringQueued.current.add(id);
+      markHeld(sessionId, id, "sending");
+      void dispatchHeldMessage({
+        persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
+        deliver: () => {
+          const live = sessionsStore.getState().sessions[sessionId];
+          if (
+            !steerTurnIsCurrent(
+              targetedTurnEpoch,
+              live === undefined
                 ? undefined
                 : {
-                    turnEpoch: current.transcript.turnEpoch,
-                    working: current.lifecycle === "working",
-                    deliverable: isDeliverable(current),
-                  };
-            },
-            consumeClaim: () => dequeueClaimed(targetId),
-            restore: async () => {
-              markHeld(sessionId, targetId, restoreState);
-              await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
-            },
-            releaseClaim: () => releaseQueuedClaim(targetId),
-          });
+                    turnEpoch: live.transcript.turnEpoch,
+                    working: live.lifecycle === "working",
+                    deliverable: isDeliverable(live),
+                  },
+            )
+          ) {
+            toast.error("Message not steered: the targeted turn has ended");
+            return Promise.resolve("refused" as const);
+          }
+          return submit(entry, "steer");
         },
-        submit: (message, delivery) => submit(message, delivery),
-        finish: async (messageId, outcome) => {
-          if (outcome === "refused") markHeld(sessionId, messageId, "unsent");
-          else dropHeld(sessionId, messageId);
+        finish: async (outcome) => {
+          if (outcome === "refused") markHeld(sessionId, id, "unsent");
+          else dropHeld(sessionId, id);
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
-      });
+      }).finally(() => steeringQueued.current.delete(id));
     },
-    [
-      beginQueuedSteer,
-      claimQueued,
-      dequeueClaimed,
-      dropHeld,
-      markHeld,
-      releaseQueuedClaim,
-      sessionId,
-      sessionsStore,
-      submit,
-    ],
+    [dropHeld, markHeld, sessionId, sessionsStore, steerQueued, strip, submit],
   );
 
-  // The release queue is renderer memory and the held copy is what outlives it,
-  // so the copy is retired by the queue letting go: a released message is one
-  // the runtime now owns. Nothing else can say it — the drain runs in the
-  // resident client, which has no view and no drafts.
+  // Only positive host ownership evidence retires a recovery copy. An empty or
+  // stale projection is not evidence of acceptance after a transport failure.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue, durableMessageIds)) dropHeld(sessionId, id);
+    for (const id of settledHeldIds(held, queue, durableMessageIds)) {
+      if (!queuedMutations.current.has(id)) dropHeld(sessionId, id);
+    }
   }, [dropHeld, durableMessageIds, held, queue, sessionId]);
 
   // Questions, budget asks and confirmations share the existing composer slot.
@@ -1128,7 +1138,15 @@ export function ChatPlane({
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
   // prop of the memoized composer, so the press must read the latest text
   // without the handler re-creating itself once per streamed frame.
-  const lastReply = React.useMemo(() => lastAssistantText(messages), [messages]);
+  //
+  // Read against the whole Session, not just the messages held (VC-315): a
+  // bounded open can hold a current turn's tool calls without the reply that
+  // preceded them, and `currentTurnReply` falls back on the host's baseline
+  // there rather than silently offering nothing.
+  const lastReply = React.useMemo(
+    () => currentTurnReply({ messages, before: historyBefore, latestReply }),
+    [historyBefore, latestReply, messages],
+  );
   const lastReplyRef = React.useRef<string | null>(lastReply);
   lastReplyRef.current = lastReply;
   // The facts every verb's offer rule reads, gathered once (`ComposerVerbMoment`).
@@ -1493,13 +1511,13 @@ export function ChatPlane({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
               <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                {messages.length === 0 && historyPending ? (
+                {messages.length === 0 && session.historyBefore === null && historyPending ? (
                   // History is on its way (VC-383). A null projection with no
                   // Draft behind it means the snapshot has not landed, and the
                   // empty state below would say "nothing was ever said here"
                   // about a Session that may hold a thousand turns.
                   <TranscriptSkeleton />
-                ) : messages.length === 0 ? (
+                ) : messages.length === 0 && session.historyBefore === null ? (
                   // Where this Session runs, drawn (VC-55). It replaces the bare
                   // mark that stood here — see `empty/chat-empty-state.tsx` for why
                   // that reversal is deliberate. What blocks TYPING still sits on
@@ -1513,6 +1531,8 @@ export function ChatPlane({
                     rows={rows}
                     context={turnContext}
                     liveTurn={liveTurn}
+                    historyBefore={session.historyBefore}
+                    onLoadOlder={controller.loadOlder}
                     {...(onOpenSession === undefined ? {} : { onOpenSession })}
                   >
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
@@ -1981,12 +2001,33 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * day of reading history does not leave a thousand rows mounted behind a reader
  * who is watching the live tail. The drop happens while the reader is pinned to
  * the bottom, where removing rows far above the viewport moves nothing.
+ *
+ * AND THE HOST PAGES TOO (VC-315). A Session opens on the host's newest window
+ * of history, not the whole log, so the rows held here can run out before the
+ * Session does. `historyBefore` says the host has more: the same affordance
+ * then reads the next window, with the window pinned to the row at its top so
+ * the page lands above it unmounted, and reveals it once it arrives — the
+ * reader's place kept exactly as for rows that were already here. A reveal that
+ * leaves less than a page above it reads the next window ahead of the reader.
+ *
+ * A page does not always bring a row (VC-315 review, B3). When the window began
+ * partway through a turn, the page completes that turn instead: the first row
+ * grows at its top, no row is added, and nothing above is left to reveal. So
+ * the reader's place is held by what they can SEE rather than by rows: before
+ * every page the reader asked for, the visible transcript anchors (one per
+ * segment) and their offsets are written down, and when the page lands the
+ * first one still drawn is put back where it was — or, with none left, the
+ * offset moves by the height that arrived. A row keeps its React identity
+ * while a page completes it (`stableRowKeys`), so its open disclosures and
+ * the anchors inside it survive.
  */
 function ChatTranscript({
   sessionId,
   rows,
   context,
   liveTurn,
+  historyBefore,
+  onLoadOlder,
   onOpenSession,
   children,
 }: {
@@ -1995,6 +2036,10 @@ function ChatTranscript({
   context: TurnContext;
   /** The turn the harness is still writing into, by identity, or `null`. */
   liveTurn: readonly UIMessage[] | null;
+  /** The host's cursor for history above these rows, or `null` when they reach the start. */
+  historyBefore: number | null;
+  /** Reads the next window of history above the rows. */
+  onLoadOlder(): Promise<boolean>;
   onOpenSession?(sessionId: string): void;
   /** The live tail's own marks — compaction progress, the working mark. */
   children?: React.ReactNode;
@@ -2010,18 +2055,29 @@ function ChatTranscript({
   // the tail, and the tail needs no search. A retired anchor (a compaction can
   // take its row) answers -1, which `transcriptWindow` reads as the tail.
   const anchor = React.useMemo(
-    () => (anchorKey === null ? -1 : rows.findIndex((row) => transcriptRowKey(row) === anchorKey)),
+    () => (anchorKey === null ? -1 : transcriptRowIndex(rows, anchorKey)),
     [anchorKey, rows],
   );
   const shown = transcriptWindow(rows.length, anchor);
   const mounted = React.useMemo(() => rows.slice(shown.start), [rows, shown.start]);
+  const rowKeys = React.useRef<ReadonlyMap<string, string>>(new Map());
+  const mountedKeys = React.useMemo(() => {
+    const keyed = stableRowKeys(mounted, rowKeys.current);
+    rowKeys.current = keyed.byNatural;
+    return keyed.keys;
+  }, [mounted]);
   const earlierRow = shown.earlierStart < 0 ? undefined : rows[shown.earlierStart];
   const earlierKey = earlierRow === undefined ? null : transcriptRowKey(earlierRow);
 
-  // What the scroller looked like before a reveal, read at the press rather than
-  // in the effect: by then the rows are already in the document and the height
-  // it grew by is no longer measurable.
-  const before = React.useRef<{ height: number; top: number } | null>(null);
+  // What the scroller looked like before a prepend, read at the press rather
+  // than in the effect: by then the rows are already in the document and where
+  // the reader's anchors were is no longer measurable. `cursor` is `null` for a
+  // reveal of rows already held, applied on the next commit; for a host page it
+  // is the cursor the page answers, applied on the commit that moves past it.
+  const prepend = React.useRef<{ geometry: PrependGeometry; cursor: number | null } | null>(null);
+  // A host page still on its way, so a reveal restored before it lands can
+  // write down the reader's place again for it.
+  const inflight = React.useRef<number | null>(null);
 
   // Where the reader stands, written down for the next mount. Called from the
   // two places the answer changes — a reveal and a scroll — rather than from an
@@ -2043,29 +2099,71 @@ function ChatTranscript({
     [control, sessionId],
   );
 
-  const reveal = React.useCallback(() => {
-    if (earlierKey === null) return;
+  const hostHasOlder = historyBefore !== null;
+  // A host page asked for by a reveal, to be revealed in its turn once it lands.
+  const pendingPage = React.useRef(false);
+  const topRow = React.useRef<string | null>(null);
+
+  // The reader asked for this page: their place is written down before it is
+  // read, and growth it brings is not followed — the rule a disclosure obeys
+  // (see `useStopFollowing`).
+  const readPage = React.useCallback(() => {
+    const cursor = historyBefore;
+    if (cursor === null) return;
     const scroller = control.scroller();
-    before.current =
-      scroller === null ? null : { height: scroller.scrollHeight, top: scroller.scrollTop };
+    if (scroller !== null && prepend.current === null) {
+      prepend.current = { geometry: measurePrepend(scroller), cursor };
+    }
+    control.stopFollowing();
+    inflight.current = cursor;
+    void onLoadOlder().then((applied) => {
+      if (inflight.current === cursor) inflight.current = null;
+      // Nothing landed: a place written down for it would be applied to
+      // whatever moves the cursor next.
+      if (!applied && prepend.current?.cursor === cursor) prepend.current = null;
+    });
+  }, [control, historyBefore, onLoadOlder]);
+
+  const reveal = React.useCallback(() => {
+    if (earlierKey === null) {
+      if (!hostHasOlder) return;
+      // Pinned first, so the page lands above the window instead of in it.
+      const top = topRow.current;
+      if (anchorKey === null && top !== null) {
+        record(top);
+        setAnchorKey(top);
+      }
+      pendingPage.current = true;
+      readPage();
+      return;
+    }
+    const scroller = control.scroller();
+    prepend.current =
+      scroller === null ? null : { geometry: measurePrepend(scroller), cursor: null };
     // Growth the reader revealed is not followed — the same rule a disclosure
     // obeys (see `useStopFollowing`).
     control.stopFollowing();
+    if (hostHasOlder && shown.earlierStart < TRANSCRIPT_PAGE_ROWS) readPage();
     record(earlierKey);
     setAnchorKey(earlierKey);
-  }, [control, earlierKey, record]);
+  }, [anchorKey, control, earlierKey, hostHasOlder, readPage, record, shown.earlierStart]);
 
+  // The reader's place, put back once what they asked for is drawn: on the
+  // commit that mounts revealed rows, or the one where a host page lands —
+  // whether that page added rows or only completed the first one.
   React.useLayoutEffect(() => {
-    const previous = before.current;
-    before.current = null;
     const scroller = control.scroller();
-    if (previous === null || scroller === null) return;
-    // Reading `scrollHeight` forces the layout the prepend dirtied, so the
-    // browser's own scroll anchoring has already run by the time this compares:
-    // an offset that is already correct is left alone rather than applied twice.
-    const target = previous.top + (scroller.scrollHeight - previous.height);
-    if (Math.abs(scroller.scrollTop - target) > 1) scroller.scrollTop = target;
-  }, [anchorKey, control]);
+    const pending = prepend.current;
+    if (pending !== null && (pending.cursor === null || pending.cursor !== historyBefore)) {
+      prepend.current = null;
+      if (scroller !== null) restorePrepend(scroller, pending.geometry);
+    }
+    // A page still on its way lands against where the reader is now.
+    const page = inflight.current;
+    if (prepend.current === null && page !== null && page === historyBefore && scroller !== null) {
+      prepend.current = { geometry: measurePrepend(scroller), cursor: page };
+    }
+  }, [anchorKey, control, historyBefore, mounted]);
 
   // The press and the sentinel reveal the same page; the ref is what lets one
   // observer outlive the callback's identity instead of being torn down and
@@ -2075,8 +2173,33 @@ function ChatTranscript({
     revealRef.current = reveal;
   }, [reveal]);
 
+  // The host page a reveal asked for: shown once there are rows above the
+  // window, asked for again if it held nothing to draw, dropped once the host
+  // has nothing more.
+  React.useLayoutEffect(() => {
+    if (!pendingPage.current) return;
+    if (earlierKey !== null) {
+      pendingPage.current = false;
+      revealRef.current();
+      return;
+    }
+    if (historyBefore === null) {
+      pendingPage.current = false;
+      return;
+    }
+    readPage();
+  }, [earlierKey, historyBefore, readPage]);
+
+  // A window with nothing to draw — the tail was all tool traffic and turn
+  // marks — is not a transcript yet: read back until there is a row or no
+  // more history.
+  const empty = rows.length === 0;
+  React.useEffect(() => {
+    if (empty && historyBefore !== null) void onLoadOlder();
+  }, [empty, historyBefore, onLoadOlder]);
+
   const sentinel = React.useRef<HTMLDivElement>(null);
-  const hasEarlier = shown.earlier > 0;
+  const hasEarlier = shown.earlier > 0 || hostHasOlder;
   // THE SENTINEL IS ARMED BY A READER, NOT BY A MOUNT, and that is not a nicety.
   // A plane mounts with its scroller at the top and is moved to the bottom a
   // frame later by the library's first resize — so for that one frame the
@@ -2109,7 +2232,6 @@ function ChatTranscript({
   // leaves the bottom, so pressing "Show earlier" while already pinned (a
   // transcript shorter than its viewport) is never undone by the press itself.
   const anchorRef = React.useRef(anchorKey);
-  const topRow = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     anchorRef.current = anchorKey;
     const first = mounted[0];
@@ -2206,9 +2328,9 @@ function ChatTranscript({
           </Button>
         </div>
       ) : null}
-      {mounted.map((row) => (
+      {mounted.map((row, index) => (
         <ChatTranscriptRow
-          key={transcriptRowKey(row)}
+          key={mountedKeys[index]}
           row={row}
           context={context}
           live={row.kind === "turn" && row.messages === liveTurn}
@@ -2217,6 +2339,103 @@ function ChatTranscript({
       ))}
       {children}
     </ContentColumn>
+  );
+}
+
+/** Where the reader's visible anchors were, and the scroller's size, before a prepend. */
+interface PrependGeometry {
+  height: number;
+  top: number;
+  anchors: readonly { key: string; offset: number }[];
+}
+
+/** How many visible anchors a prepend writes down: enough that one survives a regroup. */
+const PREPEND_ANCHORS = 8;
+
+/**
+ * The transcript anchors the reader can see, top first, each with its offset
+ * from the scroller's top edge. An anchor is one segment of a turn, keyed by
+ * the message part it starts at, so it outlives a page that completes the
+ * turn around it.
+ */
+function measurePrepend(scroller: HTMLElement): PrependGeometry {
+  const edge = scroller.getBoundingClientRect().top;
+  const anchors: { key: string; offset: number }[] = [];
+  for (const node of scroller.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom <= edge) continue;
+    if (rect.top >= edge + scroller.clientHeight) break;
+    anchors.push({ key: node.dataset["transcriptAnchor"] ?? "", offset: rect.top - edge });
+    if (anchors.length === PREPEND_ANCHORS) break;
+  }
+  return { height: scroller.scrollHeight, top: scroller.scrollTop, anchors };
+}
+
+/**
+ * Puts the first written-down anchor still drawn back where it was. Reading
+ * its position forces the layout the prepend dirtied, so the browser's own
+ * scroll anchoring has already run by the time this compares: an anchor that
+ * is already in place is left alone rather than corrected twice. With no
+ * anchor left, everything that grew is taken to have grown above the reader.
+ */
+function restorePrepend(scroller: HTMLElement, geometry: PrependGeometry): void {
+  const wanted = new Map(geometry.anchors.map(({ key, offset }) => [key, offset]));
+  if (wanted.size > 0) {
+    const edge = scroller.getBoundingClientRect().top;
+    for (const node of scroller.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+      const offset = wanted.get(node.dataset["transcriptAnchor"] ?? "");
+      if (offset === undefined) continue;
+      const drift = node.getBoundingClientRect().top - edge - offset;
+      if (Math.abs(drift) > 1) scroller.scrollTop += drift;
+      return;
+    }
+  }
+  const target = geometry.top + (scroller.scrollHeight - geometry.height);
+  if (Math.abs(scroller.scrollTop - target) > 1) scroller.scrollTop = target;
+}
+
+/**
+ * React keys for the mounted rows that hold still while a host page completes
+ * a turn (VC-315). A turn's natural key is its first message, which the page
+ * just changed; keyed by it, the turn would remount — losing its open
+ * disclosures and every anchor the reader's place was written against. So a
+ * row whose natural key is new keeps the key of the row it grew from: the
+ * one whose first message it still holds.
+ */
+function stableRowKeys(
+  rows: readonly TranscriptRow[],
+  previous: ReadonlyMap<string, string>,
+): { keys: string[]; byNatural: Map<string, string> } {
+  const byNatural = new Map<string, string>();
+  const used = new Set<string>();
+  const keys = rows.map((row) => {
+    const natural = transcriptRowKey(row);
+    let key = previous.get(natural);
+    if (key === undefined && row.kind === "turn") {
+      for (const message of row.messages) {
+        key = previous.get(message.id);
+        if (key !== undefined) break;
+      }
+    }
+    if (key === undefined || used.has(key)) key = natural;
+    used.add(key);
+    byNatural.set(natural, key);
+    return key;
+  });
+  return { keys, byNatural };
+}
+
+/**
+ * Where the row keyed `key` is now. A host page can complete a turn that the
+ * window began partway through (VC-315), and that turn's key is its first
+ * message, which the page just changed: the row the reader was anchored on is
+ * then the one that now holds that message, not nowhere.
+ */
+function transcriptRowIndex(rows: readonly TranscriptRow[], key: string): number {
+  const exact = rows.findIndex((row) => transcriptRowKey(row) === key);
+  if (exact >= 0) return exact;
+  return rows.findIndex(
+    (row) => row.kind === "turn" && row.messages.some((message) => message.id === key),
   );
 }
 
@@ -2360,7 +2579,10 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
+                // An anchor for the reader's place across a history page (VC-315).
+                <div key={segment.key} data-transcript-anchor={segment.key}>
+                  {renderSegment(segment, role, context, live)}
+                </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>

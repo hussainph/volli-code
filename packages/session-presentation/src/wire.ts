@@ -10,6 +10,7 @@
 import type {
   SessionStreamCompactionProgress,
   SessionStreamOverlay,
+  SessionStreamQueue,
   TranscriptDelta,
 } from "@volli/session-engine";
 import { COMPACTION_WORK_REASONS, parseRendererSessionEvent } from "@volli/shared";
@@ -275,4 +276,39 @@ function refusalSeverity(result: unknown): CommandRefusalSeverity {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Host queue updates have their own revision, not a durable event sequence. */
+export function chatSessionQueue(value: unknown): SessionStreamQueue | null {
+  if (
+    !isRecord(value) ||
+    value.kind !== "queue" ||
+    typeof value.sessionId !== "string" ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0 ||
+    typeof value.throughSequence !== "number" ||
+    !Array.isArray(value.queue)
+  )
+    return null;
+  if (
+    !value.queue.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.id === "string" &&
+        typeof entry.commandId === "string" &&
+        (entry.state === "queued" || entry.state === "releasing") &&
+        isRecord(entry.message) &&
+        entry.message.id === entry.id &&
+        entry.message.role === "user" &&
+        Array.isArray(entry.message.parts) &&
+        entry.message.parts.every(
+          (part) =>
+            isRecord(part) &&
+            typeof part.type === "string" &&
+            (part.type !== "text" || typeof part.text === "string"),
+        ),
+    )
+  )
+    return null;
+  return value as unknown as SessionStreamQueue;
 }

@@ -34,9 +34,12 @@ describe("the desktop's IPC exposure", () => {
       "sessions.create",
       "sessions.attach",
       "session.snapshot",
+      "session.history",
       "session.projection",
       "session.subscribe",
       "session.command",
+      "session.cancelQueued",
+      "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
     ]);

@@ -65,6 +65,8 @@ export interface FileTranscriptArtifactStoreOptions {
 
 export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   #ready: Promise<void> | undefined;
+  /** Canonical sizes by artifact id; see {@link byteLength}. */
+  readonly #sizes = new Map<string, number>();
   readonly #gzipBytes: (canonicalBytes: Buffer) => Promise<Buffer>;
 
   constructor(
@@ -118,6 +120,42 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   async read(reference: TranscriptReference): Promise<SessionTranscriptArtifact> {
     const bytes = await this.readCanonicalBytes(reference);
     return parseArtifact(bytes, reference.id);
+  }
+
+  /**
+   * The artifact's canonical size, from what the file already persists beside
+   * its body (VC-315): a gzip member's trailer records its uncompressed size
+   * (ISIZE, RFC 1952 § 2.3.1), and a legacy plain file is its canonical
+   * bytes. One open and at most four bytes read, never the body, never a
+   * gunzip — so a session's history window is chosen without touching the
+   * bodies it leaves out, and an excluded corrupt body cannot fail it.
+   *
+   * Unverified by design: the digest is checked when the body is read, which
+   * happens only for a frame the window returns, and the window rechecks its
+   * bound on the bodies it hydrated. A size that is unreadable is `null`.
+   * Content-addressed, so a size once read is cached for the store's life.
+   */
+  async byteLength(reference: TranscriptReference): Promise<number | null> {
+    const cached = this.#sizes.get(reference.id);
+    if (cached !== undefined) return cached;
+    let size: number | null;
+    try {
+      validateReference(reference);
+      const { compressed, legacy } = this.pathsFor(reference.id);
+      try {
+        size = await storedCanonicalSize(compressed, "gzip");
+      } catch (error) {
+        // A present compressed path is authoritative, as it is for a read.
+        if (!isMissing(error)) throw error;
+        size = await storedCanonicalSize(legacy, "plain");
+      }
+    } catch {
+      return null;
+    }
+    if (size === null) return null;
+    if (this.#sizes.size >= ARTIFACT_SIZE_CACHE_ENTRIES) this.#sizes.clear();
+    this.#sizes.set(reference.id, size);
+    return size;
   }
 
   /** Reads either disk form and returns verified, uncompressed canonical bytes. */
@@ -463,6 +501,41 @@ async function readStoredFile(path: string): Promise<StoredFile> {
     const info = await handle.stat();
     if (!info.isFile()) throw notRegularFile();
     return { stored: await handle.readFile(), info };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * How many artifact sizes a store remembers before it starts over. A size is
+ * a few dozen bytes and a window looks at a few hundred, so this holds every
+ * size a busy day of opens asks for in well under a megabyte.
+ */
+const ARTIFACT_SIZE_CACHE_ENTRIES = 16_384;
+/** A gzip member is at least a 10-byte header and an 8-byte trailer. */
+const GZIP_MIN_BYTES = 18;
+
+/**
+ * A stored file's canonical size, from its metadata: the gzip trailer's
+ * ISIZE, or a plain file's length. Opened like a read ({@link STORED_READ_FLAGS}),
+ * so a symlink or a FIFO at the path is refused the same way. `null` for a
+ * gzip file too short to have a trailer.
+ */
+async function storedCanonicalSize(path: string, form: "gzip" | "plain"): Promise<number | null> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, STORED_READ_FLAGS);
+  } catch (error) {
+    throw refusedLink(error);
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw notRegularFile();
+    if (form === "plain") return info.size;
+    if (info.size < GZIP_MIN_BYTES) return null;
+    const trailer = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(trailer, 0, 4, info.size - 4);
+    return bytesRead === 4 ? trailer.readUInt32LE(0) : null;
   } finally {
     await handle.close();
   }

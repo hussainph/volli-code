@@ -21,16 +21,19 @@ function deps(): ChatSessionClientDeps {
   const writes = {
     sessions: {},
     applyStream: () => undefined,
+    applySnapshot: () => undefined,
+    prependHistory: () => undefined,
     setProjection: () => undefined,
     attaching: () => undefined,
     delivered: () => undefined,
     settle: () => undefined,
-    dequeue: () => undefined,
+    setQueue: () => undefined,
   } satisfies ChatSessionWrites;
   return {
     rpc: {
       session: {
         snapshot: { query: unreachable },
+        history: { query: unreachable },
         projection: { query: unreachable },
         subscribe: { subscribe: unreachable },
         command: { mutate: unreachable },
