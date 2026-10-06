@@ -254,7 +254,7 @@ function connect(url: string, hello: Partial<HostHelloInput> | null = {}) {
   return { client, closes, hellos };
 }
 
-/** A raw socket, for what the stock client will not do: stall, or never say hello. */
+/** A raw socket, to stall, skip hello, or observe a refusal without the client's reconnect race. */
 async function raw(url: string, hello: HostHello | null) {
   const socket = new WebSocket(`${url}?connectionParams=1`);
   cleanups.push(() => socket.terminate());
@@ -635,6 +635,7 @@ describe("revocation closes every stream", () => {
     const lever = credential(device);
     const { listener, append, listeners, events } = await serve({
       grants: { "device-token": lever.grant },
+      limits: { refusedCloseMs: 20 },
     });
     const { client, closes } = connect(listener.url);
     const streams = [1, 2].map(() =>
@@ -657,10 +658,21 @@ describe("revocation closes every stream", () => {
     await until(() => closes.includes(HOST_PROTOCOL_CLOSE_CODES.credentialInvalid), "the close");
     await until(() => listeners.size === 0, "the runtime listeners to go");
     expect(events).toContainEqual(expect.objectContaining({ kind: "revoked" }));
-    // The reconnect the client attempts says the same credential, and is refused.
-    expect(await expectHostError(client.protocol.welcome.query())).toMatchObject({
-      reason: "credential-invalid",
-    });
+    // Reconnect with the same credential over a raw socket: the stock client
+    // can still be closing or reconnecting here and fail before sending a call.
+    const refused = await raw(listener.url, buildHostHello(HELLO));
+    refused.socket.send(request(1, "query", "protocol.welcome", null));
+    const [code, reason] = await refused.closed;
+    expect([code, reason.toString()]).toStrictEqual([
+      HOST_PROTOCOL_CLOSE_CODES.credentialInvalid,
+      "credential-invalid",
+    ]);
+    expect(refused.messages).toMatchObject([
+      {
+        id: 1,
+        error: { data: { hostError: { code: "UNAUTHORIZED", reason: "credential-invalid" } } },
+      },
+    ]);
   });
 
   it("finds a grant that lapsed silently on its periodic re-check", async () => {
