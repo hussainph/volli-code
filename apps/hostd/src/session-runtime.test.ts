@@ -175,7 +175,11 @@ function fixture() {
     secrets: { store } as unknown as HeadlessSecrets,
     env: { HOME: "/home/service", PI_CODING_AGENT_DIR: "/auth", PATH: "/service/bin" },
     socketPath: "/run/hostd.sock",
-    options: { binDir: "/bin", venue: { id: "hostd", kind: "remote" as const } },
+    options: {
+      binDir: "/bin",
+      venue: { id: "hostd", kind: "remote" as const },
+      platform: "linux",
+    },
   };
   return {
     input,
@@ -361,6 +365,30 @@ describe("headless runtime ownership", () => {
     f.runtime.projection.mockRejectedValueOnce(new Error("unreadable"));
     await expect(ready.busyWorktreeSites("/tree")).rejects.toThrow("unreadable");
   });
+  // VC-700 PR 1c: on a Mac host, a Session's git never reaches the keychain.
+  it("hands a Mac's Session commands git with every credential helper reset", async () => {
+    const f = fixture();
+    createHeadlessSessionRuntime({
+      ...f.input,
+      options: { ...f.input.options, platform: "darwin" },
+    });
+    const input = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
+    expect(await input.concurrencyEnvFor("s")).toMatchObject({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_TERMINAL_PROMPT: "0",
+      VOLLI_SOCKET: "/run/hostd.sock",
+    });
+    // The platform defaults to this process's.
+    const { platform: _, ...unnamed } = f.input.options;
+    createHeadlessSessionRuntime({ ...f.input, options: unnamed });
+    const defaulted = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
+    expect("GIT_TERMINAL_PROMPT" in (await defaulted.concurrencyEnvFor("s"))).toBe(
+      process.platform === "darwin",
+    );
+  });
+
   it("uses an explicit sandbox and reports a missing automation runner", async () => {
     const f = fixture();
     const owner = createHeadlessSessionRuntime({

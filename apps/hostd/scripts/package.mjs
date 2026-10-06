@@ -4,7 +4,8 @@
  * "Packaging"). CI runs it inside the digest-pinned Linux host image
  * (.devcontainer/host/Dockerfile) after a host-only install, so the Node it
  * copies and the natives it builds are that image's: Node = .nvmrc, glibc =
- * Debian bookworm's.
+ * Debian bookworm's. release.yml's hostd-darwin job runs it natively on a
+ * macOS runner of each architecture, under the nodejs.org Node = .nvmrc.
  *
  *   node apps/hostd/scripts/package.mjs --out <dir>
  *
@@ -126,6 +127,18 @@ for (const native of ["better-sqlite3", "node-pty"]) {
     if (!ours) rmSync(join(prebuilds, entry), { recursive: true, force: true });
   }
 }
+// node-pty forks through `spawn-helper` on macOS, and its published darwin
+// prebuilds carry it without the execute bit, so every spawn fails with
+// "posix_spawnp failed" (step 5's probe found it). Linux has no helper.
+for (const dir of ["prebuilds", join("build", "Release")]) {
+  const root = join(stage, "lib", "node_modules", "node-pty", dir);
+  if (!existsSync(root)) continue;
+  const helpers =
+    dir === "prebuilds"
+      ? readdirSync(root).map((entry) => join(root, entry, "spawn-helper"))
+      : [join(root, "spawn-helper")];
+  for (const helper of helpers) if (existsSync(helper)) chmodSync(helper, 0o755);
+}
 
 // Code Mode executes in a worker with an ES-module loader. Ship its published
 // files and QuickJS together; the host half stays bundled, but neither this
@@ -142,7 +155,8 @@ cpSync(sandboxRoot, join(stage, "lib", "node_modules", "@earendil-works", "pi-co
 });
 cpSync(quickjsRoot, join(stage, "lib", "node_modules", "quickjs-wasi"), { recursive: true });
 
-// 3. Node itself, and the launchers.
+// 3. Node itself, and the launchers. `readlink -f` is in macOS's own
+// readlink from 12.3, and this Node already needs 13.5 or later.
 copyFileSync(process.execPath, join(stage, "bin", "node"));
 chmodSync(join(stage, "bin", "node"), 0o755);
 const launcher = (bundle) => `#!/bin/sh
@@ -215,7 +229,13 @@ run(join(stage, "bin", "node"), [join(stage, "lib", "probe-codemode.mjs")]);
 
 // 6. The archive and its checksum.
 const archive = join(out, `${name}.tar.gz`);
-run("tar", ["-czf", archive, "-C", staging, name]);
+// macOS's bsdtar would otherwise add AppleDouble `._*` entries and extended
+// attributes from the build machine; the archive should hold only the files.
+// GNU tar has neither option and needs neither, so they are Darwin-only.
+const tarFlags = process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : [];
+run("tar", [...tarFlags, "-czf", archive, "-C", staging, name], {
+  env: { ...process.env, COPYFILE_DISABLE: "1" },
+});
 rmSync(staging, { recursive: true, force: true });
 const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
 writeFileSync(`${archive}.sha256`, `${digest}  ${name}.tar.gz\n`);
