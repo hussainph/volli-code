@@ -6,6 +6,7 @@
  * refusal an operator must fix, which the systemd unit does not restart.
  * `status` exits 0 serving, 1 refusing, 3 not serving. `credentials reset`
  * exits 0 when it reset or had nothing to reset, 1 when it did not.
+ * `database restore` exits 0 after a durable, checked restore, 1 on refusal/failure.
  */
 import { EXIT_CONFIG, HostdBootError } from "./boot-error";
 import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
@@ -13,6 +14,7 @@ import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
 import { parseHostdArgs, USAGE, type HostdCommand } from "./args";
 import { socketActivationFd } from "./activation";
 import { runCredentialsReset } from "./credentials";
+import { runDatabaseRestore } from "./database";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
 import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
@@ -51,6 +53,11 @@ async function main(): Promise<number> {
       return runCredentialsReset(command, {
         env: process.env,
         now: () => new Date(),
+        out: (text) => process.stdout.write(text),
+        err: (text) => process.stderr.write(text),
+      });
+    case "database-restore":
+      return runDatabaseRestore(command, {
         out: (text) => process.stdout.write(text),
         err: (text) => process.stderr.write(text),
       });
