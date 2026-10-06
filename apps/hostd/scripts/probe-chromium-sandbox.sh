@@ -4,7 +4,8 @@
 # Starts Chromium once, with its sandbox (never --no-sandbox), as a transient
 # systemd service carrying every directive in the unit's hardening block — read
 # from packaging/volli-hostd.service itself, so this tests the unit as shipped,
-# not a copy of it. Exits 0 only when Chromium reports itself sandboxed.
+# not a copy of it. Exits 0 only when a renderer runs in its own user
+# namespace under a seccomp filter: the sandbox, engaged.
 #
 #   sudo apps/hostd/scripts/probe-chromium-sandbox.sh /opt/volli-chromium/chrome [user]
 #   sudo /opt/volli-hostd/share/probe-chromium-sandbox.sh /opt/volli-chromium/chrome volli
@@ -38,21 +39,43 @@ if ((${#properties[@]} == 0)); then
 fi
 printf 'probe: %s\n' "${properties[*]}"
 
+# What runs inside the unit: Chromium on a blank page, then a look at its
+# renderer from outside. Sandboxed means the renderer sits in a user namespace
+# of its own (the namespace sandbox) and under a seccomp-BPF filter. Chromium
+# without a usable sandbox aborts at launch instead ("No usable sandbox!").
+inner='
+chrome="$1"
+"$chrome" --headless --no-first-run --disable-background-networking \
+  --user-data-dir=/tmp/volli-chromium-probe about:blank 2>/tmp/volli-chromium-probe.log &
+browser=$!
+verdict=""
+for _ in $(seq 1 40); do
+  sleep 0.5
+  if ! kill -0 "$browser" 2>/dev/null; then verdict="exited"; break; fi
+  for pid in $(pgrep -f -- "--type=renderer" || true); do
+    [ "$(readlink "/proc/$pid/ns/user")" != "$(readlink "/proc/$browser/ns/user")" ] || continue
+    seccomp=$(awk "/^Seccomp:/ {print \$2}" "/proc/$pid/status")
+    [ "$seccomp" = 2 ] || continue
+    verdict="sandboxed renderer $pid: own user namespace, seccomp filter"
+    break 2
+  done
+done
+kill "$browser" 2>/dev/null; wait "$browser" 2>/dev/null
+case "$verdict" in
+  sandboxed*) echo "$verdict" ;;
+  *) echo "verdict: ${verdict:-no sandboxed renderer within 20 s}"; tail -20 /tmp/volli-chromium-probe.log; exit 1 ;;
+esac
+'
+
 status=0
 output="$(
-  systemd-run --quiet --wait --pipe --collect \
+  systemd-run --quiet --wait --pipe --collect -p RuntimeMaxSec=60 \
     -p User="$user" -p Environment=HOME=/tmp "${properties[@]}" -- \
-    "$chrome" --headless --no-first-run --user-data-dir=/tmp/volli-chromium-probe \
-    --dump-dom chrome://sandbox 2>&1
+    /bin/bash -c "$inner" probe "$chrome" 2>&1
 )" || status=$?
+printf '%s\n' "$output" | tail -25
 if ((status != 0)); then
-  printf '%s\n' "$output" | tail -40 >&2
-  echo "probe: Chromium did not start sandboxed under the unit's hardening (exit $status)" >&2
-  exit 1
-fi
-if ! grep -q "adequately sandboxed" <<<"$output"; then
-  printf '%s\n' "$output" | tail -40 >&2
-  echo "probe: Chromium started, but chrome://sandbox does not report it sandboxed" >&2
+  echo "probe: Chromium did not run sandboxed under the unit's hardening (exit $status)" >&2
   exit 1
 fi
 echo "probe: Chromium is sandboxed under volli-hostd.service's hardening"
