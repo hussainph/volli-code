@@ -18,6 +18,9 @@
  * No deadline lives here. The host's shutdown bounds the drain with the same
  * deadline as every other shutdown task (`settleShutdownBeforeDeadline`).
  */
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("detached-work");
 
 /** What a detached operation is handed: enrol, nothing more. */
 export interface DetachedWorkPort {
@@ -47,7 +50,7 @@ export interface DetachedWorkTrackerOptions {
 }
 
 function reportUnhandledDetachedFailure(error: unknown): void {
-  console.error("[volli] detached work failed:", error);
+  log.error("detached work failed", { error });
 }
 
 export function createDetachedWorkTracker(
@@ -71,7 +74,7 @@ export function createDetachedWorkTracker(
           } catch (reportError) {
             // The observed promise must not reject before a later drain has
             // attached its handler (or leak an unhandled rejection at all).
-            console.error("[volli] detached work failure reporter failed:", reportError);
+            log.error("detached work failure reporter failed", { error: reportError });
           }
         },
       );

@@ -833,10 +833,7 @@ describe("shutdown faults", () => {
     expect(log.error).toHaveBeenCalledWith("agent socket did not close cleanly", {
       error: expect.any(Error),
     });
-    expect(log.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("host shutdown failed"),
-      expect.anything(),
-    );
+    expect(log.error).not.toHaveBeenCalledWith("host shutdown step failed", expect.anything());
     expect(existsSync(join(root, "data", "volli.db-wal"))).toBe(false);
   });
 
@@ -850,10 +847,11 @@ describe("shutdown faults", () => {
     expect(log.error).toHaveBeenCalledWith("agent socket did not close cleanly", {
       error: expect.any(Error),
     });
-    expect(log.error).toHaveBeenCalledWith(
-      expect.stringContaining("host shutdown failed at close-database:"),
-      { source: "host-core" },
-    );
+    expect(log.error).toHaveBeenCalledWith("host shutdown step failed", {
+      source: "host-core",
+      step: "close-database",
+      error: expect.any(Error),
+    });
   });
 });
 
@@ -890,10 +888,11 @@ it("retains the startup failure even if runtime drain fails, and still closes so
   faults.runtimeCloseError = true;
   const log = logger();
   await expect(boot({}, log)).rejects.toThrow("Session startup failed");
-  expect(log.error).toHaveBeenCalledWith(
-    expect.stringContaining("host shutdown failed at close-runtime: Error: runtime close failed"),
-    { source: "host-core" },
-  );
+  expect(log.error).toHaveBeenCalledWith("host shutdown step failed", {
+    source: "host-core",
+    step: "close-runtime",
+    error: expect.objectContaining({ message: "runtime close failed" }),
+  });
   expect(existsSync(join(root, "data/volli.sock"))).toBe(false);
   expect(existsSync(join(root, "data/volli.db-wal"))).toBe(false);
 });
@@ -912,10 +911,11 @@ it("rejects new requests while stopping and after stop, and reports failed runti
     ok: false,
     error: { code: "APP_UNREACHABLE" },
   });
-  expect(log.error).toHaveBeenCalledWith(
-    expect.stringContaining("host shutdown failed at close-runtime: Error: runtime close failed"),
-    { source: "host-core" },
-  );
+  expect(log.error).toHaveBeenCalledWith("host shutdown step failed", {
+    source: "host-core",
+    step: "close-runtime",
+    error: expect.objectContaining({ message: "runtime close failed" }),
+  });
   expect(faults.order).toEqual([
     "maintenance.start",
     "maintenance.stop",

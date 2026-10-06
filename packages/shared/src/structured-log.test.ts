@@ -21,6 +21,10 @@ import {
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN = "00f067aa0ba902b7";
 
+function stackless(thrown: Error): Error {
+  return Object.assign(thrown, { stack: undefined });
+}
+
 describe("log levels", () => {
   it("ranks debug < info < warn < error", () => {
     expect(LOG_LEVELS.map((level) => LOG_LEVEL_RANK[level])).toEqual([10, 20, 30, 40]);
@@ -132,11 +136,19 @@ describe("redaction (a merge gate: no secret, key or credential reaches a line)"
       cause: new Error("secret cause"),
     });
     const out = redactLogValue(error) as Record<string, unknown>;
-    expect(out).toEqual({ name: "TypeError", message: expect.any(String), code: "EAUTH" });
+    expect(out).toEqual({
+      name: "TypeError",
+      message: expect.any(String),
+      code: "EAUTH",
+      stack: expect.stringContaining("TypeError"),
+    });
     expect(String(out["message"])).not.toContain("abc123");
     expect(JSON.stringify(out)).not.toContain("secret cause");
-    expect(redactLogValue(new Error("plain"))).toEqual({ name: "Error", message: "plain" });
-    expect(redactLogValue(Object.assign(new Error("n"), { code: 7 }))).toEqual({
+    expect(redactLogValue(stackless(new Error("plain")))).toEqual({
+      name: "Error",
+      message: "plain",
+    });
+    expect(redactLogValue(stackless(Object.assign(new Error("n"), { code: 7 })))).toEqual({
       name: "Error",
       message: "n",
       code: 7,

@@ -25,6 +25,9 @@ import {
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type { BrowserTabBounds, BrowserTabCaptureFrame, BrowserTabState } from "../../ipc/contract";
 import { debuggerTransport, loadWaiter } from "./webcontents-cdp";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("browser");
 
 /**
  * Electron construction surfaces injected into the host. Tests can provide
@@ -686,7 +689,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
       // background teardown failure rather than a user operation, but it must
       // remain visible in diagnostics instead of disappearing silently.
       if (error instanceof Error && /object has been destroyed/i.test(error.message)) return;
-      console.error(`[volli] could not ${label} after Browser Tab destruction:`, error);
+      log.error("browser tab teardown step failed after destruction", { step: label, error });
     }
   }
 
@@ -884,7 +887,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
         abandon = () => resolve(null);
         signal?.addEventListener("abort", abandon, { once: true });
         timer = setTimeout(() => {
-          console.warn(`[volli] Browser Tab ${tabId} preview capture timed out`);
+          log.warn("browser tab preview capture timed out", { tabId });
           resolve(null);
         }, BROWSER_PREVIEW_TIMEOUT_MS);
       });
@@ -937,7 +940,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
         persist: false,
       });
     } catch (error) {
-      console.warn(`[volli] Browser Tab ${tabId} preview capture unavailable:`, error);
+      log.warn("browser tab preview capture unavailable", { tabId, error });
       return null;
     } finally {
       clearTimeout(timer);

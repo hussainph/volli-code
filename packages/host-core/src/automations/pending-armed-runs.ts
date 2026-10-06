@@ -20,6 +20,7 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import type { LogFields } from "../log/logger";
 import type { RunAutomationOutcome } from "./run";
 
 export interface DeliberateMoveArrival {
@@ -78,7 +79,7 @@ export interface PendingArmedRunCoordinatorPorts {
   clearTimer(handle: unknown): void;
   onPendingChanged?(pending: readonly PendingArmedRun[]): void;
   onSettled?(settlement: PendingArmedRunSettlement): void;
-  log?(message: string): void;
+  log?(msg: string, fields?: LogFields): void;
 }
 
 export interface PendingArmedRunCoordinator {
@@ -133,8 +134,7 @@ export function createPendingArmedRunCoordinator(
       () => inFlight.delete(work),
       (error: unknown) => {
         inFlight.delete(work);
-        const message = error instanceof Error ? error.message : String(error);
-        deps.log?.(`[volli] armed countdown settlement failed: ${message}`);
+        deps.log?.("armed countdown settlement failed", { error });
       },
     );
   }
@@ -169,11 +169,12 @@ export function createPendingArmedRunCoordinator(
         try {
           deps.updateAttemptError(id, message);
         } catch (storageError) {
-          const storageMessage =
-            storageError instanceof Error ? storageError.message : String(storageError);
-          deps.log?.(`[volli] armed automation failure could not be updated: ${storageMessage}`);
+          deps.log?.("armed automation failure could not be updated", {
+            pendingId: id,
+            error: storageError,
+          });
         }
-        deps.log?.(`[volli] armed automation run failed: ${message}`);
+        deps.log?.("armed automation run failed", { pendingId: id, error });
         deps.onSettled?.({ kind: "failed", pending: attempt.pending, error: message });
         return;
       }
@@ -186,7 +187,7 @@ export function createPendingArmedRunCoordinator(
         // The fallback failure was stored before Run. If cleanup cannot commit,
         // leave that row retryable rather than claiming this reply completed.
         const message = error instanceof Error ? error.message : String(error);
-        deps.log?.(`[volli] armed automation completion could not be recorded: ${message}`);
+        deps.log?.("armed automation completion could not be recorded", { pendingId: id, error });
         deps.onSettled?.({ kind: "failed", pending: attempt.pending, error: message });
         return;
       }

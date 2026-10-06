@@ -143,6 +143,9 @@ import type { NoticeDelivery } from "./host-notice-delivery";
 import type { StartSessionPorts } from "./start-session";
 import type { SessionModelOverride, Sessions } from "./sessions";
 import { stopSessionOperation } from "./supervise-session";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("delegation");
 
 /**
  * How much of a child's final message the notice carries inline. Past it the
@@ -438,7 +441,8 @@ export interface Delegations {
 }
 
 export function createDelegations(ports: DelegateSessionPorts): Delegations {
-  const report = ports.report ?? ((message) => console.error(`[volli] ${message}`));
+  const report =
+    ports.report ?? ((message) => log.error("subagent delegation issue", { detail: message }));
   const delivery = { runtime: ports.runtime, report };
   /** Live delegations by child Session id. */
   const live = new Map<string, LiveDelegation>();

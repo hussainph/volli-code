@@ -351,9 +351,9 @@ describe("host lifecycle stop", () => {
     const report = await createHostLifecycle(ports).stop("quit");
     expect(report.clean).toBe(false);
     expect(calls.at(-1)).toBe("close-database");
-    expect(consoleError).toHaveBeenCalledWith(
-      "[host] failed to report a close-runtime failure:",
-      "logger gone",
-    );
+    expect(consoleError).toHaveBeenCalledWith("[host] failed to report a shutdown step failure", {
+      step: "close-runtime",
+      error: { name: "Error", message: "logger gone" },
+    });
   });
 });
