@@ -57,7 +57,12 @@ try {
     }).trim();
     if (paths) {
       const previous = JSON.parse(
-        execFileSync("git", ["show", `${base}:${schemaPath}`], { cwd: root, encoding: "utf8" }),
+        // The committed schema outgrew execFileSync's 1 MiB default buffer (ENOBUFS).
+        execFileSync("git", ["show", `${base}:${schemaPath}`], {
+          cwd: root,
+          encoding: "utf8",
+          maxBuffer: 256 * 1024 * 1024,
+        }),
       );
       const allowlist = JSON.parse(
         await readFile(new URL(`../../${exceptionPath}`, import.meta.url), "utf8"),
