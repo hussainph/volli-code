@@ -3,7 +3,7 @@ import type { HostCore } from "@volli/host-core";
 import type {
   RecoveredSessionServices,
   SessionRuntimeLifecycle,
-} from "@volli/host-core/session-runtime/lifecycle";
+} from "@volli/host-core/session-runtime";
 
 export function createDesktopHostRuntime<Services>(options: {
   host: HostCore;

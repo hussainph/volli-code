@@ -16,7 +16,7 @@ import { basename, resolve } from "node:path";
 
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
 
-import { planProjectCreate } from "@volli/host-core/project-create";
+import { planProjectCreate } from "../project-create";
 import type { AgentCommandContext } from "./context";
 import { failure } from "./context";
 import { dryRunResponse } from "./preview";

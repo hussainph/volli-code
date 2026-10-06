@@ -33,14 +33,16 @@ remain explicit operations, not a periodic scheduler.
 
 ## Ports
 
-| Port                                               | hostd passes                                                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `events`                                           | Drops each broadcast (no client is connected before M2); logs the topic at `debug`.              |
-| `attention`                                        | `HEADLESS_ATTENTION` (every alert `unsupported`), plus an `info` line with its title.            |
-| `power`, `connectivity`                            | `NO_POWER_EVENTS`, `ALWAYS_ONLINE`.                                                              |
-| `client`, `trash`                                  | Absent: host-core refuses those requests with its typed errors.                                  |
-| `log`                                              | The JSON logger.                                                                                 |
-| `listOpenNativeBindings`, `observeScheduledResume` | The shared runtime's bindings and scheduled-resume observer, scoped to this host's remote venue. |
+| Port                    | hostd passes                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| `events`                | Drops each broadcast (no client is connected before M2); logs the topic at `debug`.   |
+| `attention`             | `HEADLESS_ATTENTION` (every alert `unsupported`), plus an `info` line with its title. |
+| `power`, `connectivity` | `NO_POWER_EVENTS`, `ALWAYS_ONLINE`.                                                   |
+| `client`, `trash`       | Absent: host-core refuses those requests with its typed errors.                       |
+| `log`                   | The JSON logger.                                                                      |
+
+The runtime's open bindings and scheduled resume are not ports: host-core's
+runtime assembly and lifecycle wire them into its Session services (VC-632).
 
 Policy: `onTransactionViolation: throwTransactionViolation` (VC-551: nobody
 watches a server's log while a bug corrupts a transaction) and

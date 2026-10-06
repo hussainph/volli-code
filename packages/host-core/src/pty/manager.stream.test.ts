@@ -16,7 +16,7 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import type { HostClientEventSink, HostEventMap, HostEventTopic } from "../ports";
 import { syncProjectRoots } from "../project-roots";
 import { BATCH_MAX_CHARS } from "./output";
-import { PtyManager, type PtyHost, type PtyManagerOptions } from "./manager";
+import { PtyManager, type PtyManagerPorts, type PtyManagerOptions } from "./manager";
 import { parkConfigFromEnv } from "./park";
 
 // Construction stays one options object whose first four fields are required
@@ -99,7 +99,7 @@ beforeEach(async () => {
   root = await realpath(mkdtempSync(join(tmpdir(), "volli-pty-stream-")));
   insertProject(testDb.db, testProject({ id: "w", path: root }));
   syncProjectRoots([root]);
-  const host: PtyHost = {
+  const host: PtyManagerPorts = {
     events: { publish: () => {} },
     worktreeDeps: () => {
       throw new Error("a Board Session never asks for a worktree");
@@ -338,7 +338,7 @@ describe("construction options (VC-627)", () => {
     hostVenue: SessionExecutionVenue | undefined,
     venue?: SessionExecutionVenue,
   ) {
-    const host: PtyHost = {
+    const host: PtyManagerPorts = {
       ...(hostVenue === undefined ? {} : { venue: hostVenue }),
       events: { publish: () => {} },
       worktreeDeps: () => {

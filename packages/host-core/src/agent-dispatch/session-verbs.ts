@@ -42,16 +42,16 @@ import {
   readSessionTranscriptTail,
 } from "@volli/session-engine";
 
-import { createTicketCommentCommand } from "@volli/host-core/ticket-commands";
+import { createTicketCommentCommand } from "../ticket-commands";
 import { withTicketWake } from "../ticket-wake";
-import { getTicket } from "@volli/host-core/db/tickets-repo";
+import { getTicket } from "../db/tickets-repo";
 import {
   readSessionProvenance,
   readSessionProvenances,
   type SessionProvenanceQuery,
-} from "@volli/host-core/db/session-provenance-repo";
+} from "../db/session-provenance-repo";
 import { readSessionUsageWindow } from "./cost-verb";
-import { chatSessionRecord, terminalSessionRecord } from "@volli/host-core/session-control";
+import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";

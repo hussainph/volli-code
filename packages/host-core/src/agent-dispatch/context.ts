@@ -50,11 +50,11 @@ import type {
 } from "@volli/shared";
 
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
-import type { Sessions } from "@volli/host-core/session-runtime/sessions";
-import type { DetachedWorkPort } from "@volli/host-core/detached-work";
-import type { BusyWorktreeSites } from "@volli/host-core/worktree/activity";
-import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
+import type { Sessions } from "../session-runtime/sessions";
+import type { DetachedWorkPort } from "../detached-work";
+import type { BusyWorktreeSites } from "../worktree/activity";
+import type { RunGit, RunGitAsync } from "../worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {

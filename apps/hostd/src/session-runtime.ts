@@ -15,32 +15,35 @@ import {
   type TicketMovedNotice,
 } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
-import type { RetentionReclaimSeams } from "@volli/host-core/retention-runtime";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicket } from "@volli/host-core/db/tickets-repo";
-import { SecretService } from "@volli/host-core/secrets/service";
-import { AgentObservability } from "@volli/host-core/observability/settings";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
-import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
-import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
-import { desktopCodeMode } from "@volli/host-core/codemode/dev-config";
-import { readCodeModePolicy } from "@volli/host-core/session-runtime/model-access-preferences";
-import { createAttachmentIdentities } from "@volli/host-core/session-runtime/attachment-identity";
-import { createRuntimeAssembly } from "@volli/host-core/session-runtime/assembly";
-import { createRuntimeContextResolver } from "@volli/host-core/session-runtime/context";
-import { createRuntimeAutomations } from "@volli/host-core/session-runtime/automations";
-import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
+import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
+import { getProjectById, getTicket } from "@volli/host-core/db";
+import { SecretService } from "@volli/host-core/secrets";
+import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
+  createSessionTokenRegistry,
+  createSessionConcurrencyEnvReader,
+} from "@volli/host-core/sessions";
+import {
+  BackgroundShellHost,
+  readCodeModePolicy,
+  createAttachmentIdentities,
+  createRuntimeAssembly,
+  createRuntimeContextResolver,
+  createRuntimeAutomations,
+  createTicketSessionDelegationStore,
   createRuntimeSessionFacade,
   recoveredSessionCommandPorts,
   recoveredSessionAutomationPorts,
   recoveredRuntimeSessionServices,
-} from "@volli/host-core/session-runtime/facade";
-import { createSessionRuntimeLifecycle } from "@volli/host-core/session-runtime/lifecycle";
-import { agentSitesWithin, releaseAgentSites } from "@volli/host-core/worktree/agent-sites";
-import { liveShellWorktreeSites, type BusyWorktreeSites } from "@volli/host-core/worktree/activity";
-import type { AgentSiteRuntime } from "@volli/host-core/worktree/agent-sites";
+  createSessionRuntimeLifecycle,
+} from "@volli/host-core/session-runtime";
+import {
+  agentSitesWithin,
+  releaseAgentSites,
+  liveShellWorktreeSites,
+  type BusyWorktreeSites,
+  type AgentSiteRuntime,
+} from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
 
@@ -95,12 +98,12 @@ export function createHeadlessSessionRuntime(input: {
   const homeDir = headlessHomeDir(env);
   // One lazy module: its model access is `headlessModelAccess`, handed to host-core.
   const { modelAccess, decisions, mcp: mcpSettings, webAccess } = host.runtimeServices;
-  const mcpDispatch = desktopMcpDispatch({
+  const mcpDispatch = hostMcpDispatch({
     env,
     packaged: true,
     log: (message) => ports.log.warn(message),
   });
-  const codeMode = desktopCodeMode({
+  const codeMode = hostCodeMode({
     env,
     packaged: true,
     policy: () => readCodeModePolicy(db),
@@ -266,8 +269,6 @@ export function createHeadlessSessionRuntime(input: {
     /** Sessions holding a live attachment token, read on every orphan scan. */
     liveSessionIds: () => tokens.liveSessionIds(),
     reclaim,
-    openNativeBindings: () => assembly.sessionRuntime?.openNativeBindings() ?? [],
-    observeScheduledResume: lifecycle.observeScheduledResume,
     async ready() {
       const ready = await lifecycle.ready();
       const { sessions, runtime } = recoveredRuntimeSessionServices(ready);

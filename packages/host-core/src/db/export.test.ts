@@ -1,33 +1,29 @@
 import { NO_AUTOMATION_TRIGGER, USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import {
-  createAutomation,
-  recordAutomationRun,
-  setColumnArming,
-} from "@volli/host-core/db/automations-repo";
-import { createComment } from "@volli/host-core/db/comments-repo";
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { createAutomation, recordAutomationRun, setColumnArming } from "./automations-repo";
+import { createComment } from "./comments-repo";
+import { recordTicketEvent } from "./events-repo";
 import {
   buildExportDocument,
   defaultExportFilename,
   EXPORT_FORMAT,
   REBUILDABLE_PROJECTIONS,
   serializeExportDocument,
-} from "@volli/host-core/db/export";
-import { addTicketLabel, getOrCreateLabel } from "@volli/host-core/db/labels-repo";
-import { MIGRATIONS } from "@volli/host-core/db/migrations";
+} from "./export";
+import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
+import { MIGRATIONS } from "./migrations";
 import {
   insertProject,
   updateProjectAppearance,
   updateProjectCanvas,
   updateProjectThemeOverride,
-} from "@volli/host-core/db/projects-repo";
+} from "./projects-repo";
 import { createTestSessionEngine } from "../testing/session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createTicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { archiveTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertSession } from "../session-control/test-support";
+import { createTicketSessionDelegationStore } from "../session-runtime/delegation-store";
+import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
+import { archiveTicket, insertTicket } from "./tickets-repo";
 import type { Canvas } from "@volli/shared";
 
 /**

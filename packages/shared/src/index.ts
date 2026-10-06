@@ -76,6 +76,8 @@ export * from "./session-cursor-motion";
 export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
+export type * from "./file-types";
+export type * from "./background-shell";
 export * from "./walk-prune";
 export * from "./errors";
 export * from "./terminal";

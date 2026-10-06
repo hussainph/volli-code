@@ -86,45 +86,46 @@ vi.mock("node-pty", () => ({ spawn }));
 // `parseSetupSentinel` stay REAL so the sentinel contract is exercised end to
 // end. The runtime deps bundle is replaced so phase broadcasts don't touch
 // electron and `worktreesHome` is a stable stand-in.
-vi.mock("@volli/host-core/worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
+vi.mock("../../../../packages/host-core/src/worktree/index", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../packages/host-core/src/worktree/index")>();
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("./worktree-host", () => ({
   worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
 }));
-vi.mock("@volli/host-core/worktree-runtime", () => ({
+vi.mock("../../../../packages/host-core/src/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
-import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./pty";
-import { PtyManager } from "@volli/host-core/pty/manager";
+import { confirmDestructiveClose, desktopPtyPorts, registerTerminalIpcHandlers } from "./pty";
+import { PtyManager, type ParkConfig, type ProcessInspector } from "@volli/host-core/pty";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
-import { createAgentCommandService } from "@volli/host-core/agent-commands";
-import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
-import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
-import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+import { createAgentCommandService } from "@volli/host-core/agents";
+import { importBlob, blobsRoot, removeBlob } from "@volli/host-core/files";
+import {
+  listTicketEvents,
+  recordSessionResumedOnce,
+  insertProject,
+  deleteTicket,
+  insertTicket,
+} from "@volli/host-core/db";
 import {
   getSession,
   insertSession,
   listSessions,
   listTicketSessions,
-} from "@volli/host-core/session-control/test-support";
-import {
   openTestDb,
   testProject,
   testSession,
   testTicket,
   type TestDb,
-} from "@volli/host-core/db/test-helpers";
+  createTestSessionEngine,
+} from "@volli/host-core/testing";
 import type { HarnessId } from "@volli/shared";
-import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { syncProjectRoots } from "@volli/host-core/project-roots";
-import { createTestSessionEngine } from "./test-session-engine";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { syncProjectRoots } from "@volli/host-core/board";
+import { createSessionTokenRegistry } from "@volli/host-core/sessions";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -2547,7 +2548,7 @@ describe("warm park", () => {
   beforeEach(() => {
     parts = makeInspector();
     parkManager = new PtyManager({
-      host: desktopPtyHost(),
+      host: desktopPtyPorts(),
       db: testDb.db,
       dbError: "",
       sessionEngine: fixtureSessionEngine,
@@ -2725,7 +2726,7 @@ describe("warm park", () => {
 
     it("refuses even a manual park when parking is disabled", async () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -2941,7 +2942,7 @@ describe("warm park", () => {
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -3048,7 +3049,7 @@ describe("warm park", () => {
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
       const manager2 = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,
@@ -3081,7 +3082,7 @@ describe("warm park", () => {
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
       const disabled = new PtyManager({
-        host: desktopPtyHost(),
+        host: desktopPtyPorts(),
         db: testDb.db,
         dbError: "",
         sessionEngine: fixtureSessionEngine,

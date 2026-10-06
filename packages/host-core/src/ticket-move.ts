@@ -29,7 +29,7 @@ import {
   type TicketCommandContext,
 } from "./ticket-commands";
 import { withTicketWake } from "./ticket-wake";
-import { trimFinishedWorktree, type TrimFinishDeps } from "./worktree";
+import { trimFinishedWorktree, type TrimFinishPorts } from "./worktree";
 import { getWorktreeSnapshots } from "./worktree/snapshot";
 
 export type TicketMoveCommandInput = {
@@ -41,7 +41,7 @@ export type TicketMoveCommandInput = {
   | { ticketIds: string[]; toIndex: number }
 );
 
-export interface TicketMovePorts extends TrimFinishDeps {
+export interface TicketMovePorts extends TrimFinishPorts {
   interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;

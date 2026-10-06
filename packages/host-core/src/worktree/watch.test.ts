@@ -5,19 +5,19 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { listTicketEvents, recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { listTicketEvents, recordTicketEvent } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import {
   getTicketRow,
   insertTicket,
   setTicketRetentionKeep,
   updateTicketFields,
-} from "@volli/host-core/db/tickets-repo";
+} from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 import { setRetentionTtlDays } from "./retention";
 import { netFailure, scriptedNet } from "./scripted-net";
 import {
@@ -29,7 +29,7 @@ import {
   RetentionWatcher,
   RETENTION_MAX_BACKOFF_MS,
   RETENTION_POLL_INTERVAL_MS,
-  type RetentionPollDeps,
+  type RetentionPollPorts,
 } from "./watch";
 
 let ctx: TestDb;
@@ -51,7 +51,7 @@ afterEach(() => {
  * remove runs its probes on the async runner (VC-383), so this fixture must
  * supply that seam rather than accidentally exercising the host repository.
  */
-function cleanGit(wt: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
+function cleanGit(wt: string): Pick<WorktreePorts, "git" | "gitAsync"> {
   const git = (args: readonly string[]): string => {
     if (args[0] === "worktree" && args[1] === "list") {
       return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
@@ -70,7 +70,7 @@ type Notified = NotificationRequest;
 function makeDeps(
   handler: Parameters<typeof scriptedNet>[0],
   now = 1000,
-): { deps: RetentionPollDeps; notifications: Notified[]; changes: { n: number } } {
+): { deps: RetentionPollPorts; notifications: Notified[]; changes: { n: number } } {
   const { run } = scriptedNet(handler);
   const notifications: Notified[] = [];
   const changes = { n: 0 };
@@ -408,7 +408,7 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
       }
       return { stdout: "" };
     }, 100 * DAY);
-    const brokenDeps: RetentionPollDeps = {
+    const brokenDeps: RetentionPollPorts = {
       ...deps,
       db: dbWithBrokenTransaction(ctx.db),
       reclaim: {
@@ -546,7 +546,7 @@ describe("pollRetention — F5: ghCwd falls back to the project checkout", () =>
     updateTicketFields(ctx.db, "t1", { prUrl: "https://x/pull/7" }, 1);
 
     const { run, calls } = scriptedNet(() => prView());
-    const deps: RetentionPollDeps = {
+    const deps: RetentionPollPorts = {
       db: ctx.db,
       net: run,
       now: () => 1000,
@@ -598,7 +598,7 @@ describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and
       }
       return { stdout: "" };
     });
-    const brokenDeps: RetentionPollDeps = { ...deps, db: dbWithBrokenTransaction(ctx.db) };
+    const brokenDeps: RetentionPollPorts = { ...deps, db: dbWithBrokenTransaction(ctx.db) };
 
     const result = await pollRetention(brokenDeps, createRetentionStore());
 
@@ -638,7 +638,7 @@ describe("RetentionWatcher — F4: schedule() never leaves a second timer chain"
         if (callCount === 1) return gate.promise;
         return { stdout: prView().stdout, stderr: "" };
       };
-      const deps: RetentionPollDeps = {
+      const deps: RetentionPollPorts = {
         db: ctx.db,
         net,
         now: () => 1000,

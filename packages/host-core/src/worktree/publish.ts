@@ -24,9 +24,9 @@ import {
   type TicketEventPayload,
 } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
 import { commitRemaining, type CommitChoices, type CommitOutcome } from "./commit";
 import {
@@ -38,15 +38,15 @@ import {
   type GhFailure,
   type RunNet,
 } from "./net";
-import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type WorktreePorts, type WorktreeResult } from "./types";
 
 /**
  * The publish flow's deps: the standard worktree bundle plus the async network
- * runner (`net.ts`'s injectable seam). Parallel to {@link WorktreeDeps} rather
+ * runner (`net.ts`'s injectable seam). Parallel to {@link WorktreePorts} rather
  * than folded into it because only the network verbs need it — the rest of the
  * module stays `RunNet`-free.
  */
-export interface PublishDeps extends WorktreeDeps {
+export interface PublishPorts extends WorktreePorts {
   net: RunNet;
   /**
    * The read-only credential-helper diagnosis a failed push consults before it
@@ -88,7 +88,7 @@ interface TicketIdentity {
  * re-checks rather than trusting a stale client.
  */
 async function loadIdentity(
-  deps: PublishDeps,
+  deps: PublishPorts,
   ticketId: string,
 ): Promise<WorktreeResult<TicketIdentity>> {
   const ticket = getTicketRow(deps.db, ticketId);
@@ -126,7 +126,7 @@ async function loadIdentity(
 
 /** Records a `worktree_failed` event for the given Done-flow stage, trimmed like ensure.ts. */
 function recordFailure(
-  deps: PublishDeps,
+  deps: PublishPorts,
   ticketId: string,
   stage: "commit" | "push" | "pr",
   stderr: string,
@@ -165,7 +165,7 @@ function friendlyGhMessage(failure: GhFailure): string {
  * discipline. `recordOpened` is false on a re-entry that only re-discovered an
  * already-stored PR, so History gains no duplicate line.
  */
-function persistPr(deps: PublishDeps, ticketId: string, url: string, recordOpened: boolean): void {
+function persistPr(deps: PublishPorts, ticketId: string, url: string, recordOpened: boolean): void {
   const now = Date.now();
   const write = deps.db.transaction(() => {
     updateTicketFields(deps.db, ticketId, { prUrl: url }, now);
@@ -182,7 +182,7 @@ function persistPr(deps: PublishDeps, ticketId: string, url: string, recordOpene
  * case it drifted) and records `pr_opened` only when the stored url was empty.
  */
 function returnExisting(
-  deps: PublishDeps,
+  deps: PublishPorts,
   ticketId: string,
   storedPrUrl: string | null,
   url: string,
@@ -198,7 +198,7 @@ function returnExisting(
  *   else create draft PR (pr-exists falls back to one more find) → persist.
  */
 export async function publishTicketBranch(
-  deps: PublishDeps,
+  deps: PublishPorts,
   ticketId: string,
 ): Promise<WorktreeResult<PublishOutcome>> {
   const loaded = await loadIdentity(deps, ticketId);
@@ -276,7 +276,7 @@ export async function publishTicketBranch(
  * runs `commitRemaining`, and records `worktree_committed` when a commit landed
  * or `worktree_failed { stage: "commit" }` on refusal/error. A clean-tree no-op
  * (`committed: false`) records nothing — nothing happened. Takes
- * {@link PublishDeps} because `commitRemaining` runs `add`/`commit` through the
+ * {@link PublishPorts} because `commitRemaining` runs `add`/`commit` through the
  * async runner (commit hooks are unbounded; sync would freeze main).
  *
  * `choices` (the rail dialog's message + staging breadth) passes straight
@@ -285,7 +285,7 @@ export async function publishTicketBranch(
  * the same thing for a commit made before those fields existed and after.
  */
 export async function commitTicketRemaining(
-  deps: PublishDeps,
+  deps: PublishPorts,
   ticketId: string,
   choices: CommitChoices = {},
 ): Promise<WorktreeResult<CommitOutcome>> {

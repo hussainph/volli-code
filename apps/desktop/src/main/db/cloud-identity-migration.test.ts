@@ -4,22 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { SessionExecutionVenue } from "@volli/shared";
-import { insertSession } from "@volli/host-core/session-control/test-support";
 import {
-  buildBackupDataDocument,
-  validateBackupDataDocument,
-} from "@volli/host-core/backup/data-document";
-import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
+  insertSession,
+  openRawDb,
+  testProject,
+  testSession,
+  testTicket,
+} from "@volli/host-core/testing";
+import { buildBackupDataDocument, validateBackupDataDocument } from "@volli/host-core/maintenance";
 import {
+  getProjectById,
+  insertProject,
   getTicket,
   insertTicket,
   nextTicketNumberForProject,
-} from "@volli/host-core/db/tickets-repo";
-import { openRawDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import { openVolliDb } from "@volli/host-core/db";
-import { CLOUD_IDENTITY_MIGRATION } from "@volli/host-core/db/cloud-identity-migration";
-import * as migrations from "@volli/host-core/db/migrations";
-import { migrate } from "@volli/host-core/db/migrations";
+  openVolliDb,
+  CLOUD_IDENTITY_MIGRATION,
+  migrate,
+} from "@volli/host-core/db";
+import * as migrations from "../../../../../packages/host-core/src/db/migrations";
 
 const LATEST_SCHEMA_VERSION = migrations.MIGRATIONS.at(-1)!.version;
 

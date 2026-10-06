@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const SRC = new URL("../../", import.meta.url).href;
 const N1 = new URL("./n1/", import.meta.url).href;
 const PINNED = ".pinned";
+const SELF = "@volli/host-core/";
 const loaded = new Set();
 globalThis.volliN1Loaded = loaded;
 
@@ -31,13 +32,30 @@ function resolveTs(specifier, context, nextResolve) {
   }
 }
 
+/**
+ * A pinned file is main's copy from before VC-632, when every host-core file
+ * was a package subpath: `@volli/host-core/<path>` named `src/<path>.ts` (or
+ * `src/<path>/index.ts`). The package exports only cluster entries now, so
+ * the pin's own-name imports resolve to the file they named then.
+ */
+function resolvePinnedSelfImport(specifier) {
+  const path = specifier.slice(SELF.length);
+  for (const suffix of [".ts", "/index.ts"]) {
+    const url = new URL(path + suffix, SRC);
+    if (existsSync(fileURLToPath(url))) return { url: url.href, shortCircuit: true };
+  }
+  return null;
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    const parentURL =
-      context.parentURL?.startsWith(N1) === true
-        ? SRC + context.parentURL.slice(N1.length, -PINNED.length)
-        : context.parentURL;
-    const resolved = resolveTs(specifier, { ...context, parentURL }, nextResolve);
+    const fromPin = context.parentURL?.startsWith(N1) === true;
+    const parentURL = fromPin
+      ? SRC + context.parentURL.slice(N1.length, -PINNED.length)
+      : context.parentURL;
+    const resolved =
+      (fromPin && specifier.startsWith(SELF) ? resolvePinnedSelfImport(specifier) : null) ??
+      resolveTs(specifier, { ...context, parentURL }, nextResolve);
     if (!resolved.url.startsWith(SRC) || resolved.url.startsWith(N1)) return resolved;
     const relative = resolved.url.slice(SRC.length);
     const pinned = N1 + relative + PINNED;

@@ -38,7 +38,7 @@ import type {
   DecisionModelSettingsView,
   DecisionModelTestView,
 } from "@volli/shared";
-import { getProjectById, updateProjectDecisionModel } from "@volli/host-core/db/projects-repo";
+import { getProjectById, updateProjectDecisionModel } from "../db/projects-repo";
 import {
   readGlobalDecisionModel,
   readProjectDecisionModel,
@@ -90,7 +90,7 @@ function deadline(ms: number): AbortSignal {
   return AbortSignal.timeout(ms);
 }
 
-export function createDesktopDecisions(options: HostDecisionsOptions): HostDecisions {
+export function createHostDecisions(options: HostDecisionsOptions): HostDecisions {
   const { db, models } = options;
   const now = options.now ?? Date.now;
   const log = options.log ?? ((message, error) => console.warn(message, error));

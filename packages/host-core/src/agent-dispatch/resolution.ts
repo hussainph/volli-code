@@ -29,11 +29,7 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
-import {
-  getTicket,
-  listArchivedTicketsByProject,
-  listTicketsByProject,
-} from "@volli/host-core/db/tickets-repo";
+import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
 import { failure } from "./context";
 import type { EnvSessionIdentity } from "./context";
 

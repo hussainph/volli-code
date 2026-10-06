@@ -2,10 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
-import { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
+import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/testing";
+import { insertProject, insertTicket, updateTicketFields } from "@volli/host-core/db";
+import { BackgroundShellHost } from "@volli/host-core/session-runtime";
 import {
   busySiteWithin,
   runGitCapturing,
@@ -128,7 +127,7 @@ function trimFixture() {
 
 const busyReason = {
   kind: "skipped",
-  reason: "A terminal is still running in this worktree. Close it first.",
+  reason: "A background shell is still running in this worktree. Stop it first.",
 };
 
 describe("desktop busy worktree supplier", () => {
@@ -138,7 +137,7 @@ describe("desktop busy worktree supplier", () => {
     const busy = supplier({ terminalCwds: () => terminals, shells: { liveCwds: () => shells } });
     expect(await busy("/work")).toEqual([
       { directory: terminals[0], surface: "terminal" },
-      { directory: shells[0], surface: "terminal" },
+      { directory: shells[0], surface: "shell" },
     ]);
     terminals.length = 0;
     shells.length = 0;
@@ -167,7 +166,7 @@ describe("desktop busy worktree supplier", () => {
       shells: { liveCwds: () => ["/work/ticket/src"] },
     });
     expect(await busy("/work/ticket")).toEqual([
-      { directory: "/work/ticket/src", surface: "terminal" },
+      { directory: "/work/ticket/src", surface: "shell" },
     ]);
     expect(onUnreadable).toHaveBeenCalledWith(owner.sessionId, error);
   });

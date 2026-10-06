@@ -4,7 +4,30 @@ import type { WebContents } from "electron";
 import { clientEventSink } from "./client-event-sink";
 import { applySkillModes, errorMessage, projectCommandsDir, projectSkillsDir } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
-import { searchFiles } from "@volli/host-core/file-search";
+import {
+  searchFiles,
+  loadPromptTemplates,
+  writePromptTemplate,
+  loadSkills,
+  buildFileIndex,
+  readFile,
+  writeFile,
+  createFile,
+  createDirectory,
+  renameEntry,
+  duplicateFile,
+  createArtifact,
+  resolveSafePath,
+  resolveSafeDir,
+  resolveProjectPath,
+  resolveFileScope,
+  resolveExternalFileTarget,
+  resolveLiveWorktree,
+  searchRoot,
+  FileWatchManager,
+  DirWatchManager,
+  type HostFileServices,
+} from "@volli/host-core/files";
 import { systemExternalAppGateway } from "./external-apps";
 import type { ExternalAppGateway } from "./external-apps";
 import type {
@@ -34,32 +57,10 @@ import type {
   WorktreeRevealInput,
 } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getProjectById } from "@volli/host-core/db";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import { loadPromptTemplates, writePromptTemplate } from "@volli/host-core/prompt-templates";
-import { loadSkills } from "@volli/host-core/skills";
 
-import {
-  buildFileIndex,
-  readFile,
-  writeFile,
-  createFile,
-  createDirectory,
-  renameEntry,
-  duplicateFile,
-  createArtifact,
-  resolveSafePath,
-  resolveSafeDir,
-  resolveProjectPath,
-  resolveFileScope,
-  resolveExternalFileTarget,
-  resolveLiveWorktree,
-  searchRoot,
-  FileWatchManager,
-  DirWatchManager,
-} from "@volli/host-core/volli-fs";
-import type { HostFileServices } from "@volli/host-core/file-services";
 /** The live watch managers `registerFileIpcHandlers` owns — one per watch surface. */
 export interface FileIpcWatchManagers {
   files: FileWatchManager;

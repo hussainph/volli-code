@@ -32,7 +32,7 @@ export interface CredentialHelperIssue {
   location: string;
 }
 
-export interface CredentialHelperDiagnosticsDeps {
+export interface CredentialHelperDiagnosticsPorts {
   /** Git's all-scope, origin-annotated credential-helper query. */
   readCredentialHelperConfig(cwd: string): Promise<string>;
 }
@@ -43,7 +43,7 @@ interface CredentialHelperConfigEntry {
   helper: string;
 }
 
-function processDeps(): CredentialHelperDiagnosticsDeps {
+function processDeps(): CredentialHelperDiagnosticsPorts {
   return {
     async readCredentialHelperConfig(cwd) {
       // This is asked only after a network verb has already failed, so it is a
@@ -132,7 +132,7 @@ function location(origin: string): string {
  */
 export async function credentialHelperIssues(
   cwd: string | null,
-  deps: CredentialHelperDiagnosticsDeps = processDeps(),
+  deps: CredentialHelperDiagnosticsPorts = processDeps(),
 ): Promise<CredentialHelperIssue[]> {
   if (cwd === null) return [];
 

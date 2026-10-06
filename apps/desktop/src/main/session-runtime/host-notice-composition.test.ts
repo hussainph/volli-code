@@ -23,29 +23,25 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import {
   createHostCore,
-  HEADLESS_ATTENTION,
   isLiveHost,
-  NO_POWER_EVENTS,
   throwTransactionViolation,
   type HostCore,
   type HostCorePorts,
   type LiveHostCore,
 } from "@volli/host-core";
+import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
 import {
   createSessionRuntimeLifecycle,
   readRecoveredSessionServices,
   SessionRuntimeClosingError,
   type RecoveredSessionServices,
-} from "@volli/host-core/session-runtime/lifecycle";
-import type { TicketSessionDelegationStore } from "@volli/host-core/session-runtime/delegation-store";
-import type { AgentObservability } from "@volli/host-core/observability/settings";
-import {
+  type TicketSessionDelegationStore,
   BackgroundShellHost,
   type BackgroundShellNotice,
   type BackgroundShellOwner,
-} from "@volli/host-core/shell/background-shell-host";
-import { SecretStore } from "@volli/host-core/secrets";
-import { SecretService } from "@volli/host-core/secrets/service";
+} from "@volli/host-core/session-runtime";
+import type { AgentObservability } from "@volli/host-core/integrations";
+import { SecretStore, SecretService } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "../secrets/codec";
 import { createDesktopHostRuntime } from "../host-runtime";
 
@@ -81,8 +77,6 @@ function hostPorts(): HostCorePorts {
       waitUntilOnline: () => Promise.resolve(),
       onResume: () => () => undefined,
     },
-    listOpenNativeBindings: () => [],
-    observeScheduledResume: vi.fn(),
   };
 }
 

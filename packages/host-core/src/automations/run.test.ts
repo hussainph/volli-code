@@ -18,8 +18,8 @@ import type {
 import { createAutomationEngine } from "./engine";
 import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
-import type { AutomationRunnerDeps } from "./run";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import type { AutomationRunnerPorts } from "./run";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
   getAutomation,
@@ -28,19 +28,16 @@ import {
   listProjectRunsForAutomation,
   listRunsForTicket,
   recordAutomationRun,
-} from "@volli/host-core/db/automations-repo";
-import { listTicketEvents, recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import {
-  sessionCreateCommandId,
-  StructuredSessionsError,
-} from "@volli/host-core/session-runtime/sessions";
-import type { SessionStartInput } from "@volli/host-core/session-runtime/sessions";
+} from "../db/automations-repo";
+import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { readSessionProvenance } from "../db/session-provenance-repo";
+import { insertSession } from "../session-control/test-support";
+import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
+import { sessionCreateCommandId, StructuredSessionsError } from "../session-runtime/sessions";
+import type { SessionStartInput } from "../session-runtime/sessions";
 
 let ctx: TestDb;
 
@@ -93,7 +90,7 @@ interface Harness {
   attachReceipt: CommandReceipt | null;
 }
 
-function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
+function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
   ctx = openTestDb();
   const project = testProject();
   insertProject(ctx.db, project);

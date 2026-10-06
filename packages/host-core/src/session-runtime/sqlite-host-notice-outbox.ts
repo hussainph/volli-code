@@ -8,7 +8,7 @@
 import type Database from "better-sqlite3";
 import type { SessionLedger } from "@volli/shared";
 import type { HostNotice, HostNoticeOutbox, HostNoticeReceipt } from "@volli/session-engine";
-import { prepared } from "@volli/host-core/db/prepared";
+import { prepared } from "../db/prepared";
 
 export function createSqliteHostNoticeOutbox(
   db: Database.Database,

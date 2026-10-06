@@ -19,18 +19,15 @@ import { displayTicketId, resolveAgentContext } from "@volli/shared";
 import type { AgentRequest, AgentResponse, Project, Ticket } from "@volli/shared";
 import type { WorktreeDiffMode } from "@volli/shared";
 
-import {
-  listArchivedTicketsByProject,
-  listTicketsByProject,
-} from "@volli/host-core/db/tickets-repo";
+import { listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
 import {
   previewTicketWorktree,
   readWorktreeDiff,
   readWorktreeStatus,
   syncTicketWorktree,
-} from "@volli/host-core/worktree";
-import { isInside } from "@volli/host-core/worktree/paths";
-import { getWorktreeSnapshots } from "@volli/host-core/worktree/snapshot";
+} from "../worktree";
+import { isInside } from "../worktree/paths";
+import { getWorktreeSnapshots } from "../worktree/snapshot";
 import { failure } from "./context";
 import type { AgentCommandContext, EnvSessionIdentity } from "./context";
 import { dryRunResponse } from "./preview";

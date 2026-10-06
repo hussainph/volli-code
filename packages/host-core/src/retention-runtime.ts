@@ -17,9 +17,9 @@ import {
   RetentionWatcher,
   retentionConfigFromEnv,
   runNet,
-  type ReclaimDeps,
-  type TrimFinishDeps,
-  type WorktreeDeps,
+  type ReclaimPorts,
+  type TrimFinishPorts,
+  type WorktreePorts,
 } from "./worktree";
 
 let watchers = new WeakMap<Database.Database, RetentionWatcher>();
@@ -34,7 +34,7 @@ let watcher: RetentionWatcher | null = null;
  * same watch. Absent means the watch keeps its old read-only behaviour: prompts
  * still appear, nothing is ever deleted.
  */
-export type RetentionReclaimSeams = Pick<ReclaimDeps, "releaseAgentSites" | "busyWorktreeSites">;
+export type RetentionReclaimSeams = Pick<ReclaimPorts, "releaseAgentSites" | "busyWorktreeSites">;
 
 /**
  * The trim-on-finish pass (VC-340) shares the reclaim's busy question and needs
@@ -43,9 +43,9 @@ export type RetentionReclaimSeams = Pick<ReclaimDeps, "releaseAgentSites" | "bus
  * automatic trim must refuse everything an automatic removal would.
  */
 function trimSeams(
-  worktree: () => WorktreeDeps,
+  worktree: () => WorktreePorts,
   reclaimSeams: RetentionReclaimSeams,
-): TrimFinishDeps | undefined {
+): TrimFinishPorts | undefined {
   const busy = reclaimSeams.busyWorktreeSites;
   if (busy === undefined) return undefined;
   return { worktree: worktree(), now: () => Date.now(), busySites: busy };
@@ -59,7 +59,7 @@ function trimSeams(
 export function getRetentionWatcher(
   db: Database.Database,
   ports: { events: HostEventBus; attention: Pick<AttentionDeliveryPort, "deliver"> },
-  worktree: () => WorktreeDeps,
+  worktree: () => WorktreePorts,
   reclaimSeams?: RetentionReclaimSeams,
 ): RetentionWatcher {
   const existing = watchers.get(db);

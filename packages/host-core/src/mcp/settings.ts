@@ -21,8 +21,8 @@ import {
   markMcpServerRefreshFailure,
   putMcpServer,
   selectedMcpToolDefinitions,
-} from "@volli/host-core/db/mcp-servers-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+} from "../db/mcp-servers-repo";
+import { getProjectById } from "../db/projects-repo";
 import { createMcpProtocolClientOpener } from "./client";
 import { MemoryMcpCredentialStore, type McpCredentialStore } from "./credential-store";
 import {

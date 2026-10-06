@@ -5,7 +5,7 @@ import { type SessionUsage } from "@volli/shared";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 import { clientCapabilities } from "./ports";
 import { createHostRuntimeServices } from "./runtime-services";
-import { createDesktopDecisions } from "./decision/desktop";
+import { createHostDecisions } from "./decision/host-decisions";
 import { McpSettingsService } from "./mcp/settings";
 import { McpOAuthBroker } from "./mcp/oauth";
 import { WebAccessSettings } from "./web/settings";
@@ -31,8 +31,8 @@ vi.mock("./mcp/oauth", async (importOriginal) => {
   }
   return { ...original, McpOAuthBroker: RecordingBroker };
 });
-vi.mock("./decision/desktop", () => ({
-  createDesktopDecisions: vi.fn(() => ({ decision: true })),
+vi.mock("./decision/host-decisions", () => ({
+  createHostDecisions: vi.fn(() => ({ decision: true })),
 }));
 
 let testDb: TestDb | undefined;
@@ -76,15 +76,15 @@ describe("live host runtime services", () => {
 
     expect(ownedModelAccess).toHaveBeenCalledTimes(1);
     expect(services.modelAccess).toBe(modelAccess);
-    expect(createDesktopDecisions).toHaveBeenCalledTimes(1);
-    expect(createDesktopDecisions).toHaveBeenCalledWith(
+    expect(createHostDecisions).toHaveBeenCalledTimes(1);
+    expect(createHostDecisions).toHaveBeenCalledWith(
       expect.objectContaining({
         db,
         models: modelAccess.models,
         catalogReady: modelAccess.catalogReady,
       }),
     );
-    expect(services.decisions).toBe(vi.mocked(createDesktopDecisions).mock.results[0]!.value);
+    expect(services.decisions).toBe(vi.mocked(createHostDecisions).mock.results[0]!.value);
     expect(services.mcp).toBeInstanceOf(McpSettingsService);
     // MCP credentials live beside the database, wherever the host put it.
     expect(services.mcp.credentials).toHaveProperty(
@@ -109,7 +109,7 @@ describe("live host runtime services", () => {
     });
     expect(ownedModelAccess).not.toHaveBeenCalled();
     expect(services.modelAccess).toBe(supplied);
-    expect(createDesktopDecisions).toHaveBeenCalledWith(
+    expect(createHostDecisions).toHaveBeenCalledWith(
       expect.objectContaining({ models: supplied.models, catalogReady: supplied.catalogReady }),
     );
   });
@@ -162,7 +162,7 @@ describe("live host runtime services", () => {
     const { db, dbPath } = open();
     const observe = vi.fn(async () => undefined);
     createHostRuntimeServices(db, engine(observe), ports, { dbPath, modelAccess });
-    const input = vi.mocked(createDesktopDecisions).mock.calls[0]![0];
+    const input = vi.mocked(createHostDecisions).mock.calls[0]![0];
     await input.recordUsage("session", usage, "agent.classify");
     expect(observe).toHaveBeenCalledWith({
       id: expect.stringMatching(/^usage:decision:/),
@@ -192,7 +192,7 @@ describe("live host runtime services", () => {
       venue: { id: "cloud-host", kind: "remote" },
     });
     await vi
-      .mocked(createDesktopDecisions)
+      .mocked(createHostDecisions)
       .mock.calls[0]![0].recordUsage("s", usage, "agent.classify");
     expect(observe).toHaveBeenCalledWith(
       expect.objectContaining({

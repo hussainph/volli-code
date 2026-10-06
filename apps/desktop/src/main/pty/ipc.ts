@@ -19,17 +19,22 @@ import type {
   TerminalIoResult,
 } from "@volli/shared";
 import type { VolliIpcChannel } from "../../ipc/contract";
-import { blobsRoot } from "@volli/host-core/blob-store";
+import { blobsRoot } from "@volli/host-core/files";
 import type { DbHandle } from "../data-ipc";
 import { windowEventBus } from "../broadcast";
 import { clientEventSink } from "../client-event-sink";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { SpawnLedger } from "@volli/host-core/process/spawn-ledger";
+import { SpawnLedger } from "@volli/host-core/maintenance";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
-import { createSessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { SessionConcurrencyEnvReader } from "@volli/host-core/session-concurrency";
-import type { AgentRuntimeEnvironment, PtyHost } from "@volli/host-core/pty/manager";
-import { PtyManager } from "@volli/host-core/pty/manager";
+import {
+  createSessionConcurrencyEnvReader,
+  type SessionConcurrencyEnvReader,
+} from "@volli/host-core/sessions";
+import {
+  type AgentRuntimeEnvironment,
+  type PtyManagerPorts,
+  PtyManager,
+} from "@volli/host-core/pty";
 import { worktreeDeps } from "../worktree-host";
 
 /**
@@ -37,7 +42,7 @@ import { worktreeDeps } from "../worktree-host";
  * the worktree bundle and the harness-file writer desktop composed inline
  * before the supervisor moved into host-core.
  */
-export function desktopPtyHost(): PtyHost {
+export function desktopPtyPorts(): PtyManagerPorts {
   return {
     events: windowEventBus,
     worktreeDeps,
@@ -210,7 +215,7 @@ export function registerTerminalIpcHandlers(
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
-  const host = desktopPtyHost();
+  const host = desktopPtyPorts();
   const manager =
     ownership.manager ??
     new PtyManager({

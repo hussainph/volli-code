@@ -31,7 +31,7 @@ import type {
   BrowserTrace,
 } from "@volli/shared";
 
-import type { AgentBrowserHost } from "./agent-port";
+import type { AgentBrowserBackend } from "./agent-port";
 import type { CdpTransport } from "./cdp-controller";
 
 /**
@@ -182,12 +182,12 @@ export function browserSessionPartition(input: {
  * One engine's Browser Tabs. Everything an agent tool or a host client asks of
  * the browser, and nothing about the window a person might draw a tab in.
  *
- * Extends {@link AgentBrowserHost}, the narrow subset the agent port drives,
+ * Extends {@link AgentBrowserBackend}, the narrow subset the agent port drives,
  * with the CDP wire, the load wait and the wake hold it binds per tab, and the
  * doors a host's clients use: presentation, viewport, pictures, the person's
  * side of a hold, and teardown.
  */
-export interface BrowserBackend extends AgentBrowserHost {
+export interface BrowserBackend extends AgentBrowserBackend {
   // ---- tab lifecycle (VC-110) and ownership (VC-238) ----------------------
 
   /** Closes and forgets one tab without letting page unload code veto it. */

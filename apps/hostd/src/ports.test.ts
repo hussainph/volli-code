@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
-import { NO_POWER_EVENTS } from "@volli/host-core";
+import { NO_POWER_EVENTS } from "@volli/host-core/ports";
 
 import type { HostdLogger } from "./log";
 import { headlessPorts } from "./ports";
@@ -60,7 +60,8 @@ describe("hostd's headless ports", () => {
     expect(ports.connectivity).toBe(ALWAYS_ONLINE);
     expect(ports.client).toBeUndefined();
     expect(ports.trash).toBeUndefined();
-    expect(ports.listOpenNativeBindings()).toEqual([]);
-    expect(ports.observeScheduledResume({} as never)).toBeUndefined();
+    // The runtime's open bindings and scheduled resume are host-core's own wiring.
+    expect(ports).not.toHaveProperty("listOpenNativeBindings");
+    expect(ports).not.toHaveProperty("observeScheduledResume");
   });
 });

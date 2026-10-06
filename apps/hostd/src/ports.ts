@@ -11,13 +11,12 @@
  * - **connectivity**: `ALWAYS_ONLINE`.
  * - **client** and **trash**: absent. host-core refuses those requests with
  *   its typed "needs the desktop app" errors, and never deletes instead.
- * - **listOpenNativeBindings** and **observeScheduledResume**: inert until the
- *   recovered Session runtime is composed; hostd binds them before start.
  */
 import { format } from "node:util";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
-import { HEADLESS_ATTENTION, NO_POWER_EVENTS, type HostCorePorts } from "@volli/host-core";
+import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
+import type { HostCorePorts } from "@volli/host-core";
 
 import type { HostdLogger } from "./log";
 
@@ -43,7 +42,5 @@ export function headlessPorts(logger: HostdLogger): HostCorePorts {
     },
     power: NO_POWER_EVENTS,
     connectivity: ALWAYS_ONLINE,
-    listOpenNativeBindings: () => [],
-    observeScheduledResume: () => undefined,
   };
 }

@@ -11,12 +11,13 @@ import {
   MCP_HTTP_MESSAGE_MAX_BYTES,
   MCP_STDIO_BUFFER_MAX_BYTES,
   openMcpProtocolClient,
-} from "@volli/host-core/mcp/client";
-import { MemoryMcpCredentialStore } from "@volli/host-core/mcp/credential-store";
-import { McpCredentialRejectedError, McpProtocolEraError } from "@volli/host-core/mcp/credentials";
-import { McpSessionHost } from "@volli/host-core/mcp/session-host";
+  MemoryMcpCredentialStore,
+  McpCredentialRejectedError,
+  McpProtocolEraError,
+  McpSessionHost,
+  type McpProtocolClient,
+} from "@volli/host-core/integrations";
 import { startFixtureMcpServer } from "../../../e2e/bench/mcp-parallel/http-fixture";
-import type { McpProtocolClient } from "@volli/host-core/mcp/discovery";
 
 const opened: McpProtocolClient[] = [];
 const closing: Array<() => Promise<void>> = [];

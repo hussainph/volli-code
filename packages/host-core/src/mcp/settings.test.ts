@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
 
 let ctx: TestDb;

@@ -7,8 +7,7 @@
 import type { WebContents } from "electron";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
-import type { BrowserLoadWaitMode } from "@volli/host-core/browser/backend";
-import type { CdpTransport } from "@volli/host-core/browser/cdp-controller";
+import type { BrowserLoadWaitMode, CdpTransport } from "@volli/host-core/browser";
 
 /**
  * The production CDP wire: one tab's `webContents.debugger`, Electron's

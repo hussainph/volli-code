@@ -11,8 +11,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { OrphanCleanupPlanItem } from "@volli/shared";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { cleanupOrphans } from "./cleanup";
 import { DEFAULT_RETENTION_TTL_DAYS } from "./retention";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
@@ -21,7 +21,7 @@ import { reconcileInterruptedCleanups } from "./cleanup-recovery";
 import { projectContainerName } from "./containers";
 import { resetDeletionLeasesForTest } from "./deletion-lease";
 import { scriptedGit } from "./scripted-git";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
@@ -72,7 +72,7 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
 }
 
 /** A real project with one real orphan worktree inside a container this db owns. */
-function realFixture(): { deps: WorktreeDeps; projectPath: string; orphan: string } {
+function realFixture(): { deps: WorktreePorts; projectPath: string; orphan: string } {
   const home = tempDir("home");
   const originPath = tempDir("origin");
   runRepoGit(originPath, ["init", "-q", "--bare", "-b", "main"]);
@@ -205,7 +205,7 @@ describe("reconcileInterruptedCleanups", () => {
     const { git, gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     const orphan = join(home, "gone");
 
     await engine.accept({
@@ -234,7 +234,7 @@ describe("reconcileInterruptedCleanups", () => {
     const { git, gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-1",
@@ -281,7 +281,7 @@ describe("reconcileInterruptedCleanups", () => {
         ? `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${stale}\nHEAD b\nprunable gitdir file points to non-existent location\n`
         : `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     const metadata: OrphanCleanupPlanItem = {
       id: "m1",
       kind: "metadata",
@@ -340,7 +340,7 @@ describe("reconcileInterruptedCleanups", () => {
       () =>
         `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${record}\nHEAD b\nbranch refs/heads/volli/VC-9\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-3",
@@ -386,7 +386,7 @@ describe("reconcileInterruptedCleanups", () => {
     const { git, gitAsync } = scriptedGit(
       () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-4",
@@ -415,7 +415,7 @@ describe("reconcileInterruptedCleanups", () => {
     const { git, gitAsync } = scriptedGit(
       () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     // Still on disk, no longer registered: the mixed state, so the assertion
     // below is about the run being FOUND, not about which verdict it got.
     mkdirSync(join(home, "long-gone"), { recursive: true });
@@ -454,7 +454,7 @@ describe("reconcileInterruptedCleanups", () => {
   it("does nothing when every run closed normally", async () => {
     const home = tempDir("home");
     const { git, gitAsync } = scriptedGit(() => "");
-    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     expect(await reconcileInterruptedCleanups({ worktree: deps, engine })).toEqual([]);
   });
 });

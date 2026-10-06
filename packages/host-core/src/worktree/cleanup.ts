@@ -68,8 +68,8 @@ import type {
 } from "@volli/shared";
 import { CLEANUP_PRESERVATION_RULES } from "@volli/shared";
 
-import { listProjects } from "@volli/host-core/db/projects-repo";
-import { listWorktreePaths } from "@volli/host-core/db/tickets-repo";
+import { listProjects } from "../db/projects-repo";
+import { listWorktreePaths } from "../db/tickets-repo";
 import {
   busyRefusal,
   busySiteWithin,
@@ -87,7 +87,7 @@ import { canonicalize, isInside } from "./paths";
 import { lastTouchedAt, metadataKeptReason, readOnlyGit } from "./scan";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
 import { withRepositoryWorktreeTurn } from "./repository-turn";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
 /** What a cleanup was asked to do: a command id, a scan revision, and its items. */
 export interface OrphanCleanupRequest {
@@ -105,8 +105,8 @@ export interface OrphanCleanupRequest {
 }
 
 /** The seams the cleanup needs beyond the worktree bundle. */
-export interface OrphanCleanupDeps {
-  worktree: WorktreeDeps;
+export interface OrphanCleanupPorts {
+  worktree: WorktreePorts;
   /** The durable command core; the executor never writes storage itself. */
   engine: OrphanCleanupEngine;
   /** The activity supplier the manual Delete path uses; absent means "assume none". */
@@ -200,7 +200,7 @@ interface Recheck {
  * while this one is still going.
  */
 function finalGate(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   item: OrphanCleanupPlanItem,
   request: Pick<OrphanCleanupRequest, "retentionDays">,
   sites: readonly BusyWorktreeSite[],
@@ -298,7 +298,7 @@ function finalGate(
 
 /** What is live in one directory, or nothing when there is no supplier. */
 async function busySitesFor(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   path: string,
 ): Promise<readonly BusyWorktreeSite[]> {
   return (await deps.busyWorktreeSites?.(path)) ?? [];
@@ -330,7 +330,7 @@ function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean
  * launch reconciles.
  */
 export async function cleanupOrphans(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   request: OrphanCleanupRequest,
 ): Promise<{ run: OrphanCleanupRun; receipt: OrphanCleanupReceipt }> {
   const { worktree, engine } = deps;
@@ -465,7 +465,7 @@ export async function cleanupOrphans(
 
 /** The agent-binding release, with a deadline. A timeout is a skip, never a removal. */
 async function releaseWithin(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   directory: string,
 ): Promise<{ timedOut: boolean; report: AgentSiteReleaseReport | null }> {
   const release = deps.releaseAgentSites;
@@ -515,7 +515,7 @@ interface MetadataGate {
  * Both are asked here, with the scan's own eligibility rule.
  */
 function metadataEligibility(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   items: readonly OrphanCleanupPlanItem[],
   first: OrphanCleanupPlanItem,
 ): MetadataGate {
@@ -553,7 +553,7 @@ function metadataEligibility(
  * not run.
  */
 async function pruneProject(
-  deps: OrphanCleanupDeps,
+  deps: OrphanCleanupPorts,
   request: OrphanCleanupRequest,
   items: readonly OrphanCleanupPlanItem[],
   settle: (

@@ -716,6 +716,16 @@ rejected, completed, or unreconciled. A Receipt makes delivery observable
 without claiming an unsupported native guarantee.
 _Avoid_: event, acknowledgement (when no durable outcome exists)
 
+**Door**:
+One entrance through which a caller reaches host behavior: an IPC handler
+(the renderer's door), a socket verb (the CLI's), an agent tool (the tool
+door), the Run door an Automation fires through. A door resolves its caller
+and maps inputs and replies; the behavior it reaches lives once, behind it, so
+two doors to one action must not diverge. "The one door" names the single
+entrance a rule is enforced at, such as notification delivery.
+_Avoid_: endpoint, route (both name a transport), adapter (a Port's
+implementation), service (what a door calls)
+
 **Session Engine**:
 The UI- and runtime-implementation-agnostic interface that owns Session
 commands, facts, projections, and their durable storage contract. Electron main

@@ -23,8 +23,8 @@
 import type Database from "better-sqlite3";
 import type { VenueFileCounts, VenueKind, VenueReading, VenueSnapshot } from "@volli/shared";
 
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
@@ -66,8 +66,8 @@ async function resolveBase(git: RunGitAsync, input: VenueSnapshotInput): Promise
   }
 }
 
-/** The narrow deps {@link readVenue} needs — a structural subset of `WorktreeDeps`. */
-export interface VenueReadDeps {
+/** The narrow deps {@link readVenue} needs — a structural subset of `WorktreePorts`. */
+export interface VenueReadPorts {
   db: Database.Database;
   /** The non-blocking runner; defaults to the real one, never to a sync wrapper. */
   gitAsync?: RunGitAsync;
@@ -106,7 +106,7 @@ export interface VenueTarget {
  * nothing rather than a shape with no measurement behind it.
  */
 export async function readVenue(
-  deps: VenueReadDeps,
+  deps: VenueReadPorts,
   target: VenueTarget,
 ): Promise<WorktreeResult<VenueReading>> {
   const project = getProjectById(deps.db, target.projectId);

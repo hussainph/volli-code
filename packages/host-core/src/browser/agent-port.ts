@@ -102,7 +102,7 @@ import type { BrowserTraceStepInput } from "./trace-store";
  * structural subset of {@link BrowserBackend} so tests can answer it with a
  * plain record and production hands the backend itself.
  */
-export interface AgentBrowserHost {
+export interface AgentBrowserBackend {
   /** Host-wide Browser operation queues and shared debugger lifetimes. */
   agentOperations: BrowserAgentCoordinator;
   list(scope: { projectId: string; ticketId?: string }): BrowserTabState[];
@@ -146,7 +146,7 @@ export interface AgentBrowserPort extends RuntimeBrowserPort {
 }
 
 export interface AgentBrowserPortOptions {
-  host: AgentBrowserHost;
+  host: AgentBrowserBackend;
   /** The Session's product scope, fixed at attachment and never the model's to name. */
   scope: { projectId: string; ticketId: string | null };
   /**

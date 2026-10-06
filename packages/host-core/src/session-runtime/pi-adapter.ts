@@ -124,7 +124,7 @@ import {
 } from "@volli/shared";
 import type { SecretWaitPublisher } from "../secrets/wait-publisher";
 
-type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
+type AttachmentSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
   withdraw?(interactionId: string): Promise<void>;
   cancelPending?(): Promise<void>;
   dispose?(): Promise<void>;
@@ -251,15 +251,15 @@ export type PiRuntimeContext =
  * optional: it is the one door that keeps a hold from outliving its turn, and
  * a port built without it would keep holds silently.
  */
-export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+export type AttachmentBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 
 /**
  * The runtime's shell port with the one lifecycle door the adapter drives
  * (VC-270): the attachment ending. Required rather than optional, for
- * {@link DesktopBrowserPort}'s reason — it is what keeps a Session's shells
+ * {@link AttachmentBrowserPort}'s reason — it is what keeps a Session's shells
  * from outliving it.
  */
-export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+export type AttachmentShellPort = RuntimeShellPort & { dispose: () => void };
 
 /** Main-owned MCP port with attachment cleanup for its clients/transports. */
 /**
@@ -268,7 +268,7 @@ export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
  * the question to the person driving through the same parked-question
  * machinery a verb's confirmation uses.
  */
-export type DesktopMcpPort = {
+export type AttachmentMcpPort = {
   call(
     request: RuntimeMcpCall,
     signal: AbortSignal,
@@ -284,7 +284,7 @@ export type DesktopMcpPort = {
  * The six writes still take the hold, because the port does that for every
  * writer, hold tools or not.
  */
-function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
+function withoutHoldPair(port: AttachmentBrowserPort): AttachmentBrowserPort {
   // A shallow copy is safe here, unlike in `browserHoldPort`, because the
   // desktop's port is an object literal of closures (`createAgentBrowserPort`)
   // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
@@ -294,7 +294,7 @@ function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
 }
 
 /** The port without `find`, for a surface frozen before `browser_find` (VC-364). */
-function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
+function withoutFind(port: AttachmentBrowserPort): AttachmentBrowserPort {
   // Safe as a shallow copy for `withoutHoldPair`'s reasons.
   const { find: _find, ...withoutSearch } = port;
   return withoutSearch;
@@ -302,9 +302,9 @@ function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
 
 /** The port a frozen surface binds: exactly the optional tools it recorded. */
 function browserForSurface(
-  port: DesktopBrowserPort,
+  port: AttachmentBrowserPort,
   surface: { holdPair: boolean; find: boolean },
-): DesktopBrowserPort {
+): AttachmentBrowserPort {
   const held = surface.holdPair ? port : withoutHoldPair(port);
   return surface.find ? held : withoutFind(held);
 }
@@ -390,7 +390,7 @@ export interface PiAdapterOptions {
      */
     sessionId: string;
     attachmentId: string;
-  }) => DesktopBrowserPort;
+  }) => AttachmentBrowserPort;
   /**
    * The desktop's background shell capability for one Session (VC-270),
    * scoped on {@link resolveBrowserPort}'s terms and resolved once per
@@ -409,7 +409,7 @@ export interface PiAdapterOptions {
     sessionId: string;
     attachmentId: string;
     workspacePath: string;
-  }) => DesktopShellPort;
+  }) => AttachmentShellPort;
   /**
    * The Session's decision port (VC-478), bound to the Session and its project
    * by the host. Absent means a Session whose frozen surface names `classify`
@@ -422,7 +422,7 @@ export interface PiAdapterOptions {
     /** Output filtering is universal; requesting/injection stays frozen membership. */
     allowInjection: boolean;
     wait: SecretWaitPublisher;
-  }) => DesktopSecretPort;
+  }) => AttachmentSecretPort;
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -434,7 +434,7 @@ export interface PiAdapterOptions {
     attachmentId: string;
     workspacePath: string;
     mcpTools: readonly McpToolDefinition[];
-  }) => DesktopMcpPort;
+  }) => AttachmentMcpPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -877,14 +877,14 @@ interface PiBindingOptions {
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
-  browser: DesktopBrowserPort | undefined;
+  browser: AttachmentBrowserPort | undefined;
   /** The Session's scoped background shell capability; `undefined` is "no shells". */
-  shell: DesktopShellPort | undefined;
+  shell: AttachmentShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
   resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
-  mcp: DesktopMcpPort | undefined;
+  mcp: AttachmentMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -899,11 +899,11 @@ class PiBinding implements BindingHandle {
   readonly #carry: ReturnType<typeof piContextCarry>;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
-  readonly #browser: DesktopBrowserPort | undefined;
-  readonly #shell: DesktopShellPort | undefined;
+  readonly #browser: AttachmentBrowserPort | undefined;
+  readonly #shell: AttachmentShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
-  readonly #secret: DesktopSecretPort | undefined;
-  readonly #mcp: DesktopMcpPort | undefined;
+  readonly #secret: AttachmentSecretPort | undefined;
+  readonly #mcp: AttachmentMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;

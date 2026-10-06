@@ -25,7 +25,7 @@
 import type Database from "better-sqlite3";
 import { admitSearchEndpoint } from "@volli/agent-runtime";
 
-import { prepared } from "@volli/host-core/db/prepared";
+import { prepared } from "../db/prepared";
 import type {
   KeyedWebAccessProvider,
   WebAccessProvider,

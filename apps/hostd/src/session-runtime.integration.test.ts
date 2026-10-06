@@ -20,20 +20,16 @@ import {
   scriptedProvider,
   type ScriptedReply,
 } from "../../../packages/agent-runtime/test-fixtures/scripted-provider";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { listRunsForTicket } from "@volli/host-core/db/automations-repo";
-import { createAutomationEngine } from "@volli/host-core/automations/engine";
-import { SqliteAutomationLedger } from "@volli/host-core/automations/sqlite-ledger";
+import { insertProject, insertTicket, listRunsForTicket } from "@volli/host-core/db";
+import { createAutomationEngine, SqliteAutomationLedger } from "@volli/host-core/automations";
 import { isLiveHost, type LiveHostCore } from "@volli/host-core";
-import { resetRetentionWatcherForTest } from "@volli/host-core/retention-runtime";
 import {
   fileSecretKey,
   SecretStore,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,
 } from "@volli/host-core/secrets";
-import { testProject, testTicket } from "@volli/host-core/db/test-helpers";
+import { resetRetentionWatcherForTest, testProject, testTicket } from "@volli/host-core/testing";
 import { startHostd, type RunningHostd } from "./hostd";
 import { headlessRuntimePaths } from "./runtime-paths";
 import { hostdVenue } from "./venue";

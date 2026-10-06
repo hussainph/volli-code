@@ -27,6 +27,11 @@
  * never stops a host from booting.
  */
 
+import type { SecretKeyRefusal } from "@volli/shared";
+
+/** A client is told the refusal, so it is client wire vocabulary (`@volli/shared`, VC-632). */
+export type { SecretKeyRefusal } from "@volli/shared";
+
 /** Seals and opens the secret store's file. Electron's `safeStorage` has this shape. */
 export interface SecretKeyPort {
   /** Whether sealing can work at all here. False means fail closed, never plaintext. */
@@ -43,37 +48,6 @@ export interface SecretKeyPort {
    */
   probe?(): void;
 }
-
-/** Why a secret key could not be used. Each one has a fix a person can make. */
-export type SecretKeyRefusal =
-  /** The key file grants group or other users any access. */
-  | "too-open"
-  /** The key file belongs to another user. */
-  | "wrong-owner"
-  /** The key path names something other than a regular file. */
-  | "not-a-file"
-  /** The key file holds something other than one base64-encoded 32-byte key. */
-  | "malformed"
-  /** The key file could not be read or written. */
-  | "unreadable"
-  /**
-   * The key file's filesystem cannot make hard links (some FUSE, s3fs and
-   * container volumes), so Volli cannot create the key there atomically.
-   */
-  | "no-hard-links"
-  /** Sealed secrets exist and their key file does not. */
-  | "missing"
-  /** The key file is not the key the secrets were sealed with. */
-  | "wrong-key"
-  /** The secrets were sealed by a different adapter (the macOS keychain). */
-  | "other-adapter"
-  /**
-   * The key backend cannot open the key now: the OS keychain is locked,
-   * denied access, unavailable, or no longer holds the key.
-   */
-  | "unavailable"
-  /** `VOLLI_SECRET_KEY_FILE` is not an absolute path. */
-  | "relative-path";
 
 /**
  * A secret key a person has to fix before stored secrets open or save. The

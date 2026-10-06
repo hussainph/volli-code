@@ -22,23 +22,12 @@
  * tickets and compatibility gates (VC-645, VC-646). The families are fixed
  * here so each cutover is additive.
  */
+import type { CredentialFamily } from "@volli/shared";
+
 import { isSecretName } from "./store";
 
-export type CredentialFamily =
-  /** A person's Project or Always Session secret: an environment variable. */
-  | "session-env"
-  /** A web search provider's API key. */
-  | "web-search"
-  /** One MCP server's stored values and OAuth record, bound to its endpoint. */
-  | "mcp"
-  /** One model provider's Pi credential: an API key or an OAuth grant. */
-  | "pi-provider"
-  /** This host's own private key material (M2 pairing). */
-  | "host-private"
-  /** A paired device's verifier, bound to the host, workspace and device. */
-  | "device-verifier"
-  /** A worker's verifier, bound to the host, workspace and worker. */
-  | "worker-verifier";
+/** A client is told which families are unavailable (`@volli/shared`, VC-632). */
+export type { CredentialFamily } from "@volli/shared";
 
 /** Every family, in a stable order. */
 export const CREDENTIAL_FAMILIES: readonly CredentialFamily[] = [

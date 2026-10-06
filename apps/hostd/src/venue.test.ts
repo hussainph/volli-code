@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type Database from "better-sqlite3";
 import type { SessionEventProvenance, SessionExecutionVenue } from "@volli/shared";
-import { openVolliDb } from "@volli/host-core/db";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
-import { throwTransactionViolation } from "@volli/host-core/db/transaction-gate";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control";
-import { closeStaleAttachments } from "@volli/host-core/session-runtime/boot-recovery";
+import { openVolliDb, insertProject, throwTransactionViolation } from "@volli/host-core/db";
+import {
+  openTestDb,
+  testProject,
+  type TestDb,
+  createSqliteSessionLedger,
+} from "@volli/host-core/testing";
+import { closeStaleAttachments } from "@volli/host-core/session-runtime";
 // hostd does not depend on the engine package; host-core's own copy is the one it runs.
 import {
   createSessionEngine,

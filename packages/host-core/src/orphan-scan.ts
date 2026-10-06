@@ -18,8 +18,8 @@
  * scan supersedes the older revision, because a proposal a person reviewed
  * minutes ago describes a world that has since moved.
  */
-import { scanOrphans } from "@volli/host-core/worktree";
-import type { OrphanScanOptions, OrphanScanReport, WorktreeDeps } from "@volli/host-core/worktree";
+import { scanOrphans } from "./worktree";
+import type { OrphanScanOptions, OrphanScanReport, WorktreePorts } from "./worktree";
 import type { OrphanCleanupPlanItem, OrphanCleanupRejectionCode } from "@volli/shared";
 
 /** The single in-flight/settled scan promise for this launch; `null` until first triggered. */
@@ -31,7 +31,7 @@ let cached: Promise<OrphanScanReport> | null = null;
  * vice versa) joins the existing promise rather than scanning again.
  */
 export function startOrphanScan(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   options: OrphanScanOptions = {},
 ): Promise<OrphanScanReport> {
   cached ??= scanOrphans(deps, options);
@@ -43,7 +43,7 @@ export function startOrphanScan(
  * the whole point of VC-284 — and mints a new revision, superseding the old one.
  */
 export function orphanScanReport(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   opts: { refresh?: boolean } & OrphanScanOptions = {},
 ): Promise<OrphanScanReport> {
   if (opts.refresh) cached = scanOrphans(deps, opts);

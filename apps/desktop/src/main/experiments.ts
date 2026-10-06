@@ -10,8 +10,7 @@ import {
   type ExperimentValues,
 } from "@volli/shared";
 
-import { getAppState, setAppState } from "@volli/host-core/db/app-state-repo";
-import { withTransaction } from "@volli/host-core/db/transaction-gate";
+import { getAppState, setAppState, withTransaction } from "@volli/host-core/db";
 
 /** Host-level settings, not workspace data; classification lives beside the registry. */
 export const EXPERIMENTS_APP_STATE_KEY = "volli:experimental-flags";

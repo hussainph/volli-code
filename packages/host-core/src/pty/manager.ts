@@ -45,7 +45,7 @@ import {
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
 } from "../worktree";
-import type { EnsureOutcome, RunGitAsync, SetupRun, WorktreeDeps } from "../worktree";
+import type { EnsureOutcome, RunGitAsync, SetupRun, WorktreePorts } from "../worktree";
 import { worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
@@ -213,18 +213,18 @@ export interface HarnessWorkspaceFilesInput {
 
 /**
  * What the terminal supervisor asks of the host it runs in (VC-560). Desktop
- * passes `desktopPtyHost()` (`apps/desktop/src/main/pty/ipc.ts`): the window
+ * passes `desktopPtyPorts()` (`apps/desktop/src/main/pty/ipc.ts`): the window
  * event bus, `worktree-host.ts`, and the harness-file writer, whose module
  * (`harness-workspace.ts`) has not moved into host-core yet. A headless host
  * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
  */
-export interface PtyHost {
+export interface PtyManagerPorts {
   /** Provenance only; desktop callers retain the local default. */
   readonly venue?: SessionExecutionVenue;
   /** Announces planning changes (`data-changed`) to every client. */
   readonly events: HostEventBus;
   /** The host's worktree bundle (`host.worktrees.deps`). */
-  worktreeDeps(db: Database.Database): WorktreeDeps;
+  worktreeDeps(db: Database.Database): WorktreePorts;
   /** Writes a worktree's per-harness hook files, reporting each one it refused. */
   ensureHarnessWorkspaceFiles(
     input: HarnessWorkspaceFilesInput,
@@ -245,8 +245,8 @@ const TERMINAL_VENUE = { id: "local", kind: "local" as const };
  * field keeps the default its positional parameter had.
  */
 export interface PtyManagerOptions {
-  /** What this supervisor asks of its host ({@link PtyHost}). */
-  readonly host: PtyHost;
+  /** What this supervisor asks of its host ({@link PtyManagerPorts}). */
+  readonly host: PtyManagerPorts;
   /**
    * The app database, or `null` when it failed to open. Every session
    * persists a durable record, so with no db `create` fails outright
@@ -293,7 +293,7 @@ export interface PtyManagerOptions {
    */
   readonly concurrencyEnvReader?: SessionConcurrencyEnvReader | null;
   /**
-   * The venue terminal provenance records. Wins over {@link PtyHost.venue};
+   * The venue terminal provenance records. Wins over {@link PtyManagerPorts.venue};
    * absent, the host's venue applies, else desktop's `local`/`local`.
    */
   readonly venue?: SessionExecutionVenue;
@@ -368,7 +368,7 @@ export class PtyManager {
    */
   private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
-  private readonly host: PtyHost;
+  private readonly host: PtyManagerPorts;
   private readonly db: Database.Database | null;
   private readonly dbError: string;
   private readonly sessionEngine: SessionEngine | null;

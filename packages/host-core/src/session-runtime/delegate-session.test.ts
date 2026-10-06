@@ -53,10 +53,10 @@ import {
 import type { DelegateSessionPorts } from "./delegate-session";
 import type { SessionStartInput } from "./sessions";
 import { createTicketSessionDelegationStore } from "./delegation-store";
-import { createSqliteSessionLedger } from "@volli/host-core/session-control/sqlite-ledger";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { insertSession } from "../session-control/test-support";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testSession } from "../db/test-helpers";
 
 const PARENT = "aaaaaaaa-0000-0000-0000-000000000000";
 const CHILD = "bbbbbbbb-0000-0000-0000-000000000000";

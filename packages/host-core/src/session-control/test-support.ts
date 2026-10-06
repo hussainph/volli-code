@@ -10,7 +10,7 @@
 import type Database from "better-sqlite3";
 import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
-import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {
   terminalNativeReference,
   terminalSessionRecord,

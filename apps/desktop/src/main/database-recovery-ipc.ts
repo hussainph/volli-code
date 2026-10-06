@@ -1,9 +1,5 @@
 import type { DatabaseOpenFault } from "../ipc/contract";
-import {
-  DatabaseRecovery,
-  NO_CLEAN_BACKUP,
-  RecoveryFailure,
-} from "@volli/host-core/database-recovery";
+import { DatabaseRecovery, NO_CLEAN_BACKUP, RecoveryFailure } from "@volli/host-core/maintenance";
 import { DATABASE_RECOVERY_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
 

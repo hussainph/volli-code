@@ -32,9 +32,11 @@ import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
 import type { IpcHandlerTable } from "../ipc-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "../ipc-registry";
-import type { PendingArmedRunCoordinator } from "@volli/host-core/automations/pending-armed-runs";
-import type { AutomationRunner } from "@volli/host-core/automations/run";
-import type { AutomationService } from "@volli/host-core/automations/service";
+import type {
+  PendingArmedRunCoordinator,
+  AutomationRunner,
+  AutomationService,
+} from "@volli/host-core/automations";
 
 export interface AutomationIpcDeps {
   /** Command/event/projection application service; absent only during a degraded boot. */

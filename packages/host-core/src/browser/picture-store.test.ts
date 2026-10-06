@@ -4,7 +4,7 @@ import {
   BROWSER_PICTURE_LIVE_LIMIT,
   BrowserPictureStore,
   type BrowserPictureRecord,
-  type BrowserPictureStoreDependencies,
+  type BrowserPictureStorePorts,
 } from "./picture-store";
 
 /**
@@ -37,7 +37,7 @@ function store(
     persist?: ReturnType<typeof disk>["persist"] | null;
     now?: () => number;
     firstId?: number;
-  } & Partial<Pick<BrowserPictureStoreDependencies, "persistLimit" | "persistMaxAgeMs">> = {},
+  } & Partial<Pick<BrowserPictureStorePorts, "persistLimit" | "persistMaxAgeMs">> = {},
 ): { pictures: BrowserPictureStore; persist: ReturnType<typeof disk>["persist"] } {
   let nextId = options.firstId ?? 0;
   // Always built, so the fixture's shape does not change with the option; only

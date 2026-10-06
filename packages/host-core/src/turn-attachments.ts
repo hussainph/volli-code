@@ -36,8 +36,8 @@ import { materializeBlobs } from "./blob-materialize";
 import { readBlob } from "./blob-store";
 import { getBlob, listMaterializableLinks } from "./db/blobs-repo";
 
-import type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";
-export type { TurnAttachments } from "@volli/host-core/session-runtime/turn-attachments";
+import type { TurnAttachments } from "./session-runtime/turn-attachments";
+export type { TurnAttachments } from "./session-runtime/turn-attachments";
 
 const EMPTY: TurnAttachments = { note: "", images: [] };
 

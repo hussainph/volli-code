@@ -8,12 +8,12 @@ import {
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import { createCheckpointFailureReporter } from "@volli/host-core/session-control";
+import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
-import { createDesktopSessionLocationResolver } from "./location";
+import { createSessionLocationResolver } from "./location";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
-export interface DesktopSessionRuntimeOptions {
+export interface HostSessionRuntimeOptions {
   db: Database.Database;
   venue?: SessionExecutionVenue;
   events: HostEventBus;
@@ -40,9 +40,7 @@ export interface DesktopSessionRuntimeOptions {
 }
 
 /** Composes the transport-neutral Session runtime with the desktop's durable executor. */
-export function createDesktopSessionRuntime(
-  options: DesktopSessionRuntimeOptions,
-): HostedSessionRuntime {
+export function createHostSessionRuntime(options: HostSessionRuntimeOptions): HostedSessionRuntime {
   const now = options.now ?? Date.now;
   const nextId = options.nextId ?? randomUUID;
   // Runtime write-path diagnostics; the Sessions module owns the engine's
@@ -52,7 +50,7 @@ export function createDesktopSessionRuntime(
     engine: options.sessionEngine,
     executor: options.executor,
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
-    locations: createDesktopSessionLocationResolver(
+    locations: createSessionLocationResolver(
       options.db,
       { events: options.events },
       {
@@ -67,7 +65,7 @@ export function createDesktopSessionRuntime(
   });
 }
 
-export { createDesktopSessionLocationResolver } from "./location";
+export { createSessionLocationResolver } from "./location";
 export {
   createFileTranscriptArtifactStore,
   FileTranscriptArtifactStore,

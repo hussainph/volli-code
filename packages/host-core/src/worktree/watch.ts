@@ -21,15 +21,15 @@ import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
 import type { PrCheck, TicketRetentionState } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { prepared } from "../db/prepared";
 import {
   listRetentionCandidates,
   listTrimCandidates,
   updateTicketFields,
   type TicketRow,
-} from "@volli/host-core/db/tickets-repo";
+} from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import {
@@ -38,8 +38,8 @@ import {
   reclaimIfStale,
   retentionTtlMs,
   trimFinishedWorktree,
-  type ReclaimDeps,
-  type TrimFinishDeps,
+  type ReclaimPorts,
+  type TrimFinishPorts,
 } from "./retention";
 
 export type { TicketRetentionState } from "@volli/shared";
@@ -124,7 +124,7 @@ export function createRetentionStore(): RetentionStore {
 // --- poll deps + step -------------------------------------------------------
 
 /** The poll step's injected seams — DB, network, clock, and notify/broadcast callbacks. */
-export interface RetentionPollDeps {
+export interface RetentionPollPorts {
   db: Database.Database;
   net: RunNet;
   /** Injected clock (never `Date.now()` inline) — the TTL and readiness read it. */
@@ -145,13 +145,13 @@ export interface RetentionPollDeps {
    * the pure read it has always been: nothing is deleted, the prompts still
    * appear, and the only thing lost is the automatic disk reclaim.
    */
-  reclaim?: ReclaimDeps;
+  reclaim?: ReclaimPorts;
   /**
    * The trim-on-finish pass (VC-340). Absent — in tests, and in a degraded boot
    * that could not build the worktree seams — leaves the poll exactly as it was:
    * no worktree gives up its ignored content, and nothing else changes.
    */
-  trim?: TrimFinishDeps;
+  trim?: TrimFinishPorts;
 }
 
 /** The poll cycle's outcome — the driver reads it to update backoff and broadcast. */
@@ -202,7 +202,7 @@ function observationChanged(a: RetentionObservation | undefined, b: RetentionObs
  * exists on disk, else the project checkout (the worktree may have been removed
  * on archive while the branch + `pr_url` are retained and still worth watching).
  */
-function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
+function ghCwd(deps: RetentionPollPorts, ticket: TicketRow): string | null {
   if (ticket.worktree_path && existsSync(ticket.worktree_path)) return ticket.worktree_path;
   const project = getProjectById(deps.db, ticket.project_id);
   return project?.path ?? null;
@@ -221,7 +221,7 @@ function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
  * keeps its previous observation. Never throws.
  */
 export async function pollRetention(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   store: RetentionStore,
 ): Promise<PollResult> {
   const result: PollResult = { changed: false, attempted: 0, failed: 0 };
@@ -366,7 +366,7 @@ export async function pollRetention(
  * rest of the pass.
  */
 async function runTrimPass(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   mergedThisCycle: ReadonlySet<string>,
 ): Promise<boolean> {
   const trim = deps.trim;
@@ -406,7 +406,7 @@ async function runTrimPass(
  * Returns whether anything changed, so the caller broadcasts.
  */
 async function maybeReclaim(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   ticket: TicketRow,
   prState: "open" | "merged" | "closed" | null,
 ): Promise<boolean> {
@@ -439,7 +439,7 @@ async function maybeReclaim(
  * means DISCOVER naturally retries the stamp on the next poll — no separate
  * retry bookkeeping needed.
  */
-function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: string): boolean {
+function stampDiscoveredPr(deps: RetentionPollPorts, ticket: TicketRow, url: string): boolean {
   try {
     const now = deps.now();
     const write = deps.db.transaction(() => {
@@ -486,7 +486,7 @@ const EMPTY_OBSERVATION: RetentionObservation = {
  * toggle or dismissal is reflected instantly, between polls.
  */
 export function getRetentionState(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   store: RetentionStore,
   ticketId: string,
 ): TicketRetentionState | null {
@@ -547,7 +547,7 @@ export class RetentionWatcher {
   private started = false;
 
   constructor(
-    private readonly deps: RetentionPollDeps,
+    private readonly deps: RetentionPollPorts,
     private readonly config: RetentionWatchConfig,
   ) {}
 

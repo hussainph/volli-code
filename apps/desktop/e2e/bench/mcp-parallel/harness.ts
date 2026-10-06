@@ -5,7 +5,7 @@
  * The Pi-facing half — `createPiAgentRuntime` with a scripted provider and the
  * Agent Tool Surface — comes from the package's bench
  * surface (`@volli/agent-runtime/bench/mcp-parallel`). This file composes its
- * MCP side with main's own `desktopMcpDispatch`, fed an environment the way
+ * MCP side with main's own `hostMcpDispatch`, fed an environment the way
  * main is: the parallel arm sets `VOLLI_DEV_MCP_PARALLEL`, the sequential arm
  * sets nothing. Sessions are stamped, attachments bound through the budget,
  * and disposed, by the same code main runs, into the real desktop
@@ -36,10 +36,13 @@ import {
   type RuntimeMcpPort,
 } from "@volli/shared";
 
-import { openMcpProtocolClient } from "@volli/host-core/mcp/client";
-import { desktopMcpDispatch } from "@volli/host-core/mcp/dispatch-policy";
-import { MCP_PARALLEL_DEV_ENV } from "@volli/host-core/mcp/parallel-dev-config";
-import { McpSessionHost, type McpSessionHostOptions } from "@volli/host-core/mcp/session-host";
+import {
+  openMcpProtocolClient,
+  hostMcpDispatch,
+  MCP_PARALLEL_DEV_ENV,
+  McpSessionHost,
+  type McpSessionHostOptions,
+} from "@volli/host-core/integrations";
 import { startFixtureMcpServer, type FixtureMcpServer } from "./http-fixture";
 
 export type { BatchShape, DispatchArm };
@@ -269,7 +272,7 @@ export async function composeSession(scenario: {
     throw error;
   }
   const dispatchLog: string[] = [];
-  const dispatch = desktopMcpDispatch({
+  const dispatch = hostMcpDispatch({
     env: armEnvironment(
       scenario.arm,
       fixtures.map((fixture) => fixture.id),

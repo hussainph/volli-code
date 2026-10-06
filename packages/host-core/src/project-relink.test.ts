@@ -14,18 +14,14 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
 
-import { insertProject, getProjectById, listProjects } from "@volli/host-core/db/projects-repo";
-import { projectForCreate } from "@volli/host-core/agent-dispatch/resolution";
-import {
-  insertTicket,
-  listTicketsByProject,
-  listWorktreePathsByProject,
-} from "@volli/host-core/db/tickets-repo";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
-import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
-import type { FolderProbe, ProjectRelinkDeps } from "@volli/host-core/project-relink";
+import { insertProject, getProjectById, listProjects } from "./db/projects-repo";
+import { projectForCreate } from "./agent-dispatch/resolution";
+import { insertTicket, listTicketsByProject, listWorktreePathsByProject } from "./db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
+import { scriptedGit } from "./worktree/scripted-git";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
+import type { FolderProbe, ProjectRelinkPorts } from "./project-relink";
 
 let ctx: TestDb;
 
@@ -43,7 +39,7 @@ function present(folder: string): FolderProbe {
  * nothing is accidentally read as the same directory — and whose git and
  * directory moves always succeed.
  */
-function deps(overrides: Partial<ProjectRelinkDeps> = {}): ProjectRelinkDeps {
+function deps(overrides: Partial<ProjectRelinkPorts> = {}): ProjectRelinkPorts {
   return {
     db: ctx.db,
     probeFolder: async (path) => present(`dev:${path}`),

@@ -65,7 +65,7 @@ export interface SweepSpawnLedger {
   prune(): number;
 }
 
-export interface OrphanProcessDeps {
+export interface OrphanProcessPorts {
   ledger: SweepSpawnLedger;
   /** Every Ticket checkout on this machine, for attributing a cwd to a Ticket. */
   worktrees(): readonly WorktreeRef[];
@@ -126,7 +126,7 @@ function deliver(
 }
 
 export class OrphanProcessService {
-  readonly #deps: OrphanProcessDeps;
+  readonly #deps: OrphanProcessPorts;
   readonly #now: () => number;
   readonly #nextId: () => string;
   readonly #inventory: () => Promise<ProcessFact[]>;
@@ -137,7 +137,7 @@ export class OrphanProcessService {
   readonly #protectedPids: () => readonly number[];
   #current: ScanState | null = null;
 
-  constructor(deps: OrphanProcessDeps) {
+  constructor(deps: OrphanProcessPorts) {
     this.#deps = deps;
     this.#now = deps.now ?? Date.now;
     this.#nextId = deps.nextId ?? randomUUID;

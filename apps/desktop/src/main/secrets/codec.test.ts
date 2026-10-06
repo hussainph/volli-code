@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { fileSecretKey, SecretStore } from "@volli/host-core/secrets";
-import { SecretStore as N1SecretStore } from "@volli/host-core/secrets/test-support/n1/secrets/store";
+import { N1SecretStore } from "@volli/host-core/testing";
 import { keychainSecretCodec } from "./codec";
 
 /**

@@ -9,12 +9,12 @@ import {
   type HostAutomationsInput,
 } from "./automation-services";
 import { createAutomationEngine } from "./automations/engine";
-import { createAutomationService, type AutomationServiceDeps } from "./automations/service";
-import { createAutomationRunner, type AutomationRunnerDeps } from "./automations/run";
+import { createAutomationService, type AutomationServicePorts } from "./automations/service";
+import { createAutomationRunner, type AutomationRunnerPorts } from "./automations/run";
 import { createAutomationScheduler, type AutomationSchedulerPorts } from "./automations/scheduler";
 import {
   createPendingArmedRunCoordinator,
-  type PendingArmedRunCoordinatorDeps,
+  type PendingArmedRunCoordinatorPorts,
 } from "./automations/pending-armed-runs";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import { enabledAutomationIds } from "./automations/enablement";
@@ -135,11 +135,11 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
     log,
     sessionPorts,
     serviceDeps: () =>
-      vi.mocked(createAutomationService).mock.calls[0]![0] as AutomationServiceDeps,
-    runnerDeps: () => vi.mocked(createAutomationRunner).mock.calls[0]![0] as AutomationRunnerDeps,
+      vi.mocked(createAutomationService).mock.calls[0]![0] as AutomationServicePorts,
+    runnerDeps: () => vi.mocked(createAutomationRunner).mock.calls[0]![0] as AutomationRunnerPorts,
     pendingDeps: () =>
       vi.mocked(createPendingArmedRunCoordinator).mock
-        .calls[0]![0] as PendingArmedRunCoordinatorDeps,
+        .calls[0]![0] as PendingArmedRunCoordinatorPorts,
     schedulerPorts: () =>
       vi.mocked(createAutomationScheduler).mock.calls[0]![0] as AutomationSchedulerPorts,
   };

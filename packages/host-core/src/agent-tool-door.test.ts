@@ -48,19 +48,15 @@ import {
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForTicket,
-} from "@volli/host-core/db/automations-repo";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import {
-  getProjectAuthorityPolicy,
-  insertProject,
-  listProjects,
-} from "@volli/host-core/db/projects-repo";
-import { getTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { DelegateSessionError } from "@volli/host-core/session-runtime/delegate-session";
-import type { TicketSessionDelegationClaims } from "@volli/host-core/session-runtime/delegation-policy";
-import type { SessionStartInput } from "@volli/host-core/session-runtime/sessions";
-import { StructuredSessionsError } from "@volli/host-core/session-runtime/sessions";
+} from "./db/automations-repo";
+import { openTestDb, testProject, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
+import { getProjectAuthorityPolicy, insertProject, listProjects } from "./db/projects-repo";
+import { getTicket, insertTicket } from "./db/tickets-repo";
+import { DelegateSessionError } from "./session-runtime/delegate-session";
+import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
+import type { SessionStartInput } from "./session-runtime/sessions";
+import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Watches, WatchSessionInput } from "./watches";
 
 let ctx: TestDb | undefined;

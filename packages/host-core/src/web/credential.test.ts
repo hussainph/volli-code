@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
-import { readSecret } from "@volli/host-core/db/secrets-repo";
+import { openTestDb, type TestDb } from "../db/test-helpers";
+import { readSecret } from "../db/secrets-repo";
 import { BRAVE_SEARCH_KEY_SECRET, WebCredentialError, WebCredentialStore } from "./credential";
 
 const KEY = "BSA-super-secret-brave-key-42";

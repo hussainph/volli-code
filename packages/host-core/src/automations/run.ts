@@ -36,12 +36,12 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import {
   StructuredSessionsError,
   type SessionModelOverride,
   type Sessions,
-} from "@volli/host-core/session-runtime/sessions";
+} from "../session-runtime/sessions";
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
 export interface AutomationPromptSupply {
@@ -86,7 +86,7 @@ export type InstructionDeliveryResult = {
   } | null;
 };
 
-export interface AutomationRunnerDeps {
+export interface AutomationRunnerPorts {
   /** The transport-neutral command/event/projection core. */
   engine: AutomationEngine;
   /** Projection reads belong to the host, never to IPC. */
@@ -331,7 +331,7 @@ function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | n
   }
 }
 
-export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRunner {
+export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationRunner {
   const log = deps.log ?? ((message: string) => console.error(message));
   /**
    * A local fast-path latch keeps two clicks in one host from interleaving

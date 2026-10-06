@@ -12,8 +12,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
-import { writeSecret } from "@volli/host-core/db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
+import { writeSecret } from "@volli/host-core/db";
 import {
   CREDENTIAL_INVENTORY_FILE_NAME,
   CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
@@ -22,9 +22,12 @@ import {
   SealedInventory,
   type CredentialKeychain,
 } from "@volli/host-core/secrets";
-import { BRAVE_SEARCH_KEY_SECRET, WebCredentialStore } from "@volli/host-core/web/credential";
-import { WebCredentialMirror } from "@volli/host-core/web/credential-mirror";
-import { WebAccessSettings } from "@volli/host-core/web/settings";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  WebCredentialMirror,
+  WebAccessSettings,
+} from "@volli/host-core/integrations";
 
 import { registerAcceptedQuitCoordinator } from "../quit-gate";
 import { observeKeychainUse, webSealingLifecycle } from "./sealing-lifecycle";

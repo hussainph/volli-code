@@ -1,4 +1,4 @@
-import type { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
+import type { BackgroundShellHost } from "@volli/host-core/session-runtime";
 import {
   agentTurnOpenWithin,
   liveShellWorktreeSites,
