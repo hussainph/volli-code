@@ -20,6 +20,7 @@
  */
 import {
   CATALOG_ENTRIES,
+  DESKTOP_CATALOG_ENTRIES,
   catalogActorAdmits,
   catalogActorOf,
   catalogLookup,
@@ -29,7 +30,9 @@ import {
 
 import { ADMITTED, refused, type AdmissionVerdict, type HandlerPolicy } from "./handler-map";
 
-const entryOf = catalogLookup(CATALOG_ENTRIES);
+// Both tiers: a desktop-only entry's catalog shape is its placement-derived
+// policy (`desktopCatalogEntry`), judged by the same rule as a public entry's.
+const entryOf = catalogLookup([...CATALOG_ENTRIES, ...DESKTOP_CATALOG_ENTRIES]);
 
 /** The policy actor a call's attributed actor is, or null for one no catalog entry admits. */
 function policyActorOf(call: HandlerCall): "user" | "session" | null {

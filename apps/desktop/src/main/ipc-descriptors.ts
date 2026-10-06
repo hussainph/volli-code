@@ -665,11 +665,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && typeof args[0] === "string",
     invalidError: "Invalid project id",
   },
-  "volli:project-reorder": {
-    guard: (args): args is IpcArgs<"volli:project-reorder"> =>
-      args.length === 1 && isStringArray(args[0]),
-    invalidError: "Invalid project order",
-  },
 
   "volli:ticket-create": {
     guard: (args): args is IpcArgs<"volli:ticket-create"> => {
@@ -1111,10 +1106,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     // input, so there is no shape to get wrong.
     guard: (args): args is IpcArgs<"volli:worktree-trim"> => args.length === 0,
     invalidError: "Invalid trim request",
-  },
-  "volli:worktree-trim-settings-get": {
-    guard: (args): args is IpcArgs<"volli:worktree-trim-settings-get"> => args.length === 0,
-    invalidError: "Invalid request",
   },
   "volli:worktree-trim-settings-set": {
     guard: (args): args is IpcArgs<"volli:worktree-trim-settings-set"> => {

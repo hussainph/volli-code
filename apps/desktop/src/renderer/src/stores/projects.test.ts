@@ -15,6 +15,12 @@ import {
 } from "./projects";
 import { projectScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
+// The default gateway's desktop-only command rides the Session RPC client (VC-608).
+const rpc = vi.hoisted(() => ({ reorder: vi.fn(async () => null) }));
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({ project: { reorder: { mutate: rpc.reorder } } }),
+}));
+
 import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 
@@ -1582,11 +1588,10 @@ describe("createProjectsStore() with the default gateway", () => {
     expect(checkFolder).toHaveBeenCalledWith("p1");
   });
 
-  it("commitReorder calls window.api.projects.reorder", async () => {
-    const reorder = vi.fn(async () => ({ ok: true as const }));
+  it("commitReorder calls project.reorder over the Session RPC client", async () => {
     vi.stubGlobal("window", {
       api: {
-        projects: { create: vi.fn(), remove: vi.fn(), reorder },
+        projects: { create: vi.fn(), remove: vi.fn() },
         terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
         appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
       },
@@ -1599,7 +1604,7 @@ describe("createProjectsStore() with the default gateway", () => {
 
     await store.getState().commitReorder(previousOrder);
 
-    expect(reorder).toHaveBeenCalledWith([b.id, a.id]);
+    expect(rpc.reorder).toHaveBeenCalledWith({ orderedIds: [b.id, a.id] });
   });
 
   it("select calls window.api.appState.set with the selection payload", async () => {
