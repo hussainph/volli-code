@@ -1,3 +1,4 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import type { SessionOrigin } from "@volli/shared";
 import {
   advanceSessionProjection,
@@ -38,7 +39,6 @@ import type {
   UnstampedCommandReceipt,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import { SessionEngineCommandConflictError } from "./session-engine";
 import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine";
 import { stopSessionById, type StopSessionOutcome } from "./session-stop";
 import type {
@@ -545,22 +545,19 @@ export class SessionRuntimeConflictError extends Error {
 
 /**
  * A command id already in flight, sent again with a different intent: the
- * runtime's half of {@link SessionEngineCommandConflictError}, answered
+ * runtime's half of `SessionEngineCommandConflictError`, answered
  * `CONFLICT` / `command-conflict` on the wire.
  */
-export class SessionRuntimeCommandConflictError extends SessionRuntimeConflictError {
+export class SessionRuntimeCommandConflictError
+  extends SessionRuntimeConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
   constructor(message: string) {
     super(message);
     this.name = "SessionRuntimeCommandConflictError";
   }
-}
-
-/** Whether an error is a command id reused with a different intent, from the engine or the runtime. */
-export function isSessionCommandConflict(error: unknown): boolean {
-  return (
-    error instanceof SessionEngineCommandConflictError ||
-    error instanceof SessionRuntimeCommandConflictError
-  );
 }
 
 interface BindingRecord {

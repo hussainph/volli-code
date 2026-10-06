@@ -1,5 +1,5 @@
 import { TRPCError, tracked } from "@trpc/server";
-import type { JsonUnsafeProcedures, WorkspaceId } from "@volli/host-protocol";
+import type { JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 import {
   isSessionStreamFrame,
@@ -43,27 +43,40 @@ import {
 import { z } from "zod";
 
 import {
-  catalogRouter,
   HostProcedureError,
-  hostProcedure,
-  workspaceProcedure,
+  PROJECT_RESOURCE,
+  type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
-  type RouterCaller,
-  type WorkspaceResource,
 } from "./catalog";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
+import {
+  catalogRouter,
+  hostProcedure,
+  sessionResource,
+  workspaceProcedure,
+} from "./session-catalog";
 
 export {
-  assertCatalogBound,
+  createCatalogBuilders,
   hostErrorOf,
   HostProcedureError,
   LOCAL_DESKTOP_CALLER,
+  PROJECT_RESOURCE,
+  type CatalogBuildersOptions,
+  type CatalogCallerContext,
+  type CatalogDiagnostics,
   type CatalogMismatch,
+  type CommandKindEnvelope,
+  type LocalRouterCaller,
+  type NetworkRouterCaller,
   type ProcedurePaths,
   type RouterCaller,
   type WorkspaceResource,
+  type ResourceRelation,
+  type WorkspaceResources,
 } from "./catalog";
+export { SESSION_RESOURCE } from "./session-catalog";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
@@ -186,20 +199,12 @@ export interface RpcProcedurePerformanceObserver {
   record(sample: RpcProcedurePerformanceSample): void;
 }
 
-export interface SessionRouterContext {
-  /**
-   * Who is calling and what it is authorized for, as the door authenticated
-   * it (VC-564). Every procedure's policy reads it; no input can override it.
-   * The desktop's own window is {@link LOCAL_DESKTOP_CALLER}.
-   */
-  caller: RouterCaller;
-  /**
-   * The Workspace (project) a Session belongs to, or null when there is no
-   * such Session: the one read a workspace-scoped Session call makes before its
-   * handler, and only for a caller bound to one Workspace. Absent, such a
-   * caller is refused every Session (`NOT_FOUND` / `workspace-unknown`).
-   */
-  sessionWorkspace?: (sessionId: string) => WorkspaceId | null | Promise<WorkspaceId | null>;
+/**
+ * The Session router's context: the catalog's caller and resource ports
+ * ({@link CatalogCallerContext}; its `resourceWorkspace` answers `session`
+ * resources), plus the Session runtime and its facades.
+ */
+export interface SessionRouterContext extends CatalogCallerContext {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
   readModelAccessDefaults?: () => ModelAccessDefaults;
@@ -776,7 +781,7 @@ export function createSessionRouter() {
           autoSelect: z.object({ request: z.string().max(200_000) }).optional(),
         }),
         // The Workspace is the project the Session is born in.
-        (input) => ({ projectId: input.projectId }),
+        (input) => ({ kind: PROJECT_RESOURCE, id: input.projectId }),
       ).mutation(async ({ ctx, input }) => {
         if (!ctx.createSession) {
           unavailable("Sessions are unavailable on this transport");
@@ -786,7 +791,7 @@ export function createSessionRouter() {
       attach: workspaceProcedure(
         "sessions.attach",
         z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }),
-        (input) => ({ sessionId: input.sessionId }),
+        sessionResource,
       ).mutation(async ({ ctx, input }) => {
         if (!ctx.attachSession) {
           unavailable("Sessions are unavailable on this transport");
@@ -1032,7 +1037,7 @@ export function createSessionRouter() {
         commandRequestSchema,
         // `session.create`, the one kind that names no Session, is withheld
         // before this resolves; every other kind requires `sessionId`.
-        (input) => ({ sessionId: input.sessionId! }),
+        (input) => sessionResource({ sessionId: input.sessionId! }),
       ).mutation(async ({ ctx, input }) => {
         // The start kinds are refused before this line on every door: the
         // catalog entry withholds them (`refusedIntents`), whoever asks.
@@ -1116,11 +1121,6 @@ export function createSessionRouter() {
         }),
     },
   });
-}
-
-/** A Session call's resource: the Session it names. */
-function sessionResource(input: { sessionId: string }): WorkspaceResource {
-  return { sessionId: input.sessionId };
 }
 
 function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSessionCommandResult {

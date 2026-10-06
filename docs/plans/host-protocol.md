@@ -73,13 +73,19 @@ Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newl
 **One entry per domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler each door's projection resolves to: `AGENT_VERB_TABLE` for socket verbs, one tRPC procedure for router commands. Both grow to cover human commands; no second table appears beside them. An entry carries:
 
 - its dot-name, `key`: one identity on every door, chosen once. A router entry's key is its procedure path (`session.snapshot`);
-- its actor policy, `actor`: `user` (the person: a paired device, the desktop's own window, a VC-623 operator) or `any` (Sessions too). A router judges these two; `session` (per-project policy) and `role` (a frozen Role bundle) are refused at load until a router can consult them. Tiers stay derived from access modes and actor requirement, never stored (VC-92). Human and agent policy may differ for one command;
+- its actor policy, per door. `actor` is what the agent doors (socket, tools, CLI) judge, unchanged. A router judges `catalog.actor`, defaulting to `actor` (`catalogActorOf`), and it must be a `CatalogActor`:
+  - `user`: the person (a paired device, the desktop's own window, a VC-623 operator);
+  - `any`: Sessions too, on any resource in their Workspace;
+  - `session-own`: the person, or a Session the area's own policy lets act on every **subject** the call names. After the Workspace check, the router asks the context's `sessionMayAct(resource, sessionId)` predicate about each subject. No predicate, or no subject at all, admits no Session (fail closed). Workspace entries only.
+
+  `session` (per-project policy) and `role` (a frozen Role bundle) are agent-door policies no router consults, so they are refused at load as a router actor. A socket verb whose `actor` is `session` declares its router policy in `catalog.actor` instead. Human and agent policy may differ for one command, and that one entry serves both doors. Tiers stay derived from access modes and the agent `actor`, never stored (VC-92);
 - its `catalog` declaration (`VerbCatalogDeclaration`):
   - `scope`: `workspace` (the call names a resource, authorized before the handler runs; cross-Workspace is `NOT_FOUND`) or `host` (host-level state, no Workspace data; person-only unless the actor is `any`, D8);
   - `idempotency`: `command-id` (intent-recording: `HostCommandRequest`, durable receipt), `natural` (a repeat leaves the same state) or `read`;
-  - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own;
+  - `actor` (optional): the router's actor policy, above;
+  - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own. Its input must be a `{ command: { kind } }` envelope: `workspaceProcedure` demands one at the type (`CatalogKeyRefusingIntents`) and refuses another at construction;
 - its access modes: `hostApi` is the WebSocket projection; an entry with a `catalog` and no access mode is policed but served by no network door (the lab's `labDiagnostics.*`);
-- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in `LEGACY_UNVALIDATED_OUTPUTS` (`catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
+- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in the Session family's `legacyUnvalidatedOutputs` (`session-catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
 - exactly one handler: the procedure's resolver, or the socket binding.
 
 **A worked example**, the entry behind `settings.setExperiment`, with both validators:
@@ -113,36 +119,99 @@ A workspace entry names its resource with its input schema; `session.snapshot` (
 snapshot: workspaceProcedure(
   "session.snapshot",                      // typed to the catalog's workspace keys
   z.object({ sessionId: nonEmptyString }), // the input validator
-  sessionResource,                         // input -> { sessionId }: what to authorize
+  sessionResource,                         // input -> { kind: "session", id: sessionId }: what to authorize
 ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
 ```
 
 **At dispatch**, every call runs the same checks in this order, before its handler (`packages/session-rpc/src/catalog.ts`):
 
 1. the caller is the local desktop or a network actor `isHostActor` accepts, and a network caller's `current()` answers `true` now; else `UNAUTHORIZED` / `credential-invalid`;
-2. the caller's actor, mapped through `HOST_ACTOR_POLICY`, meets the entry's `actor`, and a network caller reaches only `hostApi` entries; else `FORBIDDEN` / `verb-refused`;
+2. the caller's actor, mapped through `HOST_ACTOR_POLICY`, meets the entry's router actor (`catalogActorAdmits`), and a network caller reaches only `hostApi` entries; else `FORBIDDEN` / `verb-refused`. A Session on a `session-own` entry is admitted here and judged per resource at step 6;
 3. the input parses (`BAD_REQUEST`);
 4. a withheld intent is refused (`FORBIDDEN` / `verb-refused`);
-5. a workspace resource is resolved and authorized: a project id is its own Workspace, a Session through the context's `sessionWorkspace` port. Foreign and absent answer the same `NOT_FOUND` / `workspace-unknown`, with the same message. The desktop's own window owns every Workspace, so it skips this step and reads nothing new.
+5. **every** resource the call names is resolved and must be in the caller's Workspace. A `project` is its own Workspace; any other kind goes through the context's `resourceWorkspace` port. Foreign, absent, an unanswered kind and a call naming nothing all answer the same `NOT_FOUND` / `workspace-unknown`, with the same message;
+6. for a Session on a `session-own` entry, the context's `sessionMayAct` must answer `true` for every **subject** resource (references are not judged), with at least one subject and a predicate present; else `FORBIDDEN` / `verb-refused`. The resources are already known to be in its Workspace, so this reveals nothing.
 
-After the handler, an engine or runtime command-id conflict becomes `CONFLICT` / `command-conflict`.
+The desktop's own window owns every Workspace, so it skips steps 5 and 6 and reads nothing new.
+
+After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@volli/shared`, where every ledger can reach it without depending on a protocol package) becomes `CONFLICT` / `command-conflict`. The router recognizes the brand, never a ledger's own classes. The Session engine's and runtime's command-id conflicts carry it; an area's intent ledger brands the error it throws when a command id is reused with a different intent, and only that one.
+
+**Resources, open per area.** A resolver returns every resource the input names: `readonly WorkspaceResource[] | WorkspaceResource | null`, where `WorkspaceResource` is `{ kind, id, relation? }` and `kind` is an open string. An area adds its own kind (`ticket`, `terminal`, …) by naming it in its resolver and answering it in its context's `resourceWorkspace` port and `sessionMayAct` predicate; nothing in `@volli/session-rpc` changes. `relation` is `subject` (the default: what the command acts on) or `reference` (only pointed at, like the ticket a move lands after). **Every** named resource gets the Workspace check; only subjects are judged by `sessionMayAct`. Never drop a reference from the resolver to avoid the policy check, since that also drops its Workspace check: mark it `reference`.
+
+**Session authority is the area's policy, never an owner field.** Several Sessions may work one ticket, and coordination authority is per-project policy. Implement `sessionMayAct` from the area's existing policy (for example, ticket coordination rules), never from a single owner field. Name the noun the command acts on as the subject, not its project: a `project` resource is a Workspace, so it never makes a sensible `session-own` subject. "Absent ≡ cross-Workspace" holds by construction: the only path to the handler is every resource resolving to exactly the caller's Workspace id. Anything else (null, a foreign id, a kind no port answers, no port at all) takes the one refusal.
+
+**Subscriptions dispatch once.** Grants are checked at every dispatch, but a subscription dispatches once: the checks run when it opens, not per event. Closing streams when a credential is revoked, or re-checking per resume, belongs to VC-663's listener, which owns connection lifetime.
 
 **Exhaustive, at compile time and at construction.**
 
-- `hostProcedure(key)` and `workspaceProcedure(key, input, resource)` take only catalog keys of their scope, so a procedure with no entry, or a workspace procedure with no resource, does not compile.
-- `SessionRouterCatalogBinding` asserts `CatalogMismatch<ProcedurePaths<router>>` is `never`: no procedure without an entry and no entry without a procedure. The keys that disagree are named in the error. When a second area router lands, the assertion takes the union of every router's paths.
+- `hostProcedure(key)` and `workspaceProcedure(key, input, resources)` take only catalog keys of their scope, so a procedure with no entry, or a workspace procedure with no resources, does not compile.
+- `SessionRouterCatalogBinding` asserts `CatalogMismatch<ProcedurePaths<router>>` is `never`: no procedure without an entry and no entry without a procedure. The keys that disagree are named in the error. When a second area router lands, the assertion moves to the composition root and takes the union of every router's paths (below).
 - `HostApiCatalogCoverage` fails a `hostApi` entry with no `catalog`; `catalogEntriesFrom` refuses one at load.
 - `catalogRouter` throws at construction on a procedure the builders did not make, one at another entry's path, one whose tRPC type contradicts its idempotency (`read` is a query or subscription; anything else is a mutation), or a query/mutation with no output schema that is not a named legacy exception.
 - **Provenance is private, never metadata.** Each builder call records, in a module-private `WeakMap`, the middleware that completes its entry's policy (admission for a host entry, Workspace authorization for a workspace entry), bound to that entry's key and to the exact middleware chain it built. `catalogRouter` accepts a procedure only if its chain begins with that chain at that entry's path. tRPC `meta` proves nothing (any module can `initTRPC` and set it): a bare procedure claiming an entry, a host procedure retagged as a workspace one, and a chain that runs anything before the policy are all refused at construction. A builder also refuses a key of the other scope at runtime, for a caller that cast past the types.
-- The tRPC instance never leaves `catalog.ts`, so there is no bare procedure builder.
+- Each builder family's tRPC instance never leaves its `createCatalogBuilders` call, and its provenance is its own: a family's `catalogRouter` accepts only procedures its own builders made. There is no bare procedure builder.
 
-**Adding a command** (what VC-565 onward copies):
+**Where area routers live.**
 
-1. Add or extend its Verb Registry entry: `key` = the procedure path, `actor`, `catalog: {scope, idempotency}`, `accessModes: ["hostApi"]` for a WebSocket command (beside `cli`/`tool` when other doors project it too). Add its row to `verb-registry.test.ts`'s tier table and catalog table.
-2. Build its procedure with `hostProcedure` or `workspaceProcedure` in the area's router, inside `catalogRouter`. Bind both validators in zod beside it, `.input(...)` and `.output(...)`: a new query or mutation with no output schema is refused at construction. Add any new port on the router context.
-3. `pnpm typecheck` names anything missing in either direction. A socket verb keeps its `AGENT_VERB_TABLE` binding; both doors must reach the same host-core function.
-4. Write its cases once in the area's `describeContract` (scope denial, policy denial, replay/conflict for `command-id`), so they run on every link.
-5. Delete the area's old per-channel IPC in the same PR (below).
+- **Builders.** `@volli/session-rpc` exports `createCatalogBuilders<Ctx extends CatalogCallerContext, Entry = Verb Registry>()`. Each area router calls it once with its own context type, and gets its own `hostProcedure`, `workspaceProcedure` and `catalogRouter`. The Session router's family is `session-catalog.ts`.
+- **Routers.** An area router lives at `packages/session-rpc/src/<area>-router.ts`, for example `board-router.ts` for VC-565. Its context is `CatalogCallerContext` (caller, `resourceWorkspace`, `sessionMayAct`, diagnostics) plus the area's ports.
+- **Composition.** The router that composes every area router, and the one binding assertion over the union of their paths, live in `packages/session-rpc/src/host-router.ts`, which VC-565 creates when the second router lands. Both doors mount that one router: desktop IPC through VC-608's bridge, and hostd's WebSocket.
+- **Layering (D2).** host-core takes no `@trpc/server`. A router handler never holds domain logic; it calls a context port. The app composition roots (`apps/desktop/src/main`, `apps/hostd`) wire each port to the host-core function the socket verb's `AGENT_VERB_TABLE` binding already calls. That's how "both doors reach the same host-core function" holds, with session-rpc depending on host-core's contract only through the ports it declares. Don't copy handler bodies into session-rpc, and don't add a fourth style.
+
+**Adding a command** (what VC-565 onward copies). The worked example is a test-only area router, `packages/session-rpc/src/example-area.test-support.ts`, proven by `example-area.test.ts` through the real builders. It declares a `ticket.create`-like and a `ticket.move`-like command. Follow it step by step:
+
+1. **Declare the entry** in `VERB_REGISTRY`. The example's entries are in `EXAMPLE_AREA_ENTRIES` so they need no registry row. A command both doors serve is **one** entry:
+
+   ```ts
+   {
+     key: "ticket.create",                   // one identity; the router path is `ticket.create`
+     accessModes: ["cli", "hostApi"],        // socket/CLI and WebSocket
+     actor: "session",                        // what the socket judges, unchanged
+     handler: { site: "main", id: "ticket.create" },
+     // ...listed, group, summary, options as for any verb
+     catalog: {
+       actor: "session-own",                  // what a router judges: the person, or a Session its policy lets act
+       scope: "workspace",
+       idempotency: "command-id",
+     },
+   }
+   ```
+
+   `catalogEntriesFrom` refuses a router actor it can't judge and `session-own` on a host entry. Keep the area's rows in one typed array beside the registry, spread into `VERB_REGISTRY`, so the family can be typed by exactly its own entries:
+
+   ```ts
+   // packages/shared/src/verb-registry.ts
+   export const BOARD_ENTRIES = [/* ticket.create, ticket.move, ... */] as const satisfies readonly VerbEntry[];
+   export const VERB_REGISTRY = [/* ... */, ...BOARD_ENTRIES, /* ... */] as const satisfies readonly VerbEntry[];
+
+   // packages/session-rpc/src/board-router.ts
+   createCatalogBuilders<BoardRouterContext, (typeof BOARD_ENTRIES)[number]>({ entries: BOARD_ENTRIES });
+   ```
+
+   A family that passes neither type nor entries is typed across the whole registry and could build another area's key. Add the entry's rows to `verb-registry.test.ts`'s tier and catalog tables.
+2. **Name its resources and ports.** Choose the area's resource kinds (`TICKET_RESOURCE = "ticket"`). Its context extends `CatalogCallerContext` with the area's ports (`ExampleAreaContext.tickets`) and answers `resourceWorkspace` and `sessionMayAct` for its kinds only, `null`/`false` for any other (`exampleAreaContext`). `sessionMayAct` comes from the area's existing policy: the example's ledger lets every Session coordinating on a ticket act on it. The composition root wires these to host-core.
+3. **Build the procedure** from the area's own family, `createCatalogBuilders<ExampleAreaContext, ExampleAreaEntry>()`, inside its `catalogRouter`. Give it both zod validators, and a resolver that names **every** resource the input addresses:
+
+   ```ts
+   move: workspaceProcedure(
+     "ticket.move",
+     z.object({ commandId, ticketId, afterTicketId: ticketId }),      // input validator
+     (input) => [
+       ticketResource(input.ticketId),                    // the subject: judged by sessionMayAct
+       ticketResource(input.afterTicketId, "reference"),  // a reference: Workspace-checked only
+     ],
+   )
+     .output(receiptSchema)                                           // output validator, required
+     .mutation(({ ctx, input }) => ctx.tickets.move(input)),          // the one handler: a port
+   ```
+
+   A new query or mutation with no `.output()` is refused at construction.
+4. **Brand the intent conflict.** A `command-id` entry's handler reaches an intent ledger. That ledger throws an error implementing `CommandIntentConflict` (`ExampleIntentConflictError`) when a command id is reused with a different intent, and answers the same receipt for the same intent.
+5. **Assert the binding.** `CatalogMismatch<ProcedurePaths<router>, keys>` must be `never` (`ExampleAreaCatalogBinding`; in production, the composition root's union assertion). `pnpm typecheck` names a key missing on either side. A socket verb keeps its `AGENT_VERB_TABLE` binding, and both doors reach the same host-core function (see Layering).
+6. **Write its cases.** The example proves, through the real builders: the person is admitted; any Session the policy lets act on the subject is admitted (two Sessions on one ticket); a Session it doesn't is `FORBIDDEN`/`verb-refused` before the handler; a Session may land after a ticket only someone else works on (a reference); a cross-Workspace reference is still `NOT_FOUND`/`workspace-unknown`, exactly as an absent one; same id with the same intent replays; and another intent is `CONFLICT`/`command-conflict`. An area writes these once in its `describeContract`, so they run on every link.
+7. **Delete the area's old per-channel IPC** in the same PR (below).
+
+When a socket verb gains a `command-id` entry, the socket door mints a `commandId` per request; that mechanism lands with VC-565, the first ticket with such an entry.
 
 **The handler is the whole command.** Post-commit effects belong to the handler or the host-core services it calls: the Done trim, armed arrivals, wake scopes, feed changes (F1). They never belong to a door. A door that needs extra behavior has found a missing field or a missing command.
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { isCommandIntentConflict } from "@volli/shared";
 import type {
   ObservabilityEvent,
   ObservabilitySink,
@@ -25,7 +26,6 @@ import {
   SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
   SessionEngineCommandConflictError,
-  isSessionCommandConflict,
   SessionRuntimeNotFoundError,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
@@ -5899,10 +5899,10 @@ it("names a command id reused for a different intent, in flight or durable, as a
   expect(await inFlight).toBeInstanceOf(SessionRuntimeCommandConflictError);
   expect(await inFlight).toBeInstanceOf(SessionRuntimeConflictError);
   expect(durable).toBeInstanceOf(SessionEngineCommandConflictError);
-  expect(isSessionCommandConflict(await inFlight)).toBe(true);
-  expect(isSessionCommandConflict(durable)).toBe(true);
-  expect(isSessionCommandConflict(new SessionRuntimeConflictError("ledger fact"))).toBe(false);
-  expect(isSessionCommandConflict(new Error("different intent"))).toBe(false);
+  expect(isCommandIntentConflict(await inFlight)).toBe(true);
+  expect(isCommandIntentConflict(durable)).toBe(true);
+  expect(isCommandIntentConflict(new SessionRuntimeConflictError("ledger fact"))).toBe(false);
+  expect(isCommandIntentConflict(new Error("different intent"))).toBe(false);
 });
 
 it("replays a completed stop after release and across a runtime restart without touching an executor", async () => {
