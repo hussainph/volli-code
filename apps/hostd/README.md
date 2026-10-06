@@ -349,6 +349,8 @@ volli-hostd-<version>-linux-x64/
   lib/node_modules/     `pnpm deploy --prod` of this package, from the lockfile
   share/systemd/volli-hostd.{service,socket}
   share/launchd/com.volli.hostd.plist
+  share/apparmor/volli-chromium   the agent browser's AppArmor profile (VC-619)
+  share/probe-chromium-sandbox.sh Chromium sandboxed under the unit's hardening?
   MANIFEST.json  README.md  LICENSE
 ```
 
@@ -485,8 +487,23 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
   `/srv`, never under `/home`), the
   kernel and control-group protections, an empty `CapabilityBoundingSet=`,
   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
-  `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
+  `RestrictNamespaces=user pid net` and `SystemCallArchitectures=native`. Not
   `MemoryDenyWriteExecute` (V8's JIT).
+- **Namespaces for the agent browser's sandbox, and no others** (VC-619). The
+  agent browser is standalone Chromium, and Chromium's Linux sandbox puts each
+  renderer in new user, PID and network namespaces. `RestrictNamespaces=yes`
+  made that impossible, leaving `--no-sandbox` — every web page with the
+  service's whole reach — as the only way to start it. The unit allows those
+  three and still denies mount, IPC, UTS, cgroup and time namespaces. On Ubuntu
+  23.10+ (`kernel.apparmor_restrict_unprivileged_userns=1`) the binary also
+  needs `share/apparmor/volli-chromium` loaded for its path; it grants user
+  namespaces to that one binary and nothing more. Keep the browser outside
+  `/home` (`ProtectHome=yes` hides it), e.g. `/opt/volli-chromium`, and check
+  both with `sudo share/probe-chromium-sandbox.sh /opt/volli-chromium/chrome volli`,
+  which starts it under this unit's hardening and fails unless Chromium
+  reports itself sandboxed. CI runs the same probe. `--no-sandbox` exists only
+  as the host-core option `noSandbox` for a container that cannot provide user
+  namespaces, and logs a warning on every launch.
 
 ### Credentials
 

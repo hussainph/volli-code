@@ -539,6 +539,44 @@ jobs:
             vp rebuild node-pty
           node scripts/probe-node-pty.mjs
 
+      # host-core's Chromium backend suite (VC-619) drives a real browser:
+      # Playwright's Chrome for Testing, the full build (`--no-shell`, new
+      # headless), pinned by the lockfile's playwright-core and cached on its
+      # version. It runs from /opt, where the hostd unit's ProtectHome= can see
+      # it, with its sandbox: ubuntu-24.04 lets a binary make the user
+      # namespaces Chromium's sandbox needs only under an AppArmor profile that
+      # grants them, so the box's profile is loaded for it here. Never
+      # --no-sandbox. VOLLI_REQUIRE_CHROMIUM makes a missing browser fail the
+      # suite rather than skip it.
+      - name: Resolve the pinned Chromium
+        id: chromium
+        working-directory: packages/host-core
+        run: echo "playwright=$(node -p 'require("./node_modules/playwright-core/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Chrome for Testing
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.chromium.outputs.playwright }}
+
+      - name: Install Chrome for Testing, sandboxed
+        working-directory: packages/host-core
+        run: |
+          node node_modules/playwright-core/cli.js install chromium --no-shell
+          chrome="$(node -p 'require("playwright-core").chromium.executablePath()')"
+          sudo mkdir -p /opt/volli-chromium
+          sudo cp -a "$(dirname "$chrome")/." /opt/volli-chromium/
+          sed 's|@CHROMIUM@|/opt/volli-chromium/chrome|' ../../apps/hostd/packaging/volli-chromium.apparmor \
+            | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
+          echo "VOLLI_CHROMIUM_PATH=/opt/volli-chromium/chrome" >> "$GITHUB_ENV"
+          echo "VOLLI_REQUIRE_CHROMIUM=1" >> "$GITHUB_ENV"
+
+      # The same browser, sandboxed, under every hardening directive of the
+      # shipped hostd unit (packaging/volli-hostd.service).
+      - name: Probe Chromium's sandbox under the hostd unit
+        run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /opt/volli-chromium/chrome "$(id -un)"
+
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface
         run: >-

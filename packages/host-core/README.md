@@ -546,10 +546,10 @@ Agent browser tools speak CDP through a `BrowserTabController`
 they need, they ask of a `BrowserBackend` (`browser/backend.ts`), so the engine
 is the one thing that changes between hosts:
 
-| Backend                                               | Engine and CDP wire                                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`) | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`) |
-| Headless host                                         | Standalone Chromium over a CDP pipe (VC-619)                                             |
+| Backend                                                  | Engine and CDP wire                                                                                 |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`)    | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`)            |
+| `ChromiumBrowserBackend` (`browser/chromium-backend.ts`) | Standalone Chromium; one CDP connection over `--remote-debugging-pipe`, flattened sessions (VC-619) |
 
 - **The interface.** Tab lifecycle with the VC-238 ownership fields
   (`BrowserTabState`, now in `@volli/shared`), a `CdpTransport` per tab
@@ -572,6 +572,57 @@ is the one thing that changes between hosts:
 - **The security stance (VC-110).** A backend's CDP wire is private to the
   engine it drives. Never `--remote-debugging-port`: no loopback endpoint
   through which another local process could reach a tab.
+- **The parity suite.** `browser/test-support/backend-suite.ts` drives the real
+  port and the agent-runtime browser tools against a loopback fixture: every
+  verb, its result shape, refusals, holds, caps, cancellation and dispose.
+  A backend passes it unchanged. `chromium-backend.test.ts` runs it against
+  Chromium, in CI's Linux `Test (packages)` lane.
+
+### Chromium
+
+`new ChromiumBrowserBackend(ports, options)` launches its browser on the first
+tab and keeps it until `dispose()`. Every option is the host's to state:
+
+- **`executablePath`.** host-core finds and downloads nothing. The recommended
+  build is Playwright's Chrome for Testing, pinned by the lockfile's
+  `playwright-core` (a devDependency here, never imported at runtime) and
+  installed with `playwright-core install chromium --no-shell`: the full
+  build, which runs new headless. Never `chromium-headless-shell`, the old
+  headless. The same revision runs on dev Macs, CI and a Linux box, where
+  Ubuntu ships Chromium only as a snap.
+- **`profileRoot`.** Each launch makes a private 0700 profile directory under
+  it and removes it on close. Nothing a page stores outlives the browser.
+- **`noSandbox`.** `false` everywhere a host can provide user namespaces,
+  which is every host Volli ships for: the hostd systemd unit allows the three
+  Chromium's sandbox makes, and on Ubuntu 23.10+ the binary needs the AppArmor
+  profile in `apps/hostd/packaging/volli-chromium.apparmor`
+  (`apps/hostd/README.md`, "Running under systemd"). `true` only in a
+  container that cannot, and a launch without the sandbox logs a warning
+  every time. CI runs sandboxed.
+
+What the backend owns, beyond the registry's policy:
+
+- **Ids are ours.** `open` returns synchronously; Chromium's target is created
+  behind the entry's `ready` promise, and every engine call waits on it.
+- **Contexts by `browserSessionPartition`.** A Session's tabs share their
+  Ticket's (or Project's) browser context and nobody else's; the person's tabs
+  use the default one. Downloads and every permission are denied per context.
+- **Chrome facts from events.** url, title, loading and history are tracked
+  for the synchronous `liveChrome`; the generation bumps on main-frame
+  navigation start. A read refreshes the title first, because Chromium reports
+  a script's title change late.
+- **Page-driven navigation is HTTP(S)-only.** Every document request and
+  redirect hop is checked before it is sent (`Fetch`); a main frame that
+  commits anything else (a page's own `blob:`) is sent to `about:blank`.
+  Chromium itself refuses `file:`, `chrome:` and top-level `data:`.
+- **Popups never run.** Every new page is attached paused; one with an opener
+  is closed, and its URL becomes a product tab under the opener's provenance
+  and caps.
+- **Dialogs are dismissed** (alerts accepted, questions declined) and noted in
+  the console: nobody can answer one on a host with no window, and an open
+  dialog stops the page.
+- **No wake policy.** Each tab is its own window, never occluded, and the
+  launch turns background throttling off.
 
 ## Ticket moves
 

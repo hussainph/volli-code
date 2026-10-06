@@ -98,6 +98,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "ai": "^7.0.83",
+    "playwright-core": "^1.62.1",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

@@ -843,10 +843,39 @@ box$ VOLLI_SOCKET=~/volli-hostd-data/volli.sock volli project list
 From a source checkout instead of the artifact, see "Running from source" in
 `apps/hostd/README.md`.
 
+## The agent browser (prepare the box)
+
+hostd does not drive a browser yet: its Sessions' browser tools arrive when it
+composes host-core's Chromium backend (VC-571). The box can be made ready now,
+and the probe proves the sandbox works under the shipped unit.
+
+The browser is Playwright's Chrome for Testing build, pinned by the
+`playwright-core` version in Volli's lockfile, and it lives outside `/home`
+(the unit's `ProtectHome=yes` hides `/home`):
+
+```sh
+box$ sudo PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+       npx -y playwright-core@<the lockfile's version> install --with-deps chromium --no-shell
+box$ sudo ln -sfn /opt/ms-playwright/chromium-*/chrome-linux64 /opt/volli-chromium
+box$ sed 's|@CHROMIUM@|/opt/ms-playwright/chromium-*/chrome-linux64/chrome|' \
+       /opt/volli-hostd/share/apparmor/volli-chromium | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
+box$ sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
+box$ sudo /opt/volli-hostd/share/probe-chromium-sandbox.sh /opt/volli-chromium/chrome volli
+probe: Chromium is sandboxed under volli-hostd.service's hardening
+```
+
+`--no-shell` installs only the full build, which runs the new headless
+(`chromium-headless-shell` is the old one). AppArmor attaches a profile by the
+binary's real path, so it names the versioned directory, not the link. The AppArmor profile is what Ubuntu 24.04 needs to
+let that one binary make user namespaces; never answer "No usable sandbox!"
+with `--no-sandbox`. Why the unit allows `RestrictNamespaces=user pid net`:
+`apps/hostd/README.md`, "Running under systemd".
+
 ## What M1 does not cover
 
 - Attaching the desktop app (or a phone) to this host: M2.
-- Terminals and the browser tools: `unavailable` (VC-568, VC-619).
+- Terminals and the browser tools: `unavailable` (VC-568; the browser's
+  backend is VC-619, and hostd composes it in VC-571).
 - Automatic backups and maintenance: VC-627.
 - Soaking the stricter sandboxing (`SystemCallFilter=@system-service`,
   `ProtectSystem=strict`, `ProtectProc=invisible`, `PrivateIPC=yes`) against
