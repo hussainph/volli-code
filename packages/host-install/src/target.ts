@@ -50,10 +50,11 @@ export function targetArgs(target: SshTarget): string[] {
  */
 export function sshConfigHosts(config: string): string[] {
   const hosts: string[] = [];
-  for (const line of config.split("\n")) {
-    const match = /^\s*Host\s+(.+?)\s*$/iu.exec(line);
-    if (match === null) continue;
-    for (const name of match[1]!.split(/\s+/u)) {
+  for (const raw of config.split("\n")) {
+    // Trimmed first, then one anchored keyword: no backtracking over a person's file.
+    const line = raw.trim();
+    if (!/^host\s/iu.test(line)) continue;
+    for (const name of line.slice(4).trim().split(/\s+/u)) {
       if (/[*?!]/u.test(name) || !NAME.test(name) || hosts.includes(name)) continue;
       hosts.push(name);
     }

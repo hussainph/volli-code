@@ -84,7 +84,7 @@ export function classifySshFailure(result: SshExecResult): SshFailure | null {
   const detail = tail(text);
   if (result.code === 127 && /spawn \S+ ENOENT/u.test(text)) return { kind: "ssh-missing", detail };
   if (result.code !== 255) return null;
-  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for .* has changed/u.test(text)) {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for \S+ has changed/u.test(text)) {
     return { kind: "host-key-changed", detail };
   }
   if (/No \S+ host key is known|Host key verification failed/u.test(text)) {
@@ -100,9 +100,11 @@ export function classifySshFailure(result: SshExecResult): SshFailure | null {
   ) {
     return { kind: "unreachable", detail };
   }
-  const denied = /Permission denied \(([^)]*)\)/u.exec(text);
-  if (denied !== null) {
-    const methods = denied[1]!.split(",");
+  // Found by index, not a backtracking pattern: stderr is the remote's to say.
+  const deniedAt = text.indexOf("Permission denied (");
+  const closed = deniedAt < 0 ? -1 : text.indexOf(")", deniedAt);
+  if (closed >= 0) {
+    const methods = text.slice(deniedAt + "Permission denied (".length, closed).split(",");
     return methods.includes("publickey")
       ? { kind: "key-refused", detail }
       : { kind: "password-only", detail };

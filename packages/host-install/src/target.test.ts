@@ -57,3 +57,14 @@ describe("an SSH target", () => {
     expect(sshConfigHosts(config)).toEqual(["studio", "build", "pi"]);
   });
 });
+
+// CodeQL js/polynomial-redos: a person's ssh config is read without backtracking.
+describe("reading a hostile ssh config", () => {
+  it("answers at once on a line of endless whitespace, and still reads tabs", () => {
+    const started = performance.now();
+    expect(sshConfigHosts(`host\t${"\t".repeat(100_000)}a`)).toEqual(["a"]);
+    expect(sshConfigHosts(`host\ta${"\t".repeat(100_000)}`)).toEqual(["a"]);
+    expect(sshConfigHosts("Hostname box\nHost\n  HOST\tlab  pi\n")).toEqual(["lab", "pi"]);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});
