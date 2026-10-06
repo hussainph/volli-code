@@ -1119,7 +1119,9 @@ describe("restoreDatabaseFile — exact-schema box rollback", () => {
     expect(
       readdirSync(crash).some((name) => name.startsWith("volli.db.backup-v59.preserved")),
     ).toBe(false);
-  });
+    // Multiple durable swaps plus a whole-profile snapshot: CI's covered,
+    // concurrent Linux lane needs an I/O budget, not the unit-test default.
+  }, 30_000);
 
   it("fully checks the old schema without migrating and preserves the original WAL family", () => {
     const fx = fixture();
@@ -1143,7 +1145,7 @@ describe("restoreDatabaseFile — exact-schema box rollback", () => {
       log.slice(0, publish).some((line) => /fsync .*\.database-restore-.*\/volli.db$/.test(line)),
     ).toBe(true);
     expect(log.slice(publish).some((line) => line === `fsync ${fx.root}`)).toBe(true);
-  });
+  }, 30_000);
 
   it("refuses bad schemas, same-file sources and unfinished or linked source sidecars before displacement", () => {
     const fx = fixture();
