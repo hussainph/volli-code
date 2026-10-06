@@ -142,6 +142,12 @@ interface ChromiumEngine {
    */
   unclaimed: Map<string, string>;
   claims: Map<string, (sessionId: string) => void>;
+  /**
+   * Targets created for tabs that closed before they attached, closed at
+   * once. An attach that still arrives for one is discarded, never parked.
+   * Each leaves when its target is destroyed.
+   */
+  discarded: Set<string>;
 }
 
 /** The fixed Fetch pattern every page and frame session installs: each document request and redirect hop. */
@@ -183,6 +189,8 @@ interface ChromiumTabEntry extends BrowserTabRecord {
   loadListeners: Set<() => void>;
   /** URLs from `Page.windowOpen`, waiting for the popup target they announce. */
   popups: string[];
+  /** The wait for this tab's created target to attach, while it runs; a close cancels it. */
+  claim: { cancel: () => void } | null;
   /**
    * Sessions onto the tab's out-of-process iframes. Each carries the same
    * document `Fetch` guard as the page, so a cross-site frame's navigations
@@ -273,6 +281,12 @@ export function dialogFallback(type: ChromiumDialogType): { accept: boolean; sai
   }
 }
 
+function noop(): void {}
+
+function closedFirst(): Error {
+  return new Error("The Browser Tab closed before its page existed");
+}
+
 /** Whether a product door (an address bar, an agent's navigate) may open the target. */
 export function isAllowedChromiumTarget(target: string): boolean {
   return target === CHROMIUM_START_URL || isAllowedBrowserUrl(target);
@@ -339,6 +353,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       contexts: new Map(),
       unclaimed: new Map(),
       claims: new Map(),
+      discarded: new Set(),
     };
     engine.connection.onEvent((event) => this.#onEvent(engine, event));
     process.onExit((description) => this.#engineGone(engine, description));
@@ -435,14 +450,22 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     return context;
   }
 
-  /** Waits for the browser to attach a target we created, whichever of the two came first. */
-  #claim(engine: ChromiumEngine, targetId: string): Promise<string> {
-    const attached = engine.unclaimed.get(targetId);
-    if (attached !== undefined) {
+  /**
+   * Waits for the browser to attach a target we created, whichever of the two
+   * came first. `cancel` ends the wait at once — its timer, its close listener
+   * and its map entry — and rejects it: the tab closed first.
+   */
+  #claim(
+    engine: ChromiumEngine,
+    targetId: string,
+  ): { attached: Promise<string>; cancel: () => void } {
+    const ready = engine.unclaimed.get(targetId);
+    if (ready !== undefined) {
       engine.unclaimed.delete(targetId);
-      return Promise.resolve(attached);
+      return { attached: Promise.resolve(ready), cancel: noop };
     }
-    return new Promise((resolve, reject) => {
+    let cancel: () => void = noop;
+    const attached = new Promise<string>((resolve, reject) => {
       let unsubscribe: (() => void) | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const settle = (): void => {
@@ -463,12 +486,26 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         settle();
         reject(new Error(reason));
       });
+      cancel = () => {
+        settle();
+        reject(closedFirst());
+      };
     });
+    return { attached, cancel };
+  }
+
+  /** Closes a target made for a tab that closed first; a late attach for it is discarded. */
+  #discardTarget(engine: ChromiumEngine, targetId: string): void {
+    engine.discarded.add(targetId);
+    engine.unclaimed.delete(targetId);
+    void engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
   }
 
   async #createTarget(entry: ChromiumTabEntry): Promise<ChromiumTarget> {
     const engine = await this.#requireEngine();
+    if (entry.closed) throw closedFirst();
     const browserContextId = await this.#contextFor(engine, browserSessionPartition(entry.input));
+    if (entry.closed) throw closedFirst();
     const { targetId } = (await engine.connection.send("Target.createTarget", {
       url: "about:blank",
       // Each tab its own window: a background tab of a shared window is
@@ -476,17 +513,33 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       newWindow: true,
       ...(browserContextId === undefined ? {} : { browserContextId }),
     })) as { targetId: string };
+    if (entry.closed) {
+      // Closed while the browser made it: nobody will claim it.
+      this.#discardTarget(engine, targetId);
+      throw closedFirst();
+    }
+    // From here a close cancels the claim and closes the target at once,
+    // rather than leave both waiting on an attach nobody wants.
+    const claim = this.#claim(engine, targetId);
+    entry.claim = {
+      cancel: () => {
+        claim.cancel();
+        this.#discardTarget(engine, targetId);
+      },
+    };
     let sessionId: string;
     try {
-      sessionId = await this.#claim(engine, targetId);
+      sessionId = await claim.attached;
     } catch (error) {
-      void engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
+      if (!entry.closed) this.#discardTarget(engine, targetId);
       throw error;
+    } finally {
+      entry.claim = null;
     }
     const target: ChromiumTarget = { engine, targetId, sessionId };
     if (entry.closed) {
       await engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
-      throw new Error("The Browser Tab closed before its page existed");
+      throw closedFirst();
     }
     entry.target = target;
     this.#bySession.set(sessionId, entry);
@@ -680,6 +733,13 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
           this.#onPopup(engine, info.targetId, info.openerId);
           return;
         }
+        if (info.type === "page" && engine.discarded.has(info.targetId)) {
+          // Its tab closed while it was being made; it is already closing.
+          void engine.connection
+            .send("Target.closeTarget", { targetId: info.targetId })
+            .catch(() => undefined);
+          return;
+        }
         if (info.type === "page") {
           const claim = engine.claims.get(info.targetId);
           engine.claims.delete(info.targetId);
@@ -722,6 +782,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       case "Target.targetDestroyed": {
         const targetId = stringParam(params, "targetId") ?? "";
         engine.unclaimed.delete(targetId);
+        engine.discarded.delete(targetId);
         const entry = this.#byTarget.get(targetId);
         if (entry !== undefined && !entry.closed) this.#forget(entry.state.tabId, entry);
         return;
@@ -1028,6 +1089,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       pictureCaptures: new Map(),
       loadListeners: new Set(),
       popups: [],
+      claim: null,
       frameSessions: new Set(),
       closed: false,
     };
@@ -1079,6 +1141,9 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   /** Drops one tab from the registry and every index, and ends whatever waited on it. */
   #forget(tabId: string, entry: ChromiumTabEntry): void {
     entry.closed = true;
+    const claim = entry.claim;
+    entry.claim = null;
+    claim?.cancel();
     if (entry.target !== null) {
       this.#bySession.delete(entry.target.sessionId);
       this.#byTarget.delete(entry.target.targetId);

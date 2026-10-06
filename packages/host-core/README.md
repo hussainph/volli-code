@@ -647,8 +647,9 @@ What the backend owns, beyond the registry's policy:
   interception rewrites every document's headers, is visible to the page
   (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
   element races the commit and changes the page's DOM. A test pins the
-  behavior (`chromium-backend.test.ts`, "guards frames"). **VC-571 must not
-  wire hostd's browser for people until this is resolved.**
+  behavior (`chromium-backend.test.ts`, "guards frames"). **VC-571 must
+  enforce it, or keep the lent-view fallback, before persons use hostd's
+  browser** (`docs/plans/host-protocol.md`, parity bar).
 
 - **Popups never run.** Every new page is attached paused; one with an opener
   is closed, and its URL becomes a product tab under the opener's provenance

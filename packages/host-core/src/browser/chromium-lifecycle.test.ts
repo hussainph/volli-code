@@ -361,6 +361,63 @@ describe("ChromiumBrowserBackend over a fake browser", () => {
     }
   });
 
+  it("cancels a closed tab's target claim at once: no timer, listener or target waits for an attach (B3)", async () => {
+    const fake = fakeChromium();
+    const { backend, connection, restore } = backendOver(fake);
+    try {
+      const first = open(backend);
+      await opened(fake, 1);
+      backend.close(first.tabId);
+      await settle();
+      const baseline = connection().closeListenerCount;
+      // The browser is slow to attach what it creates: nothing attaches.
+      const deliver = fake.event;
+      const late: Array<[string, object, string | undefined]> = [];
+      fake.event = (method, params, sessionId) => {
+        if (method === "Target.attachedToTarget") late.push([method, params, sessionId]);
+        else deliver(method, params, sessionId);
+      };
+      const counts: number[] = [];
+      for (let round = 0; round < 10; round += 1) {
+        const created = fake.commands.filter((c) => c.method === "Target.createTarget").length;
+        const tab = open(backend);
+        await eventually(
+          async () => fake.commands.filter((c) => c.method === "Target.createTarget").length,
+          (count) => count > created,
+        );
+        await settle();
+        backend.close(tab.tabId);
+        await settle();
+        counts.push(connection().closeListenerCount);
+      }
+      expect(counts).toEqual(Array(10).fill(baseline));
+      // Every target made for a cancelled tab was closed at once, not at the attach timeout.
+      const created = fake.commands
+        .filter((c) => c.method === "Target.createTarget")
+        .map((_, index) => `target-${index + 1}`);
+      const closed = new Set(
+        fake.commands
+          .filter((c) => c.method === "Target.closeTarget")
+          .map((c) => c.params["targetId"]),
+      );
+      for (const targetId of created.slice(1)) expect(closed.has(targetId)).toBe(true);
+      expect(connection().pendingCount).toBe(0);
+      // An attach that arrives late anyway is discarded: closed, never a tab.
+      fake.event = deliver;
+      const closesBefore = fake.commands.filter((c) => c.method === "Target.closeTarget").length;
+      const [, params, sessionId] = late.at(-1)!;
+      deliver("Target.attachedToTarget", params, sessionId);
+      await settle();
+      expect(fake.commands.filter((c) => c.method === "Target.closeTarget").length).toBe(
+        closesBefore + 1,
+      );
+      expect(backend.list({ projectId: "p" })).toEqual([]);
+    } finally {
+      restore();
+      await backend.dispose();
+    }
+  });
+
   it("detaches an agent session whose attach answered after the transport was disposed (B3)", async () => {
     const fake = fakeChromium();
     const { backend, restore } = backendOver(fake);
