@@ -192,7 +192,7 @@ describe("the actor matrix (VC-564)", () => {
         caller: { actor } as unknown as RouterCaller,
         runtime,
         diagnostics: new RpcDiagnosticLog(),
-        sessionWorkspace: lookup,
+        resourceWorkspace: lookup,
       });
       for (const call of [
         caller.session.projection({ sessionId: "foreign-session" }),
