@@ -724,6 +724,31 @@ describe("Session tRPC router", () => {
     await expect(caller.session.history({ sessionId: "session-1", before: 1.5 })).rejects.toThrow();
   });
 
+  it("hands a surface the plan and the current reply a window cannot hold (VC-315)", async () => {
+    const fixture = runtimeFixture();
+    const todoList = [{ content: "Finish migration", status: "in_progress" as const }];
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async () => ({
+        ...snapshot(),
+        projection: { ...snapshot().projection, todoList },
+        latestReply: { sequence: 2, text: "Current-turn reply" },
+      }),
+    };
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+
+    await expect(caller.session.snapshot({ sessionId: "session-1" })).resolves.toMatchObject({
+      projection: { todoList },
+      latestReply: { sequence: 2, text: "Current-turn reply" },
+    });
+  });
+
   it("refuses a history page whose frames would not survive a JSON wire (VC-315)", async () => {
     const fixture = runtimeFixture();
     const cyclic: Record<string, unknown> = { kind: "cyclic" };

@@ -30,7 +30,8 @@ import { chatSessionFrame } from "./wire";
  * first). Counts are asserted; times are printed.
  */
 
-const SIZES = [50, 500, 1_668, 5_000] as const;
+/** The ticket's 100, 1,000 and 10,000 events, and the review's 500. */
+const SIZES = [100, 500, 1_000, 10_000] as const;
 const RESULT_CHARS = [400, 1_200, 3_000, 800, 600, 2_000, 900, 24_000] as const;
 const REPLY_CHARS = 1_500;
 const WINDOW = { events: 256, bytes: 512 * 1024 };
@@ -179,8 +180,8 @@ describe("first paint cost (VC-315)", () => {
       expect(row.after.frames).toBeLessThanOrEqual(WINDOW.events);
       expect(row.after.messages).toBeGreaterThan(0);
     }
-    const [, at500, , at5000] = rows;
-    expect(at5000!.after.frames).toBeLessThanOrEqual(at500!.after.frames * 1.1);
+    const [, at500, , at10000] = rows;
+    expect(at10000!.after.frames).toBeLessThanOrEqual(at500!.after.frames * 1.1);
 
     // eslint-disable-next-line no-console -- the probe's numbers ARE the deliverable
     console.log(

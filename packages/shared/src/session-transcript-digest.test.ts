@@ -200,6 +200,13 @@ describe("the transcript digest on the wire", () => {
     expect(decodeRendererSessionEventPayload(stored, "payload")).toEqual(payload);
   });
 
+  it("decodes a digest that carries only its role", () => {
+    const payload = message(1, { role: "user" }).payload;
+    expect(decodeSessionEventPayload(JSON.parse(JSON.stringify(payload)), "payload")).toEqual(
+      payload,
+    );
+  });
+
   it("decodes an event written before digests existed without inventing one", () => {
     const legacy = message(1).payload;
     expect(decodeSessionEventPayload(JSON.parse(JSON.stringify(legacy)), "payload")).toEqual(

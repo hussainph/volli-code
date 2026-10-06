@@ -432,7 +432,10 @@ describe("history windows (VC-315)", () => {
  * A live runtime recording a turn whose reply is followed by more silent
  * messages than a window holds: the review's B2 shape, end to end.
  */
-async function recordedTurn(silent: number) {
+async function recordedTurn(
+  silent: number,
+  wrap: (store: TranscriptArtifactStore) => TranscriptArtifactStore = (store) => store,
+) {
   let now = 100;
   const clock = { now: () => now++ };
   const engine = createSessionEngine({
@@ -444,7 +447,7 @@ async function recordedTurn(silent: number) {
   const runtime = createSessionRuntime({
     engine,
     executor: adapter,
-    artifacts: createInMemoryTranscriptArtifactStore(),
+    artifacts: wrap(createInMemoryTranscriptArtifactStore()),
     locations: fixedLocation("/projects/fake"),
     clock,
     ids: runtimeCounter("live-"),
@@ -517,6 +520,68 @@ describe("the current turn's latest reply on open (VC-315, review B2)", () => {
       expect(snapshot.latestReply?.text).toBe("Current-turn reply");
     } finally {
       await short.runtime.close();
+    }
+  });
+
+  it("is no reply, not a failed open, when the reply's body above the window cannot say one", async () => {
+    let mode: "throw" | "blank" | null = null;
+    const replyBody = (store: TranscriptArtifactStore): TranscriptArtifactStore => ({
+      write: (record) => store.write(record),
+      byteLength: (reference) => store.byteLength!(reference),
+      read: async (reference) => {
+        const body = await store.read(reference);
+        const isReply = JSON.stringify(body.message.parts).includes("Current-turn reply");
+        if (!isReply || mode === null) return body;
+        if (mode === "throw") throw new Error("artifact is corrupt");
+        return { ...body, message: { ...body.message, parts: [] } };
+      },
+    });
+    const { runtime, sessionId } = await recordedTurn(SESSION_HISTORY_WINDOW.events + 4, replyBody);
+    try {
+      mode = "throw";
+      const unreadable = await runtime.snapshot({ sessionId });
+      expect(unreadable.latestReply).toBeNull();
+      expect(unreadable.frames.length).toBeGreaterThan(0);
+      mode = "blank";
+      expect((await runtime.snapshot({ sessionId })).latestReply).toBeNull();
+    } finally {
+      await runtime.close();
+    }
+  });
+});
+
+describe("a store whose sizes misbehave (VC-315)", () => {
+  it("reads a size that throws, or is not a byte count, as one it cannot say", async () => {
+    for (const misbehave of [
+      async () => {
+        throw new Error("stat failed");
+      },
+      async () => -1,
+      async () => Number.NaN,
+    ]) {
+      const odd = new Set<string>();
+      const { runtime, sessionId } = await recordedTurn(40, (store) => ({
+        write: (record) => store.write(record),
+        read: (reference) => store.read(reference),
+        byteLength: (reference) =>
+          odd.has(reference.id) ? misbehave() : store.byteLength!(reference),
+      }));
+      try {
+        const healthy = await runtime.snapshot({ sessionId });
+        expect(healthy.before).toBeNull();
+        const middle = healthy.frames.find(
+          ({ sequence, event }) =>
+            event.payload.kind === "transcript.referenced" &&
+            sequence < healthy.throughSequence - 5,
+        )!;
+        if (middle.event.payload.kind !== "transcript.referenced") throw new Error("unreachable");
+        odd.add(middle.event.payload.reference.id);
+        const window = await runtime.snapshot({ sessionId });
+        expect(window.frames[0]!.sequence).toBe(middle.sequence + 1);
+        expect(window.before).toBe(middle.sequence + 1);
+      } finally {
+        await runtime.close();
+      }
     }
   });
 });

@@ -877,10 +877,19 @@ describe("the current turn's reply", () => {
   const user: UIMessage = { id: "ask", role: "user", parts: [{ type: "text", text: "Go" }] };
   const hostReply = { sequence: 3, text: "Current-turn reply" };
 
-  it("is found in the messages held, past tool-only and blank ones", () => {
+  it("is found in the messages held, past tool-only, blank and system ones", () => {
     const blank = message("blank", "  ");
+    const system: UIMessage = {
+      id: "note",
+      role: "system",
+      parts: [{ type: "text", text: "Note" }],
+    };
     expect(
-      currentTurnReply({ messages: [user, reply, ...tools, blank], before: 9, latestReply: null }),
+      currentTurnReply({
+        messages: [user, reply, ...tools, blank, system],
+        before: 9,
+        latestReply: null,
+      }),
     ).toBe("Current-turn reply");
   });
 
