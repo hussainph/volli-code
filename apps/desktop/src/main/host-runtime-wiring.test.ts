@@ -20,6 +20,12 @@ import { readFileSync } from "node:fs";
 import { parseSync, transformSync } from "vite/rolldown/utils";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostRuntimeOwner } from "@volli/host-core";
+import {
+  createClientStateFlush,
+  MENU_BAR_FLUSH_OVERDUE_MS,
+  SHUTDOWN_FLUSH_TIMEOUT_MS,
+  type FlushTarget,
+} from "./client-state-flush";
 import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import {
   planUnsavedQuit,
@@ -158,11 +164,27 @@ type QuitEvent = { preventDefault(): void };
  * index.ts later assigns it, and the accepted-quit hold registered through the
  * Session runtime lifecycle's `installQuitHold`. Each gate's own port records.
  */
-function liftedQuitPath(options: { declineUnsaved: boolean }) {
+function liftedQuitPath(options: {
+  declineUnsaved: boolean;
+  cloud?: boolean;
+  menuBar?: ReturnType<typeof menuBarFake> | null;
+  /**
+   * How each window's renderer answers a draft flush, through the REAL
+   * `createClientStateFlush`: after `answerAfterMs` (it sends its draft,
+   * then acks), or never.
+   */
+  renderer?: { answerAfterMs: number } | "silent";
+  shutdownFlushTimeoutMs?: number;
+}) {
   const calls: string[] = [];
   const listeners: Array<(event: QuitEvent) => void> = [];
   const exited = Promise.withResolvers<number>();
-  const ptyManager = { kind: "pty-manager" };
+  const ptyManager = {
+    kind: "pty-manager",
+    killAll: () => {
+      calls.push("terminals.killAll");
+    },
+  };
   const hostCore = {
     stop: vi.fn(async () => {
       calls.push("host.stop");
@@ -191,6 +213,12 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
       },
     },
     updateInstallQuitInFlight: () => false,
+    isExperimentEnabled: (id: string) => {
+      expect(id).toBe("cloud");
+      return options.cloud === true;
+    },
+    menuBarHost: options.menuBar ?? null,
+    hostClosing: false,
     unsavedDocumentNames: () => ["draft.md"],
     process: { env: {} },
     confirmDiscardUnsaved: (names: readonly string[], verb: string) => {
@@ -218,12 +246,40 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
       }),
     },
     console: { error: vi.fn() },
+    // The draft flush barrier (VC-577), as index.ts names and builds it:
+    // the real barrier, over renderers this test scripts.
+    BrowserWindow: { getAllWindows: () => ["window"] },
+    SHUTDOWN_FLUSH_TIMEOUT_MS: options.shutdownFlushTimeoutMs ?? SHUTDOWN_FLUSH_TIMEOUT_MS,
+    flushWindowState: (windows: unknown[], timeoutMs: number) => {
+      calls.push(`windows.flush:${windows.length}`);
+      const renderer = options.renderer ?? { answerAfterMs: 0 };
+      return flusher.flush(
+        windows.map((): FlushTarget => ({
+          isDestroyed: () => false,
+          requestFlush: (requestId) => {
+            if (renderer === "silent") return;
+            setTimeout(() => {
+              calls.push("renderer.draft-sent");
+              flusher.acknowledge(requestId);
+            }, renderer.answerAfterMs);
+          },
+        })),
+        timeoutMs,
+      );
+    },
   };
+  let nextRequest = 0;
+  const flusher = createClientStateFlush({
+    newRequestId: () => `flush-${++nextRequest}`,
+    log: (line) => calls.push(`flush.log:${line}`),
+  });
   // Boot order as in index.ts: the gates start as no-ops, prepareHostQuit and
   // the quit hold are created, and only later does each gate get its body.
   scope["terminalQuit"] = evaluate(initializerOf("terminalQuit"), scope);
   scope["unsavedQuit"] = evaluate(initializerOf("unsavedQuit"), scope);
   scope["abortRepack"] = evaluate(initializerOf("abortRepack"), scope);
+  scope["systemShutdownTeardown"] = evaluate(initializerOf("systemShutdownTeardown"), scope);
+  scope["systemShutdownFlush"] = evaluate(initializerOf("systemShutdownFlush"), scope);
   scope["prepareHostQuit"] = evaluate(initializerOf("prepareHostQuit"), scope);
   const lifecycleCall = exactlyOne(
     callsTo("createSessionRuntimeLifecycle"),
@@ -237,7 +293,27 @@ function liftedQuitPath(options: { declineUnsaved: boolean }) {
   scope["unsavedQuit"] = evaluate(assignmentTo("unsavedQuit"), scope);
   scope["terminalQuit"] = evaluate(assignmentTo("terminalQuit"), scope);
   scope["abortRepack"] = evaluate(assignmentTo("abortRepack"), scope);
+  scope["systemShutdownTeardown"] = evaluate(assignmentTo("systemShutdownTeardown"), scope);
   return { calls, listeners, exited: exited.promise, hostCore, scope };
+}
+
+function menuBarFake(
+  branch: "quit" | "menu-bar",
+  calls: string[],
+  options: { shuttingDown?: boolean; tabs?: "close" | "cancel" } = {},
+) {
+  return {
+    systemShuttingDown: vi.fn(() => options.shuttingDown === true),
+    confirmEnter: vi.fn(() => {
+      if (options.tabs === undefined) return true;
+      calls.push("tabs.confirm");
+      return options.tabs === "close";
+    }),
+    branch: vi.fn(() => branch),
+    enter: vi.fn(() => {
+      calls.push("menu-bar.enter");
+    }),
+  };
 }
 
 describe("index.ts quit wiring", () => {
@@ -299,7 +375,398 @@ describe("index.ts quit wiring", () => {
     expect(quit.calls).toEqual(["automations.stop"]);
     expect(late).toEqual(["unsavedQuit", "terminalQuit", "abortRepack"]);
   });
+
+  it("flag off: a built menu-bar host is never asked, and the quit is today's", async () => {
+    const calls: string[] = [];
+    const menuBar = menuBarFake("menu-bar", calls);
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: false, menuBar });
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    expect(quit.calls.slice(0, 4)).toEqual([
+      "automations.stop",
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "repack.abort",
+    ]);
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(await quit.exited).toBe(0);
+  });
+
+  it("flag on, live work: the confirms run, then menu-bar mode — no Automation stop, no host stop", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls);
+    quit.scope["menuBarHost"] = menuBar;
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "menu-bar.enter",
+    ]);
+    expect(quitAlreadyRefused(event)).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(quit.hostCore.stop).not.toHaveBeenCalled();
+  });
+
+  it("flag on, no live work: today's quit with the two stops behind the decision", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    quit.scope["menuBarHost"] = menuBarFake("quit", quit.calls);
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    expect(quit.calls.slice(0, 4)).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "automations.stop",
+      "repack.abort",
+    ]);
+    expect(await quit.exited).toBe(0);
+  });
+
+  it("flag on, system shutdown noted: no confirm is asked, their teardown runs, and the quit is accepted", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: true, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    quit.scope["menuBarHost"] = menuBar;
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls.slice(0, 4)).toEqual([
+      "terminals.killAll",
+      "windows.flush:1",
+      "automations.stop",
+      "repack.abort",
+    ]);
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(quitAlreadyRefused(event)).toBe(false);
+    expect(await quit.exited).toBe(0);
+    expect(quit.hostCore.stop).toHaveBeenCalledOnce();
+    // The flush is joined: the renderer's draft went out before the exit.
+    expect(quit.calls).toContain("renderer.draft-sent");
+  });
+
+  it("flag on, system shutdown: exit waits for a responsive renderer's draft (the re-check probe)", async () => {
+    const quit = liftedQuitPath({
+      declineUnsaved: true,
+      cloud: true,
+      renderer: { answerAfterMs: 50 },
+    });
+    quit.scope["menuBarHost"] = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    let draftSentAtExit = false;
+    const exited = quit.exited.then((code) => {
+      draftSentAtExit = quit.calls.includes("renderer.draft-sent");
+      return code;
+    });
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    // The host stops at once; the renderer answers 50ms later, inside the bound.
+    expect(await exited).toBe(0);
+    expect(draftSentAtExit).toBe(true);
+  });
+
+  it("flag on, system shutdown: a silent renderer never stalls power-off past the bound", async () => {
+    const quit = liftedQuitPath({
+      declineUnsaved: true,
+      cloud: true,
+      renderer: "silent",
+      shutdownFlushTimeoutMs: 30,
+    });
+    quit.scope["menuBarHost"] = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(await quit.exited).toBe(0);
+    expect(quitAlreadyRefused(event)).toBe(false);
+    expect(quit.calls).not.toContain("renderer.draft-sent");
+    expect(quit.calls).toEqual(
+      expect.arrayContaining([expect.stringContaining("flush.log:[client-state] 1 window(s)")]),
+    );
+  });
+
+  it("flag off, system shutdown noted: today's confirms, and a decline still refuses", async () => {
+    const quit = liftedQuitPath({ declineUnsaved: true, cloud: false });
+    const menuBar = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    quit.scope["menuBarHost"] = menuBar;
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "automations.stop",
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate(refused)",
+      "repack.abort",
+    ]);
+    expect(menuBar.systemShuttingDown).not.toHaveBeenCalled();
+    expect(quitAlreadyRefused(event)).toBe(true);
+  });
+
+  it("flag on, live work over agent Browser Tabs: Cancel refuses before the terminal gate", () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls, { tabs: "cancel" });
+    quit.scope["menuBarHost"] = menuBar;
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(quit.calls).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "tabs.confirm",
+      "terminal.gate(refused)",
+    ]);
+    expect(menuBar.enter).not.toHaveBeenCalled();
+    expect(quitAlreadyRefused(event)).toBe(true);
+  });
+
+  it("flag on, but the host is already stopping: never offered menu-bar mode", () => {
+    const quit = liftedQuitPath({ declineUnsaved: false, cloud: true });
+    const menuBar = menuBarFake("menu-bar", quit.calls);
+    quit.scope["menuBarHost"] = menuBar;
+    quit.scope["hostClosing"] = true;
+    (quit.scope["prepareHostQuit"] as (event: QuitEvent) => void)({ preventDefault: vi.fn() });
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(quit.calls[0]).toBe("automations.stop");
+  });
 });
+
+/** index.ts's one `app.on("<event>", listener)` listener, as source. */
+function appListener(event: string): AstNode {
+  const call = exactlyOne(
+    nodesWhere((node) => {
+      if (node.type !== "CallExpression") return false;
+      const callee = node["callee"];
+      if (!isNode(callee) || callee.type !== "MemberExpression") return false;
+      if (!isIdentifierNamed(callee["object"], "app")) return false;
+      if (!isIdentifierNamed(callee["property"], "on")) return false;
+      const first = (node["arguments"] as unknown[])[0];
+      return isNode(first) && first.type === "Literal" && first["value"] === event;
+    }),
+    `app.on("${event}", …) listener`,
+  );
+  return argument(call, 1);
+}
+
+function windowsFake(count: number) {
+  const restore = vi.fn();
+  const focus = vi.fn();
+  const all = Array.from({ length: count }, () => ({
+    isMinimized: () => false,
+    restore,
+    focus,
+  }));
+  // Flag off nothing is ever retiring, so the live windows are all of them.
+  return { BrowserWindow: { getAllWindows: () => all }, liveWindows: () => all, restore, focus };
+}
+
+describe("index.ts window-return wiring (VC-577)", () => {
+  it("activate with no window reveals through the menu-bar host; with one, does nothing", () => {
+    const reveal = vi.fn();
+    const noteActivated = vi.fn();
+    const listener = evaluate<() => void>(appListener("activate"), {
+      ...windowsFake(0),
+      menuBar: { reveal, noteActivated },
+    });
+    listener();
+    expect(reveal).toHaveBeenCalledExactlyOnceWith();
+    // Every activation ends a noted logout (VC-577 B3), window or not.
+    expect(noteActivated).toHaveBeenCalledOnce();
+    const busy = vi.fn();
+    evaluate<() => void>(appListener("activate"), {
+      ...windowsFake(1),
+      menuBar: { reveal: busy, noteActivated },
+    })();
+    expect(busy).not.toHaveBeenCalled();
+    expect(noteActivated).toHaveBeenCalledTimes(2);
+  });
+
+  it("second-instance with no window: today's early return with the flag off, a reveal with it on", () => {
+    for (const cloud of [false, true]) {
+      const reveal = vi.fn();
+      const listener = evaluate<() => void>(appListener("second-instance"), {
+        ...windowsFake(0),
+        isExperimentEnabled: () => cloud,
+        revealWindowForLaunch: reveal,
+      });
+      listener();
+      expect(reveal).toHaveBeenCalledTimes(cloud ? 1 : 0);
+    }
+  });
+
+  it("a notification click with no window reveals through the menu-bar host once it exists", () => {
+    const opener = argument(exactlyOne(callsToMember("bindWindowOpener"), "bindWindowOpener"), 0);
+    const reveal = vi.fn();
+    const createOwnedWindow = vi.fn();
+    evaluate<() => void>(opener, {
+      ...windowsFake(0),
+      menuBarHost: { reveal },
+      createOwnedWindow,
+    })();
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(createOwnedWindow).not.toHaveBeenCalled();
+    // Before the host exists (boot), exactly the former body.
+    evaluate<() => void>(opener, { ...windowsFake(0), menuBarHost: null, createOwnedWindow })();
+    expect(createOwnedWindow).toHaveBeenCalledOnce();
+    evaluate<() => void>(opener, { ...windowsFake(1), menuBarHost: null, createOwnedWindow })();
+    expect(createOwnedWindow).toHaveBeenCalledOnce();
+  });
+});
+
+/** A window as closeAll and open touch it. */
+function fakeWindow(name: string, calls: string[]) {
+  let destroyed = false;
+  return {
+    name,
+    hide: () => calls.push(`${name}.hide`),
+    isDestroyed: () => destroyed,
+    destroy: () => {
+      destroyed = true;
+      calls.push(`${name}.destroy`);
+    },
+  };
+}
+
+describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
+  function liftedEntry() {
+    const ports = argument(exactlyOne(callsTo("createMenuBarHost"), "createMenuBarHost(...)"), 0);
+    const windowsPort = objectProperty(ports, "windows");
+    const calls: string[] = [];
+    const a = fakeWindow("a", calls);
+    const b = fakeWindow("b", calls);
+    const all = [a, b];
+    const retiringWindows = new WeakSet<object>();
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    let nextRequestId = 0;
+    const flusher = createClientStateFlush({
+      newRequestId: () => `req-${++nextRequestId}`,
+      timers: {
+        setTimeout: (run) => {
+          nextTimer += 1;
+          timers.set(nextTimer, run);
+          return nextTimer;
+        },
+        clearTimeout: (handle) => {
+          timers.delete(handle as number);
+        },
+      },
+      log: () => {},
+    });
+    const requests = new Map<string, string>();
+    const createOwnedWindow = vi.fn();
+    const revealWindow = vi.fn();
+    const warn = vi.fn();
+    const scope = {
+      liveWindows: () => all.filter((each) => !each.isDestroyed() && !retiringWindows.has(each)),
+      retiringWindows,
+      MENU_BAR_FLUSH_OVERDUE_MS,
+      // index.ts's flushWindowState over the real barrier; each request id
+      // is remembered per window so the test answers as that renderer.
+      flushWindowState: (
+        closing: ReturnType<typeof fakeWindow>[],
+        timeoutMs: number,
+        onAcked: (window: ReturnType<typeof fakeWindow>) => void,
+      ) => {
+        calls.push(`flush:${closing.length}:${timeoutMs}`);
+        return flusher.flush(
+          closing.map((window) => ({
+            isDestroyed: () => window.isDestroyed(),
+            requestFlush: (requestId: string) => requests.set(window.name, requestId),
+            onAcked: () => onAcked(window),
+          })),
+          timeoutMs,
+        );
+      },
+      console: { warn },
+      BrowserWindow: { getAllWindows: () => all.filter((each) => !each.isDestroyed()) },
+      createOwnedWindow,
+      revealWindow,
+      nativeWindowPolicy: { kind: "native" },
+    };
+    return {
+      closeAll: evaluate<() => void>(objectProperty(windowsPort, "closeAll"), scope),
+      open: evaluate<() => void>(objectProperty(windowsPort, "open"), scope),
+      count: evaluate<() => number>(objectProperty(windowsPort, "count"), scope),
+      ack: (name: string) => flusher.acknowledge(requests.get(name)),
+      overdue: () => {
+        for (const [id, run] of timers) {
+          timers.delete(id);
+          run();
+        }
+      },
+      calls,
+      a,
+      b,
+      retiringWindows,
+      createOwnedWindow,
+      revealWindow,
+      warn,
+    };
+  }
+
+  it("hides every window, then destroys each one only from its own renderer's flush ack", async () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    expect(entry.calls).toEqual(["a.hide", "b.hide", `flush:2:${MENU_BAR_FLUSH_OVERDUE_MS}`]);
+    // Retired at once: hidden windows no longer count as open.
+    expect(entry.count()).toBe(0);
+    entry.ack("a");
+    expect(entry.calls.at(-1)).toBe("a.destroy");
+    expect(entry.b.isDestroyed()).toBe(false);
+    entry.ack("b");
+    expect(entry.calls.at(-1)).toBe("b.destroy");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(entry.warn).not.toHaveBeenCalled();
+  });
+
+  it("never destroys an unflushed window: overdue logs and keeps it hidden until its ack", async () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.overdue();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(entry.warn).toHaveBeenCalledWith(expect.stringContaining("kept hidden, not destroyed"));
+    expect(entry.b.isDestroyed()).toBe(false);
+    expect(entry.retiringWindows.has(entry.b)).toBe(true);
+    // The slow renderer finally saved its latest draft: now it may go.
+    entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(true);
+  });
+
+  it("a reveal reuses a window still saving its drafts, and its late ack then keeps it", () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.open();
+    expect(entry.createOwnedWindow).not.toHaveBeenCalled();
+    expect(entry.revealWindow).toHaveBeenCalledExactlyOnceWith(entry.b, { kind: "native" });
+    expect(entry.retiringWindows.has(entry.b)).toBe(false);
+    expect(entry.count()).toBe(1);
+    entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(false);
+    // With nothing retained, a reveal builds a fresh window.
+    entry.b.destroy();
+    entry.open();
+    expect(entry.createOwnedWindow).toHaveBeenCalledOnce();
+  });
+
+  it("closes agent Browser Tabs with a model-readable reason, and reopens them on reveal", () => {
+    const ports = argument(exactlyOne(callsTo("createMenuBarHost"), "createMenuBarHost(...)"), 0);
+    const tabs = objectProperty(ports, "browserTabs");
+    const browserTabs = {
+      sessionTabCount: vi.fn(() => 3),
+      closeAllForAgents: vi.fn(),
+      reopenForAgents: vi.fn(),
+    };
+    const scope = { browserTabs, BROWSER_CLOSED_FOR_MENU_BAR: "closed for the menu bar" };
+    expect(evaluate<() => number>(objectProperty(tabs, "sessionTabCount"), scope)()).toBe(3);
+    evaluate<() => void>(objectProperty(tabs, "closeForMenuBar"), scope)();
+    expect(browserTabs.closeAllForAgents).toHaveBeenCalledWith("closed for the menu bar");
+    evaluate<() => void>(objectProperty(tabs, "reopen"), scope)();
+    expect(browserTabs.reopenForAgents).toHaveBeenCalledOnce();
+  });
+});
+
+/** Calls to `<anything>.<name>(…)`. */
+function callsToMember(name: string): AstNode[] {
+  return nodesWhere((node) => {
+    if (node.type !== "CallExpression") return false;
+    const callee = node["callee"];
+    return (
+      isNode(callee) &&
+      callee.type === "MemberExpression" &&
+      isIdentifierNamed(callee["property"], name)
+    );
+  });
+}
 
 /** The recorded `vi.fn` at `binding` or `binding.member` in a lifted scope. */
 function spy(scope: Record<string, unknown>, path: string) {

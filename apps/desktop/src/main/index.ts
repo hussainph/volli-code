@@ -94,6 +94,8 @@ import {
 import { isInternalNavigationTarget } from "./navigation";
 import {
   applyQuietAppPolicy,
+  hideDockForMenuBar,
+  showDockAfterMenuBar,
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
@@ -133,6 +135,7 @@ import {
   createSessionConcurrencyEnvReader,
   type SessionConcurrencyEnvReader,
   createSessionTokenRegistry,
+  NO_LIVE_WORK,
 } from "@volli/host-core/sessions";
 import { registerNotificationIpcHandlers } from "./notifications/ipc";
 import { createNotificationRuntime } from "./notifications/runtime";
@@ -203,9 +206,22 @@ import { piSignIn } from "@volli/agent-runtime";
 import {
   ExperimentalSettings,
   installExperimentalSettings,
+  isExperimentEnabled,
   readExperiments,
   setExperiment,
 } from "./experiments";
+import { BROWSER_CLOSED_FOR_MENU_BAR, createMenuBarHost, type MenuBarHost } from "./menu-bar-host";
+import {
+  confirmCloseAgentTabs,
+  confirmMenuBarQuit,
+  electronMenuBarPower,
+  electronMenuBarTray,
+} from "./menu-bar-electron";
+import {
+  createClientStateFlush,
+  MENU_BAR_FLUSH_OVERDUE_MS,
+  SHUTDOWN_FLUSH_TIMEOUT_MS,
+} from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -224,7 +240,7 @@ import {
   windowEventBus,
 } from "./broadcast";
 import { subscribeTicketWake } from "@volli/host-core/board";
-import { registerUpdateIpcHandlers } from "./update-ipc";
+import { installDownloadedUpdate, registerUpdateIpcHandlers } from "./update-ipc";
 import {
   countOpenAgentTurns,
   reconcileInterruptedCleanups,
@@ -361,10 +377,20 @@ const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLo
 const log = hostLogger("desktop");
 const repackLog = hostLogger("transcript-repack");
 const worktreeLog = hostLogger("worktree");
+/**
+ * Brings a window back for a launch that found none (VC-577). Bound once the
+ * window factory exists; until then a second launch has nothing to open.
+ */
+let revealWindowForLaunch: (() => void) | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
     const mainWindow = BrowserWindow.getAllWindows()[0];
-    if (!mainWindow) return;
+    if (!mainWindow) {
+      // Flag off: today's early return. Flag on: a menu-bar host (or one whose
+      // every window was closed) answers a second launch with a window.
+      if (isExperimentEnabled("cloud")) revealWindowForLaunch?.();
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     revealWindow(mainWindow, nativeWindowPolicy);
     sealQuietAppActivation(app, nativeWindowPolicy);
@@ -1077,8 +1103,16 @@ const appStartup = app.whenReady().then(async () => {
     redactOutput: (text) => secrets.store.redact(text),
     redactNoticeOutput: (text) => secrets.store.redactPartial(text),
     onNotice: (notice) => relayShellNotice?.(notice),
-    publishState: (started) => publishBackgroundShellEvent({ shell: started }),
-    publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
+    // The host's live work counts running shells (VC-577) off the same feed
+    // the renderer gets, so the two can never disagree about one shell.
+    publishState: (started) => {
+      liveHost?.liveWork.observeShell(started);
+      publishBackgroundShellEvent({ shell: started });
+    },
+    publishRemoved: (removedShellId) => {
+      liveHost?.liveWork.forgetShell(removedShellId);
+      publishBackgroundShellEvent({ removedShellId });
+    },
     // One row per started shell (VC-341). A background shell is the door a
     // model most often uses to start a dev server, and the one whose child can
     // outlive both the Session and this launch.
@@ -1466,15 +1500,30 @@ const appStartup = app.whenReady().then(async () => {
   let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let abortRepack = noQuitAction;
+  /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
+  let systemShutdownTeardown = noQuitAction;
+  /**
+   * The flag-on shutdown's draft flush (VC-577), joined into the accepted
+   * quit's host shutdown below so `app.exit` waits for it — bounded, so
+   * power-off is never stalled. Resolved unless a shutdown teardown ran.
+   */
+  let systemShutdownFlush: Promise<unknown> = Promise.resolve();
   let hostClosing = false;
+  /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
+  let menuBarHost: MenuBarHost | null = null;
   const prepareHostQuit = (event: { preventDefault(): void }) => {
-    // Preserve the former listener order, including the two unconditional
-    // stops on a refused attempt. Only the quit trigger is registered.
+    // Flag off: the former listener order, including the two unconditional
+    // stops on a refused attempt. Only the quit trigger is registered. Flag
+    // on: the menu-bar branch decides after the confirms, and a host already
+    // stopping is never offered it.
     prepareDesktopQuit(event, {
       stopAutomations: runtimeAutomations.stop,
       unsavedQuit,
       terminalQuit,
       abortRepack,
+      ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
+        ? { menuBar: menuBarHost, systemShutdownTeardown }
+        : {}),
     });
   };
   const runtimeLifecycle = createSessionRuntimeLifecycle({
@@ -1495,7 +1544,7 @@ const appStartup = app.whenReady().then(async () => {
       registerAcceptedQuitCoordinator({
         lifecycle: quittingApp,
         shutdownNativeSessions: async () => {
-          await hostCore.stop("quit");
+          await Promise.all([hostCore.stop("quit"), systemShutdownFlush]);
         },
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
@@ -1850,6 +1899,17 @@ const appStartup = app.whenReady().then(async () => {
   );
   ptyManagerRef = ptyManager;
   terminalQuit = (event) => prepareTerminalQuit(ptyManager, event);
+  // Flag on, logout/restart/shutdown (VC-577): the terminal confirm's killAll
+  // and the windows' draft flush, with nothing that could refuse power-off.
+  systemShutdownTeardown = () => {
+    ptyManager.killAll();
+    // Every window, a hidden menu-bar one included; joined by the accepted
+    // quit's shutdown above, never longer than the bound.
+    systemShutdownFlush = flushWindowState(
+      BrowserWindow.getAllWindows(),
+      SHUTDOWN_FLUSH_TIMEOUT_MS,
+    );
+  };
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them
@@ -1948,6 +2008,35 @@ const appStartup = app.whenReady().then(async () => {
       log: hostLogger("browser").error,
     });
   }
+  // Menu-bar entry's flush-and-ack barrier (VC-577): windows it is about to
+  // destroy are hidden and no longer count as open, so a reopen during the
+  // (bounded) flush builds a fresh window instead of finding a doomed one.
+  const retiringWindows = new WeakSet<BrowserWindow>();
+  const liveWindows = (): BrowserWindow[] =>
+    BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed() && !retiringWindows.has(window),
+    );
+  const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
+  ipcMain.on(
+    "volli:client-state-flushed" satisfies VolliIpcChannel,
+    (_event, ...args: unknown[]): void => {
+      clientStateFlush.acknowledge(args[0]);
+    },
+  );
+  const flushWindowState = (
+    windows: readonly BrowserWindow[],
+    timeoutMs: number,
+    onAcked?: (window: BrowserWindow) => void,
+  ) =>
+    clientStateFlush.flush(
+      windows.map((window) => ({
+        isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+        requestFlush: (requestId: string) =>
+          window.webContents.send("volli:client-state-flush" satisfies VolliIpcEvent, requestId),
+        ...(onAcked === undefined ? {} : { onAcked: () => onAcked(window) }),
+      })),
+      timeoutMs,
+    );
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
     // Browser Tabs are live machine resources, not durable documents. Once the
@@ -1986,7 +2075,11 @@ const appStartup = app.whenReady().then(async () => {
   // the app alive), and the renderer collects the parked target as it
   // subscribes. Bound here because this is where the factory exists.
   notifications.bindWindowOpener(() => {
-    if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
+    // Through the menu-bar host once it exists, so a click on a windowless
+    // host also brings the Dock icon back (VC-577). Outside menu-bar mode its
+    // reveal is exactly this line's former body.
+    if (menuBarHost !== null) menuBarHost.reveal();
+    else if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
   });
   const mainWindow = createOwnedWindow();
   const transcriptRepackAbort = new AbortController();
@@ -2134,7 +2227,11 @@ const appStartup = app.whenReady().then(async () => {
     currentVersion: app.getVersion(),
     notify: (request) => notifications.deliver(request),
     log: hostLogger("auto-update").info,
-    onStateChange: broadcastUpdateState,
+    onStateChange: (state) => {
+      broadcastUpdateState(state);
+      // The Tray's "Install Update When Idle" follows the staged update.
+      menuBarHost?.refresh();
+    },
     // The double-notify guard: with a window open the sidebar badge/dialog
     // owns the "downloaded" announcement; the native notification only speaks
     // when no window is left to show it (macOS keeps the app alive).
@@ -2157,6 +2254,10 @@ const appStartup = app.whenReady().then(async () => {
             log.warn("could not read session", { sessionId, error });
           }),
     unsavedDrafts: unsavedDocumentNames,
+    // Flag on (VC-577): the same synchronous read the Tray and the quit
+    // verdict use, shells included. Flag off: null, and today's count above.
+    liveWork: () =>
+      isExperimentEnabled("cloud") && liveHost !== undefined ? liveHost.liveWork.current() : null,
     beginInstall: beginAcceptedUpdateInstall,
     abandonInstall: abandonAcceptedUpdateInstall,
     // Absent on a broken db, which is the one case this whole registration is
@@ -2173,6 +2274,114 @@ const appStartup = app.whenReady().then(async () => {
         }
       : undefined,
   });
+
+  // Menu-bar mode (VC-577, D-A2 (b)): with the `cloud` flag on, ⌘Q over live
+  // host work keeps this process running as the Mac's host, windowless and
+  // Dock-less, with a Tray. Built for every launch so reopening goes through
+  // one door; with the flag off nothing ever enters the mode, and its reveal
+  // is exactly "open a window if none exists".
+  const menuBar = createMenuBarHost({
+    // Read from the host, never a renderer. A degraded host runs nothing.
+    liveWork: liveHost?.liveWork ?? {
+      current: () => NO_LIVE_WORK,
+      subscribe: () => () => {},
+      tryBeginIdleExit: () => true,
+      abandonIdleExit: () => {},
+    },
+    browserTabs: {
+      sessionTabCount: () => browserTabs.sessionTabCount(),
+      closeForMenuBar: () => browserTabs.closeAllForAgents(BROWSER_CLOSED_FOR_MENU_BAR),
+      reopen: () => browserTabs.reopenForAgents(),
+    },
+    confirmCloseAgentTabs,
+    windows: {
+      count: () => liveWindows().length,
+      // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
+      // confirms already answered, and a window `close` would ask again.
+      // `destroy` skips `beforeunload`, so each renderer is asked to flush
+      // its pending drafts first, and each window is destroyed only from its
+      // own ack. Hidden at once, so the person sees the quit take effect.
+      // Menu-bar entry is not power-off: a window that has not acked is never
+      // destroyed — past the overdue mark it is logged and stays hidden until
+      // a reveal reuses it or a real quit tears it down.
+      closeAll: () => {
+        const closing = liveWindows();
+        for (const window of closing) {
+          retiringWindows.add(window);
+          window.hide();
+        }
+        void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
+          // A reveal that reused this window took it back: keep it.
+          if (!retiringWindows.has(window) || window.isDestroyed()) return;
+          retiringWindows.delete(window);
+          window.destroy();
+        }).then(({ unanswered }) => {
+          if (unanswered > 0) {
+            hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {
+              unanswered,
+            });
+          }
+        });
+      },
+      // A hidden window still waiting on its flush is reused rather than
+      // duplicated: its renderer, and its unsaved drafts, are still there.
+      open: () => {
+        const retained = BrowserWindow.getAllWindows().find(
+          (window) => !window.isDestroyed() && retiringWindows.has(window),
+        );
+        if (retained === undefined) {
+          createOwnedWindow();
+          return;
+        }
+        retiringWindows.delete(retained);
+        revealWindow(retained, nativeWindowPolicy);
+      },
+    },
+    dock: {
+      hide: () => hideDockForMenuBar(app, nativeWindowPolicy),
+      show: () => showDockAfterMenuBar(app, nativeWindowPolicy),
+    },
+    tray: electronMenuBarTray((item) => {
+      if (item === "open") menuBar.reveal({ focus: true });
+      else if (item === "quit") menuBar.quitFromTray();
+      else if (item === "install-when-idle") menuBar.toggleInstallWhenIdle();
+    }),
+    power: electronMenuBarPower(),
+    update: {
+      ready: () => autoUpdate.state().phase === "downloaded",
+      installInFlight: updateInstallQuitInFlight,
+      install: () => {
+        const started = installDownloadedUpdate({
+          update: autoUpdate,
+          beginInstall: beginAcceptedUpdateInstall,
+          abandonInstall: abandonAcceptedUpdateInstall,
+        });
+        if (!started.ok) {
+          hostLogger("menu-bar").error("update install failed", { error: started.error });
+        }
+        return started.ok;
+      },
+    },
+    confirmQuit: confirmMenuBarQuit,
+    quit: () => app.quit(),
+    focusApp: () => {
+      if (!nativeWindowPolicy.enabled) app.focus({ steal: true });
+    },
+  });
+  menuBarHost = menuBar;
+  revealWindowForLaunch = () => menuBar.reveal({ focus: true });
+  // The menu-bar smokes' seam (`e2e/menu-bar-*-smoke.mjs`): a CI runner has no
+  // model to keep a turn live, so the mechanics smoke enters the mode through
+  // the controller itself. Two locks, as with the browser host above: an
+  // unpackaged build AND the smoke's own flag — never a door on a release.
+  if (isDev && process.env["VOLLI_SMOKE_MENU_BAR_HOST"] === "1") {
+    (globalThis as { volliMenuBarHost?: MenuBarHost }).volliMenuBarHost = menuBar;
+  }
+  // Logout, restart and shutdown (`NSWorkspaceWillPowerOffNotification`)
+  // arrive here BEFORE macOS asks the app to quit: the quit that follows must
+  // not be refused, or Volli would cancel the person's logout. Never
+  // preventDefault: that would delay the system instead.
+  powerMonitor.on("shutdown", () => menuBar.noteSystemShutdown());
 
   let shimPath = join(runtimePaths.binDir, "volli");
 
@@ -2685,10 +2894,17 @@ const appStartup = app.whenReady().then(async () => {
   }
 
   app.on("activate", () => {
+    // An activation means a noted logout did not happen (VC-577): the next
+    // ⌘Q keeps its turns again. Inert with the flag off — only the flag-on
+    // quit branch reads that latch.
+    menuBar.noteActivated();
     // On macOS it's common to re-create a window when the dock icon is
-    // clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createOwnedWindow();
+    // clicked and there are no other windows open. A menu-bar host (VC-577)
+    // also leaves menu-bar mode and shows its Dock icon again; otherwise the
+    // reveal is exactly this re-creation. A window menu-bar entry hid while
+    // its drafts flush does not count as open (flag off: there is none).
+    if (liveWindows().length === 0) {
+      menuBar.reveal();
     }
   });
 });

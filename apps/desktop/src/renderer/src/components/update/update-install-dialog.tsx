@@ -54,6 +54,7 @@ export function UpdateInstallDialog() {
         setLiveWork({
           busyCommands: result.busyCommands,
           openAgentSessions: result.openAgentSessions,
+          backgroundShells: result.backgroundShells,
           unsavedDrafts: result.unsavedDrafts,
         });
       })

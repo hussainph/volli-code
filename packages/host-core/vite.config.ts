@@ -109,6 +109,8 @@ export default defineConfig({
         // else can check. The peek's fold rides here too — it is the whole of
         // what a card is allowed to say about a Session it never adopted.
         "src/session-control/session-read-watch.ts",
+        // The synchronous live-work read a desktop quit decides on (VC-577).
+        "src/session-control/live-work.ts",
         "src/session-control/peek-content.ts",
         // The orphan process sweep's ledger storage (VC-341): a row it hands
         // back wrong is what the decision to signal a process is made from.
