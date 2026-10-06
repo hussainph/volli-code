@@ -15,7 +15,8 @@
  * notice the edit.
  */
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import type Database from "better-sqlite3";
@@ -115,35 +116,44 @@ function sha256(content: string): string {
 
 async function scanOne(harnessesDir: string, slug: string): Promise<ScannedDirectory> {
   const manifestPath = join(harnessesDir, slug, MANIFEST_FILENAME);
-  // Sized before it is read, because the read is the unbounded part. A manifest
-  // is allowed to be a symlink — people keep these in dotfile repos — so this
-  // follows it and asks about the file at the end of it, which is the file whose
-  // bytes would be hashed.
   try {
-    const entry = await stat(manifestPath);
-    if (!entry.isFile()) return { read: "nothing" };
-    if (entry.size > MAX_MANIFEST_BYTES) {
-      console.warn(
-        `[harness] skipped ${manifestPath}: ${entry.size} bytes is larger than a manifest can be (${MAX_MANIFEST_BYTES})`,
-      );
-      return { read: "nothing" };
+    // Manifests may be symlinked into dotfile repos. Validate and read the
+    // resolved inode through one descriptor, so a pathname swap cannot change
+    // what we read. O_NONBLOCK keeps even a symlink to a FIFO from hanging boot
+    // before fstat rejects it. Ancestor directories remain user-owned.
+    const file = await open(manifestPath, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const entry = await file.stat();
+      if (!entry.isFile()) return { read: "nothing" };
+      if (entry.size > MAX_MANIFEST_BYTES) {
+        console.warn(
+          `[harness] skipped ${manifestPath}: ${entry.size} bytes is larger than a manifest can be (${MAX_MANIFEST_BYTES})`,
+        );
+        return { read: "nothing" };
+      }
+      // fstat alone cannot bound a file that grows in place. Read at most one
+      // byte past the limit, including short reads, and reject growth too.
+      const bytes = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const { bytesRead } = await file.read(bytes, length, bytes.length - length, length);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+      if (length > MAX_MANIFEST_BYTES) {
+        console.warn(`[harness] skipped ${manifestPath}: grew beyond ${MAX_MANIFEST_BYTES} bytes`);
+        return { read: "nothing" };
+      }
+      const raw = bytes.subarray(0, length).toString("utf8");
+      return { read: "manifest", manifest: parseOne(manifestPath, slug, raw) };
+    } finally {
+      await file.close();
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { read: "nothing" };
-    console.warn(`[harness] could not stat ${manifestPath}: ${errorMessage(error)}`);
-    return { read: "failed" };
-  }
-  let raw: string;
-  try {
-    raw = await readFile(manifestPath, "utf8");
-  } catch (error) {
-    // ENOENT here is a file deleted between the stat and the read, which is
-    // still just a directory with no manifest in it.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { read: "nothing" };
     console.warn(`[harness] could not read ${manifestPath}: ${errorMessage(error)}`);
     return { read: "failed" };
   }
-  return { read: "manifest", manifest: parseOne(manifestPath, slug, raw) };
 }
 
 function parseOne(manifestPath: string, slug: string, raw: string): ScannedHarnessManifest {

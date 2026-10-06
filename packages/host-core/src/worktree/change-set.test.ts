@@ -1,8 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  promises as fs,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CHANGE_SET_FILE_CAP } from "@volli/shared";
 
@@ -388,6 +399,182 @@ describe("changeSetSnapshot — untracked", () => {
       deletions: null,
       binary: false,
     });
+  });
+});
+
+function watchHandle(handle: FileHandle) {
+  return {
+    handle,
+    read: vi.spyOn(handle, "read"),
+    close: vi.spyOn(handle, "close"),
+  };
+}
+
+describe("changeSetSnapshot — untracked descriptor safety", () => {
+  let directory: string;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (directory) rmSync(directory, { recursive: true, force: true });
+  });
+
+  function fixture(content = "one\ntwo\nthree"): string {
+    directory = mkdtempSync(join(tmpdir(), "volli-changeset-descriptor-"));
+    const path = join(directory, "new.txt");
+    writeFileSync(path, content);
+    return path;
+  }
+
+  async function snapshot() {
+    const { gitAsync } = scriptedChangeSetGit({ status: z("? new.txt") });
+    const result = await changeSetSnapshot(gitAsync, {
+      worktreePath: directory,
+      baseBranch: "main",
+    });
+    expect(result.ok).toBe(true);
+    return result.ok ? result.value.files[0] : undefined;
+  }
+
+  it.each([false, true])(
+    "counts only symlink metadata, including dangling links (%s)",
+    async (dangling) => {
+      const path = fixture();
+      if (dangling) rmSync(path);
+      symlinkSync("new.txt", join(directory, "link.txt"));
+      const { gitAsync } = scriptedChangeSetGit({ status: z("? link.txt") });
+      const result = await changeSetSnapshot(gitAsync, {
+        worktreePath: directory,
+        baseBranch: "main",
+      });
+      expect(result.ok && result.value.files[0]).toMatchObject({
+        path: "link.txt",
+        insertions: 1,
+        deletions: 0,
+        binary: false,
+      });
+    },
+  );
+
+  it("does not read a target when the leaf becomes a symlink at open", async () => {
+    const path = fixture();
+    const target = join(directory, "target.txt");
+    writeFileSync(target, "must\nnot\ncount\nthese\nlines\n");
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      expect(flags).toBe(constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      rmSync(path);
+      symlinkSync(target, path);
+      return open(file, flags, mode);
+    });
+
+    // A link's own blob remains previewable; the target's five lines do not.
+    expect(await snapshot()).toMatchObject({ insertions: 1, deletions: 0, binary: false });
+  });
+
+  it("keeps counts unknown if a symlink becomes a regular file before readlink", async () => {
+    const path = fixture();
+    rmSync(path);
+    symlinkSync("missing.txt", path);
+    const readlink = fs.readlink;
+    vi.spyOn(fs, "readlink").mockImplementationOnce((file) => {
+      rmSync(path);
+      writeFileSync(path, "must not be read\n");
+      return readlink(file);
+    });
+    expect(await snapshot()).toMatchObject({ insertions: null, deletions: null, binary: false });
+  });
+
+  it("rejects a directory swapped in at open, without reading, and closes the descriptor", async () => {
+    const path = fixture();
+    const open = fs.open;
+    let observed: ReturnType<typeof watchHandle> | undefined;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      rmSync(path);
+      mkdirSync(path);
+      const handle = await open(file, flags, mode);
+      observed = watchHandle(handle);
+      return handle;
+    });
+
+    expect(await snapshot()).toMatchObject({ insertions: null, deletions: null, binary: false });
+    expect(observed?.read).not.toHaveBeenCalled();
+    expect(observed?.close).toHaveBeenCalledOnce();
+    expect(observed?.handle.fd).toBe(-1);
+  });
+
+  it("rejects a FIFO without blocking or reading and closes its descriptor", async () => {
+    const path = fixture();
+    rmSync(path);
+    execFileSync("mkfifo", [path]);
+    const open = fs.open;
+    let observed: ReturnType<typeof watchHandle> | undefined;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      expect(flags).toBe(constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const handle = await open(file, flags, mode);
+      observed = watchHandle(handle);
+      return handle;
+    });
+
+    expect(await snapshot()).toMatchObject({ insertions: null, deletions: null, binary: false });
+    expect(observed?.read).not.toHaveBeenCalled();
+    expect(observed?.close).toHaveBeenCalledOnce();
+    expect(observed?.handle.fd).toBe(-1);
+  });
+
+  it("reads the validated descriptor even if its pathname is replaced with a symlink", async () => {
+    const path = fixture();
+    const target = join(directory, "target.txt");
+    writeFileSync(target, "must\nnot\ncount\nthese\nlines\n");
+    const open = fs.open;
+    let observed: ReturnType<typeof watchHandle> | undefined;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      const handle = await open(file, flags, mode);
+      observed = watchHandle(handle);
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+        const entry = await stat();
+        renameSync(path, join(directory, "original.txt"));
+        symlinkSync(target, path);
+        return entry;
+      });
+      return handle;
+    });
+
+    expect(await snapshot()).toMatchObject({ insertions: 3, deletions: 0, binary: false });
+    expect(observed?.read).toHaveBeenCalled();
+    expect(observed?.close).toHaveBeenCalledOnce();
+    expect(observed?.handle.fd).toBe(-1);
+  });
+
+  it.each(["stat", "read"] as const)("closes the descriptor when %s fails", async (operation) => {
+    fixture();
+    const open = fs.open;
+    let observed: ReturnType<typeof watchHandle> | undefined;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      const handle = await open(file, flags, mode);
+      observed = watchHandle(handle);
+      vi.spyOn(handle, operation).mockRejectedValueOnce(new Error("injected I/O failure"));
+      return handle;
+    });
+
+    expect(await snapshot()).toMatchObject({ insertions: null, deletions: null, binary: false });
+    expect(observed?.close).toHaveBeenCalledOnce();
+    expect(observed?.handle.fd).toBe(-1);
+  });
+
+  it("closes the descriptor on the early binary return", async () => {
+    fixture("binary\0data");
+    const open = fs.open;
+    let observed: ReturnType<typeof watchHandle> | undefined;
+    vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+      const handle = await open(file, flags, mode);
+      observed = watchHandle(handle);
+      return handle;
+    });
+
+    expect(await snapshot()).toMatchObject({ insertions: null, deletions: null, binary: true });
+    expect(observed?.close).toHaveBeenCalledOnce();
+    expect(observed?.handle.fd).toBe(-1);
   });
 });
 
