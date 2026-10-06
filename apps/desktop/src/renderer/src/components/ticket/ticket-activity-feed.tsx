@@ -61,6 +61,7 @@ import { cn } from "@renderer/lib/utils";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 type PhosphorIcon = typeof ChatCircleIcon;
 
@@ -204,7 +205,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
       return;
     }
     const result = await writeThrough("edit comment", () =>
-      window.api.comments.update({ commentId: comment.id, body: trimmed }),
+      boardApi().comments.update({ commentId: comment.id, body: trimmed }),
     );
     if (!result) return; // failure already toasted — keep the editor open
     setEditing(false);
@@ -213,7 +214,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
 
   async function remove() {
     const result = await writeThrough("delete comment", () =>
-      window.api.comments.remove({ commentId: comment.id }),
+      boardApi().comments.remove({ commentId: comment.id }),
     );
     if (!result) return;
     onChanged();
@@ -417,7 +418,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const refetchComments = React.useCallback(async () => {
     const token = activityFetch.claim();
     try {
-      const cm = await window.api.comments.list({ ticketId });
+      const cm = await boardApi().comments.list({ ticketId });
       if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!cm.ok) {
         toastError(`Couldn't load activity: ${cm.error}`);
@@ -487,7 +488,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       version: useBoardStore.getState().lastPlanningChange.version,
     });
     const result = await writeThrough("post comment", () =>
-      window.api.comments.create({ ticketId, body }),
+      boardApi().comments.create({ ticketId, body }),
     );
     if (!result) {
       const rolledBack = useTicketActivityStore.getState().byTicket[ticketId];

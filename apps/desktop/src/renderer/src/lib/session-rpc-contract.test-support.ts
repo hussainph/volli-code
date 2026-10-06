@@ -18,6 +18,9 @@ import {
   type AppRouter,
   type RouterCaller,
   type SessionRouterContext,
+  type BoardRouterHandlers,
+  type DesktopRouterHandlers,
+  type SessionRouterHandlers,
 } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import {
@@ -101,7 +104,12 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
       judgeNextRegistrationAs({ caller, resourceWorkspace });
       // One object, as main hands it: the map over the ports the case states.
       const registration = registerSessionRpcIpcHandlers({
-        handlers: sessionHandlersFrom(ports),
+        // The Session cases reach only the Session router's slice; the bridge
+        // also serves the board router (VC-565) and the desktop-only tier
+        // (VC-608), whose cases are their own.
+        handlers: sessionHandlersFrom(ports) as unknown as SessionRouterHandlers &
+          BoardRouterHandlers &
+          DesktopRouterHandlers,
         ...(diagnostics === undefined ? {} : { diagnostics }),
       });
       assertIdentityConsumed();

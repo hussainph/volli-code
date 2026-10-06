@@ -91,6 +91,7 @@ import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/sessi
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
@@ -499,8 +500,8 @@ export function ActiveSessions({
   const statusFetch = useLatestAsync();
   React.useEffect(() => {
     const token = statusFetch.claim();
-    window.api.tickets
-      .statusEntries({ projectId: project.id })
+    boardApi()
+      .tickets.statusEntries({ projectId: project.id })
       .then((result) => {
         if (!statusFetch.isCurrent(token)) return;
         if (!result.ok) {
@@ -531,8 +532,8 @@ export function ActiveSessions({
       setSignalsByTicket({});
       return;
     }
-    window.api.tickets
-      .latestSignals({ projectId: project.id })
+    boardApi()
+      .tickets.latestSignals({ projectId: project.id })
       .then((result) => {
         if (!signalsFetch.isCurrent(token)) return;
         if (!result.ok) {
