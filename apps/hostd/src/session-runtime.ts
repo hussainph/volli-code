@@ -291,6 +291,8 @@ export function createHeadlessSessionRuntime(input: {
       recovered = { busyWorktreeSites, runtime };
       return {
         ...recoveredSessionCommandPorts(ready),
+        /** What the host protocol's Session router serves (VC-663). */
+        sessionRouter: { runtime, sessions },
         venue: options.venue,
         verifySessionToken: tokens.verify,
         busyWorktreeSites,

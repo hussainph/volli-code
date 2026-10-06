@@ -23,6 +23,7 @@ describe("volli-hostd's arguments", () => {
       dataDir: "/var/lib/volli",
       socketPath: "/var/lib/volli/volli.sock",
       operatorsFile: "/etc/volli-hostd-operators",
+      listen: null,
     });
     expect(defaultSocketPath("/d")).toBe("/d/volli.sock");
   });
@@ -38,7 +39,36 @@ describe("volli-hostd's arguments", () => {
       dataDir: "/srv/data",
       socketPath: "/srv/run/v.sock",
       operatorsFile: "/srv/etc/operators",
+      listen: null,
     });
+  });
+
+  // VC-663: the host protocol's address. Loopback only until VC-575.
+  it("takes a loopback address for the host protocol", () => {
+    for (const [value, listen] of [
+      ["127.0.0.1:7420", { host: "127.0.0.1", port: 7420 }],
+      ["localhost:0", { host: "localhost", port: 0 }],
+      ["[::1]:65535", { host: "::1", port: 65535 }],
+    ] as const) {
+      expect(parseHostdArgs(["--data-dir", "/d", "--listen", value], CWD)).toMatchObject({
+        listen,
+      });
+    }
+  });
+
+  it("refuses a --listen that is not a loopback host and port", () => {
+    expect(refusal(["--data-dir", "/d", "--listen", "0.0.0.0:7420"])).toBe(
+      "--listen binds loopback only until pairing lands (VC-575), not 0.0.0.0.",
+    );
+    expect(refusal(["--data-dir", "/d", "--listen", "7420"])).toBe(
+      "--listen takes <host>:<port>, not 7420.",
+    );
+    expect(refusal(["--data-dir", "/d", "--listen", "[::1]:70000"])).toBe(
+      "--listen's port must be 0–65535, not 70000.",
+    );
+    expect(refusal(["status", "--data-dir", "/d", "--listen", "127.0.0.1:1"])).toBe(
+      "--listen belongs to serving, not to status.",
+    );
   });
 
   it("treats an empty --socket as the default", () => {

@@ -45,8 +45,10 @@ import {
   type HostActorKind,
   type HostError,
   type HostErrorReason,
+  type HostWelcome,
   type LocalDeviceActor,
   type SessionId,
+  type SubscriptionReplayBounds,
   type WorkspaceId,
 } from "@volli/host-protocol";
 import {
@@ -174,9 +176,42 @@ export interface CatalogCallerContext {
    */
   sessionMayAct?: (resource: WorkspaceResource, sessionId: SessionId) => boolean | Promise<boolean>;
   diagnostics: CatalogDiagnostics;
-  transport?: "electron-ipc" | "unknown";
+  transport?: RouterTransport;
   performanceObserver?: RpcProcedurePerformanceObserver;
+  /**
+   * The catalog keys this connection's negotiated features grant
+   * (`operationsGrantedBy`, `@volli/host-protocol`). A door with a handshake
+   * always sets it, and a call to any other key is `FORBIDDEN` /
+   * `verb-refused` before its input is read. Absent: the door negotiates no
+   * features (the desktop's in-process IPC).
+   */
+  operations?: ReadonlySet<string>;
+  /** The welcome the door's handshake negotiated; `protocol.welcome` answers it. */
+  welcome?: HostWelcome;
+  /**
+   * The door refused this connection's handshake (VC-663): every call answers
+   * this refusal before anything else about it is read, so each operation a
+   * client queued behind its hello learns the reason, and the door then
+   * closes the connection. Such a context carries no caller a handler could
+   * use.
+   */
+  refused?: HandshakeRefusal;
+  /**
+   * How much history one subscription may replay before it answers
+   * `subscription-resnapshot-required` instead. The WebSocket listener sets
+   * `SUBSCRIPTION_REPLAY_BOUNDS`; absent (IPC), replay is unbounded (D9).
+   */
+  replayBounds?: SubscriptionReplayBounds;
 }
+
+/** Why a door refused a handshake: a host-protocol reason, never a bare message. */
+export interface HandshakeRefusal {
+  readonly reason: HostErrorReason;
+  readonly message: string;
+}
+
+/** Which door a call came through, as diagnostics record it. */
+export type RouterTransport = "electron-ipc" | "websocket" | "unknown";
 
 /** A refusal the host protocol names: the reason travels to every client as `data.hostError`. */
 export class HostProcedureError extends TRPCError {
@@ -209,8 +244,10 @@ export function hostErrorOf(error: unknown, fallback = "Session RPC request fail
     : { code, message };
 }
 
+export const CREDENTIAL_INVALID_MESSAGE = "This connection's credential is no longer valid.";
+
 /** Same message for a foreign and an absent resource, so neither reveals the other. */
-const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
+export const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
 
 /** Pins host-protocol's actor kinds to the shared mapping's, in both directions. */
 type AssertNever<Type extends never> = Type;
@@ -469,11 +506,11 @@ export function createCatalogBuilders<
   function policed(entry: CatalogEntry) {
     const requirement = catalogActorOf(entry);
     return instrumented.use(async function admit({ ctx, next }) {
+      if (ctx.refused !== undefined) {
+        throw new HostProcedureError(ctx.refused.reason, ctx.refused.message);
+      }
       if (!callerAffirmed(ctx.caller)) {
-        throw new HostProcedureError(
-          "credential-invalid",
-          "This connection's credential is no longer valid.",
-        );
+        throw new HostProcedureError("credential-invalid", CREDENTIAL_INVALID_MESSAGE);
       }
       const { actor } = ctx.caller;
       const policyActor = HOST_ACTOR_POLICY[actor.kind];
@@ -487,6 +524,12 @@ export function createCatalogBuilders<
         (isLocalDeviceActor(actor) || entry.accessModes.includes("hostApi"));
       if (!admitted) {
         throw new HostProcedureError("verb-refused", `${entry.key} is not open to this caller.`);
+      }
+      if (ctx.operations !== undefined && !ctx.operations.has(entry.key)) {
+        throw new HostProcedureError(
+          "verb-refused",
+          `${entry.key} is not among the features this connection negotiated.`,
+        );
       }
       const result = await next();
       // A command id reused for a different intent is the client's conflict,

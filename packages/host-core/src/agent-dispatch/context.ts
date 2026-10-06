@@ -35,6 +35,7 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionReadVerb,
   SessionRole,
   SessionEnvRepair,
   SessionEnvReport,
@@ -320,6 +321,17 @@ export interface OperatorWriteRecord {
 
 export interface AgentCommandService {
   execute(request: AgentRequest): Promise<AgentResponse>;
+  /**
+   * One of the socket's Session reads for a caller bound to ONE Workspace
+   * (the host protocol's WebSocket, VC-663): the same handler `execute`
+   * runs, with its roster forced to that project. Another Workspace's
+   * Session answers `SESSION_NOT_FOUND`, exactly as an absent one does.
+   */
+  executeInWorkspace(
+    verb: SessionReadVerb,
+    workspaceId: string,
+    args: Record<string, unknown>,
+  ): Promise<AgentResponse>;
 }
 
 /**

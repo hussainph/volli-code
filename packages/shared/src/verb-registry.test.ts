@@ -11,6 +11,7 @@ import {
   catalogEntriesFrom,
   catalogLookup,
   catalogEntry,
+  SESSION_READ_VERBS,
   cliVerbName,
   VERB_IDEMPOTENCIES,
   VERB_SCOPES,
@@ -240,7 +241,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   help: "read",
   // The Session router's catalog entries (VC-564): `hostApi`-only, tiered by
   // the CLI's actor rule. Every one requires the person, so every one reads
-  // coordination, the same answer VC-623 gave `project.add`.
+  // coordination, the same answer VC-623 gave `project.add`; the bootstrap
+  // `protocol.welcome` is any caller's, so it reads (VC-663).
+  "protocol.welcome": "read",
   "sessions.create": "coordination",
   "sessions.attach": "coordination",
   "settings.experiments": "coordination",
@@ -1233,6 +1236,9 @@ describe("verb result details (VC-471)", () => {
   });
 });
 
+/** The socket's Session reads, projected onto the WebSocket by VC-663 (D4). */
+const SESSION_READS: readonly string[] = SESSION_READ_VERBS;
+
 describe("the host-protocol command catalog (VC-564)", () => {
   // VC-564 A2: one entry serves both doors, each with its own actor policy.
   it("lets a socket verb's agent actor and its router actor differ", () => {
@@ -1252,7 +1258,14 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expect(catalogActorOf(declared!)).toBe("session-own");
     expect(declared!.actor).toBe("session");
     expect(verbTier(socketVerb)).toBe("coordination");
-    for (const entry of CATALOG_ENTRIES) expect(catalogActorOf(entry)).toBe(entry.actor);
+    // A router-only entry's router actor is its own; the socket's Session
+    // reads (VC-663) keep `any` for the socket and require the person on
+    // the WebSocket.
+    for (const entry of CATALOG_ENTRIES) {
+      expect(catalogActorOf(entry), entry.key).toBe(
+        SESSION_READS.includes(entry.key) ? "user" : entry.actor,
+      );
+    }
   });
 
   it("looks a key up in any checked catalog", () => {
@@ -1263,6 +1276,11 @@ describe("the host-protocol command catalog (VC-564)", () => {
 
   /** The Session router, procedure by procedure: the catalog's first area. */
   const SESSION_ROUTER = {
+    "session.list": ["workspace", "read"],
+    "session.show": ["workspace", "read"],
+    "session.peek": ["workspace", "read"],
+    "session.answer": ["workspace", "read"],
+    "protocol.welcome": ["host", "read"],
     "sessions.create": ["workspace", "command-id"],
     "sessions.attach": ["workspace", "command-id"],
     "settings.experiments": ["host", "read"],
@@ -1300,8 +1318,13 @@ describe("the host-protocol command catalog (VC-564)", () => {
     for (const entry of CATALOG_ENTRIES) {
       expect(VERB_SCOPES).toContain(entry.catalog.scope);
       expect(VERB_IDEMPOTENCIES).toContain(entry.catalog.idempotency);
-      // The person's, on no agent surface (D3, D8).
-      expect(entry.actor, entry.key).toBe("user");
+      if (SESSION_READS.includes(entry.key)) {
+        // Socket verbs first (D4): listed for agents there, the person's here.
+        expect(entry.accessModes, entry.key).toEqual(["cli", "hostApi"]);
+        continue;
+      }
+      // The person's, on no agent surface (D3, D8); the bootstrap read is anyone's.
+      expect(entry.actor, entry.key).toBe(entry.key === "protocol.welcome" ? "any" : "user");
       expect(entry.listed, entry.key).toBe(false);
     }
   });
@@ -1314,6 +1337,10 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expectTypeOf<HostApiCatalogCoverage>().toEqualTypeOf<never>();
     expectTypeOf<Exclude<HostApiKey, CatalogKey>>().toEqualTypeOf<never>();
     expectTypeOf<CatalogKeyScopedTo<"workspace">>().toEqualTypeOf<
+      | "session.list"
+      | "session.show"
+      | "session.peek"
+      | "session.answer"
       | "sessions.create"
       | "sessions.attach"
       | "session.snapshot"

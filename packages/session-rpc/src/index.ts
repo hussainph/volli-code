@@ -1,5 +1,10 @@
 import { TRPCError, tracked } from "@trpc/server";
-import type { JsonUnsafeProcedures } from "@volli/host-protocol";
+import {
+  isHostActor,
+  type HostActor,
+  type HostOperation,
+  type JsonUnsafeProcedures,
+} from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 import {
   isSessionStreamFrame,
@@ -48,8 +53,20 @@ import {
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
+  type RouterTransport,
 } from "./catalog";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
+import { replayExceedsEvents, ReplayMeter, resnapshotRequired } from "./replay-bound";
+import {
+  readSession,
+  readWorkspace,
+  sessionHandleInput,
+  sessionListInput,
+  sessionListOutput,
+  sessionPeekInput,
+  sessionReadOutput,
+  type ReadSessionVerb,
+} from "./session-reads";
 import {
   catalogRouter,
   hostProcedure,
@@ -74,9 +91,11 @@ export {
   type RouterCaller,
   type WorkspaceResource,
   type ResourceRelation,
+  type RouterTransport,
   type WorkspaceResources,
 } from "./catalog";
 export { SESSION_RESOURCE } from "./session-catalog";
+export type { ReadSessionVerb } from "./session-reads";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
@@ -235,8 +254,14 @@ export interface SessionRouterContext extends CatalogCallerContext {
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /**
+   * The socket's Session reads, run Workspace-scoped (VC-663, D4): host-core's
+   * `executeInWorkspace`. Absent: `operation-unavailable` (the desktop's IPC,
+   * which has its own listing).
+   */
+  readSessionVerb?: ReadSessionVerb;
   diagnostics: RpcDiagnosticLog;
-  transport?: "electron-ipc" | "unknown";
+  transport?: RouterTransport;
   performanceObserver?: RpcProcedurePerformanceObserver;
 }
 
@@ -694,6 +719,21 @@ const commandRequestSchema = z
     }
   });
 
+/**
+ * The welcome as `protocol.welcome` answers it: the grammar `isHostWelcome`
+ * checks, stated in zod so the JSON Schema a non-TypeScript client reads can
+ * be derived from it (D2). The actor is the one field left to its guard,
+ * which also refuses the reserved local device.
+ */
+const hostWelcomeSchema = z.object({
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  workspace: z.object({ id: z.uuidv4(), epoch: nonNegativeSafeInteger }),
+  actor: z.custom<HostActor>(isHostActor, "Expected a network actor"),
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
+});
+
 const sessionSubscriptionSchema = z.object({
   sessionId: nonEmptyString,
   afterSequence: nonNegativeSafeInteger.optional(),
@@ -746,6 +786,18 @@ function subscriptionOverflowError(message: string): HostProcedureError {
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
   return catalogRouter({
+    protocol: {
+      // The v1 bootstrap read: base, in no feature, so a client can always
+      // ask what its handshake negotiated before anything else.
+      welcome: hostProcedure("protocol.welcome")
+        .output(hostWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined) {
+            unavailable("This connection negotiated no welcome");
+          }
+          return ctx.welcome;
+        }),
+    },
     sessions: {
       create: workspaceProcedure(
         "sessions.create",
@@ -928,6 +980,45 @@ export function createSessionRouter() {
         }),
     },
     session: {
+      // The socket's Session reads, forced to the caller's Workspace (D4).
+      list: workspaceProcedure("session.list", sessionListInput, readWorkspace)
+        .output(sessionListOutput)
+        .query(({ ctx, input: { projectId, ...filters } }) =>
+          readSession(ctx.readSessionVerb, "session.list", projectId, filters, sessionListOutput),
+        ),
+      show: workspaceProcedure("session.show", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            ctx.readSessionVerb,
+            "session.show",
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
+      peek: workspaceProcedure("session.peek", sessionPeekInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            ctx.readSessionVerb,
+            "session.peek",
+            input.projectId,
+            { id: input.session, lines: input.lines },
+            sessionReadOutput,
+          ),
+        ),
+      answer: workspaceProcedure("session.answer", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            ctx.readSessionVerb,
+            "session.answer",
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
       snapshot: workspaceProcedure(
         "session.snapshot",
         z.object({ sessionId: nonEmptyString }),
@@ -950,6 +1041,20 @@ export function createSessionRouter() {
       ).subscription(async function* ({ ctx, input, signal }) {
         if (signal?.aborted) return;
         const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
+        // A bounded door (the WebSocket, D9) refuses a resume it would have
+        // to replay too much for, before the source is opened at all.
+        const bounds = ctx.replayBounds;
+        if (
+          bounds !== undefined &&
+          replayExceedsEvents(
+            bounds,
+            afterSequence,
+            (await ctx.runtime.projection({ sessionId: input.sessionId })).throughSequence,
+          )
+        ) {
+          throw resnapshotRequired();
+        }
+        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
         const queue = new AsyncQueue<RendererSessionStreamEmission>();
         const sourceFailure: { current: { error: unknown } | null } = { current: null };
         const unsubscribe = await ctx.runtime.subscribe(
@@ -959,8 +1064,12 @@ export function createSessionRouter() {
           // boundary, and no transient arm carries either. Asked as the
           // negation of the durable arm so a third transient arm needs no
           // edit here.
-          (emission) =>
-            queue.push(isSessionStreamFrame(emission) ? rendererFrame(emission) : emission),
+          (emission) => {
+            const durable = isSessionStreamFrame(emission);
+            const sent = durable ? rendererFrame(emission) : emission;
+            replay?.measure(sent, durable);
+            queue.push(sent);
+          },
           // The runtime's drain died behind this subscription. Ended like an
           // overflow — buffered contiguous frames still drain, then the
           // stream closes with an error instead of a clean `done`, because a
@@ -972,6 +1081,14 @@ export function createSessionRouter() {
             queue.close(false);
           },
         );
+        // The runtime replays history before its subscribe call returns, so
+        // everything measured so far was replay: past the bounds, nothing of
+        // it is sent.
+        replay?.end();
+        if (replay?.exceeded === true) {
+          unsubscribe();
+          throw resnapshotRequired();
+        }
         if (signal?.aborted) {
           unsubscribe();
           return;
@@ -1223,6 +1340,16 @@ export type AppRouter = ReturnType<typeof createSessionRouter>;
  */
 export type SessionRouterCatalogBinding = AssertNever<
   CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>
+>;
+
+/**
+ * Every operation a v1 feature grants is a procedure this router serves
+ * (`HOST_FEATURE_OPERATIONS`, VC-663): a feature that names a key no router
+ * has fails `pnpm typecheck` here. Moves to the composition root with the
+ * catalog binding when a second area router lands.
+ */
+export type SessionRouterFeatureBinding = AssertNever<
+  Exclude<HostOperation, ProcedurePaths<AppRouter["_def"]["record"]>>
 >;
 
 /**

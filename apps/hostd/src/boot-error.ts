@@ -8,7 +8,13 @@
  */
 export const EXIT_CONFIG = 78;
 
-export type HostdBootFailure = "usage" | "data-dir" | "socket" | "already-running" | "operators";
+export type HostdBootFailure =
+  | "usage"
+  | "data-dir"
+  | "socket"
+  | "already-running"
+  | "operators"
+  | "host-protocol";
 
 export class HostdBootError extends Error {
   readonly reason: HostdBootFailure;

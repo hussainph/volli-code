@@ -57,6 +57,10 @@ import {
   createHostAgentCommands,
 } from "@volli/host-core/agents";
 
+import type { HostCredentialVerifier } from "@volli/host-protocol";
+import type { HostProtocolListener } from "@volli/session-rpc/websocket";
+
+import { cloudEnabled, startHostdProtocolListener, type HostProtocolBind } from "./host-protocol";
 import {
   createHeadlessSessionRuntime,
   headlessModelAccess,
@@ -74,6 +78,7 @@ import {
   writeStatus,
   type HostdCapabilities,
   type HostdDatabaseStatus,
+  type HostdHostProtocolStatus,
   type HostdState,
   type HostdStatus,
 } from "./status";
@@ -101,6 +106,18 @@ export interface HostdOptions {
    * or a variable — whoever owns that file can mint a person.
    */
   readonly operatorsOwnerUid?: number;
+  /**
+   * `--listen`: where the host protocol's WebSocket listens (VC-663), served
+   * only with the `cloud` flag on (`VOLLI_EXPERIMENTAL=cloud`). Loopback
+   * only until VC-575. Absent or `null`: no listener.
+   */
+  readonly listen?: HostProtocolBind | null;
+  /**
+   * The host protocol's credential verifier. A test seam only, never an
+   * argument or a variable: until VC-575/VC-577 there is no production
+   * verifier, and every handshake is refused (D5).
+   */
+  readonly hostProtocolVerifier?: HostCredentialVerifier;
   readonly runtime?: HeadlessRuntimeOptions;
   readonly now?: () => Date;
   /**
@@ -142,6 +159,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
   let database: HostdDatabaseStatus | null = null;
   let capabilities = UNAVAILABLE;
   let credentials: HostdStatus["credentials"] = null;
+  let hostProtocol: HostdHostProtocolStatus | null = null;
   const snapshot = (): HostdStatus => ({
     v: 1,
     state,
@@ -154,6 +172,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     database,
     capabilities,
     credentials,
+    hostProtocol,
   });
   const publish = (next: HostdState): void => {
     state = next;
@@ -161,6 +180,14 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
   };
 
   logger.info("starting", { version: options.version, dataDir, socketPath, pid: process.pid });
+  // The host protocol is behind the `cloud` flag: an address alone opens nothing.
+  const listen = options.listen ?? null;
+  const cloud = cloudEnabled(options.env);
+  if (listen !== null && !cloud) {
+    logger.warn("--listen is ignored: the host protocol needs VOLLI_EXPERIMENTAL=cloud", {
+      listen: `${listen.host}:${listen.port}`,
+    });
+  }
   prepareDataDir(dataDir, logger);
   warnOfSharedSocketDir(socketPath, dataDir, logger);
   const lock = acquireInstanceLock(dataDir);
@@ -250,11 +277,13 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
       venue: { id: socketPath, kind: "remote" },
     };
     let sessionRuntime: HeadlessSessionRuntime | undefined;
+    let listener: HostProtocolListener | undefined;
 
     /** Settles what every verb answers with, and publishes the state that goes with it. */
     const serve = async (host: HostCore, ports: HostCorePorts): Promise<void> => {
       if (isLiveHost(host)) {
         database = { ok: true, path: host.dbPath };
+        const venue = hostdVenue(host.database.db);
         sessionRuntime = createHeadlessSessionRuntime({
           host,
           ports,
@@ -264,31 +293,56 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           socketPath,
           // An address locates this host; only its persisted identity names
           // ownership. Override packaged/source runtime path metadata alike.
-          options: { ...runtimeOptions, venue: hostdVenue(host.database.db) },
+          options: { ...runtimeOptions, venue },
         });
-        const sessionPorts = await sessionRuntime.ready();
+        const { sessionRouter, ...sessionPorts } = await sessionRuntime.ready();
         capabilities = {
           ...UNAVAILABLE,
           board: "available",
           sessions: "available",
           automations: sessionPorts.automationsAvailable ? "available" : "unavailable",
         };
-        settle(
-          createHostAgentCommands(ports, {
-            db: host.database.db,
-            ...sessionPorts,
-            appVersion: options.version,
-            verifyOperatorToken: operators.verify,
-            // A Done move's worktree trim outlives its reply; the host's stop
-            // drains it before the database closes.
-            detachedWork: host.detachedWork,
-            // The audit line beside each operator write. `SO_PEERCRED` would
-            // add the peer's uid and pid, but Node's `net` cannot read it
-            // without a native addon; the login the token names is the
-            // attribution (README, "Operators").
-            onOperatorWrite: (record) => logger.info("operator write", { ...record }),
-          }).execute,
-        );
+        const commands = createHostAgentCommands(ports, {
+          db: host.database.db,
+          ...sessionPorts,
+          appVersion: options.version,
+          verifyOperatorToken: operators.verify,
+          // A Done move's worktree trim outlives its reply; the host's stop
+          // drains it before the database closes.
+          detachedWork: host.detachedWork,
+          // The audit line beside each operator write. `SO_PEERCRED` would
+          // add the peer's uid and pid, but Node's `net` cannot read it
+          // without a native addon; the login the token names is the
+          // attribution (README, "Operators").
+          onOperatorWrite: (record) => logger.info("operator write", { ...record }),
+        });
+        settle(commands.execute);
+        if (cloud && listen !== null) {
+          try {
+            listener = await startHostdProtocolListener({
+              db: host.database.db,
+              hostId: venue.id,
+              version: options.version,
+              bind: listen,
+              ...(options.hostProtocolVerifier === undefined
+                ? {}
+                : { verifier: options.hostProtocolVerifier }),
+              runtime: sessionRouter.runtime,
+              sessionEngine: sessionPorts.sessionEngine,
+              sessions: sessionRouter.sessions,
+              commands,
+              logger,
+            });
+          } catch (error) {
+            throw new HostdBootError(
+              "host-protocol",
+              `Could not listen for the host protocol on ${listen.host}:${listen.port}: ${(error as Error).message}`,
+              { listen: `${listen.host}:${listen.port}` },
+            );
+          }
+          hostProtocol = { url: listener.url, ...listener.address };
+          logger.info("host protocol listening", { url: listener.url });
+        }
         publish("serving");
         logger.info("serving", { socketPath, database: host.dbPath, capabilities });
         // Retention and the automatic reap begin at readiness; the host's stop ends them.
@@ -368,6 +422,11 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         },
         stopProducers: () => sessionRuntime?.stopProducers(),
         close: async () => {
+          // Every WebSocket stream ends before the runtime that feeds it.
+          if (listener !== undefined) {
+            await listener.close();
+            hostProtocol = null;
+          }
           await sessionRuntime?.close();
         },
         drainRequests: async () => {

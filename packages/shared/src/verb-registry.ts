@@ -1526,7 +1526,10 @@ export const VERB_REGISTRY = [
   },
   {
     key: "session.list",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
@@ -1559,10 +1562,14 @@ export const VERB_REGISTRY = [
         help: "Activity window: RFC 3339 instant or look-back (24h, 7d, 90m).",
       },
     ],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     key: "session.show",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.show" },
     listed: true,
@@ -1577,12 +1584,16 @@ export const VERB_REGISTRY = [
     ],
     positionalId: "required",
     options: [],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // Read tier despite the disclosure it carries: cross-session transcript
     // access is per-actor policy data (VC-44), not a tier change.
     key: "session.peek",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
@@ -1605,6 +1616,7 @@ export const VERB_REGISTRY = [
         help: "How much trailing output to show.",
       },
     ],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // A Session's answer (VC-9): its final message, in full, and how its
@@ -1615,7 +1627,10 @@ export const VERB_REGISTRY = [
     // transcript already is (`session peek`); the trust line is drawn by the
     // rendering, which quotes the message as another author's prose.
     key: "session.answer",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.answer" },
     listed: true,
@@ -1631,6 +1646,7 @@ export const VERB_REGISTRY = [
     ],
     positionalId: "required",
     options: [],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // Agent control stays tool-only. VC-622 admits the person at a headless
@@ -3196,6 +3212,20 @@ export const VERB_REGISTRY = [
   // as they are for VC-572 to refine. `labDiagnostics.*` carries no access
   // mode: the router keeps it for the in-process lab, and no door serves it.
   {
+    // The v1 bootstrap read (HP § Handshake): the welcome this connection's
+    // handshake negotiated. In no feature, so every authenticated connection
+    // may ask, a Session's included; it reveals only the caller's own grant.
+    key: "protocol.welcome",
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: "protocol.welcome" },
+    listed: false,
+    group: "App",
+    summary: "Read the welcome this connection's handshake negotiated.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
     key: "sessions.create",
     accessModes: ["hostApi"],
     actor: "user",
@@ -3554,6 +3584,19 @@ export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly Agent
 export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as Readonly<
   Record<AgentCommand, AgentCommandBindingId>
 >;
+
+/**
+ * The socket's Session reads the WebSocket also serves (VC-663, D4): the same
+ * handler, run with its roster forced to the connection's one Workspace.
+ * Their router policy is the person's (`catalog.actor: "user"`).
+ */
+export const SESSION_READ_VERBS = [
+  "session.list",
+  "session.show",
+  "session.peek",
+  "session.answer",
+] as const satisfies readonly (AgentCommand & CatalogKey)[];
+export type SessionReadVerb = (typeof SESSION_READ_VERBS)[number];
 
 /**
  * The Verb Tier a verb's access modes and actor requirement imply (VC-92 §2).
