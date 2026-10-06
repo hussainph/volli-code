@@ -145,6 +145,7 @@ import {
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
+import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -1603,6 +1604,9 @@ export function ChatPlane({
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
+          {/* Where this Session's work runs, when that is not This Mac
+              (VC-576). Nothing with the `cloud` flag off. */}
+          <RunningOnLabel projectId={projectId} className="pointer-events-auto mb-2 ml-auto" />
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
           {/* The Activity Island (VC-268): what this Session holds beyond the
               chat stream — its Browser Tabs, its plan, its background shells

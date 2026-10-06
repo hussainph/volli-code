@@ -47,6 +47,7 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { useHostReadOnly } from "@renderer/components/hosts/use-hosts";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import {
@@ -71,6 +72,8 @@ export function ColumnArmingButton({
   const rank = useAutomationsStore((state) => selectColumnRank(state, projectId, status));
   const armed = useAutomationsStore((state) => selectArmedAutomation(state, projectId, status));
   const enabledIds = useAutomationsStore((state) => state.enabledIds);
+  // The project's host cannot serve (VC-576): arming is a write, so it stands down.
+  const readOnly = useHostReadOnly(projectId);
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
   const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
@@ -113,6 +116,7 @@ export function ColumnArmingButton({
             <Button
               variant="ghost"
               size="icon-sm"
+              disabled={readOnly}
               aria-label={label}
               data-column-arming={status}
               data-armed={armed === null ? undefined : armed.id}
