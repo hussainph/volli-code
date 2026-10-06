@@ -40,6 +40,7 @@ import {
   type ChatSessionRpc,
   type ChatSessionTransport,
 } from "@volli/session-presentation";
+import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
@@ -1562,5 +1563,21 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
   it("copies nothing when the host says the current turn has not spoken", async () => {
     const writeText = await pressCopy(null);
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  // The re-check review's legacy probe, kept: the reply was recorded before
+  // transcript digests, so no event says where it is. The host recovers it
+  // from history above the window (VC-315's legacy baseline), and `/copy`
+  // copies what that real snapshot answers.
+  it("VC-315 recheck: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
+    const snapshot = await openLegacySession([
+      { say: "Current-turn reply" },
+      ...tools.map(() => ({ say: "   " })),
+      { say: "   " },
+    ]);
+    expect(snapshot.before).not.toBeNull();
+    expect(JSON.stringify(snapshot.frames)).not.toContain("Current-turn reply");
+    const writeText = await pressCopy(snapshot.latestReply);
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
   });
 });

@@ -228,3 +228,65 @@ describe("the transcript digest on the wire", () => {
     }
   });
 });
+
+/**
+ * Whether the checkpoint's plan and reply baseline is whole (VC-315's legacy
+ * baseline). The host recovers the baseline of a checkpoint that does not say
+ * so; one that does is never scanned.
+ */
+describe("the checkpoint's baseline marker", () => {
+  const marked = [{ content: "Plan", status: "pending" as const }];
+
+  it("is set by a fold from the first event that meets only digests", () => {
+    expect(createSessionProjectionCheckpoint(session, []).baselineComplete).toBe(true);
+    expect(
+      createSessionProjectionCheckpoint(session, [
+        message(1, { role: "assistant", reply: true, todoList: marked }),
+        message(2, { role: "assistant" }),
+      ]).baselineComplete,
+    ).toBe(true);
+  });
+
+  it("is absent once a digest-less transcript fact is folded, from scratch or over a checkpoint", () => {
+    expect(createSessionProjectionCheckpoint(session, [message(1)])).not.toHaveProperty(
+      "baselineComplete",
+    );
+    const whole = createSessionProjectionCheckpoint(session, [message(1, { role: "user" })]);
+    expect(advanceSessionProjection(whole, [message(2)])).not.toHaveProperty("baselineComplete");
+  });
+
+  it("is carried across digest-bearing facts, and not invented over a checkpoint without it", () => {
+    const whole = createSessionProjectionCheckpoint(session, [message(1, { role: "user" })]);
+    expect(
+      advanceSessionProjection(whole, [message(2, { role: "assistant" })]).baselineComplete,
+    ).toBe(true);
+    // An older build's checkpoint says nothing: a digest after it does not
+    // make the baseline before it whole.
+    const { baselineComplete: _marker, ...older } = whole;
+    expect(advanceSessionProjection(older, [message(2, { role: "assistant" })])).not.toHaveProperty(
+      "baselineComplete",
+    );
+  });
+
+  it("keeps a recovered baseline under the facts that follow it", () => {
+    const recovered = {
+      ...createSessionProjectionCheckpoint(session, [message(1)]),
+      baselineComplete: true as const,
+    };
+    const withPlan = {
+      ...recovered,
+      projection: {
+        ...recovered.projection,
+        todoList: marked,
+        latestReply: { sequence: 1, reference: reference(1) },
+      },
+    };
+    const next = advanceSessionProjection(withPlan, [message(2, { role: "assistant" })]);
+    expect(next.baselineComplete).toBe(true);
+    expect(next.projection.todoList).toEqual(marked);
+    expect(next.projection.latestReply).toEqual({ sequence: 1, reference: reference(1) });
+    const reset = advanceSessionProjection(withPlan, [message(2, { role: "user" })]);
+    expect(reset.projection.latestReply).toBeUndefined();
+    expect(reset.projection.todoList).toEqual(marked);
+  });
+});

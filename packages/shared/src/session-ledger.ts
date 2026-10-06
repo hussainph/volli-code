@@ -1662,6 +1662,20 @@ export interface SessionProjectionCheckpoint {
   stoppedRecoveryAttachmentId: string | null;
   pendingAttachmentCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
   pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
+  /**
+   * The projection's plan and reply baseline (`todoList`, `latestReply`) is
+   * whole (VC-315). Present when every transcript fact folded into this
+   * checkpoint carried its {@link SessionTranscriptDigest} — a Session born
+   * with digests — or when the host recovered the baseline from the bodies of
+   * the digest-less facts written before them. Absent on a checkpoint written
+   * by an older build, or folded over a digest-less fact: the host recovers
+   * the baseline once and writes it back with this set.
+   *
+   * Optional and additive, not a version bump: an older reader ignores it, and
+   * a checkpoint without it costs one recovery, never a refold of every
+   * Session.
+   */
+  baselineComplete?: true;
 }
 
 export const SESSION_PROJECTION_CHECKPOINT_VERSION = 4 as const;
@@ -1854,6 +1868,9 @@ function foldSessionProjection(
   let bornTicketless = base?.bornTicketless ?? session.ticketId === null;
   let todoList: SessionTodoList | null = base?.todoList ?? null;
   let latestReply: SessionReplyLocation | null = base?.latestReply ?? null;
+  // A fold from the first event knows its baseline is whole until it meets a
+  // digest-less transcript fact; a fold over a checkpoint inherits its word.
+  let baselineComplete = checkpoint === null || checkpoint.baselineComplete === true;
   const throughSequence = checkpoint?.throughSequence ?? 0;
 
   const ordered = [...events]
@@ -2148,7 +2165,12 @@ function foldSessionProjection(
       // The body is the transcript's; only the digest moves state (VC-315).
       case "transcript.referenced": {
         const { digest } = event.payload;
-        if (digest === undefined) break;
+        if (digest === undefined) {
+          // Written before digests: what it meant for the plan and the reply
+          // is only in its body, which the host recovers (VC-315).
+          baselineComplete = false;
+          break;
+        }
         if (digest.todoList !== undefined) todoList = digest.todoList;
         if (digest.role === "user") latestReply = null;
         else if (digest.role === "assistant" && digest.reply === true) {
@@ -2241,6 +2263,7 @@ function foldSessionProjection(
       commandId,
       origin,
     })),
+    ...(baselineComplete ? { baselineComplete: true as const } : {}),
   };
 }
 

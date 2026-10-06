@@ -6,7 +6,7 @@
  * tracks the Session's newest `todo_write` call and an identity that does not
  * move when nothing about the plan did.
  */
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, type SessionTodoList } from "@volli/shared";
 import type { UIMessage } from "ai";
 // The desktop owns jsdom for renderer tests, but does not ship its ambient types.
 // @ts-expect-error — this test only uses the typed-at-runtime JSDOM constructor.
@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import type { IslandPlan } from "@volli/session-presentation";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { openLegacySession } from "./legacy-session.test-support";
 import { useIslandPlan } from "./use-island-plan";
 
 const SESSION_ID = "durable-1";
@@ -171,7 +172,7 @@ describe("useIslandPlan on a Session holding only its newest window", () => {
   function seedWindow(
     store: ReturnType<typeof createChatSessionsStore>,
     messages: readonly UIMessage[],
-    todoList: readonly { content: string; status: "pending" | "in_progress" }[] | undefined,
+    todoList: SessionTodoList | undefined,
   ) {
     store.setState({
       sessions: {
@@ -195,6 +196,35 @@ describe("useIslandPlan on a Session holding only its newest window", () => {
     expect(whole).toMatchObject({ steps: [{ title: "Finish migration", state: "in_progress" }] });
 
     await act(async () => seedWindow(store, later, plan));
+
+    expect(seen.at(-1)).toEqual(whole);
+  });
+
+  // The re-check review's legacy probe, kept: a Session whose plan call was
+  // recorded before transcript digests, so no event says what it was. The
+  // host recovers it from history above the window (VC-315's legacy baseline).
+  it("VC-315 recheck: preserves a legacy Session plan on bounded reopen without event digests", async () => {
+    const store = createChatSessionsStore(noTransport);
+    const plan = [{ content: "Finish legacy migration", status: "in_progress" as const }];
+    seed(store, [todoCall(plan), ...later]);
+    const seen = await mount(store);
+    const whole = seen.at(-1);
+    expect(whole).toMatchObject({
+      steps: [{ title: "Finish legacy migration", state: "in_progress" }],
+    });
+
+    const snapshot = await openLegacySession([
+      { say: "   ", plan },
+      ...later.map(() => ({ say: "later work" })),
+      { say: "later work" },
+    ]);
+    // Bounded, and the window itself says nothing about the plan.
+    expect(snapshot.before).not.toBeNull();
+    const held = snapshot.frames.flatMap(({ transcript }) =>
+      transcript === null ? [] : [transcript.message],
+    );
+    expect(JSON.stringify(held)).not.toContain("Finish legacy migration");
+    await act(async () => seedWindow(store, held, snapshot.projection.todoList));
 
     expect(seen.at(-1)).toEqual(whole);
   });

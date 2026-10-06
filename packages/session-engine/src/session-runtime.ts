@@ -70,6 +70,7 @@ import {
   sessionRootThreadId,
 } from "./observation-translation";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
+import { recoverTranscriptBaseline } from "./transcript-baseline";
 import { replyText, transcriptDigest } from "./transcript-digest";
 import { transcriptReferenceFor } from "./transcript-tail";
 import {
@@ -3290,14 +3291,101 @@ class DefaultSessionRuntime implements SessionRuntime {
     for (const frame of page.frames) {
       if (frame.transcript) transcript.push(frame.transcript);
     }
+    // A Session with history from before transcript digests has a projection
+    // that cannot say its plan or its reply. Recovered here, once, and kept.
+    const recovered =
+      history.checkpoint.baselineComplete === true
+        ? null
+        : await this.#recoverBaseline(input.sessionId, history, page.frames);
+    const projection = recovered?.projection ?? history.projection;
     return {
-      projection: await this.#withFollowUps(history.projection),
+      projection: await this.#withFollowUps(projection),
       throughSequence: history.throughSequence,
       frames: page.frames,
       before: page.before,
       transcript,
-      latestReply: await this.#latestReply(history.projection.latestReply, page.frames),
+      latestReply: await this.#latestReply(projection.latestReply, page.frames, recovered?.read),
     };
+  }
+
+  /**
+   * The plan and reply baseline of a Session whose transcript predates
+   * digests, recovered from its history and written into the projection
+   * checkpoint with `baselineComplete`, so the next open is the bounded one
+   * (VC-315; {@link recoverTranscriptBaseline} has the scan).
+   *
+   * Host side and best effort. The scan's bodies come from the window first,
+   * and an unreadable one is skipped and reported. Anything else that fails is
+   * reported and answers `null`: the open goes on with the projection as it
+   * was, and the next open tries again. Nothing here can fail an open.
+   */
+  async #recoverBaseline(
+    sessionId: string,
+    history: ProjectedHistory,
+    frames: readonly SessionStreamFrame[],
+  ): Promise<{
+    projection: SessionProjection;
+    read: ReadonlyMap<number, SessionTranscriptArtifact>;
+  } | null> {
+    let checkpoint: SessionProjectionCheckpoint;
+    let read: ReadonlyMap<number, SessionTranscriptArtifact>;
+    try {
+      const held = new Map<number, SessionTranscriptArtifact>();
+      for (const frame of frames) if (frame.transcript) held.set(frame.sequence, frame.transcript);
+      const baseline = await recoverTranscriptBaseline(
+        history.projection,
+        history.throughSequence,
+        {
+          range: async (afterSequence, before) =>
+            await this.ports.engine.listEvents({
+              sessionId,
+              afterSequence,
+              limit: before - afterSequence - 1,
+            }),
+          read: (reference) => this.ports.artifacts.read(reference),
+          held,
+          concurrency: SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
+          onSkipped: (sequence, error) =>
+            this.#reportCheckpointFailure(
+              new Error(
+                `Session ${sessionId}: plan and reply recovery skipped the transcript at sequence ${sequence}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                { cause: error },
+              ),
+            ),
+        },
+      );
+      read = baseline.read;
+      const { todoList: _todoList, latestReply: _latestReply, ...rest } = history.projection;
+      checkpoint = {
+        ...history.checkpoint,
+        projection: {
+          ...rest,
+          ...(baseline.todoList === undefined ? {} : { todoList: baseline.todoList }),
+          ...(baseline.latestReply === undefined ? {} : { latestReply: baseline.latestReply }),
+        },
+        baselineComplete: true,
+      };
+    } catch (error) {
+      await this.#reportCheckpointFailure(error);
+      return null;
+    }
+    try {
+      // Kept for the next open: whatever was recorded while the scan ran is
+      // folded on top, as any later fact would be, then the checkpoint is
+      // persisted. A save that loses to a newer one is only a later recovery.
+      const tail = await this.#listEventsPaged({
+        sessionId,
+        afterSequence: checkpoint.throughSequence,
+      });
+      const adopted = foldHistory(history.projection.session, tail, checkpoint, history);
+      this.#keepHistory(sessionId, adopted);
+      await this.#persistProjectionCheckpoint(adopted.checkpoint);
+    } catch (error) {
+      await this.#reportCheckpointFailure(error);
+    }
+    return { projection: checkpoint.projection, read };
   }
 
   /**
@@ -3308,9 +3396,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #latestReply(
     location: SessionProjection["latestReply"],
     frames: readonly SessionStreamFrame[],
+    read?: ReadonlyMap<number, SessionTranscriptArtifact>,
   ): Promise<SessionLatestReply | null> {
     if (location === undefined) return null;
-    let artifact = frames.find(({ sequence }) => sequence === location.sequence)?.transcript;
+    let artifact =
+      frames.find(({ sequence }) => sequence === location.sequence)?.transcript ??
+      read?.get(location.sequence);
     if (artifact === undefined || artifact === null) {
       try {
         artifact = await this.ports.artifacts.read(location.reference);
