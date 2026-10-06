@@ -52,7 +52,12 @@ import {
   type CredentialSelector,
   type CredentialValue,
 } from "./credential-families";
-import { credentialLockFor, CredentialLockBusyError, type CredentialLock } from "./credential-lock";
+import {
+  CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS,
+  credentialLockFor,
+  CredentialLockBusyError,
+  type CredentialLock,
+} from "./credential-lock";
 import {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
@@ -64,6 +69,7 @@ import {
   SealedStoreNewerError,
   type CredentialStatus,
 } from "./credential-state";
+import { waitForCredentialRead } from "./credential-wait";
 import { envelopeHeader, openEnvelope, sealEnvelope } from "./sealed-envelope";
 import {
   isSealedOpenFailure,
@@ -209,6 +215,15 @@ export class SealedInventory {
    */
   status(): CredentialStatus {
     return this.#read().status;
+  }
+
+  /** Explicit open/read door: waits asynchronously for contention, then reports busy at the bound. */
+  statusAsync(timeoutMs = CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS): Promise<CredentialStatus> {
+    return waitForCredentialRead(
+      () => this.status(),
+      (status) => status,
+      timeoutMs,
+    );
   }
 
   /** One family's records and the status they were read under: one read, never two that disagree. */

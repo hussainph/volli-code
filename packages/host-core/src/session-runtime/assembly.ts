@@ -265,7 +265,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // from the Sessions working now — under the identity above, which
                 // is what keeps a machine fact from ever posing as who is running.
                 environment: await options.concurrencyEnvFor(identity.sessionId),
-                secretEnvironment: () => secrets.environment(identity.sessionId),
+                secretEnvironment: (signal) => secrets.environmentAsync(identity.sessionId, signal),
                 // The execution environment is owned by this attachment and its
                 // cleanup runs on every close path. Revoke there so a copied
                 // token cannot outlive the structured attachment that held it.
@@ -297,7 +297,8 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     // machine, so it self-limits by the budget that is true when it
                     // starts (VC-339).
                     concurrencyEnv: () => options.concurrencyEnvFor(scope.sessionId),
-                    secretEnvironment: () => secrets.environment(scope.sessionId),
+                    secretEnvironment: (signal) =>
+                      secrets.environmentAsync(scope.sessionId, signal),
                   }),
               }),
           // The Session's decision port (VC-478), bound to the Session and its

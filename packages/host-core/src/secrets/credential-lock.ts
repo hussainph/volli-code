@@ -64,6 +64,7 @@ import {
   type Stats,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
 
 import Database from "better-sqlite3";
 
@@ -113,15 +114,20 @@ export function credentialLockFor(file: string): CredentialLock {
  * attempts and the lock is never held across one. The last busy refusal
  * reaches the caller.
  */
-export async function retryWhileBusy<T>(attempt: () => T, timeoutMs: number): Promise<T> {
+export async function retryWhileBusy<T>(
+  attempt: () => T,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (let tries = 0; ; tries += 1) {
+    signal?.throwIfAborted();
     try {
       return attempt();
     } catch (error) {
       const wait = Math.min(POLL_MS[Math.min(tries, POLL_MS.length - 1)]!, deadline - Date.now());
       if (!(error instanceof CredentialLockBusyError) || wait <= 0) throw error;
-      await new Promise((settle) => setTimeout(settle, wait));
+      await pause(wait, undefined, { signal });
     }
   }
 }

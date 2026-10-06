@@ -179,6 +179,36 @@ describe("the actor matrix (VC-564)", () => {
     }
   });
 
+  // VC-564 re-check B3: the desktop's exemptions belong to its one actor
+  // object, never to a lookalike some caller built.
+  it("refuses a local-shaped actor that is not the desktop's own, before any read", async () => {
+    for (const actor of [
+      { kind: "device", deviceId: "local" },
+      { kind: "device", deviceId: "local", network: true, workerId: DEVICE },
+    ]) {
+      const { caller, runtime } = fixture({ actor } as unknown as RouterCaller);
+      const lookup = vi.fn(() => OTHER_WORKSPACE);
+      const lookalike = createSessionRouter().createCaller({
+        caller: { actor } as unknown as RouterCaller,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        sessionWorkspace: lookup,
+      });
+      for (const call of [
+        caller.session.projection({ sessionId: "foreign-session" }),
+        lookalike.session.projection({ sessionId: "foreign-session" }),
+      ]) {
+        expect(hostErrorOf(await refusal(call))).toEqual({
+          code: "UNAUTHORIZED",
+          message: "This connection's credential is no longer valid.",
+          reason: "credential-invalid",
+        });
+      }
+      expect(lookup).not.toHaveBeenCalled();
+      expect(runtime.projection).not.toHaveBeenCalled();
+    }
+  });
+
   it("honors a checker the desktop's own window chooses to carry", async () => {
     const { caller, runtime } = fixture({ ...LOCAL_DESKTOP_CALLER, current: () => false });
     expect(await refusal(caller.session.projection({ sessionId: "session-1" }))).toMatchObject({

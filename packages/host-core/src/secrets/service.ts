@@ -9,10 +9,11 @@ import {
   CredentialLockBusyError,
   isSecretName,
   retryWhileBusy,
-  type CredentialStatus,
   type SecretStore,
   type SecretWaitPublisher,
 } from "./index";
+import { CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS } from "./credential-lock";
+import { waitForCredentialRead } from "./credential-wait";
 export type { CredentialStatus, SecretWaitPublisher } from "./index";
 /** The credential door's answers are client wire vocabulary (`@volli/shared`, VC-632). */
 export type { CredentialsResult, SecretsResult } from "@volli/shared";
@@ -35,7 +36,7 @@ interface Pending {
  * to let go of the credential lock (VC-642). The thread stays free: each
  * attempt refuses at once, and the next one is a timer away.
  */
-export const CREDENTIAL_DOOR_WAIT_MS = 2_000;
+export const CREDENTIAL_DOOR_WAIT_MS = CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS;
 
 /** Values enter only through person IPC. The Engine owns waiting facts and
  * Attention; this map holds only the live promise correlations needed to deliver
@@ -51,9 +52,19 @@ export class SecretService {
     return owner === undefined ? {} : this.store.environment(sessionId, owner.projectId);
   }
 
+  /**
+   * Command-start read and last-use commit: brief contention must not fail the
+   * command, or silently omit stored secrets. A stuck lock still rejects
+   * before any process is spawned. The synchronous door remains a try-once API.
+   */
+  environmentAsync(sessionId: string, signal?: AbortSignal): Promise<Record<string, string>> {
+    return retryWhileBusy(() => this.environment(sessionId), CREDENTIAL_DOOR_WAIT_MS, signal);
+  }
+
   port(owner: SecretOwner, wait?: SecretWaitPublisher, allowInjection = true) {
     if (allowInjection) this.#owners.set(owner.sessionId, owner);
     let closed = false;
+    const lifetime = new AbortController();
     return {
       redact: (text: string) => this.store.redact(text),
       hasValues: () => this.store.hasValues(),
@@ -64,9 +75,25 @@ export class SecretService {
         if (closed || !allowInjection || !isSecretName(input.name) || signal.aborted) {
           return "still missing";
         }
-        if (this.store.available(input.name, owner.sessionId, owner.projectId)) {
-          return "signed in";
+        let available: boolean;
+        try {
+          available = this.store.availableForUse(input.name, owner.sessionId, owner.projectId);
+        } catch (error) {
+          if (!(error instanceof CredentialLockBusyError)) throw error;
+          try {
+            available = await this.store.availableAsync(
+              input.name,
+              owner.sessionId,
+              owner.projectId,
+              AbortSignal.any([signal, lifetime.signal]),
+            );
+          } catch (waitError) {
+            if (closed || signal.aborted) return "still missing";
+            throw waitError;
+          }
         }
+        if (closed || signal.aborted) return "still missing";
+        if (available) return "signed in";
         // One live correlation per Session; durable waiting state lives in the Engine.
         if ([...this.#pending.values()].some((p) => p.metadata.sessionId === owner.sessionId)) {
           return "still missing";
@@ -125,6 +152,7 @@ export class SecretService {
       },
       dispose: async () => {
         closed = true;
+        lifetime.abort();
         await this.endSession(owner.sessionId);
       },
     };
@@ -137,9 +165,10 @@ export class SecretService {
    * in memory.
    */
   async list(projectId?: string): Promise<SecretsResult> {
-    const snapshot = await whenFree(
+    const snapshot = await waitForCredentialRead(
       () => this.store.snapshot(projectId),
       (result) => result.credentials,
+      CREDENTIAL_DOOR_WAIT_MS,
     );
     return {
       ok: true,
@@ -156,9 +185,10 @@ export class SecretService {
     this.store.unlock();
     return {
       ok: true,
-      credentials: await whenFree(
+      credentials: await waitForCredentialRead(
         () => this.store.status(),
         (status) => status,
+        CREDENTIAL_DOOR_WAIT_MS,
       ),
     };
   }
@@ -235,23 +265,5 @@ export class SecretService {
     }
     this.store.endSession(sessionId);
     this.#owners.delete(sessionId);
-  }
-}
-
-/**
- * Reads with `read` until its status is not `busy`, asynchronously, within
- * {@link CREDENTIAL_DOOR_WAIT_MS}; then answers the last read, busy or not.
- */
-async function whenFree<T>(read: () => T, status: (result: T) => CredentialStatus): Promise<T> {
-  let last: T | undefined;
-  try {
-    return await retryWhileBusy(() => {
-      last = read();
-      if (status(last).reason === "busy") throw new CredentialLockBusyError();
-      return last;
-    }, CREDENTIAL_DOOR_WAIT_MS);
-  } catch (error) {
-    if (!(error instanceof CredentialLockBusyError)) throw error;
-    return last!;
   }
 }
