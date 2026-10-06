@@ -124,6 +124,7 @@ class FakeRuntime implements AgentRuntime {
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
   /** What each submit was asked to settle on (VC-324). */
   readonly settles: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[5]> = [];
+  readonly targetTurnIds: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[6]> = [];
   readonly submissionCommandIds: Array<
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
   > = [];
@@ -181,11 +182,13 @@ class FakeRuntime implements AgentRuntime {
         _images,
         resources = [],
         settle,
+        targetTurnId,
       ): Promise<DeliveryOutcome> => {
         this.submissions.push(text);
         this.submissionResources.push(resources);
         this.deliveries.push(delivery);
         this.settles.push(settle);
+        this.targetTurnIds.push(targetTurnId);
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "prompt" };
@@ -2092,12 +2095,14 @@ describe("Pi native adapter dispatch", () => {
       attachmentId: ATTACHMENT_ID,
       message: userMessage("now"),
       delivery: "steer",
+      targetTurnId: "turn-active",
       model: null,
       agent: null,
       variant: null,
     });
 
     expect(runtime.deliveries).toEqual(["queue", "steer"]);
+    expect(runtime.targetTurnIds).toEqual([undefined, "turn-active"]);
   });
 
   it("asks the runtime to settle where the command said, and reports the turn it opened", async () => {

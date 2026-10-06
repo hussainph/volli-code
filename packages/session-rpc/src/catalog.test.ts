@@ -8,6 +8,7 @@ import {
 import {
   createSessionProjectionCheckpoint,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  QUEUE_REVISION_CONFLICT,
   type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
@@ -176,6 +177,13 @@ describe("the actor matrix (VC-564)", () => {
     const { caller, runtime } = fixture(sessionActor);
     for (const call of [
       caller.session.snapshot({ sessionId: "session-1" }),
+      caller.session.cancelQueued({ commandId: "cancel", sessionId: "session-1", messageId: "m" }),
+      caller.session.editQueued({
+        commandId: "edit",
+        sessionId: "session-1",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      }),
       caller.modelAccess.defaults(),
     ]) {
       expect(await refusal(call)).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
@@ -295,6 +303,37 @@ describe("the actor matrix (VC-564)", () => {
   });
 });
 
+describe("follow-up feature compatibility", () => {
+  it("does not widen sessions: edits/cancels require the new queue feature", async () => {
+    const runtime = {
+      command: vi.fn<SessionRuntime["command"]>(async () => {
+        throw new Error("not reached");
+      }),
+    };
+    const caller = createSessionRouter().createCaller({
+      ...sessionContext({
+        caller: device,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        resourceWorkspace: () => WORKSPACE,
+      }),
+      operations: new Set(["session.command"]),
+    });
+    await expect(
+      caller.session.cancelQueued({ commandId: "cancel", sessionId: "session-1", messageId: "m" }),
+    ).rejects.toMatchObject({ reason: "verb-refused" });
+    await expect(
+      caller.session.editQueued({
+        commandId: "edit",
+        sessionId: "session-1",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      }),
+    ).rejects.toMatchObject({ reason: "verb-refused" });
+    expect(runtime.command).not.toHaveBeenCalled();
+  });
+});
+
 describe("workspace scope, before any read", () => {
   it("answers a Session in another Workspace exactly as an absent one, and reads neither", async () => {
     const { caller, runtime } = fixture(device);
@@ -320,6 +359,14 @@ describe("workspace scope, before any read", () => {
           commandId: "c",
           sessionId,
           command: { kind: "executor.interrupt" },
+        }),
+      () => caller.session.cancelQueued({ commandId: "cancel", sessionId, messageId: "m" }),
+      () =>
+        caller.session.editQueued({
+          commandId: "edit",
+          sessionId,
+          messageId: "m",
+          message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
         }),
       () => caller.session.cancelInteraction({ sessionId, interactionId: "i" }),
       () => caller.session.reconcile({ sessionId, attachmentId: "a" }),
@@ -377,6 +424,34 @@ describe("workspace scope, before any read", () => {
 });
 
 describe("the error envelope", () => {
+  it("maps stale queue mutations to a typed CONFLICT / queue-revision-conflict", async () => {
+    const { caller, runtime } = fixture(device);
+    class StaleQueue extends Error {
+      readonly [QUEUE_REVISION_CONFLICT] = true as const;
+    }
+    for (const kind of ["cancel", "edit"] as const) {
+      runtime.command.mockRejectedValueOnce(new StaleQueue("Queue revision changed"));
+      const input = {
+        commandId: kind,
+        sessionId: "session-1",
+        messageId: "m",
+        expectedRevision: 0,
+      };
+      const result =
+        kind === "cancel"
+          ? caller.session.cancelQueued(input)
+          : caller.session.editQueued({
+              ...input,
+              message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+            });
+      expect(hostErrorOf(await refusal(result))).toEqual({
+        code: "CONFLICT",
+        reason: "queue-revision-conflict",
+        message: "Queue revision changed",
+      });
+    }
+  });
+
   it("maps a command id reused for another intent to CONFLICT / command-conflict", async () => {
     const { caller, runtime } = fixture(device);
     runtime.command.mockRejectedValueOnce(

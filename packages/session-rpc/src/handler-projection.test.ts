@@ -61,10 +61,18 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
   "session.snapshot": SESSION,
   "session.projection": SESSION,
   "session.subscribe": SESSION,
+  "session.subscribeQueue": SESSION,
   "session.command": {
     commandId: "command-1",
     ...SESSION,
     command: { kind: "executor.interrupt" },
+  },
+  "session.cancelQueued": { commandId: "cancel", ...SESSION, messageId: "m" },
+  "session.editQueued": {
+    commandId: "edit",
+    ...SESSION,
+    messageId: "m",
+    message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
   },
   "session.cancelInteraction": { ...SESSION, interactionId: "interaction-1" },
   "session.reconcile": { ...SESSION, attachmentId: "attachment-1" },

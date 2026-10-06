@@ -204,7 +204,13 @@ describe("checkMigrationHistory", () => {
     migrate(db, dbPath);
     db.exec("DROP TABLE migration_history");
     const report = checkMigrationHistory(db, SCHEMA_HEAD);
-    expect(report).toMatchObject({ consistent: false, unrecorded: [60], backfilled: 0 });
+    expect(report).toMatchObject({
+      consistent: false,
+      unrecorded: MIGRATIONS.filter(({ version }) => version >= MIGRATION_HISTORY_VERSION).map(
+        ({ version }) => version,
+      ),
+      backfilled: 0,
+    });
     expect(describeMigrationHistory(report)).toContain("has no record of 60");
   });
 
@@ -220,7 +226,7 @@ describe("checkMigrationHistory", () => {
     const report = checkMigrationHistory(db, SCHEMA_HEAD);
     expect(report).toMatchObject({ diverged: [1], unrecorded: [60], ahead: [70] });
     expect(describeMigrationHistory(report)).toContain(
-      "ran a different migration than this build at 1; has no record of 60; records 70 above its schema 60",
+      `ran a different migration than this build at 1; has no record of 60; records 70 above its schema ${SCHEMA_HEAD}`,
     );
   });
 

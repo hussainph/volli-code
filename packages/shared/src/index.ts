@@ -15,6 +15,7 @@ export * from "./token-list";
 export * from "./verb-registry";
 export * from "./catalog-actor";
 export * from "./command-intent-conflict";
+export * from "./queue-revision-conflict";
 export * from "./operation-unavailable";
 export * from "./handler-refused";
 export * from "./handler-keys";

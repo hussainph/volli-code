@@ -34,7 +34,23 @@ function callAll(handlers: SessionRouterHandlers) {
     () => handlers["session.snapshot"]({ sessionId: "s" }, CALL),
     () => handlers["session.projection"]({ sessionId: "s" }, CALL),
     () => handlers["session.subscribe"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
+    () => handlers["session.subscribeQueue"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
     () => handlers["session.command"]({} as never, CALL),
+    () =>
+      handlers["session.cancelQueued"](
+        { commandId: "cancel", sessionId: "s", messageId: "m" },
+        CALL,
+      ),
+    () =>
+      handlers["session.editQueued"](
+        {
+          commandId: "edit",
+          sessionId: "s",
+          messageId: "m",
+          message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+        },
+        CALL,
+      ),
     () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
   ];
@@ -90,6 +106,20 @@ describe("sessionHandlersFrom", () => {
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
     expect(port).toHaveBeenCalledTimes(15);
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "s",
+      command: {
+        kind: "message.edit",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      },
+    });
     expect(await sessionHandlersFrom(ports)["session.snapshot"]({ sessionId: "s" }, CALL)).toBe(
       runtime,
     );
@@ -112,7 +142,7 @@ describe("sessionHandlersFrom", () => {
       performanceObserver: { record: () => {} },
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
-    // 21 Session-router handlers, and the four Session reads (VC-663).
-    expect(Object.keys(context.handlers)).toHaveLength(25);
+    // 21 existing router handlers, three queue operations, and four Session reads.
+    expect(Object.keys(context.handlers)).toHaveLength(28);
   });
 });

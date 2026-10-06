@@ -127,6 +127,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Session identity, role and parentage — durable ahead of any executor.",
   },
   {
+    table: "session_follow_up_queue",
+    decision: "include",
+    reason:
+      "Pending follow-ups, mutation receipts and release evidence cannot be rebuilt; omitting them loses accepted work or duplicates replay.",
+  },
+  {
     table: "host_notice_outbox",
     decision: "include",
     reason:
@@ -454,6 +460,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_events",
   "ticket_event_sequence",
   "sessions",
+  "session_follow_up_queue",
   "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",

@@ -234,6 +234,7 @@ describe("createHostCore", () => {
     const runtime = createHostSessionRuntime({
       db,
       events: ports.events,
+      log: ports.log,
       dataDir: core.dataDir,
       transcriptDirectory: join(core.dataDir, "transcripts"),
       sessionEngine: engine,
@@ -291,6 +292,65 @@ describe("createHostCore", () => {
       await runtime.close();
       construct.mockRestore();
       writer.mockRestore();
+    }
+  });
+  it("reports a failed automatic follow-up release through the host log port, not the console", async () => {
+    const ports = sessionPorts();
+    const core = live(createHostCore(ports, headlessOptions(dataDir())));
+    opened.push(core);
+    const project = testProject();
+    insertProject(core.database.db, project);
+    const console = vi.spyOn(globalThis.console, "error").mockImplementation(() => undefined);
+    const runtime = createHostSessionRuntime({
+      db: core.database.db,
+      events: ports.events,
+      log: ports.log,
+      dataDir: core.dataDir,
+      transcriptDirectory: join(core.dataDir, "transcripts"),
+      sessionEngine: core.sessionEngine,
+      executor: {
+        id: "test",
+        durableIdNamespace: "test",
+        adapterVersion: "1",
+        runtime: { path: "test", version: "1", fingerprint: "test" },
+        attach: vi.fn(() => {
+          throw new Error("executor offline");
+        }),
+      },
+    });
+    try {
+      const { sessionId } = await runtime.command({
+        commandId: "create",
+        command: {
+          kind: "session.create",
+          projectId: project.id,
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: null,
+        },
+      });
+      await runtime.command({
+        commandId: "queue",
+        sessionId,
+        command: {
+          kind: "message.submit",
+          delivery: "queue",
+          message: { id: "queued", role: "user", parts: [{ type: "text", text: "Later" }] },
+        },
+      });
+      // No Client is attached: the idle Session releases on its own, and the
+      // executor refuses the attach.
+      await vi.waitFor(() =>
+        expect(ports.log.error).toHaveBeenCalledWith(
+          "[volli] follow-up queue release failed:",
+          expect.any(String),
+        ),
+      );
+      expect(console).not.toHaveBeenCalledWith("[volli] follow-up queue:", expect.anything());
+    } finally {
+      await runtime.close();
+      console.mockRestore();
     }
   });
   it("owns the secret store and lazily constructs one terminal manager from options", async () => {

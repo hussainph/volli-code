@@ -14,6 +14,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  chatSessionQueue,
   commandRefusal,
   rejectedReceipt,
 } from "./wire";
@@ -437,5 +438,63 @@ describe("commandRefusal", () => {
     expect(commandRefusal({ receipt: { status: "rejected", detail: "", code: 7 } })?.message).toBe(
       "rejected",
     );
+  });
+});
+
+describe("chatSessionQueue", () => {
+  const item = {
+    id: "q1",
+    commandId: "c1",
+    state: "queued",
+    message: { id: "q1", role: "user", parts: [{ type: "text", text: "later" }] },
+  };
+  const queueBaseline = {
+    kind: "queue",
+    sessionId: "s1",
+    throughSequence: 0,
+    revision: 1,
+    queue: [item],
+  };
+  it("reads both queued and releasing state at an unchanged durable cursor", () => {
+    expect(chatSessionQueue(queueBaseline)).toEqual(queueBaseline);
+    expect(
+      chatSessionQueue({ ...queueBaseline, queue: [{ ...item, state: "releasing" }] }),
+    ).not.toBeNull();
+    expect(
+      chatSessionQueue({
+        ...queueBaseline,
+        queue: [{ ...item, message: { ...item.message, parts: [{ type: "file", url: "blob" }] } }],
+      }),
+    ).not.toBeNull();
+  });
+  it("drops malformed updates rather than corrupting the ordered queue", () => {
+    for (const value of [
+      null,
+      {},
+      { ...queueBaseline, kind: "overlay" },
+      { ...queueBaseline, sessionId: null },
+      { ...queueBaseline, throughSequence: null },
+      { ...queueBaseline, revision: -1 },
+      { ...queueBaseline, revision: 0.5 },
+      { ...queueBaseline, revision: null },
+      { ...queueBaseline, queue: null },
+    ]) {
+      expect(chatSessionQueue(value)).toBeNull();
+    }
+    for (const broken of [
+      null,
+      { ...item, id: null },
+      { ...item, commandId: null },
+      { ...item, state: "sent" },
+      { ...item, message: null },
+      { ...item, message: { ...item.message, id: "other" } },
+      { ...item, message: { ...item.message, role: "assistant" } },
+      { ...item, message: { ...item.message, parts: null } },
+      { ...item, message: { ...item.message, parts: [null] } },
+      { ...item, message: { ...item.message, parts: [{ type: null }] } },
+      { ...item, message: { ...item.message, parts: [{ type: "text", text: null }] } },
+    ]) {
+      expect(chatSessionQueue({ ...queueBaseline, queue: [broken] })).toBeNull();
+    }
   });
 });
