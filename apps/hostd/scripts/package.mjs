@@ -127,6 +127,18 @@ for (const native of ["better-sqlite3", "node-pty"]) {
     if (!ours) rmSync(join(prebuilds, entry), { recursive: true, force: true });
   }
 }
+// node-pty forks through `spawn-helper` on macOS, and its published darwin
+// prebuilds carry it without the execute bit, so every spawn fails with
+// "posix_spawnp failed" (step 5's probe found it). Linux has no helper.
+for (const dir of ["prebuilds", join("build", "Release")]) {
+  const root = join(stage, "lib", "node_modules", "node-pty", dir);
+  if (!existsSync(root)) continue;
+  const helpers =
+    dir === "prebuilds"
+      ? readdirSync(root).map((entry) => join(root, entry, "spawn-helper"))
+      : [join(root, "spawn-helper")];
+  for (const helper of helpers) if (existsSync(helper)) chmodSync(helper, 0o755);
+}
 
 // Code Mode executes in a worker with an ES-module loader. Ship its published
 // files and QuickJS together; the host half stays bundled, but neither this
