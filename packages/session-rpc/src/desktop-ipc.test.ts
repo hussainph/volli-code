@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { DESKTOP_IPC_EXPOSURE, DESKTOP_IPC_PATHS } from "./desktop-ipc";
+import { createBoardRouter } from "./board-router";
 import { createDesktopRouter } from "./desktop-router";
 import { createSessionRouter } from "./index";
 
@@ -9,7 +10,7 @@ describe("the desktop's IPC exposure", () => {
   // exactly the procedures they publish, so nothing is served or withheld by a
   // path that does not exist.
   it("classifies every procedure the desktop's routers publish, and nothing else", () => {
-    const published = [createSessionRouter(), createDesktopRouter()]
+    const published = [createSessionRouter(), createBoardRouter(), createDesktopRouter()]
       // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
       .flatMap((router) => Object.keys(router._def.procedures))
       .toSorted();
@@ -17,8 +18,9 @@ describe("the desktop's IPC exposure", () => {
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge
-  // became router-generic, and nothing more.
-  it("serves the window its Session, settings, Model Access and own-log procedures, and the desktop-only tier", () => {
+  // became router-generic, the board router VC-565 serves beside it, this
+  // Mac's own log (VC-699), and the desktop-only tier.
+  it("serves the window its Session, settings, Model Access, own-log and board procedures, and the desktop-only tier", () => {
     expect(Object.isFrozen(DESKTOP_IPC_PATHS)).toBe(true);
     expect(DESKTOP_IPC_PATHS).toEqual([
       "settings.experiments",
@@ -47,6 +49,33 @@ describe("the desktop's IPC exposure", () => {
       "session.reconcile",
       "logs.tail",
       "logs.follow",
+      // The board (VC-565): what the window reads and writes with `cloud` on.
+      "board.snapshot",
+      "board.roster",
+      "board.changes",
+      "board.projectFolder",
+      "board.ticketBody",
+      "board.archivedTickets",
+      "board.ticketEvents",
+      "board.latestSignals",
+      "board.statusEntries",
+      "board.comments",
+      "ticket.move",
+      "board.updateProject",
+      "board.setSkillModes",
+      "board.setSessionDefaults",
+      "board.createTicket",
+      "board.moveTickets",
+      "board.setPriority",
+      "board.updateTicket",
+      "board.setLabels",
+      "board.archiveTicket",
+      "board.unarchiveTicket",
+      "board.deleteTicket",
+      "board.createComment",
+      "board.updateComment",
+      "board.removeComment",
+      "board.setLabelColor",
       "project.reorder",
       "worktree.trimSettings",
     ]);

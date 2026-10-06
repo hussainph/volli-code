@@ -57,10 +57,10 @@ try {
     }).trim();
     if (paths) {
       const previous = JSON.parse(
+        // The published schema is past Node's 1 MiB default output buffer (VC-565).
         execFileSync("git", ["show", `${base}:${schemaPath}`], {
           cwd: root,
           encoding: "utf8",
-          // The committed schema passed 1 MiB (Node's default buffer) with VC-565's board.
           maxBuffer: 64 * 1024 * 1024,
         }),
       );
