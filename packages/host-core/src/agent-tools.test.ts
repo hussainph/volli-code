@@ -243,6 +243,23 @@ describe("cleanupLegacyGlobalCliLink", () => {
 });
 
 describe("login PATH wiring", () => {
+  it("handles adversarial slash runs within a bounded time", () => {
+    const slashes = "/".repeat(250_000);
+    const start = performance.now();
+    // A slash run followed by a non-slash forces the former /\\/+$/ regex
+    // to retry from every slash. Also exercise the accepted trailing run.
+    expect(loginPathHasUserBin(`/other${slashes}x`, "/home/me")).toBe(false);
+    expect(loginPathHasUserBin(`/home/me/.local/bin${slashes}`, "/home/me")).toBe(true);
+    expect(loginPathHasUserBin("/usr/bin", `/home/${slashes}me`)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(1_000);
+  }, 2_000);
+
+  it("does not normalize internal slashes, empty entries, or slash-only entries", () => {
+    expect(loginPathHasUserBin(":/:////:/home/me//.local/bin", "/home/me")).toBe(false);
+    expect(loginPathHasUserBin("/home/me/.local/bin/x", "/home/me")).toBe(false);
+    expect(loginPathHasUserBin("/home/me/.local/bin///", "/home/me///")).toBe(true);
+  });
+
   it("recognizes ~/.local/bin on the login PATH, trailing slashes tolerated", () => {
     expect(loginPathHasUserBin(`/usr/bin:${join("/home/me", ".local/bin")}`, "/home/me")).toBe(
       true,

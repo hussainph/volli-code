@@ -16,8 +16,19 @@
  * its `dbPath`; `apps/desktop/src/main/index.ts` is the one call site that
  * resolves the real `app.getPath("userData")`.
  */
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { blobRelPath } from "@volli/shared";
 
@@ -50,15 +61,68 @@ export function blobExists(root: string, hash: string): boolean {
 export function writeBlob(root: string, bytes: Uint8Array): string {
   const hash = hashBytes(bytes);
   const destPath = blobFilePath(root, hash);
-  if (existsSync(destPath)) return hash;
+  try {
+    // A descriptor-only fast path preserves deduplication even when the store
+    // is read-only or full. No later write relies on this existence check.
+    const existing = openBlob(destPath);
+    closeSync(existing);
+    return hash;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   mkdirSync(dirname(destPath), { recursive: true });
-  writeFileSync(destPath, bytes);
-  return hash;
+  // Stage complete bytes on an exclusively created inode, then publish with a
+  // hard link: link is atomic and refuses any existing destination, including a
+  // dangling symlink. Neither a concurrent writer nor a reader sees truncation.
+  // As with the rest of the store, ancestor directories must be user-owned.
+  const temporaryPath = join(dirname(destPath), `.blob-${randomUUID()}`);
+  const fd = openSync(
+    temporaryPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error("Blob must be a regular file");
+      writeFileSync(fd, bytes);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      linkSync(temporaryPath, destPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Idempotence is only for real files, not symlinks or special files. This
+      // check is descriptor-based too, and never opens the winner for writing.
+      const existing = openBlob(destPath);
+      closeSync(existing);
+    }
+    return hash;
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+/** Open and validate the inode that will actually be read, never a leaf symlink. */
+function openBlob(path: string): number {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("Blob must be a regular file");
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
 }
 
 /** Reads a Blob's bytes. Throws when they are absent — a missing Blob is a real failure, not an empty file. */
 export function readBlob(root: string, hash: string): Buffer {
-  return readFileSync(blobFilePath(root, hash));
+  const fd = openBlob(blobFilePath(root, hash));
+  try {
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Removes a Blob's bytes. Idempotent — a missing file is not an error. */

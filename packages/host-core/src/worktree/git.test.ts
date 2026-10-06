@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -10,9 +11,133 @@ import {
   GitError,
   parseWorktreeList,
   resetGitChildSlotsForTest,
+  runGitCapturing,
+  runGitCapturingAsync,
   stderrOf,
   withGitChildSlot,
 } from "./git";
+
+describe("the local git argument boundary", () => {
+  const unsafe: readonly (readonly string[])[] = [
+    ["--upload-pack=echo injected"],
+    ["-c", "core.sshCommand=echo injected", "status"],
+    ["ls-remote", "--upload-pack=echo injected", "."],
+    ["clone", "--upload-pack=echo injected", "."],
+    ["fetch", "--upload-pack=echo injected", "origin"],
+    ["rev-parse", "--verify", "--quiet", "--upload-pack=echo injected"],
+    ["rev-parse", "--end-of-options", "-ref"],
+    ["merge-base", "-ref", "HEAD"],
+    ["merge", "--no-edit", "--upload-pack=echo injected"],
+    ["diff", "--numstat", "-ref...HEAD"],
+    ["diff", "--ext-diff", "HEAD"],
+    ["rev-list", "--count", "-ref..HEAD"],
+    ["show", "--output=unexpected-file"],
+    ["cat-file", "-e", "-ref:path"],
+    ["ls-files", "--upload-pack=echo injected", "--", "file.txt"],
+    ["symbolic-ref", "--quiet", "-ref"],
+    ["log", "-1", "--format=%ct", "-ref"],
+    ["log", "HEAD", "--not", "-ref", "--remotes", "--max-count=1", "--format=%H"],
+    ["for-each-ref", "-ref", "--sort=-committerdate", "--format=%(refname:short)"],
+    ["worktree", "add", "-b", "-branch", "./path", "HEAD"],
+    ["worktree", "add", "-path", "HEAD"],
+    ["worktree", "add", "-b", "branch", "./path", "-ref"],
+    ["worktree", "repair", "-path"],
+    ["worktree", "repair", "--", "-path"],
+    ["worktree", "remove", "-path"],
+    ["worktree", "remove", "--force", "-path"],
+    ["worktree", "remove", "--force", "--", "-path"],
+    ["worktree", "remove", "--force", "./path", "./another-path"],
+    ["rev-parse", "--git-path", "-path"],
+    ["rev-parse", "HEAD\0"],
+  ];
+
+  it("rejects option-prefixed refs, repository operands and network commands before sync spawn", () => {
+    for (const args of unsafe) {
+      // An unusable cwd proves rejection happened before invoking git, not
+      // because a command failed after its injected option was interpreted.
+      expect(() => runGitCapturing(args, "/nonexistent-volli-git-argument-test")).toThrow(
+        "Unsafe or unsupported local git arguments.",
+      );
+    }
+  });
+
+  it("enforces the same boundary on the async runner", async () => {
+    for (const args of unsafe) {
+      await expect(
+        runGitCapturingAsync(args, "/nonexistent-volli-git-argument-test"),
+      ).rejects.toThrow("Unsafe or unsupported local git arguments.");
+    }
+  });
+
+  it("preserves local reads, ranges, literal -prefixed filenames and worktree lifecycle", async () => {
+    const dir = mkdtempSync(join(process.cwd(), ".git-args-test-"));
+    const raw = (args: readonly string[]): string =>
+      execFileSync("git", [...args], { cwd: dir, encoding: "utf8" });
+    try {
+      raw(["init", "--quiet", "--initial-branch=main"]);
+      writeFileSync(join(dir, "-file.txt"), "literal option-looking path\n");
+      writeFileSync(join(dir, "space name.txt"), "spaces remain valid\n");
+      raw(["add", "--", "-file.txt", "space name.txt"]);
+      raw([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--quiet",
+        "-m",
+        "initial",
+      ]);
+      const reads = [
+        ["rev-parse", "--verify", "--quiet", "main^{commit}"],
+        ["rev-parse", "--git-dir"],
+        ["rev-parse", "--git-common-dir"],
+        ["rev-parse", "--git-path", "FETCH_HEAD"],
+        ["merge-base", "main", "HEAD"],
+        ["diff", "--numstat", "main...HEAD"],
+        ["diff", "--raw", "--numstat", "-z", "-M", "main"],
+        ["rev-list", "--left-right", "--count", "main...HEAD"],
+        ["show", "HEAD:-file.txt"],
+        ["cat-file", "-e", "HEAD:space name.txt"],
+        ["ls-files", "-z", "--", "-file.txt"],
+        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["log", "-1", "--format=%ct", "main"],
+        ["log", "HEAD", "--not", "main", "--remotes", "--max-count=1", "--format=%H"],
+        ["log", "HEAD", "--not", "--remotes", "--max-count=1", "--format=%H"],
+        ["for-each-ref", "refs/heads", "--sort=-committerdate", "--format=%(refname:short)"],
+        ["--no-optional-locks", "worktree", "list", "--porcelain"],
+      ];
+      for (const args of reads) {
+        const expected = raw(args);
+        expect(runGitCapturing(args, dir)).toBe(expected);
+        expect(await runGitCapturingAsync(args, dir)).toBe(expected);
+      }
+      await runGitCapturingAsync(
+        ["worktree", "add", "-b", "topic", "./space checkout", "main"],
+        dir,
+      );
+      expect(existsSync(join(dir, "space checkout", "-file.txt"))).toBe(true);
+      runGitCapturing(["worktree", "repair", "./space checkout"], dir);
+      expect(await runGitCapturingAsync(["merge", "--no-edit", "main"], dir)).toContain(
+        "Already up to date",
+      );
+      await runGitCapturingAsync(["worktree", "remove", "./space checkout"], dir);
+      // Removal and confirmed orphan cleanup use both runners. Exercise clean
+      // and forced dirty removal, not just creation through the argument fence.
+      for (const runner of [runGitCapturing, runGitCapturingAsync]) {
+        await runner(["worktree", "add", "./clean checkout", "topic"], dir);
+        await runner(["worktree", "remove", "./clean checkout"], dir);
+        expect(existsSync(join(dir, "clean checkout"))).toBe(false);
+        await runner(["worktree", "add", "./dirty checkout", "topic"], dir);
+        writeFileSync(join(dir, "dirty checkout", "untracked.txt"), "keep unless forced\n");
+        await runner(["worktree", "remove", "--force", "./dirty checkout"], dir);
+        expect(existsSync(join(dir, "dirty checkout"))).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("the runner factory's deadline", () => {
   it("refuses a deadline that is not a positive finite number", () => {
