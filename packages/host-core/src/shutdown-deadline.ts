@@ -13,6 +13,8 @@ export function settleShutdownBeforeDeadline(options: {
   shutdowns: readonly ShutdownTask[];
   deadlineMs?: number;
   reportFailure(error: unknown): void;
+  /** Diagnostics only; a throwing observer must not change deadline/exit semantics. */
+  onDeadline?(deadlineMs: number): void;
 }): Promise<void> {
   const deadlineMs = options.deadlineMs ?? DEFAULT_APPLICATION_SHUTDOWN_DEADLINE_MS;
   const observedShutdowns = options.shutdowns.map((shutdown) =>
@@ -31,6 +33,11 @@ export function settleShutdownBeforeDeadline(options: {
   return Promise.race([drained, timedOut])
     .then((outcome) => {
       if (outcome === "timed-out") {
+        try {
+          options.onDeadline?.(deadlineMs);
+        } catch {
+          // A diagnostic observer cannot alter shutdown's existing outcome.
+        }
         options.reportFailure(
           new Error(`Application shutdown did not settle within ${deadlineMs}ms.`),
         );

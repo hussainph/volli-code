@@ -672,6 +672,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       databaseFailure: { kind: "other" },
       start: vi.fn(async () => {}),
       stop: vi.fn(async (reason: string) => ({ reason, clean: true })),
+      warnIfFollowUpCleanCloseSkipped: vi.fn(),
     };
     const owner = createSessionRuntimeLifecycle({ ...f.options, host, runtime: null });
     await owner.ready();

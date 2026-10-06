@@ -97,6 +97,8 @@ interface HostLifecycleOwner {
   readonly database: DbHandle;
   start(runtime?: HostRuntimeOwner): Promise<void>;
   stop(reason: string): Promise<HostStopReport>;
+  /** Host-edge deadline diagnostics; never changes the drain or stamp policy. */
+  warnIfFollowUpCleanCloseSkipped(reason: string): void;
 }
 
 /** Failure is one variant, not a live host with six null Session services. */
@@ -254,7 +256,7 @@ function lifecycleOwner(
     stampCleanClose?(): void;
   },
   stopPolicy: HostStopPolicy | undefined,
-): Pick<HostLifecycleOwner, "start" | "stop"> {
+): Pick<HostLifecycleOwner, "start" | "stop" | "warnIfFollowUpCleanCloseSkipped"> {
   let runtime: HostRuntimeOwner | undefined;
   let adopted = false;
   const lifecycle = createHostLifecycle(
@@ -277,8 +279,10 @@ function lifecycleOwner(
         }
       },
       stopActivity: () => services.stopActivity?.(),
-      stampCleanClose: () => services.stampCleanClose?.(),
+      stampCleanClose: services.stampCleanClose,
       closeDatabase: () => services.closeDatabase?.(),
+      reportSkippedCleanClose: (reason) =>
+        ports.log.warn(`[volli] follow-up clean-close watermark was not stamped: ${reason}`),
       reportFailure: (step, error) =>
         ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
     },
@@ -293,5 +297,6 @@ function lifecycleOwner(
       return lifecycle.start();
     },
     stop: lifecycle.stop,
+    warnIfFollowUpCleanCloseSkipped: lifecycle.warnIfCleanCloseSkipped,
   };
 }

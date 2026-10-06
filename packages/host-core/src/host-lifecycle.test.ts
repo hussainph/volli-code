@@ -133,6 +133,120 @@ describe("host lifecycle start", () => {
 
 describe("host lifecycle stop", () => {
   it.each(["desktop-quit", "drain-and-close"] as const)(
+    "%s warns once with the first unclean-step reason, without changing the stop",
+    async (policy) => {
+      const warn = vi.fn();
+      const stamp = vi.fn();
+      const { ports } = recordingPorts({
+        closeRuntime: async () => false,
+        closeSocket: async () => {
+          throw new Error("socket failed");
+        },
+        stampCleanClose: stamp,
+        reportSkippedCleanClose: warn,
+      });
+      const host = createHostLifecycle(ports, policy);
+      expect(await host.stop("quit")).toEqual({ reason: "quit", clean: false });
+      await host.stop("repeat");
+      host.warnIfCleanCloseSkipped("shutdown deadline expired");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("quit: close-runtime reported an unclean stop");
+      expect(stamp).not.toHaveBeenCalled();
+    },
+  );
+
+  it("warns once when a lifecycle step throws", async () => {
+    const warn = vi.fn();
+    const { ports } = recordingPorts({
+      stopProducers: () => {
+        throw new Error("scheduler failed");
+      },
+      stampCleanClose: vi.fn(),
+      reportSkippedCleanClose: warn,
+    });
+    expect((await createHostLifecycle(ports).stop("SIGTERM")).clean).toBe(false);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "SIGTERM: stop-producers failed: scheduler failed",
+    );
+  });
+
+  it("warns once about a deadline while the drain remains pending, then observes a late failure", async () => {
+    const close = deferred();
+    const warn = vi.fn();
+    const stamp = vi.fn();
+    const { ports } = recordingPorts({
+      closeRuntime: () => close.promise,
+      stampCleanClose: stamp,
+      reportSkippedCleanClose: warn,
+    });
+    const host = createHostLifecycle(ports, "desktop-quit");
+    const stopped = host.stop("quit");
+    await settleMicrotasks();
+    host.warnIfCleanCloseSkipped("quit: shutdown deadline expired after 15000ms");
+    host.warnIfCleanCloseSkipped("repeat deadline");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("quit: shutdown deadline expired after 15000ms");
+    expect(host.state()).toBe("stopping");
+    expect(stamp).not.toHaveBeenCalled();
+    close.reject(new Error("late close error"));
+    expect((await stopped).clean).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deadline warning never suppresses a late successful stamp", async () => {
+    const close = deferred();
+    const warn = vi.fn();
+    const stamp = vi.fn();
+    const { ports } = recordingPorts({
+      closeRuntime: () => close.promise,
+      stampCleanClose: stamp,
+      reportSkippedCleanClose: warn,
+    });
+    const host = createHostLifecycle(ports);
+    const stopped = host.stop("quit");
+    host.warnIfCleanCloseSkipped("shutdown deadline expired");
+    close.resolve();
+    expect((await stopped).clean).toBe(true);
+    expect(stamp).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("does not warn about a late deadline or DB-close error when the watermark was stamped", async () => {
+    const warn = vi.fn();
+    const { ports } = recordingPorts({
+      stampCleanClose: vi.fn(),
+      reportSkippedCleanClose: warn,
+      closeDatabase: () => {
+        throw new Error("database busy");
+      },
+    });
+    const host = createHostLifecycle(ports);
+    expect((await host.stop("quit")).clean).toBe(false);
+    host.warnIfCleanCloseSkipped("other shutdown task exceeded deadline");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns if stamping is unavailable without changing the stop's result", async () => {
+    const warn = vi.fn();
+    const { ports } = recordingPorts({ reportSkippedCleanClose: warn });
+    expect((await createHostLifecycle(ports).stop("quit")).clean).toBe(true);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("quit: clean-close stamping is unavailable");
+  });
+
+  it("a failed warning reporter cannot change teardown or its result", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { ports, calls } = recordingPorts({
+      reportSkippedCleanClose: () => {
+        throw new Error("logger failed");
+      },
+    });
+    expect((await createHostLifecycle(ports).stop("quit")).clean).toBe(true);
+    expect(calls.at(-1)).toBe("close-database");
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+      "[host] failed to report a skipped clean-close watermark:",
+      "logger failed",
+    );
+  });
+
+  it.each(["desktop-quit", "drain-and-close"] as const)(
     "%s stamps only after a clean drain, before any database close",
     async (policy) => {
       const { ports, calls } = recordingPorts({ stampCleanClose: () => calls.push("stamp") });
@@ -153,14 +267,19 @@ describe("host lifecycle stop", () => {
   });
 
   it("reports a failed stamp but still closes the database", async () => {
+    const warn = vi.fn();
     const error = new Error("stamp unavailable");
     const { ports, calls, failures } = recordingPorts({
+      reportSkippedCleanClose: warn,
       stampCleanClose: () => {
         throw error;
       },
     });
     expect((await createHostLifecycle(ports).stop("quit")).clean).toBe(false);
     expect(failures).toEqual([{ step: "stamp-clean-close", error }]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "quit: stamp-clean-close failed: stamp unavailable",
+    );
     expect(calls.at(-1)).toBe("close-database");
   });
   it("desktop quit adds no start/detached joins or database close", async () => {
