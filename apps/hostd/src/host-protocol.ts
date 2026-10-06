@@ -78,9 +78,11 @@ const MIB = 1024 * 1024;
  *
  * against the defaults' 128 × (32 + 64 × 32 + 8) MiB. An answer or event
  * past 4 MiB is refused whole (`response-too-large`; `session.history`
- * pages), and a resume past 4 MiB re-reads its snapshot instead. A client
- * holds one connection per Workspace, so eight is several Workspaces with
- * room to reconnect.
+ * pages), and a resume past 4 MiB re-reads its snapshot instead. The
+ * connection cap is **host-wide**: at most 8 active client/Workspace
+ * connections per host, across every Mac (a client holds one per
+ * Workspace). One Mac with a few projects open fits, with room to
+ * reconnect; two Macs with four projects each fill it.
  */
 export const HOSTD_LISTENER_LIMITS: HostProtocolListenerLimits = Object.freeze({
   ...DEFAULT_LISTENER_LIMITS,

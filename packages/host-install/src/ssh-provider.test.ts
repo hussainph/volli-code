@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +42,7 @@ import {
 } from "./ssh-provider";
 import {
   runProcess,
+  shellQuote,
   type HostKeyOffer,
   type SshExecOptions,
   type SshExecResult,
@@ -1396,6 +1398,9 @@ describe("delivering the pinned release, on a real local shell", { timeout: 30_0
     const legacy = join(cache, FILE.replace(/\.tar\.gz$/u, ""));
     tampered(legacy);
     tampered(join(cache, "stage.OLD123"));
+    // Abandoned: older than an hour.
+    const old = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(join(cache, "stage.OLD123"), old, old);
     const box = fakeBox((script) =>
       script === PROBE_SCRIPT ? { stdout: probeOutput({ home }) } : undefined,
     );
@@ -1446,7 +1451,44 @@ describe("delivering the pinned release, on a real local shell", { timeout: 30_0
     const second = again.results.deliver as UploadResult;
     expect(second.reused).toBe(true);
     expect(second.releaseDir).not.toBe(deliver.releaseDir);
+    // The first tree is young, so it stays (it could be another delivery's)
+    // until it is abandoned: older than an hour, the next delivery removes it.
+    expect(existsSync(deliver.releaseDir)).toBe(true);
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(deliver.releaseDir, twoHoursAgo, twoHoursAgo);
+    const third = (await advanceWith(retry(again, "deliver"), p)).results.deliver as UploadResult;
     expect(existsSync(deliver.releaseDir)).toBe(false);
+    expect(existsSync(second.releaseDir)).toBe(true);
+    expect(existsSync(third.releaseDir)).toBe(true);
+  });
+
+  // The recheck's N-B1: two desktops delivering to one account's cache.
+  it("never removes another delivery's young tree, which may be awaiting its sudo password", async () => {
+    const { artifact, bytes } = buildRelease();
+    const home = join(root, "shared-remote");
+    const cache = join(home, ".cache/volli-hostd");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, FILE), bytes);
+    const make = () => {
+      const box = fakeBox((script) =>
+        script === PROBE_SCRIPT ? { stdout: probeOutput({ home, sudo: null }) } : undefined,
+      );
+      return ports(box, {
+        ssh: partlyReal(box, deliverOnly, localShell(root)),
+        artifact: async () => artifact,
+      });
+    };
+    const a = await advanceWith(start(), make());
+    expect(stoppedWith(a)).toMatchObject({ kind: "sudo-password", step: "install" });
+    const deliveredA = a.results.deliver as UploadResult;
+    const b = await advanceWith(start(), make());
+    expect(stoppedWith(b)).toMatchObject({ kind: "sudo-password", step: "install" });
+    expect((b.results.deliver as UploadResult).releaseDir).not.toBe(deliveredA.releaseDir);
+    // The exact executable A will hand sudo once the person answers is still there, and runs.
+    const attempt = await localShell(root)(
+      `exec ${shellQuote(join(deliveredA.releaseDir, "bin/volli-hostd"))} --version </dev/null`,
+    );
+    expect(attempt).toMatchObject({ code: 0, stdout: "1.1.0\n" });
   });
 
   it("keeps shell metacharacters in a remote home literal, never injected", async () => {

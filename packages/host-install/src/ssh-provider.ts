@@ -368,6 +368,13 @@ function installing(state: SshProvisionState): boolean {
 
 /** Every staging directory deliver makes in the cache: `stage.XXXXXX`. */
 const STAGE_PREFIX = "stage.";
+/**
+ * Past this age (by mtime) a staging directory is abandoned and removed.
+ * Never a younger one: another desktop (or this one, in another flow) may
+ * have delivered it a moment ago and be waiting on a sudo password to
+ * install from it. Each is touched when made, so its age is its delivery's.
+ */
+export const STALE_STAGING_MINUTES = 60;
 
 const deliver: Step = async ({ state, ports, logger }) => {
   if (!installing(state)) return { result: { skipped: true } };
@@ -427,13 +434,17 @@ const deliver: Step = async ({ state, ports, logger }) => {
       "umask 022",
       `d=${q(dir)}`,
       ...(reused ? [] : [`mv -f ${q(part)} ${q(tarball)} || exit 1`]),
-      `rm -rf ${q(legacy)} "$d"/${STAGE_PREFIX}*`,
+      `rm -rf ${q(legacy)}`,
+      // Only abandoned staging: one younger may be another delivery's, awaiting its install.
+      `find "$d" -mindepth 1 -maxdepth 1 -type d -name '${STAGE_PREFIX}*' -mmin +${STALE_STAGING_MINUTES} -exec rm -rf {} + 2>/dev/null`,
       `s=$(mktemp -d "$d/${STAGE_PREFIX}XXXXXX") || exit 1`,
       // mktemp's 0700 would follow the copy into the install, shutting the service account out.
       'chmod 755 "$s" || exit 1',
       `sum=$(sha256sum ${q(tarball)} | cut -d' ' -f1)`,
       `if [ "$sum" != ${q(artifact.sha256)} ]; then rm -rf "$s" ${q(tarball)}; echo "checksum=$sum"; exit 3; fi`,
-      `tar -xzf ${q(tarball)} -C "$s" --strip-components=1 --no-same-owner || exit 1`,
+      `tar -xzf ${q(tarball)} -C "$s" --strip-components=1 --no-same-owner || { rm -rf "$s"; exit 1; }`,
+      // Its age is this delivery's, whatever times the archive carried.
+      'touch "$s"',
       'echo "dir=$s"',
       'echo "version=$("$s/bin/volli-hostd" --version </dev/null)"',
     ].join("\n"),
