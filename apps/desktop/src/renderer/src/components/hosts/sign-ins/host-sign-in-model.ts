@@ -15,13 +15,14 @@
  *
  * Words: the host's own name and "This Mac", never Workspace or venue.
  */
-import type {
-  HostProviderSignIn,
-  HostSignInRelayState,
-  HostSignInRunEvent,
-  HostSignInState,
-  HostSignInStatus,
-  ModelAccessSignInPrompt as HostSignInPrompt,
+import {
+  expiredHostSignIns,
+  type HostProviderSignIn,
+  type HostSignInRelayState,
+  type HostSignInRunEvent,
+  type HostSignInState,
+  type HostSignInStatus,
+  type ModelAccessSignInPrompt as HostSignInPrompt,
 } from "@volli/shared";
 
 /** Where a row's sign-in comes from: this Mac sends it, or the host signs in itself. */
@@ -29,14 +30,9 @@ export type SignInSource = "mac" | "host";
 
 /**
  * A host's expired sign-in, as the host-connection store's `HostRecord`
- * carries it (VC-576, `stores/host-connection.ts`: `HostSignIn`), for the
- * host chip's badge and the switcher.
+ * carries it (VC-576, `stores/host-connection.ts`: `HostSignIn`).
  */
-export interface ExpiredHostSignIn {
-  readonly providerId: string;
-  /** "Claude". */
-  readonly name: string;
-}
+export type { ExpiredHostSignIn } from "@volli/shared";
 
 /** One row: a provider this host can sign in to, or a git host it holds a push credential for. */
 export interface SignInRowView {
@@ -148,11 +144,7 @@ function providerRow(provider: HostProviderSignIn, macKeys: ReadonlySet<string>)
 }
 
 /** The host chip's badge: the sign-ins this host held that no longer authenticate. */
-export function expiredSignInsOf(status: HostSignInStatus): readonly ExpiredHostSignIn[] {
-  return status.providers
-    .filter((provider) => provider.state === "expired")
-    .map((provider) => ({ providerId: provider.providerId, name: provider.label }));
-}
+export const expiredSignInsOf = expiredHostSignIns;
 
 /** The one sentence on the surface: the trust boundary, true for what is on screen. */
 export function trustLine(hostName: string, sendsFromMac: boolean): string {
