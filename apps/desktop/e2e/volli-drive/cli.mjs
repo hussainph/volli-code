@@ -496,9 +496,13 @@ async function main() {
         out(
           `  keychain guard: ${report.guard.active ? "ACTIVE" : "NOT ACTIVE"} — trapped ${guardLive ? Object.values(guardLive.trapped).filter(Boolean).length : 0}/${guardLive ? Object.keys(guardLive.trapped).length : 0}; mock keychain ${guardLive?.mockKeychainSwitch}; password-store ${guardLive?.passwordStore}; violations ${report.guard.violations.length}`,
         );
+        const recorded = guardLive?.recorded ?? {};
+        out(
+          `  shell recorder: ${Object.values(recorded).filter(Boolean).length}/${Object.keys(recorded).length} of openExternal/openPath/showItemInFolder/trashItem record only; external requests ${report.isolation.externalRequests}`,
+        );
         const iso = report.isolation;
         out(
-          `  isolation: userData ${iso.userData} (inside: ${iso.userDataInside}); home inside: ${iso.homeInside}; db inside: ${iso.dbInside}`,
+          `  isolation: userData ${iso.userData} (inside: ${iso.userDataInside}); home inside: ${iso.homeInside}; agent home ${iso.agentHome} (inside: ${iso.agentHomeInside}); db inside: ${iso.dbInside}`,
         );
         out(
           `  app socket ${iso.appSocket} (ours: ${iso.appSocketOwned}); fake provider ${iso.providerUrl ?? "-"}`,
