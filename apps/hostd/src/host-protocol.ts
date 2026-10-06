@@ -127,6 +127,8 @@ export interface HostdProtocolPorts {
   readonly handlers: HostHandlerMap;
   readonly sessionEngine: SessionEngine;
   readonly logger: HostdLogger;
+  /** Whether this host keeps a recent log for `host.logs` (VC-699) to read. */
+  readonly offerLogs?: boolean;
 }
 
 export function startHostdProtocolListener(
@@ -141,7 +143,7 @@ export function startHostdProtocolListener(
     router: createSessionRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
-    features: HOSTD_FEATURES,
+    features: ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES,
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
     verifier: ports.verifier ?? REFUSING_CREDENTIAL_VERIFIER,
     context: () => ({

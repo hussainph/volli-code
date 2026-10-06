@@ -190,8 +190,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     sender: WebContents,
   ): Promise<SessionRpcIpcResponse> {
     try {
-      if (request.procedure === "session.subscribe") {
-        return await startSubscription(request.input, sender);
+      if (isSubscription(request)) {
+        return await startSubscription(request.procedure, request.input, sender);
       }
       const procedures = router.createCaller({
         caller: LOCAL_DESKTOP_CALLER,
@@ -214,6 +214,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   });
 
   async function startSubscription(
+    procedure: SubscriptionProcedure,
     input: unknown,
     owner: WebContents,
   ): Promise<SessionRpcIpcResponse> {
@@ -228,7 +229,10 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
       },
       { signal: abort.signal },
     );
-    const stream = await procedures.session.subscribe(input as never);
+    const stream =
+      procedure === "logs.follow"
+        ? await procedures.logs.follow(input as never)
+        : await procedures.session.subscribe(input as never);
     const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<readonly [string, unknown]>;
     const subscriptionId = randomUUID();
     if (owner.isDestroyed()) {
@@ -239,11 +243,14 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const onDestroyed = () => void stop(subscriptionId);
     active.set(subscriptionId, { owner, abort, iterator, onDestroyed });
     owner.once("destroyed", onDestroyed);
-    void pumpSubscription(subscriptionId);
+    void pumpSubscription(subscriptionId, procedure);
     return { ok: true, subscriptionId };
   }
 
-  async function pumpSubscription(subscriptionId: string): Promise<void> {
+  async function pumpSubscription(
+    subscriptionId: string,
+    procedure: SubscriptionProcedure,
+  ): Promise<void> {
     const subscription = active.get(subscriptionId);
     /* v8 ignore next -- the only call site registers the entry two lines above it, synchronously. */
     if (!subscription) return;
@@ -266,7 +273,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     } catch (error) {
       const terminalError = subscriptionError(error);
       diagnostics.record({
-        procedure: "session.subscribe",
+        procedure,
         phase: "error",
         transport: "electron-ipc",
         ...terminalError,
@@ -313,7 +320,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
 
 async function callProcedure(
   caller: ReturnType<ReturnType<typeof createSessionRouter>["createCaller"]>,
-  request: Exclude<SessionRpcIpcRequest, { procedure: "session.subscribe" }>,
+  request: Exclude<SessionRpcIpcRequest, { procedure: SubscriptionProcedure }>,
 ): Promise<unknown> {
   switch (request.procedure) {
     case "settings.experiments":
@@ -362,6 +369,8 @@ async function callProcedure(
       return caller.session.cancelInteraction(request.input as never);
     case "session.reconcile":
       return caller.session.reconcile(request.input as never);
+    case "logs.tail":
+      return caller.logs.tail(request.input as never);
     /* v8 ignore next 4 -- unreachable behind `isRequest`; it exists so a listed procedure this switch forgot fails to compile. */
     default: {
       const exhaustive: never = request;
@@ -397,6 +406,15 @@ export function registerDegradedSessionRpcIpcHandlers(reason: string): void {
   // Claimed for symmetry with the live registration: a cancel is fire-and-
   // forget (`ipcMain.on`), and with no subscriptions there is nothing to stop.
   ipcMain.on(SESSION_RPC_CANCEL_CHANNEL, () => {});
+}
+
+/** The routed procedures that answer with a stream: acknowledged, then pushed as frames. */
+type SubscriptionProcedure = "session.subscribe" | "logs.follow";
+
+function isSubscription(
+  request: SessionRpcIpcRequest,
+): request is Extract<SessionRpcIpcRequest, { procedure: SubscriptionProcedure }> {
+  return request.procedure === "session.subscribe" || request.procedure === "logs.follow";
 }
 
 function isRequest(value: unknown): value is SessionRpcIpcRequest {

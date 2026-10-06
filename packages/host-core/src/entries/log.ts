@@ -40,3 +40,10 @@ export {
 } from "../log/ring";
 export { hostLogger, hostLogLevel, installHostLog } from "../log/root";
 export { consoleSink, jsonLineSink, teeSinks } from "../log/sinks";
+export {
+  SSH_INSTALL_STEPS,
+  type SshInstallStep,
+  startStepLog,
+  type StepLog,
+  type StepLogOptions,
+} from "../log/steps";

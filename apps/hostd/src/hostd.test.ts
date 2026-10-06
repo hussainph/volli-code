@@ -28,7 +28,7 @@ import {
 } from "@volli/host-protocol";
 import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
 import { createHostLink } from "@volli/host-protocol/client-link";
-import { installHostLog, jsonLineSink } from "@volli/host-core/log";
+import { createLogRing, installHostLog, jsonLineSink, teeSinks } from "@volli/host-core/log";
 import type { AppRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
@@ -284,6 +284,7 @@ async function boot(
     rootOwnsOperators?: boolean;
     listen?: HostdOptions["listen"];
     hostProtocolVerifier?: HostdOptions["hostProtocolVerifier"];
+    logRing?: HostdOptions["logRing"];
   } = {},
   log = logger(),
 ): Promise<RunningHostd> {
@@ -303,6 +304,7 @@ async function boot(
     ...(options.hostProtocolVerifier === undefined
       ? {}
       : { hostProtocolVerifier: options.hostProtocolVerifier }),
+    ...(options.logRing === undefined ? {} : { logRing: options.logRing }),
   });
   running.push(host);
   return host;
@@ -1224,9 +1226,13 @@ describe("the host protocol listener (VC-663)", () => {
 
   it("writes the Client's trace on every line it logs for a request, joined to the Session and command (VC-699)", async () => {
     const lines: Record<string, unknown>[] = [];
+    const logRing = createLogRing();
     const undo = installHostLog({
       level: "debug",
-      sink: jsonLineSink((line) => lines.push(JSON.parse(line) as Record<string, unknown>)),
+      sink: teeSinks(
+        jsonLineSink((line) => lines.push(JSON.parse(line) as Record<string, unknown>)),
+        logRing,
+      ),
     });
     const lever = device();
     try {
@@ -1234,6 +1240,7 @@ describe("the host protocol listener (VC-663)", () => {
         env: CLOUD,
         listen: LOOPBACK,
         hostProtocolVerifier: lever.verifier,
+        logRing,
       });
       if (!isLiveHost(host.host)) throw new Error("database did not open");
       const { db } = host.host.database;
@@ -1253,7 +1260,7 @@ describe("the host protocol listener (VC-663)", () => {
         url: host.status().hostProtocol!.url,
         workspaceId: WORKSPACE,
         client: { kind: "desktop", version: "test" },
-        features: ["sessions"],
+        features: ["sessions", "host.logs"],
         credential: () => "device-token",
         traceId: flow.traceId,
       });
@@ -1303,6 +1310,15 @@ describe("the host protocol listener (VC-663)", () => {
           expect(line["spanId"]).toMatch(/^[0-9a-f]{16}$/u);
         }
         expect(JSON.stringify(lines)).not.toContain("device-token");
+        // The same lines, read back over the host protocol (host.logs): no SSH.
+        const page = (await link.query("logs.tail", { limit: 500 })) as {
+          entries: { record: Record<string, unknown> }[];
+        };
+        expect(
+          page.entries
+            .filter(({ record }) => record["traceId"] === flow.traceId)
+            .map(({ record }) => record["msg"]),
+        ).toEqual(expect.arrayContaining(["session command.recorded", "rpc call answered"]));
       } finally {
         link.close();
       }

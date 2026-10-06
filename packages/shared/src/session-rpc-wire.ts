@@ -59,6 +59,10 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "session.editQueued",
   "session.cancelInteraction",
   "session.reconcile",
+  // This Mac's own log (VC-699): the dev log viewer's local stream, the same
+  // `host.logs` operations a remote host serves over the WebSocket.
+  "logs.tail",
+  "logs.follow",
 ] as const);
 
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];

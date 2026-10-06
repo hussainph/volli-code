@@ -1349,6 +1349,9 @@ const appStartup = app.whenReady().then(async () => {
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
+      // This Mac's recent log (VC-699): main's, the in-process host's and the
+      // renderer's lines, which the dev log viewer reads through `host.logs`.
+      logs: desktopLog?.ring ?? null,
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */

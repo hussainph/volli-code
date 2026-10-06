@@ -16,10 +16,12 @@ import { join } from "node:path";
 
 import {
   consoleSink,
+  createLogRing,
   createRotatingFileSink,
   hostLogger,
   installHostLog,
   teeSinks,
+  type LogRing,
   type LogSink,
   type RotatingFileSink,
 } from "@volli/host-core/log";
@@ -30,6 +32,11 @@ export interface DesktopLog {
   readonly directory: string;
   readonly level: LogLevel;
   readonly file: RotatingFileSink;
+  /**
+   * The recent lines in memory (bounded: `LOG_RING_BOUNDS`), which the
+   * handler map's `logs.*` read: the dev log viewer's local stream.
+   */
+  readonly ring: LogRing;
   /** Resolves once every line so far reached the disk, or after `deadlineMs`, whichever is first. */
   flush(deadlineMs?: number): Promise<void>;
   /** Uninstalls and closes the file. */
@@ -56,13 +63,15 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   const directory = desktopLogDirectory(options.userData);
   const file = createRotatingFileSink({ directory });
   const level = logLevelFrom(options.env["VOLLI_LOG_LEVEL"], options.dev ? "debug" : "info");
-  const sinks: LogSink[] = [file, ...(options.sinks ?? [])];
+  const ring = createLogRing();
+  const sinks: LogSink[] = [file, ring, ...(options.sinks ?? [])];
   if (options.dev) sinks.push(consoleSink(options.console));
   const undo = installHostLog({ level, sink: teeSinks(...sinks) });
   return {
     directory,
     level,
     file,
+    ring,
     flush: (deadlineMs = 500) =>
       Promise.race([
         file.flush(),

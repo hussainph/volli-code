@@ -44,6 +44,8 @@ describe("Session RPC wire protocol", () => {
       "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
+      "logs.tail",
+      "logs.follow",
     ]);
   });
 

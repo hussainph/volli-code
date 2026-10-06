@@ -347,6 +347,11 @@ journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .component,
 journalctl -u volli-hostd -o cat | jq -cR 'fromjson? | select(.traceId == "<trace>")'
 ```
 
+hostd also keeps its most recent lines in memory (10,000 lines or 8 MiB),
+which a paired device reads over the host protocol's `host.logs` feature
+(`logs.tail`, `logs.follow`) with no SSH session: the desktop's log viewer
+does. A Session's credential cannot read it.
+
 ## Packaging
 
 **Decision: a pinned Node beside a bundled `dist` and its native

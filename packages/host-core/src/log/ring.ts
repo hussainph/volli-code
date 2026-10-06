@@ -60,6 +60,10 @@ interface Held {
   readonly bytes: number;
 }
 
+function passes(record: LogRecord, floor: LogLevel | undefined): boolean {
+  return floor === undefined || logLevelPasses(record.level, floor);
+}
+
 export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
   const limits: LogRingBounds = { ...LOG_RING_BOUNDS, ...bounds };
   const instance = randomBytes(6).toString("hex");
@@ -70,7 +74,10 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
   const followers = new Set<(held: Held) => void>();
 
   const cursorOf = (seq: number): string => `${instance}:${seq}`;
-  const entryOf = (held: Held): HostLogEntry => ({ cursor: cursorOf(held.seq), record: held.record });
+  const entryOf = (held: Held): HostLogEntry => ({
+    cursor: cursorOf(held.seq),
+    record: held.record,
+  });
 
   /** The seq to start strictly after, and whether lines between it and the oldest kept are gone. */
   function start(after: string | undefined): { after: number; gap: boolean } {
@@ -84,12 +91,11 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
     return { after: seq, gap: seq < oldest - 1 };
   }
 
-  function passes(record: LogRecord, floor: LogLevel | undefined): boolean {
-    return floor === undefined || logLevelPasses(record.level, floor);
-  }
-
   function evict(): void {
-    while (lines.length - head > limits.maxLines || (bytes > limits.maxBytes && lines.length - head > 1)) {
+    while (
+      lines.length - head > limits.maxLines ||
+      (bytes > limits.maxBytes && lines.length - head > 1)
+    ) {
       bytes -= lines[head]!.bytes;
       head += 1;
     }
@@ -118,7 +124,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       index -= 1;
     }
     return {
-      entries: newest.reverse(),
+      entries: newest.toReversed(),
       gap: from.gap || (query.after !== undefined && unread),
       cursor: cursorOf(nextSeq - 1),
     };
@@ -146,7 +152,11 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
         const batch = pending;
         pending = [];
         for (let index = 0; index < batch.length; index += LOG_PAGE_LIMIT) {
-          listener({ entries: batch.slice(index, index + LOG_PAGE_LIMIT), gap: false, cursor: batch.at(-1)!.cursor });
+          listener({
+            entries: batch.slice(index, index + LOG_PAGE_LIMIT),
+            gap: false,
+            cursor: batch.at(-1)!.cursor,
+          });
         }
       };
       const follower = (held: Held): void => {

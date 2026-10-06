@@ -17,6 +17,7 @@ import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
 import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
+import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
@@ -91,6 +92,8 @@ export function createHeadlessSessionRuntime(input: {
   /** The agent socket this host serves; every Session command is pointed at it. */
   socketPath: string;
   options: HeadlessRuntimeOptions;
+  /** The host's recent log (VC-699), when the process keeps one: what `host.logs` reads. */
+  logs?: LogRing | null;
 }) {
   const { host, ports, env, options } = input;
   const db = host.database.db;
@@ -320,6 +323,7 @@ export function createHeadlessSessionRuntime(input: {
           // Served before any door opens: hostd hands it over before it
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+          logs: input.logs ?? null,
         }),
       };
     },

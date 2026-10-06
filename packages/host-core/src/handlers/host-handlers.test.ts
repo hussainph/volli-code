@@ -453,7 +453,12 @@ describe("the host's log (VC-699)", () => {
   it("reads a page and follows the ring a host keeps", async () => {
     const { createLogRing } = await import("../log/ring");
     const ring = createLogRing();
-    const record = { ts: "2026-10-07T00:00:00.000Z", level: "info", component: "c", msg: "m" } as const;
+    const record = {
+      ts: "2026-10-07T00:00:00.000Z",
+      level: "info",
+      component: "c",
+      msg: "m",
+    } as const;
     ring.write(record, JSON.stringify(record));
     const map = handlers({ logs: ring });
     const page = await map["logs.tail"]({ limit: 5 }, USER);

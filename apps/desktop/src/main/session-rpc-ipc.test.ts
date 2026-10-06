@@ -509,6 +509,51 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("reads and follows this Mac's log over the same bridge (VC-699)", async () => {
+    const batch = {
+      entries: [
+        {
+          cursor: "ring:2",
+          record: {
+            ts: "2026-10-07T00:00:00.000Z",
+            level: "info" as const,
+            component: "c",
+            msg: "m",
+          },
+        },
+      ],
+      gap: false,
+      cursor: "ring:2",
+    };
+    let push!: (next: typeof batch) => void;
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: runtimeFixture().runtime,
+      readLogs: () => batch,
+      followLogs: (_query, listener) => {
+        push = listener as (next: typeof batch) => void;
+        return () => undefined;
+      },
+    });
+    const owner = sender();
+    expect(await invoke(owner, { procedure: "logs.tail", input: { limit: 5 } })).toEqual({
+      ok: true,
+      data: batch,
+    });
+    const response = await invoke(owner, { procedure: "logs.follow", input: { after: "ring:1" } });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(push).toBeDefined());
+    push(batch);
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "data",
+        subscriptionId: response.subscriptionId,
+        eventId: "ring:2",
+        data: batch,
+      }),
+    );
+    await registration.close();
+  });
+
   it("ignores a cancellation that does not name a subscription", async () => {
     const fixture = runtimeFixture();
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });

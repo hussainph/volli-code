@@ -3293,18 +3293,25 @@ describe("Session tRPC router", () => {
   });
 });
 
-describe("host.logs on the router (VC-699)", () => {
-  const batch = (cursor: string) => ({
+function logBatch(cursor: string) {
+  return {
     entries: [
       {
         cursor,
-        record: { ts: "2026-10-07T00:00:00.000Z", level: "info" as const, component: "c", msg: cursor },
+        record: {
+          ts: "2026-10-07T00:00:00.000Z",
+          level: "info" as const,
+          component: "c",
+          msg: cursor,
+        },
       },
     ],
     gap: false,
     cursor,
-  });
+  };
+}
 
+describe("host.logs on the router (VC-699)", () => {
   it("follows from a cursor, and ends subscription-overflow when it falls behind", async () => {
     const follows: unknown[] = [];
     let unsubscribed = 0;
@@ -3316,7 +3323,7 @@ describe("host.logs on the router (VC-699)", () => {
         followLogs: (query, listener) => {
           follows.push(query);
           // A burst past the stream's queue before the reader takes anything.
-          for (let index = 0; index < 300; index += 1) listener(batch(`r:${index}`));
+          for (let index = 0; index < 300; index += 1) listener(logBatch(`r:${index}`));
           return () => {
             unsubscribed += 1;
           };
@@ -3342,7 +3349,7 @@ describe("host.logs on the router (VC-699)", () => {
         runtime: {},
         diagnostics: new RpcDiagnosticLog(),
         followLogs: (_query, listener, fail) => {
-          listener(batch("r:1"));
+          listener(logBatch("r:1"));
           fail(new Error("ring gone"));
           return () => undefined;
         },
@@ -3380,7 +3387,11 @@ describe("host.logs on the router (VC-699)", () => {
 
   it("answers unavailable on a host that keeps no log", async () => {
     const caller = createSessionRouter().createCaller(
-      sessionContext({ caller: LOCAL_DESKTOP_CALLER, runtime: {}, diagnostics: new RpcDiagnosticLog() }),
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+      }),
     );
     await expect(caller.logs.tail({})).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
   });

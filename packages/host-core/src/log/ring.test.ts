@@ -65,7 +65,12 @@ describe("the host's recent log", () => {
     expect(ring.read({ after: cursor, limit: 3 })).toMatchObject({ gap: false });
     // Lines the filter excludes are not missed lines.
     ring.write(...line("quiet", "debug"));
-    expect(ring.read({ after: ring.read({ limit: 1, minLevel: "info" }).entries[0]!.cursor, minLevel: "warn" })).toMatchObject({
+    expect(
+      ring.read({
+        after: ring.read({ limit: 1, minLevel: "info" }).entries[0]!.cursor,
+        minLevel: "warn",
+      }),
+    ).toMatchObject({
       gap: false,
     });
   });

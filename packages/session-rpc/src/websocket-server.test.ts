@@ -1482,7 +1482,12 @@ describe("host.logs: the person's, never a Session's (VC-699)", () => {
     entries: [
       {
         cursor: "ring:1",
-        record: { ts: "2026-10-07T00:00:00.000Z", level: "info" as const, component: "c", msg: "m" },
+        record: {
+          ts: "2026-10-07T00:00:00.000Z",
+          level: "info" as const,
+          component: "c",
+          msg: "m",
+        },
       },
     ],
     gap: false,
@@ -1525,9 +1530,9 @@ describe("host.logs: the person's, never a Session's (VC-699)", () => {
     const follows: unknown[] = [];
     const { listener } = await serve({
       logs: {
-        followLogs: (query, listener) => {
+        followLogs: (query, onBatch) => {
           follows.push(query);
-          emit = listener as (batch: typeof page) => void;
+          emit = onBatch as (batch: typeof page) => void;
           return () => undefined;
         },
       },
