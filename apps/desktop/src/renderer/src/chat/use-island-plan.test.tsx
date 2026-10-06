@@ -15,6 +15,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { createSessionEngine } from "@volli/session-engine";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import type { IslandPlan } from "@volli/session-presentation";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -213,7 +214,7 @@ describe("useIslandPlan on a Session holding only its newest window", () => {
       steps: [{ title: "Finish legacy migration", state: "in_progress" }],
     });
 
-    const snapshot = await openLegacySession([
+    const snapshot = await openLegacySession(createSessionEngine, [
       { say: "   ", plan },
       ...later.map(() => ({ say: "later work" })),
       { say: "later work" },

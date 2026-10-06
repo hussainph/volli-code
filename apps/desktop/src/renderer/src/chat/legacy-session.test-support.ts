@@ -17,12 +17,12 @@ import {
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
-  createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
+  type SessionEnginePorts,
   type SessionRuntimeSnapshot,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
@@ -98,15 +98,20 @@ function strip(event: SessionEvent): SessionEvent {
  * Records `messages` in one turn, then opens the Session as a host upgraded
  * past them does: every transcript fact read back without its digest, and no
  * projection checkpoint. Answers that open's snapshot.
+ *
+ * `engineOf` is the engine factory, handed in by the calling test: this file
+ * is not a `.test` file, and desktop sources other than tests never build a
+ * Session engine of their own (VC-632's guard).
  */
 export async function openLegacySession(
+  engineOf: (ports: SessionEnginePorts) => SessionEngine,
   messages: readonly LegacyMessage[],
 ): Promise<SessionRuntimeSnapshot> {
   let now = 100;
   const clock = { now: () => now++ };
   let id = 0;
   const ids: SessionLedgerIds = { next: (kind) => `${kind}-${++id}` };
-  const engine = createSessionEngine({ ledger: createInMemorySessionLedger(), clock, ids });
+  const engine = engineOf({ ledger: createInMemorySessionLedger(), clock, ids });
   const memory = createInMemoryTranscriptArtifactStore();
   let nextPlan: SessionTodoList | null = null;
   const artifacts: TranscriptArtifactStore = {

@@ -450,10 +450,18 @@ describe("recovering a legacy Session's baseline (VC-315)", () => {
       expect(open.snapshot.projection.todoList).toBeUndefined();
       // Skipped, not fatal: the scan went on past it and found the reply.
       expect(open.snapshot.latestReply?.text).toBe("Earlier reply");
-      expect((open.failures as Error[]).map(({ message }) => message.split(": ").slice(1))).toEqual([
-        [`plan and reply recovery skipped the transcript at sequence ${silent.sequence}`, "disk said no"],
-        [`plan and reply recovery skipped the transcript at sequence ${planEvent.sequence}`, "artifact is corrupt"],
-      ]);
+      expect((open.failures as Error[]).map(({ message }) => message.split(": ").slice(1))).toEqual(
+        [
+          [
+            `plan and reply recovery skipped the transcript at sequence ${silent.sequence}`,
+            "disk said no",
+          ],
+          [
+            `plan and reply recovery skipped the transcript at sequence ${planEvent.sequence}`,
+            "artifact is corrupt",
+          ],
+        ],
+      );
       // Best effort is still once: the next open does not try the body again.
       const next = await legacy.reopen();
       expect(next.snapshot.projection.todoList).toBeUndefined();

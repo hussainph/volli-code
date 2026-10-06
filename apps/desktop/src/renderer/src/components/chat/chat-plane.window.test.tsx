@@ -40,6 +40,7 @@ import {
   type ChatSessionRpc,
   type ChatSessionTransport,
 } from "@volli/session-presentation";
+import { createSessionEngine } from "@volli/session-engine";
 import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -1570,7 +1571,7 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
   // from history above the window (VC-315's legacy baseline), and `/copy`
   // copies what that real snapshot answers.
   it("VC-315 recheck: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
-    const snapshot = await openLegacySession([
+    const snapshot = await openLegacySession(createSessionEngine, [
       { say: "Current-turn reply" },
       ...tools.map(() => ({ say: "   " })),
       { say: "   " },
