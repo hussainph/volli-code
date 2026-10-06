@@ -11,8 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ChatSessionSlice } from "./client";
 import {
   applyProjection,
-  dequeueSlice,
-  enqueueSlice,
+  applyQueue,
   foldStreamBatch,
   markAttaching,
   markDelivered,
@@ -177,21 +176,26 @@ describe("settleSlice", () => {
   });
 });
 
-describe("the queue transitions", () => {
-  it("appends what was typed and keeps identity for blank text", () => {
-    const slice = seedSlice("ready");
-
-    const queued = enqueueSlice(slice, { id: "q1", text: " first " });
-    expect(queued.queue).toEqual([{ id: "q1", text: "first" }]);
-
-    expect(enqueueSlice(slice, { id: "q2", text: "   " })).toBe(slice);
-  });
-
-  it("removes one entry and keeps identity when it was never there", () => {
-    const queued = enqueueSlice(seedSlice("ready"), { id: "q1", text: "first" });
-
-    expect(dequeueSlice(queued, "q1").queue).toEqual([]);
-    expect(dequeueSlice(queued, "q9")).toBe(queued);
+describe("the host queue projection", () => {
+  it("does not roll back a stream revision with a stale query result", () => {
+    const entry = {
+      id: "q1",
+      commandId: "c1",
+      state: "queued" as const,
+      message: {
+        id: "q1",
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "first" }],
+      },
+    };
+    const newer = applyQueue(seedSlice("ready"), [entry], 2);
+    expect(newer.queue).toEqual([
+      { id: "q1", commandId: "c1", queueState: "queued", text: "first" },
+    ]);
+    const stale = applyProjection(newer, { ...projectionFor(null), queue: [], queueRevision: 1 });
+    expect(stale.queue).toBe(newer.queue);
+    expect(applyQueue(newer, [], 2)).toBe(newer);
+    expect(applyQueue(newer, [], 3).queue).toEqual([]);
   });
 });
 

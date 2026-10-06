@@ -1,6 +1,6 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { COMPACT_VERB, COMPOSER_VERBS, SKILL_POLICY_DEFAULT } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
@@ -57,7 +57,15 @@ function findElements(
  * why) and a memo component is an object, not a function. `.type` is the render
  * function inside it, so this stays the same call it always was.
  */
-const composerTree = SessionComposer.type;
+function composerTree(props: SessionComposerProps) {
+  let tree!: React.ReactNode;
+  function Capture() {
+    tree = SessionComposer.type(props);
+    return null;
+  }
+  renderToStaticMarkup(<Capture />);
+  return tree;
+}
 
 function composerProps(overrides: Partial<SessionComposerProps> = {}): SessionComposerProps {
   return {
@@ -91,6 +99,82 @@ describe("the queued message row", () => {
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
     expect(html).toContain('aria-label="Queued message actions: also cover the empty-name branch"');
     expect(html).not.toContain('aria-label="Edit queued message"');
+  });
+
+  // A releasing row with no proof of delivery would otherwise be stuck at the
+  // head of the FIFO: the host cancels an unproven release and refuses one in
+  // flight, so Remove and Edit stay offered and the host decides. Steer stays
+  // off — the release already claimed that identity.
+  it("disables only Steer on a releasing host row; Remove and Edit ask the host", () => {
+    for (const queueState of ["queued", "releasing"] as const) {
+      const tree = composerTree(
+        composerProps({
+          queued: [
+            {
+              id: "host-row",
+              commandId: "host-command",
+              queueState,
+              text: "later",
+            },
+          ],
+        }),
+      );
+      const buttons = findElements(tree, Button);
+      const disabled = (label: string) => {
+        const button = buttons.find((entry) => entry.props["aria-label"] === label);
+        expect(button).toBeDefined();
+        return button?.props.disabled;
+      };
+      expect(disabled("Steer queued message: later")).toBe(queueState === "releasing");
+      expect(disabled("Remove queued message: later")).toBeFalsy();
+      expect(disabled("Queued message actions: later")).toBeFalsy();
+      expect(findElements(tree, DropdownMenuItem)).toHaveLength(1);
+    }
+  });
+
+  // The host refuses a release already in flight (or proven delivered). The
+  // composer must neither drop the row nor hand its words and files back.
+  it("leaves a releasing row and the draft untouched when the host refuses its cancel", async () => {
+    const attachment = {
+      linkId: "link",
+      blobHash: "ab".repeat(32),
+      label: "shot",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    const queued = [
+      {
+        id: "host-row",
+        commandId: "host-command",
+        queueState: "releasing" as const,
+        text: "in flight",
+        attachments: [attachment],
+      },
+    ];
+    const events: string[] = [];
+    const tree = composerTree(
+      composerProps({
+        value: "typing",
+        queued,
+        onQueuedChange: async (next, options) => {
+          events.push(options?.restoreDraft === undefined ? "remove" : "edit");
+          expect(next).toEqual([]);
+          return false;
+        },
+        onRestoreAttachments: () => events.push("files"),
+        onValueChange: () => events.push("draft"),
+        onComposerFocusRequest: () => events.push("focus"),
+      }),
+    );
+
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    await findElements(tree, Button)
+      .find((button) => button.props["aria-label"] === "Remove queued message: in flight")
+      ?.props.onClick?.();
+    await vi.waitFor(() => expect(events).toEqual(["edit", "remove"]));
+    await Promise.resolve();
+    expect(events).toEqual(["edit", "remove"]);
   });
 
   it("draws the files a queued message is carrying (VC-273)", () => {
@@ -152,7 +236,7 @@ describe("the queued message row", () => {
     }
   });
 
-  it("wires Edit message to return that row to the current draft", () => {
+  it("wires Edit message to return that row to the current draft", async () => {
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     let nextDraft: string | undefined;
     const acts: string[] = [];
@@ -187,16 +271,16 @@ describe("the queued message row", () => {
       },
     });
     expect(nextQueue).toEqual([]);
-    expect(nextDraft).toBe("also cover the empty-name branch\nnew thought");
+    await vi.waitFor(() => expect(nextDraft).toBe("also cover the empty-name branch\nnew thought"));
     // Two focus requests: one inside `editQueued` (which the modal menu's
     // focus trap swallows while the content is still mounted) and one from
     // `onCloseAutoFocus`, the first moment after the trap is gone — the only
     // request that can actually land on the textarea.
-    expect(acts).toEqual(["queue", "draft", "focus", "focus"]);
+    expect(acts).toEqual(["queue", "focus", "draft", "focus"]);
     expect(restorePrevented).toBe(true);
   });
 
-  it("does not edit or remove a row whose resident delivery claim rejects mutation", () => {
+  it("does not edit or remove a row whose resident delivery claim rejects mutation", async () => {
     let draft: string | undefined;
     let focusRequests = 0;
     const tree = composerTree(
@@ -216,7 +300,7 @@ describe("the queued message row", () => {
       (button) =>
         button.props["aria-label"] === "Remove queued message: also cover the empty-name branch",
     );
-    remove?.props.onClick?.();
+    await remove?.props.onClick?.();
 
     expect(draft).toBeUndefined();
     expect(focusRequests).toBe(0);
@@ -226,7 +310,7 @@ describe("the queued message row", () => {
   // row carried: the files go back to the strip BEFORE the row leaves the
   // queue, because the removal path reads the strip to tell "came back" from
   // "deleted" — restoring after would read as a delete and drop the links.
-  it("hands an edited row's attachments back to the strip before it leaves the queue", () => {
+  it("hands an edited row's attachments back to the strip before it leaves the queue", async () => {
     const acts: string[] = [];
     const attachments = [
       {
@@ -256,10 +340,42 @@ describe("the queued message row", () => {
 
     findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
 
-    expect(acts).toEqual(["restore", "queue", "draft", "focus"]);
+    await vi.waitFor(() => expect(acts).toEqual(["queue", "restore", "draft", "focus"]));
   });
 
-  it("wires direct Steer and removal before handing focus to the composer", () => {
+  it("waits for host acceptance before returning text or attachment links", async () => {
+    let accept!: (accepted: boolean) => void;
+    const events: string[] = [];
+    const attachment = {
+      linkId: "link",
+      blobHash: "ab".repeat(32),
+      label: "shot",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    const tree = composerTree(
+      composerProps({
+        queued: [{ id: "q1", text: "later", attachments: [attachment] }],
+        onQueuedChange: (_rows, options) => {
+          expect(options?.restoreAttachments).toEqual([attachment]);
+          events.push("cancel");
+          return new Promise((resolve) => {
+            accept = resolve;
+          });
+        },
+        onRestoreAttachments: () => events.push("files"),
+        onValueChange: () => events.push("draft"),
+      }),
+    );
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    expect(events).toEqual(["cancel"]);
+    accept(false);
+    await Promise.resolve();
+    expect(events).toEqual(["cancel"]);
+  });
+
+  it("wires direct Steer and removal before handing focus to the composer", async () => {
     let steered: string | undefined;
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     const acts: string[] = [];
@@ -282,7 +398,7 @@ describe("the queued message row", () => {
     named("Steer queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(acts).toEqual(["steer:m1", "focus"]);
     acts.length = 0;
-    named("Remove queued message: also cover the empty-name branch")?.props.onClick?.();
+    await named("Remove queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(steered).toBe("m1");
     expect(nextQueue).toEqual([]);
     expect(acts).toEqual(["queue:0", "focus"]);

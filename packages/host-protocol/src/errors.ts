@@ -53,6 +53,7 @@ export const HOST_ERROR_REASON_CODES = {
   "lease-epoch-fenced": "PRECONDITION_FAILED",
   "verb-refused": "FORBIDDEN",
   "command-conflict": "CONFLICT",
+  "queue-revision-conflict": "CONFLICT",
   "subscription-overflow": "TOO_MANY_REQUESTS",
   "subscription-resnapshot-required": "PRECONDITION_FAILED",
   "subscription-source-failed": "INTERNAL_SERVER_ERROR",

@@ -86,7 +86,12 @@ type DeliberatelyMainOnlyProcedure = PublishedProcedure<
  * listing; VC-608's generic bridge decides whether these cross IPC.
  */
 type DeliberatelyWebSocketOnlyProcedure = PublishedProcedure<
-  "protocol.welcome" | "session.list" | "session.show" | "session.peek" | "session.answer"
+  | "protocol.welcome"
+  | "session.list"
+  | "session.show"
+  | "session.peek"
+  | "session.answer"
+  | "session.subscribeQueue"
 >;
 
 /**
@@ -333,6 +338,10 @@ async function callProcedure(
       return caller.session.projection(request.input as never);
     case "session.command":
       return caller.session.command(request.input as never);
+    case "session.cancelQueued":
+      return caller.session.cancelQueued(request.input as never);
+    case "session.editQueued":
+      return caller.session.editQueued(request.input as never);
     case "session.cancelInteraction":
       return caller.session.cancelInteraction(request.input as never);
     case "session.reconcile":

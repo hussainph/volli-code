@@ -39,6 +39,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { createSessionEngine } from "@volli/session-engine";
+import { createSqliteSessionFollowUpLedger } from "./session-follow-up-repo";
 import { createBackupBundle, readBackupBundle } from "../backup/bundle";
 import { restoreBackupBundle } from "../backup/restore";
 import { blobsRoot } from "../blob-store";
@@ -73,7 +74,7 @@ const manifest: N1Manifest | null = manifestPath
  * An entry is asserted, not skipped: if the build does anything else, the
  * test fails.
  */
-const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: string }>> = {
+const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: readonly string[] }>> = {
   // v0.2.1 (schema 57) stamps a bundle with the FILE's schema but writes only
   // the tables it knows, so its bundle of a schema-58+ profile omits
   // `workspace_epochs` and neither build can restore it. This is why
@@ -82,13 +83,19 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: string 
   // bundles they make there of a newer profile are unusable.
   f6ec540ca7ff14c6e403a4c8a91e840bba46dd1b: {
     release: "v0.2.1",
-    bundle: "Data document is missing table workspace_epochs.",
+    bundle: [
+      "Data document is missing table workspace_epochs.",
+      "Data document is missing table session_follow_up_queue.",
+    ],
   },
   // v0.2.1-canary.7 (schema 57) has v0.2.1's database and backup modules
   // byte for byte, so the same fault.
   a3bb337904f389fb7e89a52852f8d764870e125a: {
     release: "v0.2.1-canary.7",
-    bundle: "Data document is missing table workspace_epochs.",
+    bundle: [
+      "Data document is missing table workspace_epochs.",
+      "Data document is missing table session_follow_up_queue.",
+    ],
   },
 };
 
@@ -220,6 +227,20 @@ async function headProfile(): Promise<void> {
       title: "Head Session",
       provenance,
     });
+    await createSqliteSessionFollowUpLedger(db).transaction("session-head", (state) => {
+      state.entries.push({
+        id: "head-follow-up",
+        commandId: "head-queue-command",
+        deliveryCommandId: "follow-up:session-head:head-queue-command",
+        state: "queued",
+        message: {
+          id: "head-follow-up",
+          role: "user",
+          parts: [{ type: "text", text: "Do not lose this pending follow-up" }],
+        },
+      });
+      state.revision += 1;
+    });
     writeSecret(db, "n1-probe:kept", "head-value", NOW);
   } finally {
     db.close();
@@ -348,6 +369,11 @@ describe.skipIf(manifest === null)(
       assertHeadReads(dbPath);
       const db = openVolliDb(dbPath);
       try {
+        const queued = await createSqliteSessionFollowUpLedger(db).transaction(
+          "session-head",
+          (state) => state.entries,
+        );
+        expect(queued).toMatchObject([{ id: "head-follow-up", state: "queued" }]);
         expect(hasSecret(db, "n1-probe:saved")).toBe(true);
         expect(hasSecret(db, "n1-probe:kept")).toBe(false);
         const tickets = listTicketsByProject(db, PROJECT_ID);
@@ -377,6 +403,17 @@ describe.skipIf(manifest === null)(
         });
         expect(restored.ok ? restored.report.schemaVersion : restored.problems).toBe(SCHEMA_HEAD);
         assertHeadReads(join(target, "volli.db"));
+        const roundtrip = openVolliDb(join(target, "volli.db"));
+        try {
+          expect(
+            await createSqliteSessionFollowUpLedger(roundtrip).transaction(
+              "session-head",
+              (state) => state.entries,
+            ),
+          ).toEqual(queued);
+        } finally {
+          roundtrip.close();
+        }
       } finally {
         db.close();
       }
@@ -391,9 +428,9 @@ describe.skipIf(manifest === null)(
       value(run, 0);
       const read = readBackupBundle(readFileSync(bundlePath));
       if (hazards.bundle !== undefined) {
-        expect(read.ok ? "readable" : read.problems.map((problem) => problem.message)).toEqual([
+        expect(read.ok ? "readable" : read.problems.map((problem) => problem.message)).toEqual(
           hazards.bundle,
-        ]);
+        );
         return;
       }
       expect(read.ok ? "readable" : read.problems).toBe("readable");

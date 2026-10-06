@@ -12,6 +12,7 @@ export * from "./session-answer";
 export * from "./session-todo";
 export * from "./transcript-digest";
 export * from "./session-runtime";
+export * from "./session-follow-ups";
 export { REASONING_LEVELS } from "@volli/shared";
 export type {
   ModelAccessSnapshot,

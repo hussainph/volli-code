@@ -1468,6 +1468,7 @@ class PiBinding implements BindingHandle {
         attachments.images,
         resources,
         command.settle ?? "turn",
+        command.targetTurnId,
       );
       return outcome.kind === "delivered"
         ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened)

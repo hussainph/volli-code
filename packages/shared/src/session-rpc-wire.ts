@@ -53,6 +53,8 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "session.projection",
   "session.subscribe",
   "session.command",
+  "session.cancelQueued",
+  "session.editQueued",
   "session.cancelInteraction",
   "session.reconcile",
 ] as const);

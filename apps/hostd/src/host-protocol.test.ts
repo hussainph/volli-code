@@ -16,6 +16,7 @@ describe("what hostd offers", () => {
   it("is every v1 feature it composes, and not Model Access, which it does not", () => {
     expect(HOSTD_FEATURES).toStrictEqual([
       "sessions",
+      "sessions.queue",
       "sessions.subscribe",
       "sessions.history",
       "session.read",

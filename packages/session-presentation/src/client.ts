@@ -1,29 +1,11 @@
-/**
- * The resident half of a chat Session: one client per durable Session id,
- * owning its subscription, the cadence its stream folds at, and its queue.
- *
- * It lives outside React for the reason the terminal registry does — a Session
- * is durable and its views are lazy, so nothing about a stream may depend on a
- * component staying mounted. A chat left for the board keeps folding, keeps its
- * queued message, and releases it the moment the harness is free, whether or not
- * anyone is looking at the tab.
- *
- * Every effectful dependency arrives through {@link ChatSessionClientDeps}: the
- * RPC edge, the flush pacing, the store written back to, and the two surface
- * effects a client triggers but does not own — a failure notice and the
- * auto-title rename. That is what lets this file be tested without a window
- * and keeps a future transport from changing the resident client core.
- *
- * The seams this declares — {@link ChatSessionRpc} and {@link ChatSessionStore} —
- * are stated here rather than imported from either side. The core is the thing
- * that has to be right; its transport and its container are details it names
- * requirements for.
- */
+/** A resident stream projection and command client. The host owns pending
+ * follow-ups and their release, even when no Client is connected. */
 import { isResnapshotRequired } from "@volli/host-protocol";
 import type {
   SessionLatestReply,
   SessionStreamCompactionProgress,
   SessionStreamOverlay,
+  SessionStreamQueue,
 } from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
@@ -36,7 +18,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { isUntitledChatSession, nextRelease, type QueuedMessage } from "./session-model";
+import { isUntitledChatSession, type QueuedMessage } from "./session-model";
 import {
   movesProjection,
   type ChatSessionFrame,
@@ -47,6 +29,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  chatSessionQueue,
   commandRefusal,
   rejectedReceipt,
 } from "./wire";
@@ -81,6 +64,11 @@ export type ChatMessageDelivery = "queue" | "steer" | "replace";
  */
 export type MessageDelivery = "delivered" | "recorded" | "refused";
 
+export type ChatSessionProjection = SessionPresentationProjection & {
+  queue?: SessionStreamQueue["queue"];
+  queueRevision?: number;
+};
+
 /**
  * One Session's resident state.
  *
@@ -89,7 +77,8 @@ export type MessageDelivery = "delivered" | "recorded" | "refused";
  * durable projection owns the Session's selected model.
  */
 export interface ChatSessionSlice {
-  projection: SessionPresentationProjection | null;
+  projection: ChatSessionProjection | null;
+  queueRevision?: number;
   transcript: ChatTranscriptState;
   lifecycle: ChatSessionLifecycle;
   /**
@@ -123,37 +112,6 @@ export function isDeliverable(slice: ChatSessionSlice): boolean {
   const projection = slice.projection;
   if (projection === null) return false;
   return projection.liveExecutor !== null && projection.modelSelection !== null;
-}
-
-/**
- * Whether the queue is holding words that nothing is coming to collect.
- *
- * The queue's own rule (VC-367). {@link isDeliverable} says a message cannot
- * leave *right now*, which is an ordinary and temporary thing: an executor is
- * starting, a model is being written down, a turn is mid-flight. What it cannot
- * distinguish is the one case where waiting is not temporary at all — a Session
- * whose executor is GONE. Nothing about that state ever ends on its own, so a
- * message held behind it is held forever, which is the silent queue this
- * predicate exists to end.
- *
- * Asked only of a queue that has something in it, because the answer is an
- * ACTION: bringing an executor back costs a process and a model turn, and
- * nothing should pay that for a Session nobody is trying to talk to. The three
- * exclusions are the states where an attach would be wrong rather than merely
- * early — no projection yet (this client has not read the Session), `starting`
- * (an attach is already in flight, and `retryAttach` would refuse it anyway),
- * and `archived` (there is nothing left to attach to).
- *
- * `error` is deliberately NOT excluded: a person who types after a failed
- * attach is asking for it again, and that is the whole difference between a
- * latch a command set and a wall.
- */
-export function queueNeedsExecutor(slice: ChatSessionSlice): boolean {
-  if (slice.queue.length === 0) return false;
-  if (slice.lifecycle === "starting") return false;
-  const projection = slice.projection;
-  if (projection === null || projection.status === "archived") return false;
-  return projection.liveExecutor === null;
 }
 
 /**
@@ -227,14 +185,14 @@ export interface ChatSessionWrites {
   applySnapshot(
     sessionId: string,
     window: TranscriptWindow,
-    projection: SessionPresentationProjection,
+    projection: ChatSessionProjection,
   ): void;
   /**
    * One older page, put above the transcript — only while the transcript still
    * holds `requested`, the cursor the page answers.
    */
   prependHistory(sessionId: string, requested: number, page: TranscriptWindow): void;
-  setProjection(sessionId: string, projection: SessionPresentationProjection): void;
+  setProjection(sessionId: string, projection: ChatSessionProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
   /**
@@ -244,14 +202,13 @@ export interface ChatSessionWrites {
    * `turnEpoch` is the transcript's count at submit. Pi answers a
    * `message.submit` when the turn it started has ALREADY ENDED (the runtime
    * awaits `agent.prompt`), so an unconditional latch here re-opens a turn the
-   * stream has closed — and the queue's release rule reads this same field,
-   * which strands every message behind it. An unchanged epoch is the one case
+   * stream has closed. An unchanged epoch is the one case
    * where nothing has been heard and optimism is all there is.
    */
   delivered(sessionId: string, turnEpoch: number): void;
   /** A failure, or `null` to clear one and hand the Session back to its stream. */
   settle(sessionId: string, error: string | null): void;
-  dequeue(sessionId: string, id: string): void;
+  setQueue(sessionId: string, queue: SessionStreamQueue["queue"], revision: number): void;
 }
 
 export interface ChatSessionStore {
@@ -291,7 +248,7 @@ type ChatCommand =
   | {
       kind: "message.submit";
       message: UIMessage;
-      delivery: ChatMessageDelivery;
+      delivery?: ChatMessageDelivery;
     }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
@@ -324,7 +281,7 @@ export interface ChatSessionRpc {
      */
     snapshot: {
       query(input: { sessionId: string }): Promise<{
-        projection: SessionPresentationProjection;
+        projection: ChatSessionProjection;
         frames: readonly unknown[];
         throughSequence: number;
         before?: number | null;
@@ -340,9 +297,13 @@ export interface ChatSessionRpc {
       }>;
     };
     projection: {
-      query(input: { sessionId: string }): Promise<{ projection: SessionPresentationProjection }>;
+      query(input: { sessionId: string }): Promise<{ projection: ChatSessionProjection }>;
     };
     subscribe: {
+      subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
+    };
+    /** Network bindings supply this after negotiating sessions.queue. IPC keeps its private stream. */
+    subscribeQueue?: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
     };
     // Deliberately `unknown`-shaped past the session id: every reader of a
@@ -350,6 +311,23 @@ export interface ChatSessionRpc {
     // because this crosses the RPC edge as JSON. A declared field here would
     // be a promise the transport never made.
     command: { mutate(input: ChatCommandRequest): Promise<{ sessionId: string }> };
+    cancelQueued: {
+      mutate(input: {
+        commandId: string;
+        sessionId: string;
+        messageId: string;
+        expectedRevision?: number;
+      }): Promise<unknown>;
+    };
+    editQueued: {
+      mutate(input: {
+        commandId: string;
+        sessionId: string;
+        messageId: string;
+        message: UIMessage;
+        expectedRevision?: number;
+      }): Promise<unknown>;
+    };
     cancelInteraction: {
       mutate(input: { sessionId: string; interactionId: string }): Promise<unknown>;
     };
@@ -393,8 +371,8 @@ export interface FlushHost {
  * A frame callback is the right cadence while a window is on screen, and it
  * stops firing entirely once Chromium considers the window occluded. For an
  * animation that is a pause; for a resident Session it is "stop folding this
- * stream until somebody looks at the tab again", with the queued release and the
- * attention it was carrying frozen behind it. The timer beside it is what keeps
+ * stream until somebody looks at the tab again", with the attention it
+ * was carrying frozen behind it. The timer beside it is what keeps
  * a hidden Session current, and it costs one cleared timeout per batch while
  * visible.
  *
@@ -550,7 +528,6 @@ export class ChatSessionClient {
   readonly #attachSession: ChatSessionTransport["attachSession"];
   readonly #notify: ChatSessionClientDeps["notify"];
   readonly #renameSession: ChatSessionClientDeps["renameSession"];
-  readonly #detachStore: () => void;
 
   #subscription: { unsubscribe(): void } | null = null;
   #cancelFlush: (() => void) | null = null;
@@ -591,40 +568,10 @@ export class ChatSessionClient {
   #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
-  // Automatic queue reattachment can meet the same transport failure twice.
+  // Repeated attach or stream failures should not repeat the same notification.
   // Keep one notification per source until it recovers or the person retries.
   readonly #reportedLocalFailures: Partial<Record<"attach" | "stream", string>> = {};
   #retired = false;
-  #draining = false;
-  /** A store write arrived mid-drain; the pass that owns the latch owes it one. */
-  #drainRequested = false;
-  /** Queue ids owned by either an explicit persisted steer or resident drain. */
-  readonly #claimedQueued = new Set<string>();
-  /**
-   * The queue this client has already tried to bring an executor back for.
-   * Null re-arms the attempt; see {@link ChatSessionClient.#attachForQueue}.
-   */
-  #queueAttachSignature: string | null = null;
-  /**
-   * The projection this client's own attach succeeded against, while that
-   * attach's executor has not been reported yet — or null.
-   *
-   * An attach RPC answering "ready" says the ledger accepted it, NOT that the
-   * projection has caught up: the executor reaches this client on the stream, a
-   * moment later. In between, a Session that is starting perfectly well looks
-   * exactly like one whose executor is gone — and a Chat Draft's first message
-   * is already in the queue by then (VC-358), which is the state
-   * {@link queueNeedsExecutor} exists to act on. Asking again there is what
-   * made the ledger refuse the second attach with "already has a live
-   * executor".
-   *
-   * Held only until the NEXT projection arrives, whatever it says. If it
-   * carries an executor the wait was right; if it does not, the attach truly
-   * did not take and the queue may ask again. Either way this ends, so it can
-   * never become the silent queue it is protecting.
-   */
-  #awaitingExecutorFor: SessionPresentationProjection | null = null;
-
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
     this.#rpc = deps.rpc;
@@ -635,13 +582,6 @@ export class ChatSessionClient {
     this.#attachSession = deps.attachSession;
     this.#notify = deps.notify;
     this.#renameSession = deps.renameSession;
-    // The queue's release rule reads lifecycle and the durable projection, and
-    // any of the three can move without this client having touched it — a person
-    // picking a model is enough. Watching the store is what makes one rule
-    // answer all of them.
-    this.#detachStore = deps.store.subscribe(() => {
-      void this.#drain();
-    });
   }
 
   /**
@@ -656,6 +596,7 @@ export class ChatSessionClient {
     await this.#open(null);
   }
 
+  /**
   /**
    * Reads the window of history above the transcript, if the host has any.
    *
@@ -689,36 +630,6 @@ export class ChatSessionClient {
   }
 
   /**
-   * Stops the resident release loop from taking one queued message while the
-   * renderer first makes its crash-safe held copy durable.
-   */
-  claimQueued(id: string): boolean {
-    const queued = this.#slice()?.queue.some((entry) => entry.id === id) ?? false;
-    if (!queued || this.#claimedQueued.has(id)) return false;
-    this.#claimedQueued.add(id);
-    return true;
-  }
-
-  /** Hands an unconsumed claim back to the ordinary ordered release loop. */
-  releaseQueuedClaim(id: string): void {
-    if (!this.#claimedQueued.delete(id)) return;
-    void this.#drain();
-  }
-
-  /**
-   * Consumes a claim and its queue row in one synchronous turn, before an
-   * explicit steer is submitted.
-   */
-  dequeueClaimed(id: string): boolean {
-    if (!this.#claimedQueued.has(id)) return false;
-    const queued = this.#slice()?.queue.some((entry) => entry.id === id) ?? false;
-    if (!queued) return false;
-    this.#claimedQueued.delete(id);
-    this.#writes().dequeue(this.sessionId, id);
-    return true;
-  }
-
-  /**
    * One attachment attempt on the durable Session this client owns.
    *
    * A refusal is a completed round trip carrying a rejected receipt; a transport
@@ -749,14 +660,6 @@ export class ChatSessionClient {
    * The FIRST attach of a Session this surface just brought into residence —
    * a create, or a Chat Draft promoted by its first message (VC-358).
    *
-   * One attacher, deliberately. The store used to perform this attach itself
-   * while the client performed every other one, and the two could not see each
-   * other: with a message already queued (which is exactly what promotion
-   * does), the queue's own reattach fired while the store's attach was still
-   * landing and the ledger refused the second with "already has a live
-   * executor". The client owns the attach door now, so its own latch covers
-   * every path into it.
-   *
    * Unlike {@link retryAttach} this does not require a projection: there has
    * not been one yet. It opens the stream and attaches in the same gesture,
    * which is what makes the Session live.
@@ -767,15 +670,7 @@ export class ChatSessionClient {
     return this.#attachOnce(options);
   }
 
-  /**
-   * The attach itself, with no opinion about the stream beside it.
-   *
-   * Split from {@link retryAttach} so the queue's own reattach (VC-367) can
-   * reuse the one attach door without the reopen: that path runs on a stream
-   * that is already delivering, and re-reading the snapshot under it would
-   * replace the projection this attach is about to move with the one it had
-   * before.
-   */
+  /** The explicit start/recovery attach, separate from opening the stream. */
   async #attachOnce(options?: AttachOptions): Promise<boolean> {
     try {
       const attached = await this.#attachSession({
@@ -802,8 +697,6 @@ export class ChatSessionClient {
           ? null
           : `Could not start Session: ${failure}`;
       const slicePart = attachPart ?? this.#reportedLocalFailures.stream ?? null;
-      // Before the settle, which is the store write the drain re-enters on.
-      this.#awaitingExecutorFor = failure === null ? (this.#slice()?.projection ?? null) : null;
       if (failure === null) delete this.#reportedLocalFailures.attach;
       this.#writes().settle(this.sessionId, slicePart);
       return failure === null;
@@ -967,14 +860,14 @@ export class ChatSessionClient {
    * which is state and not a result. See {@link MessageDelivery} for why two
    * kinds of failure are not one.
    */
-  async submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
+  async submit(message: QueuedMessage, delivery?: ChatMessageDelivery): Promise<MessageDelivery> {
     const slice = this.#slice();
     const body = message.text.trim();
     const attachments = message.attachments ?? [];
     // An attachment makes an otherwise-empty message a real one (VC-50): a
     // dropped screenshot with no words is a question, and refusing it here
     // would drop the file the person just chose.
-    if (slice === undefined || !isDeliverable(slice)) return "refused";
+    if (slice === undefined || (delivery !== "queue" && !isDeliverable(slice))) return "refused";
     if (body.length === 0 && attachments.length === 0) return "refused";
     try {
       // The message-scoped resource channel (VC-49): each skill body the text's
@@ -983,26 +876,14 @@ export class ChatSessionClient {
       // the transcript renders the text verbatim with a chip per resource, and
       // the adapter appends the delimited RESOURCE blocks after the text when
       // it composes the delivered prompt.
-      const wireMessage = {
-        id: message.id,
-        role: "user" as const,
-        parts: [
-          { type: "text" as const, text: body },
-          ...(message.resources ?? []).map(skillResourcePart),
-          // Attachments travel as AI SDK file parts addressed by
-          // `volli-blob:<hash>` — never as bytes. The hash is what makes the
-          // durable transcript small enough to replay forever, and what lets
-          // main find the file again after the worktree it was materialized
-          // into has been pruned.
-          ...attachments.map((attachment) => ({
-            type: "file" as const,
-            url: blobUrl(attachment.blobHash),
-            mediaType: attachment.mime,
-            filename: attachment.originalName,
-          })),
-        ],
+      // Link views and the title baseline belong to pending host queue work,
+      // not every immediate transcript message. File/resource parts still travel.
+      const wireMessage = queuedWireMessage(message, delivery === "queue");
+      const command: ChatCommand = {
+        kind: "message.submit",
+        message: wireMessage,
+        ...(delivery === undefined ? {} : { delivery }),
       };
-      const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
       const deliveryResult = this.#rpc.session.command.mutate({
         commandId: message.id,
         sessionId: this.sessionId,
@@ -1030,14 +911,75 @@ export class ChatSessionClient {
       const refusal = rejectedReceipt(delivered);
       if (refusal !== null) {
         this.#writes().settle(this.sessionId, `Message not delivered: ${refusal}`);
-        return "recorded";
+        if (delivery === "queue") this.#notify(`Message not queued: ${refusal}`, "error");
+        return delivery === "queue" ? "refused" : "recorded";
       }
-      this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
+      if (delivery === "queue") this.#refreshProjection();
+      else this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
       return "delivered";
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
+      if (delivery === "queue")
+        this.#notify(`Message not queued: ${errorMessage(failure)}`, "error");
       return "refused";
     }
+  }
+
+  /** Queue mutations never optimistically remove a row: release may already own it. */
+  async cancelQueued(
+    messageId: string,
+    expectedRevision = this.#slice()?.queueRevision,
+  ): Promise<boolean> {
+    const accepted = await this.#eventRun("Message not removed", () =>
+      this.#rpc.session.cancelQueued.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        messageId,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
+    if (accepted) this.#refreshProjection();
+    return accepted;
+  }
+
+  async editQueued(
+    message: QueuedMessage,
+    expectedRevision = this.#slice()?.queueRevision,
+  ): Promise<boolean> {
+    const accepted = await this.#eventRun("Message not changed", () =>
+      this.#rpc.session.editQueued.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        messageId: message.id,
+        message: queuedWireMessage(message),
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    );
+    if (accepted) this.#refreshProjection();
+    return accepted;
+  }
+
+  /** The host atomically claims the queued identity; never cancel before steering. */
+  async steerQueued(messageId: string): Promise<MessageDelivery> {
+    const slice = this.#slice();
+    const message = slice?.queue.find((entry) => entry.id === messageId);
+    if (!message || message.queueState === "releasing" || slice?.projection?.turnActive !== true) {
+      this.#notify(
+        "Message not steered: the queued message or targeted turn is no longer available",
+        "error",
+      );
+      return "refused";
+    }
+    const accepted = await this.#eventRun("Message not steered", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: { kind: "message.submit", delivery: "steer", message: queuedWireMessage(message) },
+      }),
+    );
+    if (!accepted) return "refused";
+    this.#refreshProjection();
+    return "delivered";
   }
 
   /** Records and applies a per-Session model override. The engine enforces idle-only changes. */
@@ -1111,7 +1053,6 @@ export class ChatSessionClient {
     this.#compactionProgress = [];
     this.#subscription?.unsubscribe();
     this.#subscription = null;
-    this.#detachStore();
   }
 
   /* ------------------------------------------------------------- the stream */
@@ -1148,7 +1089,11 @@ export class ChatSessionClient {
         );
         afterSequence = snapshot.throughSequence;
       }
-      this.#subscription = this.#rpc.session.subscribe.subscribe(
+      const source =
+        this.#streamRecovery === "host-link"
+          ? (this.#rpc.session.subscribeQueue ?? this.#rpc.session.subscribe)
+          : this.#rpc.session.subscribe;
+      this.#subscription = source.subscribe(
         // The cursor rides alongside the sequence rather than instead of it: the
         // router resumes from whichever is further on, and an overlay id — which
         // is a durable sequence, not a suffixed one — is safe to hand back.
@@ -1248,6 +1193,12 @@ export class ChatSessionClient {
   #receive(emission: unknown): void {
     // Each arm of the stream in turn, first match wins; an emission none of
     // them recognizes is dropped rather than drawn.
+    const queue = chatSessionQueue(emission);
+    if (queue !== null) {
+      if (queue.sessionId === this.sessionId)
+        this.#writes().setQueue(this.sessionId, queue.queue, queue.revision);
+      return;
+    }
     const progress = chatSessionCompactionProgress(emission);
     const overlay = progress === null ? chatSessionOverlay(emission) : null;
     const frame = progress === null && overlay === null ? chatSessionFrame(emission) : null;
@@ -1311,150 +1262,6 @@ export class ChatSessionClient {
         this.#projectionQueued = false;
         this.#refreshProjection();
       });
-  }
-
-  /* -------------------------------------------------------------- the queue */
-
-  /**
-   * Drains the queue, one message at a time.
-   *
-   * The rule the composer used to own, moved to the only thing that survives the
-   * view: a queued message written while the runtime was still coming up has to
-   * leave when it is ready, and closing the tab in between must not strand it.
-   *
-   * `#draining` is the latch, and it is a boolean rather than the released id it
-   * replaced because the loop is what enforces one at a time: each pass waits for
-   * its own send to land, and a delivered message has already made the Session
-   * busy by the time the next pass reads it. An id latch could not, because the
-   * store write that empties the queue re-enters this synchronously.
-   *
-   * A re-entry while the latch is held is REMEMBERED rather than dropped
-   * (VC-367). The loop re-reads the slice on every pass, so a write that lands
-   * mid-pass is normally picked up by the next one — but the passes that end in
-   * `return` have no next one, and a message enqueued in that window would sit
-   * there with nothing coming for it. Which is this ticket's whole complaint,
-   * one level down: a person typing again while a reattach is in flight is the
-   * likeliest way to hit it.
-   *
-   * It also owns the other half of the same promise: a queue that cannot release
-   * because the Session has NO executor gets one brought back, rather than
-   * holding the words forever. See {@link #attachForQueue}.
-   */
-  async #drain(): Promise<void> {
-    if (this.#draining) {
-      this.#drainRequested = true;
-      return;
-    }
-    this.#draining = true;
-    try {
-      for (;;) {
-        const slice = this.#slice();
-        // The Session can close mid-release; the words went with it.
-        if (slice === undefined) return;
-        // An explicit steer freezes the whole ordered queue while its selected
-        // row becomes durable. Releasing an earlier neighbor here would start
-        // a different turn and make the selected row steer the wrong work.
-        if (this.#claimedQueued.size > 0) return;
-        // Re-arm the reattach the moment the Session stops needing one, so a
-        // second death is answered as readily as the first.
-        if (!queueNeedsExecutor(slice)) this.#queueAttachSignature = null;
-        // A projection has arrived since this client's own attach succeeded, so
-        // whatever it says is now the answer and the wait is over.
-        if (this.#awaitingExecutorFor !== null && slice.projection !== this.#awaitingExecutorFor) {
-          this.#awaitingExecutorFor = null;
-        }
-        const next = nextRelease(slice.queue, {
-          working: slice.lifecycle === "working",
-          // A failure is explicit recovery, not a reason to keep feeding a
-          // harness that just refused the last thing it was handed.
-          ready: slice.lifecycle !== "error" && isDeliverable(slice),
-        });
-        if (next === null) {
-          // Nothing to release — which is either ordinary waiting, or the one
-          // state that never ends by itself. Only the second does anything, and
-          // deciding that synchronously keeps ordinary waiting on the cheap
-          // path it has always been on.
-          const signature = this.#queueAttachRequest(slice);
-          if (signature === null) return;
-          if (await this.#attachForQueue(signature)) continue;
-          return;
-        }
-        this.#claimedQueued.add(next.id);
-        let outcome: MessageDelivery;
-        try {
-          outcome = await this.submit(next, "queue");
-          if (outcome !== "refused") this.#writes().dequeue(this.sessionId, next.id);
-        } finally {
-          this.#claimedQueued.delete(next.id);
-        }
-        if (outcome === "refused") return;
-      }
-    } finally {
-      this.#draining = false;
-      if (this.#drainRequested) {
-        this.#drainRequested = false;
-        void this.#drain();
-      }
-    }
-  }
-
-  /**
-   * Brings an executor back for a queue that has no way to drain (VC-367).
-   *
-   * This is what makes sending to a crashed Session honest. A relaunch closes
-   * the attachment of every Session whose process died, so `liveExecutor` reads
-   * null and every message typed afterwards routes to the queue — where, before
-   * this, nothing ever came for it: the release rule waits on an executor and
-   * no other path was going to produce one. The composer looked like it had
-   * accepted the message and the Session simply never started.
-   *
-   * The attach is the same door the error row's Retry presses
-   * ({@link #attachOnce}), so a send can never reattach in a way a person
-   * could not. Success leaves the ordinary release rule to deliver the words;
-   * failure settles the band, which IS the visible refusal, with that same
-   * Retry beside it.
-   *
-   * The stream is deliberately NOT reopened alongside, which is the one way
-   * this differs from Retry. This runs from inside the drain, on a client whose
-   * store is moving and whose subscription is therefore delivering — re-reading
-   * the snapshot under it would put back the very projection the attach is
-   * about to move, and the release rule reads that projection. A stream this
-   * client genuinely lost has already latched its own band, and the Retry on it
-   * is the door that reopens ({@link recover}).
-   *
-   * One attempt per queue, not per pass — {@link #queueAttachRequest} is that
-   * latch, and it has already established everything {@link retryAttach} guards
-   * on: a slice that exists, a projection read, and a lifecycle that is not
-   * `starting`. Re-asking here would be an unreachable branch, so the
-   * `attaching` latch is written directly.
-   */
-  async #attachForQueue(signature: string): Promise<boolean> {
-    this.#queueAttachSignature = signature;
-    this.#writes().attaching(this.sessionId);
-    return this.#attachOnce();
-  }
-
-  /**
-   * The signature of a queue that wants an executor and has not been tried yet,
-   * or null for one that wants nothing or has already asked.
-   *
-   * Synchronous, so the drain's ordinary "nothing to release" pass never yields
-   * — a pass that awaited there would let a concurrent store write re-enter and
-   * be refused, which is this ticket's own bug one level down.
-   *
-   * The drain re-enters on every store write, including the several an attach
-   * makes, so an unlatched arm would spend a process per frame. The signature is
-   * the queue itself rather than a bare boolean so that typing a SECOND message
-   * after a refusal asks again — a person sending again is asking again, and a
-   * latch that ignored them would be the same silence in a different place.
-   */
-  #queueAttachRequest(slice: ChatSessionSlice): string | null {
-    // This client attached a moment ago and is still waiting to be told what
-    // that produced. Asking again now would be asking twice for one thing.
-    if (this.#awaitingExecutorFor !== null) return null;
-    if (!queueNeedsExecutor(slice)) return null;
-    const signature = slice.queue.map((entry) => entry.id).join(",");
-    return this.#queueAttachSignature === signature ? null : signature;
   }
 
   /* ------------------------------------------------------------- the shared */
@@ -1626,4 +1433,33 @@ function readFrames(frames: readonly unknown[]): ChatSessionFrame[] {
     const normalized = chatSessionFrame(frame);
     return normalized === null ? [] : [normalized];
   });
+}
+
+/** The host retains the complete message, including the link views needed for editing. */
+export function queuedWireMessage(message: QueuedMessage, retainQueueMetadata = true): UIMessage {
+  return {
+    id: message.id,
+    role: "user",
+    ...(!retainQueueMetadata ||
+    (message.attachments === undefined && message.autoTitleBaseline === undefined)
+      ? {}
+      : {
+          metadata: {
+            ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+            ...(message.autoTitleBaseline === undefined
+              ? {}
+              : { autoTitleBaseline: message.autoTitleBaseline }),
+          },
+        }),
+    parts: [
+      { type: "text", text: message.text.trim() },
+      ...(message.resources ?? []).map(skillResourcePart),
+      ...(message.attachments ?? []).map((attachment) => ({
+        type: "file" as const,
+        url: blobUrl(attachment.blobHash),
+        mediaType: attachment.mime,
+        filename: attachment.originalName,
+      })),
+    ],
+  };
 }

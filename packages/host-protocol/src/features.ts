@@ -27,6 +27,7 @@ export const HOST_FEATURE_OPERATIONS = {
     "session.cancelInteraction",
     "session.reconcile",
   ],
+  "sessions.queue": ["session.cancelQueued", "session.editQueued", "session.subscribeQueue"],
   /** Following one Session's stream, resuming after a cursor (VC-663). */
   "sessions.subscribe": ["session.subscribe"],
   /**

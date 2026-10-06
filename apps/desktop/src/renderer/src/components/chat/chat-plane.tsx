@@ -5,15 +5,9 @@
  * There is no header: the tab already names the Session and carries its liveness
  * dot, and a second band here would repeat it.
  *
- * Nothing about the Session lives in this component. The stream, the fold, the
- * queue and the lifecycle belong to the resident client
- * (@volli/session-presentation) and the store beside it, both of which
- * outlive every mount — so a chat left for
- * the board keeps folding and releases its queued message whether or not this is
- * on screen. Nor does the half-typed message: it is part of the Session too, so
- * it lives in `stores/chat-drafts.ts` and survives both a tab switch and a
- * relaunch. What is local is what should be: the measured composer height, and
- * which cards have a decision in flight.
+ * The host owns work and ordered follow-ups. Resident clients fold the stream;
+ * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
+ * owns only measurements and which controls have a command in flight.
  */
 import * as React from "react";
 import { toast } from "sonner";
@@ -101,7 +95,6 @@ import {
   composerModelSelection,
   composerPress,
   coordinateQueuedMutation,
-  coordinateQueuedSteerStart,
   detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
@@ -117,9 +110,8 @@ import {
   sessionBlocker,
   sessionModelStanding,
   visibleBlocker,
-  steerRollbackState,
-  steerQueuedMessage,
   settledHeldIds,
+  steerTurnIsCurrent,
   withdrawInteraction,
   type ComposerVerbPress,
   type CatalogState,
@@ -192,7 +184,6 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
-const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
 const NO_HIDDEN: readonly HiddenModelRef[] = [];
@@ -338,15 +329,13 @@ export function ChatPlane({
   );
   const sessionsStore = store ?? useChatSessionsStore;
   const {
-    claimQueued,
+    cancelQueued,
+    steerQueued,
     compactContext,
-    dequeueClaimed,
-    enqueue,
     cancelInteraction,
     interrupt,
     recover,
     retryRuntime,
-    releaseQueuedClaim,
     resolveInteraction,
     selectModel,
     submit,
@@ -368,7 +357,6 @@ export function ChatPlane({
   const setDraft = useChatDraftsStore((state) => state.setDraft);
   const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
-  const beginQueuedSteer = useChatDraftsStore((state) => state.beginQueuedSteer);
   const markHeld = useChatDraftsStore((state) => state.markHeld);
   const dropHeld = useChatDraftsStore((state) => state.dropHeld);
   const onInputChange = React.useCallback(
@@ -409,6 +397,7 @@ export function ChatPlane({
     messages,
     durableMessages,
     queue,
+    queueRevision,
     working,
     turnActive,
     deliverable,
@@ -596,13 +585,11 @@ export function ChatPlane({
   /**
    * The one road out of this surface for anything a person typed.
    *
-   * Says what became of the words, which is not the same question as whether
-   * they arrived: `held` means the Session's queue has them and nothing durable
-   * does. A redirection typed on a card takes the same road, so it is never
-   * dropped while the executor is coming up.
+   * Both queued and immediate messages are host commands. A redirection typed
+   * on a card takes the same road, including while an executor is coming up.
    */
   const deliver = React.useCallback(
-    async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
+    async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery> => {
       if (provisional !== undefined) {
         // First Send cannot defer a still-unknown model choice into main: doing
         // so would let a Settings change between retries alter one create
@@ -632,29 +619,15 @@ export function ChatPlane({
           drafts.completePromotion(sessionId);
           return "refused";
         }
-        sessionsStore.getState().enqueue(sessionId, message);
-        // Queue first, then remove the recovery marker. If the renderer exits
-        // before this synchronous handoff finishes, hydration turns the held
-        // `sending` row into a visible `unsent` retry instead of stranding it.
-        drafts.completePromotion(sessionId);
-        return "held";
+        const outcome = await sessionsStore.getState().enqueue(sessionId, message);
+        // The persisted recovery copy is dropped by dispatch only after host acceptance.
+        if (outcome !== "refused") drafts.completePromotion(sessionId);
+        return outcome;
       }
-      if (messageRoute(intent, deliverable) === "hold") {
-        enqueue(message);
-        return "held";
-      }
-      return submit(message, intent === "steer" ? "steer" : "queue");
+      if (messageRoute(intent, deliverable) === "hold") return submit(message, "queue");
+      return submit(message, intent === "steer" ? "steer" : undefined);
     },
-    [
-      deliverable,
-      enqueue,
-      provisional,
-      provisionalModel,
-      sessionId,
-      sessionsStore,
-      setSettingsOpen,
-      submit,
-    ],
+    [deliverable, provisional, provisionalModel, sessionId, sessionsStore, setSettingsOpen, submit],
   );
 
   /**
@@ -850,12 +823,11 @@ export function ChatPlane({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
         deliver: () => road(message),
         finish: async (outcome) => {
-          if (outcome === "held") markHeld(sessionId, message.id, "queued");
           // `recorded` is the message the runtime committed before the executor
           // refused it: it is in the ledger and on screen in the transcript, so
           // handing it back would be inviting a second copy of it. The blocker
           // row owns that recovery.
-          else if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
+          if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
           else dropHeld(sessionId, message.id);
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
@@ -1005,118 +977,153 @@ export function ChatPlane({
   // its words back in the box, removing one drops it — so the whole of this is
   // which ids it stopped naming. Both records are told; neither minds an id it
   // never had.
+  const queuedMutations = React.useRef(new Set<string>());
   const onQueuedChange = React.useCallback(
-    (next: readonly QueuedMessage[]) => {
+    async (
+      next: readonly QueuedMessage[],
+      options?: { restoreAttachments?: readonly BlobLinkView[]; restoreDraft?(): void },
+    ) => {
       const kept = new Set(next.map((entry) => entry.id));
       const removed = strip.filter((entry) => !kept.has(entry.id));
       if (removed.length === 0) return true;
       if (removed.length !== 1) return false;
       const entry = removed[0]!;
-      const current = sessionsStore.getState().sessions[sessionId];
-      const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
-      const gone = coordinateQueuedMutation({
-        queueBacked,
-        claim: () => claimQueued(entry.id),
-        consumeClaim: () => dequeueClaimed(entry.id),
-        releaseClaim: () => releaseQueuedClaim(entry.id),
-        dropHeld: () => dropHeld(sessionId, entry.id),
-      });
-      if (!gone) return false;
-      // A removed row's files lose their links too (VC-137) — which of them,
-      // and why an edited row's do not, is `detachableRowAttachments`.
-      for (const attachment of detachableRowAttachments(
-        entry.attachments,
-        attachmentsRef.current,
-      )) {
-        void removeAttachment(attachment);
+      if (queuedMutations.current.has(entry.id) || steeringQueued.current.has(entry.id))
+        return false;
+      // The revision of the snapshot this strip was drawn from — this render's,
+      // never `getState()` after the durability wait below. Another Client can
+      // edit the row while the recovery copy persists; reading the revision
+      // afterwards would cancel the edited words while restoring the old ones.
+      // A mismatch is a typed conflict and refuses like any other refusal.
+      const expectedRevision = queueRevision;
+      queuedMutations.current.add(entry.id);
+      try {
+        const current = sessionsStore.getState().sessions[sessionId];
+        const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
+        const heldEntry = useChatDraftsStore
+          .getState()
+          .drafts[sessionId]?.held.find((row) => row.id === entry.id);
+        // A stale host row must still ask the host; disappearance never grants local ownership.
+        const hostOwned = queueBacked || entry.commandId !== undefined;
+        if (options?.restoreDraft !== undefined && hostOwned) {
+          // Cancel removes the host's last copy. Keep recovery durable before
+          // asking, then restore the draft before retiring it after acceptance.
+          // `holdMessage` empties the box (it was built for Send, where the
+          // box IS the message); here the box holds words typed before Edit,
+          // and they must survive the wait and a refusal. Put them back in
+          // the same tick, so no render — and no durable write — sees them gone.
+          const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
+          holdMessage(sessionId, entry);
+          if (typed.length > 0) setDraft(sessionId, typed);
+          if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) {
+            markHeld(sessionId, entry.id, "unsent");
+            return false;
+          }
+        }
+        const gone = await coordinateQueuedMutation({
+          queueBacked: hostOwned,
+          cancel: () => cancelQueued(entry.id, expectedRevision),
+          localMutable: heldEntry?.state === "unsent",
+          dropHeld: () => {
+            options?.restoreDraft?.();
+            dropHeld(sessionId, entry.id);
+          },
+        });
+        if (!gone) {
+          if (options?.restoreDraft !== undefined)
+            markHeld(sessionId, entry.id, heldEntry?.state ?? "unsent");
+          return false;
+        }
+        if (options?.restoreAttachments === undefined) {
+          for (const attachment of detachableRowAttachments(
+            entry.attachments,
+            attachmentsRef.current,
+          )) {
+            void removeAttachment(attachment);
+          }
+        }
+        await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+        return true;
+      } catch (failure) {
+        if (options?.restoreDraft !== undefined) markHeld(sessionId, entry.id, "unsent");
+        toast.error(`Message not removed: ${errorMessage(failure)}`);
+        return false;
+      } finally {
+        queuedMutations.current.delete(entry.id);
       }
-      return true;
     },
     [
-      claimQueued,
-      dequeueClaimed,
+      cancelQueued,
       dropHeld,
+      holdMessage,
+      markHeld,
+      queueRevision,
       removeAttachment,
-      releaseQueuedClaim,
       sessionId,
       sessionsStore,
+      setDraft,
       strip,
     ],
   );
 
   const onSteerQueued = React.useCallback(
     (id: string) => {
-      void steerQueuedMessage(id, steeringQueued.current, {
-        read: () => {
-          const current = sessionsStore.getState().sessions[sessionId];
-          return {
-            held: useChatDraftsStore.getState().drafts[sessionId]?.held ?? NO_HELD,
-            queue: current?.queue ?? NO_QUEUE,
-            steerable: current?.lifecycle === "working" && isDeliverable(current),
-          };
-        },
-        start: async (visible, targetId) => {
-          const before = sessionsStore.getState().sessions[sessionId];
-          const targetedTurnEpoch = before?.transcript.turnEpoch;
-          const queueBacked = before?.queue.some((entry) => entry.id === targetId) ?? false;
-          const heldBefore = useChatDraftsStore
-            .getState()
-            .drafts[sessionId]?.held.find((entry) => entry.id === targetId);
-          const restoreState = steerRollbackState(queueBacked, heldBefore?.state);
-          return coordinateQueuedSteerStart(targetedTurnEpoch, {
-            queueBacked,
-            claim: () => claimQueued(targetId),
-            persist: async () => {
-              // The claim freezes the entire ordered resident queue. Its
-              // selected row and visible neighbors become durable first.
-              beginQueuedSteer(sessionId, visible, targetId);
-              return flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
-            },
-            current: () => {
-              const current = sessionsStore.getState().sessions[sessionId];
-              return current === undefined
+      if (steeringQueued.current.has(id) || queuedMutations.current.has(id)) return;
+      const current = sessionsStore.getState().sessions[sessionId];
+      const queued = current?.queue.find((entry) => entry.id === id);
+      if (
+        queued !== undefined ||
+        strip.some((entry) => entry.id === id && entry.commandId !== undefined)
+      ) {
+        // The host claims the queued identity atomically. Never cancel then resubmit.
+        void steerQueued(id);
+        return;
+      }
+      const entry = useChatDraftsStore
+        .getState()
+        .drafts[sessionId]?.held.find((row) => row.id === id);
+      if (entry?.state !== "unsent" || current?.lifecycle !== "working" || !isDeliverable(current))
+        return;
+      const targetedTurnEpoch = current.transcript.turnEpoch;
+      steeringQueued.current.add(id);
+      markHeld(sessionId, id, "sending");
+      void dispatchHeldMessage({
+        persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
+        deliver: () => {
+          const live = sessionsStore.getState().sessions[sessionId];
+          if (
+            !steerTurnIsCurrent(
+              targetedTurnEpoch,
+              live === undefined
                 ? undefined
                 : {
-                    turnEpoch: current.transcript.turnEpoch,
-                    working: current.lifecycle === "working",
-                    deliverable: isDeliverable(current),
-                  };
-            },
-            consumeClaim: () => dequeueClaimed(targetId),
-            restore: async () => {
-              markHeld(sessionId, targetId, restoreState);
-              await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
-            },
-            releaseClaim: () => releaseQueuedClaim(targetId),
-          });
+                    turnEpoch: live.transcript.turnEpoch,
+                    working: live.lifecycle === "working",
+                    deliverable: isDeliverable(live),
+                  },
+            )
+          ) {
+            toast.error("Message not steered: the targeted turn has ended");
+            return Promise.resolve("refused" as const);
+          }
+          return submit(entry, "steer");
         },
-        submit: (message, delivery) => submit(message, delivery),
-        finish: async (messageId, outcome) => {
-          if (outcome === "refused") markHeld(sessionId, messageId, "unsent");
-          else dropHeld(sessionId, messageId);
+        finish: async (outcome) => {
+          if (outcome === "refused") markHeld(sessionId, id, "unsent");
+          else dropHeld(sessionId, id);
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
-      });
+      }).finally(() => steeringQueued.current.delete(id));
     },
-    [
-      beginQueuedSteer,
-      claimQueued,
-      dequeueClaimed,
-      dropHeld,
-      markHeld,
-      releaseQueuedClaim,
-      sessionId,
-      sessionsStore,
-      submit,
-    ],
+    [dropHeld, markHeld, sessionId, sessionsStore, steerQueued, strip, submit],
   );
 
-  // The release queue is renderer memory and the held copy is what outlives it,
-  // so the copy is retired by the queue letting go: a released message is one
-  // the runtime now owns. Nothing else can say it — the drain runs in the
-  // resident client, which has no view and no drafts.
+  // Only positive host ownership evidence retires a recovery copy. An empty or
+  // stale projection is not evidence of acceptance after a transport failure.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue, durableMessageIds)) dropHeld(sessionId, id);
+    for (const id of settledHeldIds(held, queue, durableMessageIds)) {
+      if (!queuedMutations.current.has(id)) dropHeld(sessionId, id);
+    }
   }, [dropHeld, durableMessageIds, held, queue, sessionId]);
 
   // Questions, budget asks and confirmations share the existing composer slot.
