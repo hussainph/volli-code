@@ -3144,3 +3144,94 @@ describe("the board store on the protocol path (cloud on)", () => {
     expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("# Read");
   });
 });
+
+// ---- the #810 review's identity probes, kept (VC-447) ----------------------------------------
+
+describe("VC-447: a refresh keeps every unchanged identity and drops no changed field (flag off and on)", () => {
+  const base = ticket({ id: "a", status: "todo", labels: ["a", "b"] });
+  const changed: Partial<Ticket>[] = [
+    { id: "b" },
+    { projectId: "p2" },
+    { ticketNumber: 888 },
+    { title: "changed" },
+    { status: "done" },
+    { priority: "high" },
+    { labels: ["a", "c"] },
+    { labels: ["b", "a"] },
+    { labels: ["a"] },
+    { labels: ["a", "b", "c"] },
+    { usesWorktree: false },
+    { preferredHarnessId: "codex" },
+    { order: 88 },
+    { worktreePath: "/new" },
+    { branch: "new" },
+    { baseBranch: "new" },
+    { prUrl: "https://example.test" },
+    { createdAt: 888 },
+    { updatedAt: 888 },
+  ];
+  it.each(changed)("does not drop changed ticket field %j", (patch) => {
+    stopBoardProtocol();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [base] }, { p1: [] });
+    const { body: _body, ...row } = { ...base, ...patch };
+    store.getState().hydrateProjectRoster("p1", [row], []);
+    expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(base);
+    expect(store.getState().ticketsByProject.p1?.[0]).toEqual({ ...row, body: base.body });
+  });
+  it.each([{ id: "other" }, { projectId: "p2" }, { name: "new" }, { color: "red" }])(
+    "does not drop label field %j",
+    (patch) => {
+      stopBoardProtocol();
+      const store = createBoardStore(fakeGateway());
+      const label = labelNamed("bug");
+      store.getState().hydrate({ p1: [base] }, { p1: [label] });
+      const { body: _body, ...row } = base;
+      store.getState().hydrateProjectRoster("p1", [row], [{ ...label, ...patch }]);
+      expect(store.getState().labelsByProject.p1?.[0]).not.toBe(label);
+    },
+  );
+  it("preserves cloned equal arrays and objects, but updates body through its dedicated read", () => {
+    stopBoardProtocol();
+    const store = createBoardStore(fakeGateway());
+    const label = labelNamed("bug");
+    store.getState().hydrate({ p1: [base] }, { p1: [label] });
+    const prior = store.getState().ticketsByProject.p1;
+    const { body: _body, ...row } = base;
+    store
+      .getState()
+      .hydrateProjectRoster("p1", [{ ...row, labels: [...row.labels] }], [{ ...label }]);
+    expect(store.getState().ticketsByProject.p1).toBe(prior);
+    expect(store.getState().labelsByProject.p1?.[0]).toBe(label);
+    store.getState().adoptTicketBody("p1", "a", "new body");
+    expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(base);
+    expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("new body");
+  });
+});
+
+it("preserves 599 of 600 ticket identities on both board paths", () => {
+  stopBoardProtocol();
+  const store = createBoardStore(fakeGateway());
+  const rows = Array.from({ length: 600 }, (_, i) =>
+    ticket({ id: `card-${i}`, status: "todo", order: i }),
+  );
+  store.getState().hydrate({ p1: rows }, { p1: [] });
+  const cloned = rows.map((t, i) => ({
+    ...t,
+    labels: [...t.labels],
+    title: i === 42 ? "changed" : t.title,
+  }));
+  const summaries = cloned.map(({ body: _body, ...t }) => t);
+  store.getState().hydrateProjectRoster("p1", summaries, []);
+  const off = store.getState().ticketsByProject.p1!;
+  expect(off.filter((t, i) => t === rows[i])).toHaveLength(599);
+  store.getState().paintProtocolBoard(
+    "p1",
+    // Fresh objects with equal values: the paint must keep the identities.
+    // oxlint-disable-next-line oxc/no-map-spread
+    cloned.map((t) => ({ ...t, labels: [...t.labels] })),
+    [],
+    new Set(),
+  );
+  expect(store.getState().ticketsByProject.p1).toBe(off);
+});

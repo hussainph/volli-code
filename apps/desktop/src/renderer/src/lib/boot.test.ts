@@ -1200,6 +1200,31 @@ describe("startBoardProtocolIfEnabled", () => {
     expect(error).toHaveBeenCalledWith("Couldn't move ticket: stale board", expect.anything());
     expect(useBoardStore.getState().ticketsByProject.p1?.[0]?.status).toBe("todo");
   });
+
+  it("warns once that a write is still unconfirmed, and keeps it on the board", async () => {
+    vi.useFakeTimers();
+    try {
+      stubBoardBridge(
+        { p1: [boardTicket("a", "p1")], p2: [] },
+        { "board.moveTickets": { code: "SERVICE_UNAVAILABLE", message: "host-unreachable" } },
+      );
+      const error = vi.spyOn(toast, "error");
+      const warning = vi.spyOn(toast, "warning");
+      await startBoardProtocolIfEnabled(async () => true);
+
+      void useBoardStore.getState().moveTicket("p1", "a", "doing", 0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        "Still trying to move ticket: host-unreachable",
+      );
+      expect(error).not.toHaveBeenCalled();
+      expect(useBoardStore.getState().ticketsByProject.p1?.[0]?.status).toBe("doing");
+    } finally {
+      stopBoardProtocol();
+      vi.useRealTimers();
+    }
+  });
 });
 
 const unused = () => Promise.reject(new Error("not expected"));

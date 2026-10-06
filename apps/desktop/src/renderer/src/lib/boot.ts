@@ -247,6 +247,8 @@ export async function startBoardProtocolIfEnabled(
         void useVenueStore.getState().refreshStale();
       },
       failed: (message) => toastError(message),
+      // Not a failure: the write keeps being sent under its id until the host answers.
+      unconfirmed: (message) => toast.warning(message),
     },
   });
   await Promise.all(

@@ -23,12 +23,18 @@ import {
   BoardSync,
   isAmbiguousBoardFailure,
   placeholderTicketId,
+  READ_LOG_ENTITIES,
   type BoardFeedBatch,
   type BoardSyncOptions,
   type BoardSyncTransport,
   type BoardSyncView,
   type BoardWriteAnswer,
 } from "./board-sync";
+import { startBoardProtocol, stopBoardProtocol } from "../lib/board-protocol";
+import { createBoardStore } from "./board";
+import { ticketScope, useSessionsStore } from "./sessions";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // ---- fixtures ------------------------------------------------------------------
 
@@ -531,6 +537,7 @@ function recorder() {
     notePlanningChange: vi.fn<BoardSyncView["notePlanningChange"]>(),
     checkoutMoved: vi.fn<BoardSyncView["checkoutMoved"]>(),
     failed: vi.fn<BoardSyncView["failed"]>(),
+    unconfirmed: undefined as BoardSyncView["unconfirmed"],
   };
   const last = (projectId = "p1"): Paint => {
     const found = paints.findLast((paint) => paint.projectId === projectId);
@@ -787,15 +794,15 @@ describe("pending writes (T5)", () => {
     expect(last("p2").tickets[0]?.priority).toBe("high");
   });
 
-  it("remembers a bounded window of the cursors it applied", async () => {
+  it("retires a write on its reply however many batches the feed delivered since its cursor", async () => {
     const { host, sync, last } = harness({ confirmTimeoutMs: 1_000 });
     await sync.open("p1");
     host.latency.reply = 10;
 
-    // A write whose cursor the feed delivers, then 512 more batches before its reply.
+    // A write whose cursor the feed delivers, then 600 more batches before its reply.
     const move = sync.moveTickets("p1", ["A"], "doing", 0);
     await vi.advanceTimersByTimeAsync(0);
-    for (let i = 0; i < 512; i++) {
+    for (let i = 0; i < 600; i++) {
       host.stamp("p1", [
         { kind: "comment", op: "upsert", id: `c${i}`, projectId: "p1", ticketId: "B" },
       ]);
@@ -803,11 +810,11 @@ describe("pending writes (T5)", () => {
     await vi.advanceTimersByTimeAsync(10);
     await move;
 
-    // Its cursor fell out of the window: a read confirms it instead.
-    expect(host.callsTo("roster")).toEqual([]);
+    // The base is past its cursor: retired at once, with no read to confirm it.
     await vi.advanceTimersByTimeAsync(1_000 + 16);
-    expect(host.callsTo("roster")).toHaveLength(1);
-    expect(columns(last().tickets).doing).toEqual(["A", "G"]);
+    expect(host.callsTo("roster")).toEqual([]);
+    host.externalMove("p1", "A", "todo", 0);
+    expect(placement(last().tickets, "A")).toBe("todo#0");
   });
 
   it("does not let a read that started before the reply retire the edit", async () => {
@@ -833,8 +840,9 @@ describe("pending writes (T5)", () => {
   it("retries an ambiguous failure under the same commandId; the host applies it once", async () => {
     const { host, sync, view, last } = harness({ retryDelaysMs: [100] });
     await sync.open("p1");
-    // The host took the write; only its answer was lost.
+    // The host took the write; its answer was lost, and so was its feed row.
     host.fail("moveTickets", unreachable, { applied: true });
+    host.dropFeed = true;
 
     const move = sync.moveTickets("p1", ["A"], "doing", 0);
     await vi.advanceTimersByTimeAsync(100);
@@ -848,6 +856,23 @@ describe("pending writes (T5)", () => {
     expect(view.failed).not.toHaveBeenCalled();
     expect(columns(last().tickets).doing).toEqual(["A", "G"]);
     expect(columns(host.board("p1")).doing).toEqual(["A", "G"]);
+  });
+
+  it("settles on the feed's proof without a retry when only the reply was lost", async () => {
+    const { host, sync, view, last } = harness({ retryDelaysMs: [100] });
+    await sync.open("p1");
+    host.fail("moveTickets", unreachable, { applied: true });
+
+    await sync.moveTickets("p1", ["A"], "doing", 0);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // The feed named cmd-1 as the host applied it: that is the proof.
+    expect(host.callsTo("moveTickets")).toHaveLength(1);
+    expect(host.effects.get("cmd-1")).toBe(1);
+    expect(view.failed).not.toHaveBeenCalled();
+    expect(columns(last().tickets).doing).toEqual(["A", "G"]);
+    host.externalMove("p1", "A", "todo", 0);
+    expect(placement(last().tickets, "A")).toBe("todo#0");
   });
 
   it("retries a failure with no host envelope (a dead bridge) until the host takes it", async () => {
@@ -891,22 +916,42 @@ describe("pending writes (T5)", () => {
     expect(view.failed).toHaveBeenNthCalledWith(2, "Couldn't update labels: no labels today");
   });
 
-  it("gives up after its attempts, repeating the last retry delay, and reverts", async () => {
+  it("never gives up on an unknown outcome: it keeps sending, says so once, and never reverts", async () => {
+    const unconfirmed = vi.fn();
     const { host, sync, view, last } = harness({ retryDelaysMs: [10, 20], maxAttempts: 4 });
+    view.unconfirmed = unconfirmed;
     await sync.open("p1");
     host.fail("setPriority", unreachable, { times: 10 });
 
     const write = sync.setPriority("p1", "A", "high");
+    let settled = false;
+    void write.then(() => (settled = true));
     expect(last().tickets.find(({ id }) => id === "A")?.priority).toBe("high");
-    await vi.advanceTimersByTimeAsync(10 + 20 + 19);
-    expect(host.callsTo("setPriority")).toHaveLength(3);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(10 + 20 + 20);
+    expect(host.callsTo("setPriority")).toHaveLength(4);
+    expect(unconfirmed).toHaveBeenCalledExactlyOnceWith(
+      "Still trying to update priority: host-unreachable",
+    );
+    // Past its attempts: the last delay repeats, the edit stays, nothing failed.
+    await vi.advanceTimersByTimeAsync(20 * 6);
+    expect(host.callsTo("setPriority")).toHaveLength(10);
+    expect(settled).toBe(false);
+    expect(last().tickets.find(({ id }) => id === "A")?.priority).toBe("high");
+    expect(view.failed).not.toHaveBeenCalled();
+    // The host comes back: the next send lands, under the same id.
+    await vi.advanceTimersByTimeAsync(20);
     await write;
-
     const times = host.callsTo("setPriority").map(({ at }) => at);
-    expect(times.slice(1).map((at, index) => at - times[index]!)).toEqual([10, 20, 20]);
-    expect(view.failed).toHaveBeenCalledWith("Couldn't update priority: host-unreachable");
-    expect(last().tickets.find(({ id }) => id === "A")?.priority).toBe("medium");
+    expect(times.slice(1).map((at, index) => at - times[index]!)).toEqual([
+      10, 20, 20, 20, 20, 20, 20, 20, 20, 20,
+    ]);
+    expect(
+      new Set(
+        host.callsTo("setPriority").map(({ input }) => (input as { commandId: string }).commandId),
+      ),
+    ).toEqual(new Set(["cmd-1"]));
+    expect(host.effects.get("cmd-1")).toBe(1);
+    expect(unconfirmed).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry a write whose Workspace closed while it was in flight, and paints nothing", async () => {
@@ -1299,7 +1344,7 @@ describe("the change feed", () => {
     expect(view.checkoutMoved).toHaveBeenCalledWith("A");
   });
 
-  it("adopts a project row, and reads the roster for a project change without one", async () => {
+  it("adopts a project row, and reads the snapshot for a project change without one", async () => {
     const { host, sync, view } = harness();
     await sync.open("p1");
     const renamed = { ...project("p1"), name: "Renamed" };
@@ -1311,9 +1356,13 @@ describe("the change feed", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(host.callsTo("roster")).toEqual([]);
 
+    // Relinked elsewhere, announced without its row: the snapshot carries it.
+    host.projects.set("p1", { ...project("p1"), path: "/relinked" });
     host.stamp("p1", [{ kind: "project", op: "upsert", id: "p1", projectId: "p1" }]);
     await vi.advanceTimersByTimeAsync(16);
-    expect(host.callsTo("roster")).toHaveLength(1);
+    expect(host.callsTo("roster")).toEqual([]);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    expect(view.adoptProject).toHaveBeenLastCalledWith({ ...project("p1"), path: "/relinked" });
   });
 
   it("ignores a change kind this build does not know", async () => {
@@ -1538,19 +1587,28 @@ describe("roster reads", () => {
     expect(host.callsTo("roster")).toHaveLength(2);
   });
 
-  it("says when a read fails, and still runs the read queued behind it", async () => {
-    const { host, sync, view } = harness();
+  it("says once when a read fails, and reads again with backoff until one lands", async () => {
+    const { host, sync, view, last } = harness({ feedRetryDelaysMs: [250, 1_000] });
     await sync.open("p1");
     host.methodLatency.roster = { request: 0, reply: 100 };
-    host.fail("roster", conflict, { applied: true });
+    host.fail("roster", conflict, { applied: true, times: 2 });
 
     host.externalRetitle("p1", "A", "One", true);
     await vi.advanceTimersByTimeAsync(16);
     host.externalRetitle("p1", "B", "Two", true);
-    await vi.advanceTimersByTimeAsync(100 + 16 + 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(view.failed).toHaveBeenCalledExactlyOnceWith("Couldn't refresh the board: stale board");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(host.callsTo("roster")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1 + 100 + 1_000 + 100);
 
-    expect(view.failed).toHaveBeenCalledWith("Couldn't refresh the board: stale board");
-    expect(host.callsTo("roster")).toHaveLength(2);
+    expect(host.callsTo("roster")).toHaveLength(3);
+    expect(view.failed).toHaveBeenCalledTimes(1);
+    expect(
+      last()
+        .tickets.slice(0, 2)
+        .map(({ title }) => title),
+    ).toEqual(["One", "Two"]);
   });
 });
 
@@ -1826,5 +1884,773 @@ describe("a burst of drags under latency (T5)", () => {
     expect([...host.effects.values()]).toEqual([1, 1, 1, 1, 1, 1]);
     expect(view.failed).not.toHaveBeenCalled();
     expect(host.callsTo("roster")).toHaveLength(1);
+  });
+
+  it("never rubber-bands at 150 ms through a lost first send, a failed confirmation read and a resnapshot mid-read", async () => {
+    const { host, sync, paints, view } = harness({ readCoalesceMs: 50, confirmTimeoutMs: 1_000 });
+    host.latency = { request: 150, reply: 150, feed: 150 };
+    const opening = sync.open("p1");
+    await vi.advanceTimersByTimeAsync(300);
+    await opening;
+    const start = Date.now();
+    const burst: { at: number; ids: string[]; to: TicketStatus; index: number }[] = [
+      ...drags,
+      // A, whose first send is lost, dragged again: the older drag is superseded.
+      { at: 60, ids: ["A"], to: "done", index: 0 },
+    ];
+    const made: Ticket[][] = [host.board("p1")];
+    for (const drag of burst) {
+      made.push(moveTicket(made.at(-1)!, drag.ids[0]!, drag.to, drag.index, 0));
+    }
+    let dragged = 0;
+    const stageOfPaint: number[] = [];
+    const record = view.paint.getMockImplementation()!;
+    view.paint.mockImplementation((...args) => {
+      record(...args);
+      stageOfPaint.push(dragged);
+    });
+    const firstPaint = paints.length;
+    // The first drag's send never lands; the first read fails.
+    host.fail("moveTickets", unreachable);
+    host.fail("roster", unreachable);
+
+    const writes: Promise<void>[] = [];
+    const script = [
+      ...burst.map((drag) => ({
+        at: drag.at,
+        run: () => {
+          dragged += 1;
+          writes.push(sync.moveTickets("p1", drag.ids, drag.to, drag.index));
+        },
+      })),
+      ...rowless.map(({ at, id }) => ({
+        at,
+        run: () => void host.externalRetitle("p1", id, `${id} elsewhere`, true),
+      })),
+      // The burst's read fails at t+355 and is retried at t+605; the host
+      // restarts its feed while that retry is in flight.
+      { at: 700, run: () => host.requireResnapshot("p1") },
+    ].toSorted((left, right) => left.at - right.at);
+    for (const step of script) {
+      await vi.advanceTimersByTimeAsync(start + step.at - Date.now());
+      step.run();
+    }
+    await vi.advanceTimersByTimeAsync(20_000);
+    await Promise.all(writes);
+
+    const painted = paints
+      .slice(firstPaint)
+      .map((paint, index) => Object.assign({}, paint, { stage: stageOfPaint[index]! }));
+    const violations: string[] = [];
+    for (const paint of painted) {
+      for (const { id } of made[0]!) {
+        const shown = placement(paint.tickets, id);
+        const newest = placement(made[paint.stage]!, id);
+        if (shown !== newest) {
+          violations.push(`t+${paint.at - start}ms: ${id} at ${shown}, last put at ${newest}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+    const finalPaint = painted.at(-1)!;
+    expect(finalPaint.tickets.toSorted((l, r) => l.id.localeCompare(r.id))).toEqual(
+      host.board("p1").toSorted((l, r) => l.id.localeCompare(r.id)),
+    );
+    expect(columns(host.board("p1"))).toEqual(columns(made.at(-1)!));
+    expect(finalPaint.tickets.find(({ id }) => id === "I")?.title).toBe("I elsewhere");
+    // The lost first drag was never applied, nor sent again; each other once.
+    expect(host.effects.get("cmd-1")).toBeUndefined();
+    expect(host.callsTo("moveTickets")).toHaveLength(burst.length);
+    expect([...host.effects.values()]).toEqual(Array.from({ length: burst.length - 1 }, () => 1));
+    // The failed read was said once, and retried until one landed.
+    expect(view.failed).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't refresh the board: host-unreachable",
+    );
+    expect(host.callsTo("roster")).toHaveLength(2);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+  });
+});
+
+// ---- the #810 review's interleavings (VC-565), each a guarantee ----------------------------
+
+describe("interleavings: a newer write supersedes, any proof decides, the base is monotonic", () => {
+  it("keeps the latest drag when an earlier unsent command would retry after it", async () => {
+    const { host, sync, last } = harness({ retryDelaysMs: [100] });
+    await sync.open("p1");
+    host.fail("moveTickets", unreachable); // the first attempt did NOT land
+    const earlier = sync.moveTickets("p1", ["A"], "doing", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    const latest = sync.moveTickets("p1", ["A"], "done", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    await latest;
+    await vi.advanceTimersByTimeAsync(100);
+    await earlier;
+    // The earlier drag is superseded: never sent again, so it cannot undo Done.
+    expect(
+      host.callsTo("moveTickets").map(({ input }) => (input as { commandId: string }).commandId),
+    ).toEqual(["cmd-1", "cmd-2"]);
+    expect(host.effects.get("cmd-1")).toBeUndefined();
+    expect(host.effects.get("cmd-2")).toBe(1);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+    expect(placement(host.board("p1"), "A")).toBe("done#0");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+  });
+
+  it("holds a newer write that only overlaps an older unsettled one until it settles, in order", async () => {
+    const { host, sync, last } = harness({ retryDelaysMs: [100] });
+    await sync.open("p1");
+    host.fail("updateTicket", unreachable);
+    const both = sync.updateTicket("p1", { ticketId: "A", title: "First", body: "# First" });
+    await vi.advanceTimersByTimeAsync(0);
+    // Overlaps the title but not the body: it cannot replace the older write.
+    const title = sync.updateTicket("p1", { ticketId: "A", title: "Second" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last().tickets.find(({ id }) => id === "A")).toMatchObject({
+      title: "Second",
+      body: "# First",
+    });
+    expect(host.callsTo("updateTicket")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([both, title]);
+    expect(
+      host.callsTo("updateTicket").map(({ input }) => (input as { commandId: string }).commandId),
+    ).toEqual(["cmd-1", "cmd-1", "cmd-2"]);
+    expect(host.board("p1").find(({ id }) => id === "A")).toMatchObject({
+      title: "Second",
+      body: "# First",
+    });
+    expect(last().tickets.find(({ id }) => id === "A")).toMatchObject({
+      title: "Second",
+      body: "# First",
+    });
+  });
+
+  it("does not roll a saved body back when the feed leads the reply", async () => {
+    const { host, sync, paints, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.updateTicket = { request: 0, reply: 150 };
+    const painted = paints.length;
+    const update = sync.updateTicket("p1", { ticketId: "A", body: "new body" });
+    await vi.advanceTimersByTimeAsync(150);
+    expect((await update)?.body).toBe("new body");
+    // Not one paint in between showed the old body.
+    for (const paint of paints.slice(painted)) {
+      expect(paint.tickets.find(({ id }) => id === "A")?.body).toBe("new body");
+    }
+    expect(last().tickets.find(({ id }) => id === "A")?.body).toBe("new body");
+  });
+
+  it("shows a created ticket's body as soon as the feed proves the create, before the reply", async () => {
+    const { host, sync, paints, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.createTicket = { request: 0, reply: 150 };
+    const creating = sync.createTicket("p1", { status: "todo", title: "New", body: "# Mine" });
+    await vi.advanceTimersByTimeAsync(0);
+    const confirmed = last().tickets.find(({ id }) => id === "n1");
+    expect(confirmed?.body).toBe("# Mine");
+    expect(last().unloaded.has("n1")).toBe(false);
+    expect(last().tickets.some(({ id }) => id.startsWith("pending:"))).toBe(false);
+    await vi.advanceTimersByTimeAsync(150);
+    expect((await creating)?.id).toBe("n1");
+    expect(paints.at(-1)?.tickets.find(({ id }) => id === "n1")?.body).toBe("# Mine");
+  });
+
+  it("retries the confirmation read after a transient failure instead of keeping a pending edit forever", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.dropFeed = true;
+    await sync.setPriority("p1", "A", "high");
+    host.fail("roster", unreachable);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // A confirmed write by another writer must now supersede our completed edit.
+    host.dropFeed = false;
+    host.tickets = host.tickets.map((t) => (t.id === "A" ? { ...t, priority: "low" } : t));
+    host.stamp("p1", [
+      {
+        kind: "ticket",
+        op: "upsert",
+        id: "A",
+        projectId: "p1",
+        ticket: summaryOf(host.tickets.find((t) => t.id === "A")!),
+      },
+    ]);
+    expect(last().tickets.find((t) => t.id === "A")?.priority).toBe("low");
+    expect(host.callsTo("roster").length).toBe(2);
+  });
+
+  it("does not let a pre-resnapshot roster overwrite a newer snapshot", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.roster = { request: 0, reply: 300 };
+    host.externalRetitle("p1", "A", "old", true);
+    await vi.advanceTimersByTimeAsync(16); // the old roster is captured
+    host.methodLatency.snapshot = { request: 50, reply: 0 };
+    host.requireResnapshot("p1");
+    host.dropFeed = true;
+    host.externalRetitle("p1", "A", "new"); // while the old feed is stopped
+    await vi.advanceTimersByTimeAsync(50);
+    host.dropFeed = false;
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("new");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("new");
+    expect(host.board("p1").find((t) => t.id === "A")?.title).toBe("new");
+  });
+
+  it("does not replay an older feed row over a newer roster while a later feed row is delayed", async () => {
+    const { host, sync, last, paints } = harness();
+    await sync.open("p1");
+    host.methodLatency.roster = { request: 100, reply: 0 };
+    host.externalRetitle("p1", "H", "trigger", true);
+    await vi.advanceTimersByTimeAsync(16); // the read is sent; it captures at t116
+    host.latency.feed = 30;
+    host.externalRetitle("p1", "A", "old"); // delivered at t46
+    await vi.advanceTimersByTimeAsync(10);
+    host.latency.feed = 200;
+    host.externalRetitle("p1", "A", "new"); // delivered at t226; the roster already holds it
+    await vi.advanceTimersByTimeAsync(90); // t116
+    expect(host.board("p1").find((t) => t.id === "A")?.title).toBe("new");
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("new");
+    const painted = paints.length;
+    // The late batch is older than the base: its row is dropped, the title holds.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(
+      paints.slice(painted).map((p) => p.tickets.find((t) => t.id === "A")?.title),
+    ).not.toContain("old");
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("new");
+  });
+
+  it("recovers a failed first snapshot without an explicit reopen", async () => {
+    const { host, sync, last } = harness();
+    host.fail("snapshot", unreachable);
+    await expect(sync.open("p1")).rejects.toEqual(unreachable);
+    expect(sync.follows("p1")).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    expect(host.subscriberCount).toBe(1);
+    expect(columns(last().tickets).doing).toEqual(["G"]);
+  });
+
+  it("keeps re-opening with backoff while the snapshot keeps failing, and stops once closed", async () => {
+    const { host, sync } = harness({ feedRetryDelaysMs: [100, 300] });
+    host.fail("snapshot", unreachable, { times: 3 });
+    await expect(sync.open("p1")).rejects.toEqual(unreachable);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(host.callsTo("snapshot")).toHaveLength(3);
+    sync.close("p1");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(host.callsTo("snapshot")).toHaveLength(3);
+    expect(host.subscriberCount).toBe(0);
+  });
+
+  it("refreshes the Project row on a rowless project change (a relink)", async () => {
+    const { host, sync, view } = harness();
+    await sync.open("p1");
+    host.projects.set("p1", { ...project("p1"), path: "/relinked" });
+    host.stamp("p1", [{ kind: "project", op: "upsert", id: "p1", projectId: "p1" }]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    expect(view.adoptProject.mock.lastCall?.[0].path).toBe("/relinked");
+  });
+
+  it("drops a read answered from another feed: the feed's own resnapshot replaces the base", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    const roster = host.roster.bind(host);
+    host.roster = async (projectId) => ({ ...(await roster(projectId)), cursor: "other-feed:9" });
+    host.externalRetitle("p1", "A", "Elsewhere", true);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(host.callsTo("roster")).toHaveLength(1);
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("Ticket A");
+  });
+
+  it("drops an older read it can no longer replay (too much changed meanwhile), and reads again", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.roster = { request: 0, reply: 100 };
+    host.externalRetitle("p1", "A", "Rowless", true);
+    await vi.advanceTimersByTimeAsync(16);
+    // More entities change during the read than it keeps.
+    host.stamp(
+      "p1",
+      Array.from({ length: READ_LOG_ENTITIES + 1 }, (_, i) => ({
+        kind: "label" as const,
+        op: "upsert" as const,
+        id: `l${i}`,
+        projectId: "p1",
+        label: label(`l${i}`),
+      })),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    // Its answer is older than the base and cannot be replayed: dropped, read again.
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("Ticket A");
+    expect(last().labels).toHaveLength(2 + READ_LOG_ENTITIES + 1);
+    await vi.advanceTimersByTimeAsync(16 + 100);
+    expect(host.callsTo("roster")).toHaveLength(2);
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("Rowless");
+  });
+
+  it("drops a batch older than the base, but still tells per-ticket surfaces what it says", async () => {
+    const { host, sync, view, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.roster = { request: 0, reply: 0 };
+    host.latency.feed = 100;
+    host.externalRetitle("p1", "A", "Rowless", true); // delivered at t100
+    host.latency.feed = 0;
+    // A read the base asks for itself lands first and is newer.
+    host.externalRetitle("p1", "B", "Fresh", true);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("Rowless");
+    view.notePlanningChange.mockClear();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(view.notePlanningChange).toHaveBeenCalledWith({ ticketId: "A", projectId: "p1" });
+    // No further read: the late rowless change is one the read already covered.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.callsTo("roster")).toHaveLength(1);
+  });
+});
+
+describe("bounded memory", () => {
+  it("drops a ticket's body when it leaves the board, and a Workspace's bodies when it closes", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.stamp("p1", [{ kind: "ticket", op: "delete", id: "A", projectId: "p1" }]);
+    // Back on the board with no body read since: it shows as unloaded, not a stale body.
+    host.stamp("p1", [
+      {
+        kind: "ticket",
+        op: "upsert",
+        id: "A",
+        projectId: "p1",
+        ticket: summaryOf(ticket("A", "backlog", 0)),
+      },
+    ]);
+    expect(last().unloaded.has("A")).toBe(true);
+    sync.close("p1");
+    await sync.open("p1");
+    expect(last().unloaded.size).toBe(0);
+  });
+
+  it("forgets the bodies of tickets a read no longer finds", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.tickets = host.tickets.filter(({ id }) => id !== "B");
+    host.externalRetitle("p1", "A", "Rowless", true);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(last().tickets.some(({ id }) => id === "B")).toBe(false);
+    host.tickets.push(ticket("B", "backlog", 1));
+    host.stamp("p1", [
+      {
+        kind: "ticket",
+        op: "upsert",
+        id: "B",
+        projectId: "p1",
+        ticket: summaryOf(ticket("B", "backlog", 1)),
+      },
+    ]);
+    expect(last().unloaded.has("B")).toBe(true);
+  });
+
+  it("ignores a body for a ticket no followed board holds", async () => {
+    const { sync, last } = harness();
+    await sync.open("p1");
+    sync.adoptBody("nowhere", "# Orphan");
+    expect(last().tickets.some(({ id }) => id === "nowhere")).toBe(false);
+    expect(sync.workspaceOf("A")).toBe("p1");
+    expect(sync.workspaceOf("nowhere")).toBeUndefined();
+  });
+});
+
+describe("per-surface commands", () => {
+  it("settles a command on the feed row that names it, after its reply was lost", async () => {
+    const { host, sync, view } = harness({ retryDelaysMs: [100] });
+    await sync.open("p1");
+    let sent = 0;
+    const result = sync.command({
+      verb: "add comment",
+      send: async (commandId) => {
+        sent += 1;
+        // The host stamps the comment, naming the command; the reply is lost.
+        host.stamp("p1", [
+          {
+            kind: "comment",
+            op: "upsert",
+            id: "c1",
+            projectId: "p1",
+            ticketId: "A",
+            commandId,
+            comment: { id: "c1", ticketId: "A", body: "Hi" } as never,
+          },
+        ]);
+        throw unreachable;
+      },
+      fromFeed: (row) => ({ comment: row }),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await result).toEqual({
+      ok: true,
+      answer: { comment: { id: "c1", ticketId: "A", body: "Hi" } },
+    });
+    expect(sent).toBe(1);
+    expect(view.failed).not.toHaveBeenCalled();
+  });
+
+  it("answers a refusal as the legacy envelope, and a retried removal that finds nothing as done", async () => {
+    const { sync, view } = harness({ retryDelaysMs: [10] });
+    expect(
+      await sync.command({
+        verb: "edit comment",
+        send: async () => {
+          throw conflict;
+        },
+        fromFeed: () => null,
+      }),
+    ).toEqual({ ok: false, error: "stale board" });
+    // The surface says it, in its own words: not twice.
+    expect(view.failed).not.toHaveBeenCalled();
+
+    let attempts = 0;
+    const removing = sync.command({
+      verb: "delete comment",
+      send: async () => {
+        attempts += 1;
+        throw attempts === 1 ? unreachable : notFound;
+      },
+      fromFeed: () => "gone",
+      goneMeansDone: true,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await removing).toEqual({ ok: true, answer: "gone" });
+  });
+});
+
+describe("an archive's side effects run once, on its first proof", () => {
+  afterEach(() => {
+    stopBoardProtocol();
+    vi.unstubAllGlobals();
+  });
+
+  function storeOver(host: FakeHost, sync: Partial<BoardSyncOptions>) {
+    const kill = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
+    const store = createBoardStore();
+    const { view } = recorder();
+    view.paint.mockImplementation((...args) => store.getState().paintProtocolBoard(...args));
+    const started = startBoardProtocol({
+      client: {} as never,
+      view,
+      sync: { transport: host, ...sync },
+    });
+    return { kill, store, view, sync: started.sync };
+  }
+
+  it.each(["archive", "delete"] as const)(
+    "%s kills a Session once after a lost reply and a same-id retry",
+    async (kind) => {
+      const host = new FakeHost();
+      host.tickets = [ticket("A", "doing", 0)];
+      host.dropFeed = true;
+      const { kill, store, sync } = storeOver(host, { retryDelaysMs: [100] });
+      await sync.open("p1");
+      if (kind === "delete") {
+        host.tickets = [];
+        host.archived = [{ ...ticket("A", "done", 0), archivedAt: 1 }];
+        store.setState({ archivedByProject: { p1: host.archived } });
+      }
+      useSessionsStore.getState().addSession(ticketScope("p1", "A"), "s1", {
+        title: "s1",
+        harnessId: "claude-code",
+        launchKind: "shell",
+        createdAt: 0,
+      });
+      const method = kind === "archive" ? "archiveTicket" : "deleteTicket";
+      host.fail(method, unreachable, { applied: true });
+      if (kind === "delete") host.fail(method, notFound);
+      const changing =
+        kind === "archive"
+          ? store.getState().archiveTicket("p1", "A")
+          : store.getState().deleteArchivedTicket("p1", "A");
+      await vi.advanceTimersByTimeAsync(100);
+      await changing;
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(host.callsTo(method)).toHaveLength(2);
+      expect([...host.effects.values()]).toEqual([1]);
+    },
+  );
+
+  it("counts an archive the feed proved as done though every reply was lost", async () => {
+    const host = new FakeHost();
+    host.tickets = [ticket("A", "doing", 0)];
+    const { kill, store, view, sync } = storeOver(host, { retryDelaysMs: [10], maxAttempts: 2 });
+    await sync.open("p1");
+    useSessionsStore.getState().addSession(ticketScope("p1", "A"), "s1", {
+      title: "s1",
+      harnessId: "claude-code",
+      launchKind: "shell",
+      createdAt: 0,
+    });
+    host.fail("archiveTicket", unreachable, { applied: true, times: 2 });
+    const archiving = store.getState().archiveTicket("p1", "A");
+    await vi.advanceTimersByTimeAsync(10);
+    await archiving;
+    expect(host.archived.map((t) => t.id)).toEqual(["A"]);
+    expect([...host.effects.values()]).toEqual([1]);
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(view.failed).not.toHaveBeenCalled();
+    // One send: the feed's proof stopped the retry.
+    expect(host.callsTo("archiveTicket")).toHaveLength(1);
+  });
+});
+
+describe("edges of the rules", () => {
+  it.each([
+    ["createTicket", "n1"],
+    ["updateTicket", "A"],
+    ["unarchiveTicket", "Q"],
+  ] as const)(
+    "answers a %s the feed proved, after every reply was lost, with the row the base holds",
+    async (method, id) => {
+      const { host, sync, view } = harness({ retryDelaysMs: [100] });
+      await sync.open("p1");
+      const archived = { ...ticket("Q", "doing", 7), archivedAt: 5 };
+      host.archived = [archived];
+      host.fail(method, unreachable, { applied: true });
+      const answer = await (method === "createTicket"
+        ? sync.createTicket("p1", { status: "todo", title: "New", body: "# New" })
+        : method === "updateTicket"
+          ? sync.updateTicket("p1", { ticketId: "A", title: "Renamed", body: "# Renamed" })
+          : sync.unarchiveTicket("p1", archived));
+      expect(answer).toEqual(host.board("p1").find((row) => row.id === id));
+      expect(host.callsTo(method)).toHaveLength(1);
+      expect(view.failed).not.toHaveBeenCalled();
+    },
+  );
+
+  it("re-opens at once when asked during a failed open's backoff, and drops the pending retry", async () => {
+    const { host, sync } = harness({ feedRetryDelaysMs: [500] });
+    host.fail("snapshot", unreachable);
+    await expect(sync.open("p1")).rejects.toEqual(unreachable);
+    await sync.open("p1");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.callsTo("snapshot")).toHaveLength(2);
+    expect(host.subscriberCount).toBe(1);
+  });
+
+  it("does not re-open a snapshot that failed after its Workspace closed", async () => {
+    const { host, sync } = harness({ feedRetryDelaysMs: [100] });
+    host.methodLatency.snapshot = { request: 50 };
+    host.fail("snapshot", unreachable);
+    const opening = sync.open("p1");
+    sync.close("p1");
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(opening).rejects.toEqual(unreachable);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.callsTo("snapshot")).toHaveLength(1);
+  });
+
+  it("answers a per-surface command still out when every Workspace closes as not done", async () => {
+    const { sync } = harness();
+    let fail!: (error: unknown) => void;
+    const result = sync.command({
+      verb: "add comment",
+      send: () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+      fromFeed: () => null,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    sync.closeAll();
+    fail(unreachable);
+    expect(await result).toEqual({ ok: false, error: "host-unreachable" });
+  });
+
+  it("takes a per-surface command's reply after the feed proved it, and settles once", async () => {
+    const { host, sync } = harness();
+    await sync.open("p1");
+    const relinked = { ...host.projects.get("p1")!, baseBranch: "trunk" };
+    const result = await sync.command({
+      verb: "update project",
+      send: async (commandId) => {
+        host.stamp("p1", [
+          {
+            kind: "project",
+            op: "upsert",
+            id: "p1",
+            projectId: "p1",
+            commandId,
+            project: relinked,
+          },
+        ]);
+        return { project: relinked };
+      },
+      fromFeed: (row) => ({ project: row }),
+    });
+    expect(result).toEqual({ ok: true, answer: { project: relinked } });
+  });
+
+  it("settles a per-surface command on the project row the feed carried", async () => {
+    const { host, sync } = harness({ retryDelaysMs: [100] });
+    await sync.open("p1");
+    const relinked = { ...host.projects.get("p1")!, baseBranch: "trunk" };
+    const result = sync.command({
+      verb: "update project",
+      send: async (commandId) => {
+        host.stamp("p1", [
+          {
+            kind: "project",
+            op: "upsert",
+            id: "p1",
+            projectId: "p1",
+            commandId,
+            project: relinked,
+          },
+        ]);
+        throw unreachable;
+      },
+      fromFeed: (row) => ({ project: row }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual({ ok: true, answer: { project: { ...relinked } } });
+  });
+
+  it("sends a newer write at once when the older one it overlaps is already accepted", async () => {
+    const { host, sync, last } = harness({ confirmTimeoutMs: 60_000 });
+    await sync.open("p1");
+    host.dropFeed = true;
+    await sync.updateTicket("p1", { ticketId: "A", title: "First", body: "# First" });
+    host.latency.request = 10;
+    const second = sync.updateTicket("p1", { ticketId: "A", title: "Second" });
+    // Accepted is settled: the host already has the older one, so the order holds.
+    expect(host.callsTo("updateTicket")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10);
+    await second;
+    expect(last().tickets.find((t) => t.id === "A")).toMatchObject({
+      title: "Second",
+      body: "# First",
+    });
+  });
+
+  it("keeps an accepted write's edit under a newer one that covers it, until the base holds it", async () => {
+    const { host, sync, last } = harness({ confirmTimeoutMs: 60_000 });
+    await sync.open("p1");
+    host.dropFeed = true;
+    await sync.moveTickets("p1", ["A"], "doing", 0);
+    host.latency.request = 10;
+    const latest = sync.moveTickets("p1", ["A"], "done", 0);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+    await vi.advanceTimersByTimeAsync(10);
+    await latest;
+    expect(host.effects.get("cmd-1")).toBe(1);
+    expect(host.effects.get("cmd-2")).toBe(1);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+  });
+
+  it("ignores a batch from another feed on its subscription", async () => {
+    let handlers: FeedHandlers | undefined;
+    const host = new FakeHost();
+    host.tickets = [ticket("A", "backlog", 0)];
+    const { view, last } = recorder();
+    host.changes = (_projectId, _cursor, given) => {
+      handlers = given;
+      return () => {};
+    };
+    const sync = new BoardSync({ transport: host, view });
+    await sync.open("p1");
+    handlers!.onBatch({
+      cursor: "elsewhere:9",
+      changes: [{ kind: "ticket", op: "delete", id: "A", projectId: "p1" }],
+    });
+    expect(placement(last().tickets, "A")).toBe("backlog#0");
+  });
+
+  it("retires a write stamped on another feed only once a snapshot replaces the base", async () => {
+    const { host, sync, last } = harness({ confirmTimeoutMs: 60_000 });
+    await sync.open("p1");
+    host.dropFeed = true;
+    const move = host.moveTickets.bind(host);
+    // The host restarted between its write and its answer.
+    host.moveTickets = async (input) => ({ ...(await move(input)), throughCursor: "restarted:1" });
+    await sync.moveTickets("p1", ["A"], "doing", 0);
+    host.dropFeed = false;
+    host.externalMove("p1", "B", "done", 0);
+    // Not held by a batch of the old feed: the edit stays.
+    host.tickets = host.tickets.map((t) => (t.id === "A" ? { ...t, status: "backlog" } : t));
+    host.externalRetitle("p1", "C", "Nudge");
+    expect(columns(last().tickets).doing).toEqual(["A", "G"]);
+    // A snapshot of the later feed holds it.
+    host.requireResnapshot("p1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(placement(last().tickets, "A")).toBe("backlog#0");
+  });
+
+  it("waits again for a write a confirmation read could not place", async () => {
+    const { host, sync } = harness({ confirmTimeoutMs: 1_000 });
+    await sync.open("p1");
+    host.dropFeed = true;
+    const roster = host.roster.bind(host);
+    host.roster = async (projectId) => ({ ...(await roster(projectId)), cursor: "elsewhere:5" });
+    await sync.moveTickets("p1", ["A"], "doing", 0);
+    await vi.advanceTimersByTimeAsync(1_000 + 16);
+    expect(host.callsTo("roster")).toHaveLength(1);
+    // Dropped (another feed), so the write waits for its cursor again, not in a loop.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(host.callsTo("roster")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1 + 16);
+    expect(host.callsTo("roster")).toHaveLength(2);
+  });
+
+  it("does not retry a failed confirmation read once the feed brought the write", async () => {
+    const { host, sync, view } = harness({ confirmTimeoutMs: 1_000, feedRetryDelaysMs: [100] });
+    await sync.open("p1");
+    host.latency.feed = 1_050;
+    host.methodLatency.roster = { request: 0, reply: 100 };
+    host.fail("roster", unreachable, { applied: true });
+    await sync.moveTickets("p1", ["A"], "doing", 0);
+    // Another write still out asks for no read of its own.
+    host.methodLatency.setPriority = { request: 10_000 };
+    void sync.setPriority("p1", "B", "high");
+    await vi.advanceTimersByTimeAsync(1_016 + 100 + 1_000);
+    expect(view.failed).toHaveBeenCalledOnce();
+    expect(host.callsTo("roster")).toHaveLength(1);
+  });
+
+  it("keeps a body this window holds over an older snapshot read's", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.snapshot = { request: 0, reply: 100 };
+    host.stamp("p1", [{ kind: "project", op: "upsert", id: "p1", projectId: "p1" }]);
+    await vi.advanceTimersByTimeAsync(16); // the snapshot read captures at once
+    host.tickets = host.tickets.map((t) => (t.id === "A" ? { ...t, body: "# Later" } : t));
+    host.externalRetitle("p1", "A", "Later");
+    sync.adoptBody("A", "# Later");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(last().tickets.find((t) => t.id === "A")).toMatchObject({
+      title: "Later",
+      body: "# Later",
+    });
+  });
+
+  it("keeps a newer project row over a snapshot read's, and reads again for a newer rowless one", async () => {
+    const { host, sync, view } = harness();
+    await sync.open("p1");
+    host.methodLatency.snapshot = { request: 0, reply: 100 };
+    host.stamp("p1", [{ kind: "project", op: "upsert", id: "p1", projectId: "p1" }]);
+    await vi.advanceTimersByTimeAsync(16);
+    const renamed = { ...project("p1"), name: "Renamed" };
+    host.projects.set("p1", renamed);
+    host.stamp("p1", [
+      { kind: "project", op: "upsert", id: "p1", projectId: "p1", project: renamed },
+      { kind: "project", op: "upsert", id: "p1", projectId: "p1" },
+    ]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(view.adoptProject).toHaveBeenLastCalledWith(renamed);
+    await vi.advanceTimersByTimeAsync(16 + 100);
+    expect(host.callsTo("snapshot")).toHaveLength(3);
   });
 });

@@ -21,7 +21,7 @@ import {
   startBoardProtocol,
   stopBoardProtocol,
 } from "./board-protocol";
-import type { BoardSyncView } from "@renderer/stores/board-sync";
+import { BoardSync, type BoardSyncView } from "@renderer/stores/board-sync";
 
 vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-rpc-ipc-link")>();
@@ -111,6 +111,11 @@ function fakeBoard(answers: Record<string, Answer> = {}) {
       });
   const client = createBoardClient(link);
   return { client, calls, feeds };
+}
+
+/** A sync engine over the client that follows no Workspace: its commands prove by reply. */
+function syncOver(client: Parameters<typeof boardSyncTransport>[0]): BoardSync {
+  return new BoardSync({ transport: boardSyncTransport(client), view: silentView() });
 }
 
 function silentView(): BoardSyncView {
@@ -459,7 +464,7 @@ describe("boardApi with the protocol on", () => {
       "board.comments": () => ["comment"],
       "board.projectFolder": () => ({ exists: true }),
     });
-    const door = protocolBoardApi(client);
+    const door = protocolBoardApi(client, syncOver(client));
 
     expect(
       await Promise.all([
@@ -510,7 +515,7 @@ describe("boardApi with the protocol on", () => {
         throw hostError("NOT_FOUND", "no folder");
       },
     });
-    const door = protocolBoardApi(client);
+    const door = protocolBoardApi(client, syncOver(client));
 
     expect(
       await Promise.all([
@@ -540,7 +545,7 @@ describe("boardApi with the protocol on", () => {
       "board.setSkillModes": () => ({ project: { id: "p1", skillModes: {} } }),
       "board.setSessionDefaults": () => ({ project: { id: "p1", sessionModel: null } }),
     });
-    const door = protocolBoardApi(client);
+    const door = protocolBoardApi(client, syncOver(client));
 
     const answers = [
       await door.comments.create({ ticketId: "a", body: "hi", sessionId: null }),
@@ -591,7 +596,10 @@ describe("boardApi with the protocol on", () => {
       },
     });
 
-    const creating = protocolBoardApi(client).comments.create({ ticketId: "a", body: "hi" });
+    const creating = protocolBoardApi(client, syncOver(client)).comments.create({
+      ticketId: "a",
+      body: "hi",
+    });
     await vi.advanceTimersByTimeAsync(249);
     expect(calls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -604,22 +612,34 @@ describe("boardApi with the protocol on", () => {
     expect(new Set(commandIds).size).toBe(1);
   });
 
-  it("gives up on an unknown outcome after its retries, and never retries a refusal", async () => {
+  it("never gives up on an unknown outcome, and never retries a refusal", async () => {
     vi.useFakeTimers();
+    let down = true;
     const { client, calls } = fakeBoard({
       "board.updateComment": () => {
-        throw unavailable();
+        if (down) throw unavailable();
+        return { comment: { id: "c1", body: "edit" } };
       },
       "board.removeComment": () => {
         throw hostError("FORBIDDEN", "not yours");
       },
     });
-    const door = protocolBoardApi(client);
+    const door = protocolBoardApi(client, syncOver(client));
 
+    let settled = false;
     const updating = door.comments.update({ commentId: "c1", body: "edit" });
-    await vi.advanceTimersByTimeAsync(250 + 1_000 + 4_000);
-    expect(await updating).toEqual({ ok: false, error: "host-unreachable" });
-    expect(calls.filter(({ path }) => path === "board.updateComment")).toHaveLength(4);
+    void updating.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Still unknown, so still trying under the one id: never answered as failed.
+    expect(settled).toBe(false);
+    const tries = calls.filter(({ path }) => path === "board.updateComment");
+    expect(tries.length).toBeGreaterThan(8);
+    expect(new Set(tries.map(({ input }) => (input as { commandId: string }).commandId)).size).toBe(
+      1,
+    );
+    down = false;
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(await updating).toEqual({ ok: true, comment: { id: "c1", body: "edit" } });
 
     expect(await door.comments.remove({ commentId: "c1" })).toEqual({
       ok: false,
@@ -638,7 +658,9 @@ describe("boardApi with the protocol on", () => {
         throw attempts === 1 ? unavailable() : hostError("NOT_FOUND", "Not found");
       },
     });
-    const removing = protocolBoardApi(client).comments.remove({ commentId: "c1" });
+    const removing = protocolBoardApi(client, syncOver(client)).comments.remove({
+      commentId: "c1",
+    });
     await vi.advanceTimersByTimeAsync(250);
     expect(await removing).toEqual({ ok: true });
     expect(attempts).toBe(2);
@@ -650,7 +672,9 @@ describe("boardApi with the protocol on", () => {
       board: { ticketBody: { query: () => Promise.reject("not an error") } },
     } as unknown as Parameters<typeof protocolBoardApi>[0];
 
-    expect(await protocolBoardApi(client).tickets.body({ ticketId: "a" })).toEqual({
+    expect(
+      await protocolBoardApi(client, syncOver(client)).tickets.body({ ticketId: "a" }),
+    ).toEqual({
       ok: false,
       error: "not an error",
     });
@@ -662,19 +686,51 @@ describe("boardApi with the protocol on", () => {
     };
     const { client } = fakeBoard({
       "board.createComment": refuse,
+      "board.updateComment": refuse,
       "board.updateProject": refuse,
       "board.setSkillModes": refuse,
       "board.setSessionDefaults": refuse,
     });
-    const door = protocolBoardApi(client);
+    const door = protocolBoardApi(client, syncOver(client));
 
     expect(
       await Promise.all([
         door.comments.create({ ticketId: "a", body: "hi" }),
+        door.comments.update({ commentId: "c1", body: "edit" }),
         door.projects.update({ id: "p1", baseBranch: null }),
         door.projects.setSkillModes({ id: "p1", modes: {} }),
         door.projects.setSessionDefaults({ id: "p1", model: null }),
       ]),
-    ).toEqual(Array.from({ length: 4 }, () => ({ ok: false, error: "refused" })));
+    ).toEqual(Array.from({ length: 5 }, () => ({ ok: false, error: "refused" })));
+  });
+
+  it("answers a write the feed proved with the row the feed carried, in its legacy envelope", async () => {
+    const { client } = fakeBoard({});
+    // An engine whose every command is proved by the feed, its row in hand.
+    const proving = {
+      command: async (spec: { fromFeed: (row: unknown, commandId: string) => unknown }) => ({
+        ok: true,
+        answer: spec.fromFeed({ id: "fed" }, "cmd-fed"),
+      }),
+    } as unknown as BoardSync;
+    const door = protocolBoardApi(client, proving);
+
+    expect(
+      await Promise.all([
+        door.comments.create({ ticketId: "a", body: "hi" }),
+        door.comments.update({ commentId: "c1", body: "edit" }),
+        door.comments.remove({ commentId: "c1" }),
+        door.projects.update({ id: "p1", baseBranch: null }),
+        door.projects.setSkillModes({ id: "p1", modes: {} }),
+        door.projects.setSessionDefaults({ id: "p1", model: null }),
+      ]),
+    ).toEqual([
+      { ok: true, comment: { id: "fed" } },
+      { ok: true, comment: { id: "fed" } },
+      { ok: true },
+      { ok: true, project: { id: "fed" } },
+      { ok: true, project: { id: "fed" } },
+      { ok: true, project: { id: "fed" } },
+    ]);
   });
 });

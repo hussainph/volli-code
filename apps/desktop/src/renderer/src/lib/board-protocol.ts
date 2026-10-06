@@ -36,8 +36,7 @@ import type {
 import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   BoardSync,
-  isAmbiguousBoardFailure,
-  isNotFound,
+  failureMessage,
   type BoardSyncTransport,
   type BoardSyncView,
 } from "../stores/board-sync";
@@ -130,48 +129,14 @@ export function stopBoardProtocol(): void {
 
 // ---- the per-surface facade ------------------------------------------------
 
-const RETRIES = [250, 1_000, 4_000];
-
-/**
- * One command under one `commandId`, sent again under the same id while its
- * outcome is unknown (the host's receipt answers a repeat without a second
- * effect), then answered in the legacy channel's envelope.
- */
-async function command<Answer>(
-  send: (commandId: string) => Promise<Answer>,
-  gone?: Answer,
-): Promise<{ ok: true; answer: Answer } | { ok: false; error: string }> {
-  const commandId = crypto.randomUUID();
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return { ok: true, answer: await send(commandId) };
-    } catch (error) {
-      if (isAmbiguousBoardFailure(error) && attempt < RETRIES.length) {
-        await new Promise((resolve) => setTimeout(resolve, RETRIES[attempt]));
-        continue;
-      }
-      // A retried removal that finds its resource gone was the removal itself.
-      if (gone !== undefined && attempt > 0 && isNotFound(error)) return { ok: true, answer: gone };
-      return { ok: false, error: messageOf(error) };
-    }
-  }
-}
-
 async function read<Answer>(
   run: () => Promise<Answer>,
 ): Promise<{ ok: true; answer: Answer } | { ok: false; error: string }> {
   try {
     return { ok: true, answer: await run() };
   } catch (error) {
-    return { ok: false, error: messageOf(error) };
+    return { ok: false, error: failureMessage(error) };
   }
-}
-
-function messageOf(error: unknown): string {
-  const hostError = (error as { data?: { hostError?: { message?: unknown } } } | null)?.data
-    ?.hostError;
-  if (typeof hostError?.message === "string") return hostError.message;
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** The board surfaces' reads and writes, in the legacy channels' shapes. */
@@ -235,8 +200,22 @@ function legacyBoardApi(): BoardApi {
   };
 }
 
-/** The protocol door: the same calls through the board client. */
-export function protocolBoardApi(client: BoardClient): BoardApi {
+/** The answer of a write proved by the feed rather than its reply. */
+function receiptOf(commandId: string) {
+  return {
+    receipt: { commandId, status: "completed" as const, replayed: true },
+    throughCursor: "",
+  };
+}
+
+/**
+ * The protocol door: the same calls through the board client. Every write
+ * is one of the sync engine's commands (`BoardSync.command`), so it follows
+ * the board's rules: an unknown outcome is sent again under its id for as
+ * long as it takes, the first proof (a reply, or the feed's row naming it)
+ * settles it, and only a refusal fails it.
+ */
+export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi {
   const { board } = client;
   return {
     tickets: {
@@ -263,47 +242,62 @@ export function protocolBoardApi(client: BoardClient): BoardApi {
         return result.ok ? { ok: true, comments: result.answer } : result;
       },
       create: async (input) => {
-        const result = await command((commandId) =>
-          board.createComment.mutate({ commandId, ...input }),
-        );
+        const result = await sync.command({
+          verb: "add comment",
+          send: (commandId) => board.createComment.mutate({ commandId, ...input }),
+          fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
+        });
         return result.ok ? { ok: true, comment: result.answer.comment } : result;
       },
       update: async (input) => {
-        const result = await command((commandId) =>
-          board.updateComment.mutate({ commandId, ...input }),
-        );
+        const result = await sync.command({
+          verb: "edit comment",
+          send: (commandId) => board.updateComment.mutate({ commandId, ...input }),
+          fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
+        });
         return result.ok ? { ok: true, comment: result.answer.comment } : result;
       },
       remove: async (input) => {
-        const result = await command(
-          (commandId) => board.removeComment.mutate({ commandId, ...input }),
-          { receipt: null as never, throughCursor: "" },
-        );
+        // A retried removal that finds its comment gone was the removal itself.
+        const result = await sync.command({
+          verb: "delete comment",
+          send: (commandId) => board.removeComment.mutate({ commandId, ...input }),
+          fromFeed: (_row, commandId) => receiptOf(commandId),
+          goneMeansDone: true,
+        });
         return result.ok ? { ok: true } : result;
       },
     },
     projects: {
       update: async ({ id, baseBranch, setupCommand }) => {
-        const result = await command((commandId) =>
-          board.updateProject.mutate({
-            commandId,
-            projectId: id,
-            baseBranch,
-            ...(setupCommand === undefined ? {} : { setupCommand }),
-          }),
-        );
+        const result = await sync.command({
+          verb: "update project",
+          send: (commandId) =>
+            board.updateProject.mutate({
+              commandId,
+              projectId: id,
+              baseBranch,
+              ...(setupCommand === undefined ? {} : { setupCommand }),
+            }),
+          fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
+        });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       setSkillModes: async ({ id, modes }) => {
-        const result = await command((commandId) =>
-          board.setSkillModes.mutate({ commandId, projectId: id, modes: modes as never }),
-        );
+        const result = await sync.command({
+          verb: "update skills",
+          send: (commandId) =>
+            board.setSkillModes.mutate({ commandId, projectId: id, modes: modes as never }),
+          fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
+        });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       setSessionDefaults: async ({ id, model }) => {
-        const result = await command((commandId) =>
-          board.setSessionDefaults.mutate({ commandId, projectId: id, model }),
-        );
+        const result = await sync.command({
+          verb: "update session defaults",
+          send: (commandId) => board.setSessionDefaults.mutate({ commandId, projectId: id, model }),
+          fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
+        });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       checkFolder: async (projectId) => {
@@ -316,5 +310,5 @@ export function protocolBoardApi(client: BoardClient): BoardApi {
 
 /** The board surfaces' door: the protocol facade with `cloud` on, `window.api` otherwise. */
 export function boardApi(): BoardApi {
-  return active === null ? legacyBoardApi() : protocolBoardApi(active.client);
+  return active === null ? legacyBoardApi() : protocolBoardApi(active.client, active.sync);
 }

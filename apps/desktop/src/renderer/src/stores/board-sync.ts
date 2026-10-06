@@ -10,34 +10,46 @@
  * - **the base**: the rows the host has confirmed, from a snapshot, a roster
  *   read, or the Workspace's change feed (`board.changes`), whose changes
  *   inline the committed row and name the `commandId` behind them;
- * - **the pending layer**: every write this window has sent and not yet seen
- *   confirmed, keyed by the `commandId` it minted for it, each an optimistic
- *   edit replayed over the base, in the order it was made.
+ * - **the pending layer**: every write this window has made and not yet seen
+ *   in the base, keyed by the `commandId` it minted for it, each an
+ *   optimistic edit replayed over the base, in the order it was made.
  *
- * A write's reply names the feed cursor its effect was stamped through
- * (`throughCursor`). Its pending edit retires once the feed has delivered
- * that cursor, so the base already holds the effect: never earlier (the card
- * would jump back until the feed caught up) and never later (a read in
- * between cannot overwrite it, because the edit is still replayed over
- * whatever the base became). That replaces the move lane's
- * last-snapshot-wins overwrite, and with it the rubber band.
+ * The rules, each a guarantee:
  *
- * - **An ambiguous outcome retries with the same id.** A write whose answer
- *   never came (`host-unreachable`, a closed request, a dead bridge) is sent
- *   again under its `commandId`; the host's receipt answers a repeat without a
- *   second effect. Only a definitive refusal drops the edit and says why.
- * - **A created ticket shows at once**, as a placeholder that the confirmed
- *   row replaces.
- * - **One read per burst.** A change with no row (another writer the host
- *   only knows by its `data-changed`) asks for a roster read; reads coalesce
- *   over a short window, and one read runs at a time with at most one queued
- *   behind it. Changes the feed delivers while a read is in flight are
- *   replayed over its answer, so a slow read never moves the board backwards.
+ * - **The base is monotonic.** It carries the feed cursor it reflects. A feed
+ *   batch, a roster read or a snapshot read changes it only when its cursor is
+ *   at least the base's ({@link compareBoardCursors}); anything older is
+ *   dropped, and a cursor from another feed (a restarted host, a changed
+ *   epoch) never compares, so only a fresh snapshot replaces the base then. A
+ *   read that answers older than the base is the base's answer up to its
+ *   cursor: the feed's changes after that cursor, kept while the read is in
+ *   flight (compacted to the latest per entity, bounded), replay over it.
+ * - **A newer write supersedes older unsent ones.** A write that sets every
+ *   aspect an older write sets (the same card's position, the same fields)
+ *   replaces it: the older one is never sent again, so a retry can never land
+ *   after, and undo, the newer edit. A newer write that only overlaps an older
+ *   one waits for it to settle, so the host applies them in the order made.
+ * - **An outcome is decided by any proof.** A reply, a feed change naming the
+ *   `commandId`, or a retry the host answers from its receipt each prove the
+ *   host took the write, and the first proof settles it: its caller's side
+ *   effects run once. An unknown outcome is sent again under the same id, and
+ *   keeps being sent (after `maxAttempts`, the person is told it is still
+ *   trying); only a definitive refusal drops the edit and says why.
+ * - **Retirement cannot stick.** An accepted write's edit retires once the
+ *   base holds its effect: the base's cursor reaches the one the host stamped
+ *   it through. If the feed does not bring it in time, a confirmation read
+ *   does; a read that fails is retried with backoff until one lands.
+ * - **Followed means subscribed.** A Workspace this window follows is opened
+ *   until its snapshot lands and its feed is followed: a failed open, a
+ *   resnapshot or a feed that ended are retried with backoff, never left.
+ * - **A project change refreshes the project.** A project change without its
+ *   row reads the board's snapshot, which carries the project.
  *
  * Nothing here persists: the host is the source of truth, and this is the
  * in-memory last-known view (D-C1).
  */
 import {
+  compareBoardCursors,
   moveTicket as moveTicketOp,
   moveTickets as moveTicketsOp,
   TICKET_STATUSES,
@@ -87,7 +99,8 @@ export interface BoardSyncTransport {
   roster(projectId: string): Promise<{ tickets: TicketSummary[]; labels: Label[]; cursor: string }>;
   /**
    * Follows the feed after `lastEventId`. `onResnapshot`: the cursor cannot
-   * resume (host restart, retention); `onError`: anything else that ended it.
+   * resume (host restart, retention, a changed epoch); `onError`: anything
+   * else that ended it.
    */
   changes(
     projectId: string,
@@ -160,14 +173,16 @@ export interface BoardSyncView {
     labels: Label[],
     unloadedBodies: ReadonlySet<string>,
   ): void;
-  /** A committed project row arrived on the feed. */
+  /** A committed project row arrived (the feed, or a snapshot). */
   adoptProject(project: Project): void;
   /** Per-ticket surfaces (activity, body) re-read what the board does not hold. */
   notePlanningChange(change: { ticketId?: string; projectId?: string }): void;
   /** A change moved where a ticket's Sessions run: its venue reading is stale. */
   checkoutMoved(ticketId: string): void;
-  /** A write failed for good: say so (CLAUDE.md, never swallow a failed mutation). */
+  /** A write was refused, or a read failed: say so (CLAUDE.md, never swallow a failed mutation). */
   failed(message: string): void;
+  /** A write's outcome is still unknown after its attempts; it keeps being sent. Said once per write. */
+  unconfirmed?(message: string): void;
 }
 
 export interface BoardSyncOptions {
@@ -175,14 +190,15 @@ export interface BoardSyncOptions {
   readonly view: BoardSyncView;
   readonly mintCommandId?: () => string;
   readonly now?: () => number;
-  /** How long rowless changes coalesce before their one roster read. */
+  /** How long rowless changes coalesce before their one read. */
   readonly readCoalesceMs?: number;
-  /** Delays between retries of an ambiguous write, last repeated; then it gives up. */
+  /** Delays between retries of an ambiguous write, the last repeated for as long as it takes. */
   readonly retryDelaysMs?: readonly number[];
+  /** Attempts after which the person is told a write is still unconfirmed (it keeps being sent). */
   readonly maxAttempts?: number;
-  /** Delays between re-subscribes after a feed that ended in error. */
+  /** Delays between re-opens, re-subscribes and re-reads after a failure, the last repeated. */
   readonly feedRetryDelaysMs?: readonly number[];
-  /** How long a committed write waits for its cursor on the feed before a read confirms it. */
+  /** How long an accepted write waits for its cursor on the feed before a read confirms it. */
   readonly confirmTimeoutMs?: number;
   /** Whether a failure's outcome is unknown, so the write is retried under its id. */
   readonly isAmbiguous?: (error: unknown) => boolean;
@@ -190,39 +206,85 @@ export interface BoardSyncOptions {
   readonly clearTimer?: (timer: unknown) => void;
 }
 
+/** How a write ended for its caller. */
+type Outcome<Answer> =
+  | { readonly kind: "accepted"; readonly answer: Answer }
+  | { readonly kind: "refused" }
+  | { readonly kind: "superseded" };
+
+/** One write of this window's, from the moment it is made until the base holds it. */
 interface Pending {
-  readonly projectId: string;
-  /** Cleared once the feed has delivered this write's own rows: the base holds its effect. */
+  readonly commandId: string;
+  /** The Workspace it paints over; undefined for a per-surface command (it paints nothing). */
+  readonly projectId: string | undefined;
+  /** What it sets, as `<kind>:<id>:<aspect>`: a newer write setting all of them supersedes it. */
+  readonly aspects: ReadonlySet<string>;
+  /** An archive, unarchive or delete: never superseded, only waited for. */
+  readonly lifecycle: boolean;
+  /** Its optimistic edit; cleared once the base holds the effect (or it was superseded). */
   tickets?: (view: Ticket[]) => Ticket[];
   labels?: (view: Label[]) => Label[];
-  /** Set by the reply: the feed cursor that confirms this write. */
-  throughCursor?: string;
-  /** This window's order of replies, so a read started after it is known to include it. */
-  committedAt?: number;
+  /** The bodies it writes, adopted as confirmed bodies on its first proof. */
+  readonly bodies: Map<string, string>;
+  /** queued: waiting for an older overlapping write; sending/retrying: unknown; accepted: proved. */
+  state: "queued" | "sending" | "retrying" | "accepted" | "superseded" | "refused" | "closed";
+  /** The cursor the host stamped it through: its reply's, or the batch that named it. */
+  through?: string;
+  /** The id a created ticket was given, read off the feed row that named this write. */
+  createdId?: string;
+  /** The row the feed carried for it, when its answer is that row (a comment, a project). */
+  fedRow?: unknown;
   confirmTimer?: unknown;
+  retryTimer?: unknown;
+  /** Wakes a write waiting out its retry delay: a proof arrived, or it was superseded. */
+  wake?: () => void;
+  /** Resolves once the write is settled: accepted, refused, superseded or closed. */
+  readonly settled: Promise<void>;
+  settle(): void;
+}
+
+interface LoggedChange {
+  readonly cursor: string;
+  readonly change: BoardChange;
 }
 
 interface Workspace {
+  readonly projectId: string;
   readonly tickets: Map<string, TicketSummary>;
   readonly labels: Map<string, Label>;
-  /** Feed cursors this window has applied (a bounded recent window). */
-  readonly seen: string[];
+  /** Every ticket body this window has read for this Workspace: a roster row carries none (VC-387). */
+  readonly bodies: Map<string, string>;
+  /** The feed cursor the base reflects; null until the first snapshot lands. */
   cursor: string | null;
+  /** The cursor of the project row this window last adopted. */
+  projectCursor: string | null;
+  /** The newest rowless ticket or label change no read has covered yet. */
+  dirty: string | null;
+  /** The newest rowless project change no snapshot read has covered yet. */
+  dirtyProject: string | null;
+  /** Bumped by every open: a read or snapshot of an older generation never applies. */
+  generation: number;
   stop: (() => void) | null;
   feedFailures: number;
-  /** Batches applied while a roster read is in flight, replayed over its answer. */
-  readLog: BoardFeedBatch[] | null;
+  openFailures: number;
+  openTimer: unknown;
+  /** The feed's changes since an in-flight read started, latest per entity; null when overflowed. */
+  readLog: Map<string, LoggedChange> | null;
   readTimer: unknown;
+  readFailures: number;
   reading: boolean;
   readAgain: boolean;
+  /** The read asked for next must carry the project (a snapshot). */
+  readProject: boolean;
   closed: boolean;
 }
 
-/** How many applied cursors a Workspace remembers to confirm writes against. */
-const SEEN_CURSORS = 512;
 const STATUS_RANK = new Map<TicketStatus, number>(
   TICKET_STATUSES.map((status, index) => [status, index]),
 );
+
+/** Entities one in-flight read keeps changes for; past it, an older answer is dropped and read again. */
+export const READ_LOG_ENTITIES = 4_096;
 
 /**
  * Whether a write's outcome is unknown: the host may or may not have taken
@@ -249,7 +311,8 @@ export function isNotFound(error: unknown): boolean {
   return hostError?.code === "NOT_FOUND";
 }
 
-function failureMessage(error: unknown): string {
+/** The message a failure carries: the host's, an Error's, or the thing itself. */
+export function failureMessage(error: unknown): string {
   const hostError = (error as { data?: { hostError?: { message?: unknown } } } | null)?.data
     ?.hostError;
   if (typeof hostError?.message === "string") return hostError.message;
@@ -267,6 +330,36 @@ export function placeholderTicketId(commandId: string): string {
   return `pending:${commandId}`;
 }
 
+/** Whether cursor `a` is at or past `b` on one feed; false across feeds. */
+function reaches(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return false;
+  const order = compareBoardCursors(a, b);
+  return order !== null && order >= 0;
+}
+
+/** How one write is made: what it paints, what it sets, and how it is sent. */
+interface WriteSpec<Answer> {
+  readonly projectId: string | undefined;
+  readonly verb: string;
+  readonly aspects: readonly string[];
+  readonly lifecycle?: boolean;
+  readonly edit?: (commandId: string) => {
+    tickets?: (view: Ticket[]) => Ticket[];
+    labels?: (view: Label[]) => Label[];
+  };
+  /** Bodies the write sets, by ticket id; a create's is keyed by its placeholder until its id is known. */
+  readonly bodies?: ReadonlyMap<string, string>;
+  readonly send: (commandId: string) => Promise<Answer>;
+  /** The answer on a proof without a reply: the feed named the write, or a retry found its resource gone. */
+  readonly proved?: (pending: Pending) => Answer;
+  /** A retry that finds its resource gone was the removal itself (repeated delete, comment removal). */
+  readonly goneMeansDone?: boolean;
+  /** Told the refusal's own message. */
+  readonly onRefused?: (message: string) => void;
+  /** The caller says a refusal itself (a per-surface command): not told to the person here. */
+  readonly quiet?: boolean;
+}
+
 /** The board's sync engine for every Workspace this window follows. */
 export class BoardSync {
   readonly #transport: BoardSyncTransport;
@@ -282,11 +375,8 @@ export class BoardSync {
   readonly #setTimer: (run: () => void, ms: number) => unknown;
   readonly #clearTimer: (timer: unknown) => void;
   readonly #workspaces = new Map<string, Workspace>();
-  /** Every ticket body this window has read: a roster row carries none (VC-387). */
-  readonly #bodies = new Map<string, string>();
-  /** Insertion order is the order the edits were made, and the order they replay. */
+  /** Insertion order is the order the writes were made, and the order their edits replay. */
   readonly #pending = new Map<string, Pending>();
-  #replies = 0;
 
   constructor(options: BoardSyncOptions) {
     this.#transport = options.transport;
@@ -303,51 +393,89 @@ export class BoardSync {
     this.#clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as number));
   }
 
-  /** Whether this window follows the Workspace. */
+  /** Whether this window follows the Workspace: it is open, or being opened until it is. */
   follows(projectId: string): boolean {
     return this.#workspaces.has(projectId);
+  }
+
+  /** The Workspace whose board holds this ticket, if any this window follows does. */
+  workspaceOf(ticketId: string): string | undefined {
+    for (const workspace of this.#workspaces.values()) {
+      if (workspace.tickets.has(ticketId)) return workspace.projectId;
+    }
+    return undefined;
   }
 
   /**
    * Reads the Workspace's snapshot, paints it, and follows its feed from the
    * snapshot's cursor. Opening one already open re-reads it (a resnapshot).
+   * A snapshot that fails rejects (the caller says so) and is tried again,
+   * with backoff, until it lands or the Workspace is closed.
    */
   async open(projectId: string): Promise<void> {
     let workspace = this.#workspaces.get(projectId);
     if (workspace === undefined) {
       workspace = {
+        projectId,
         tickets: new Map(),
         labels: new Map(),
-        seen: [],
+        bodies: new Map(),
         cursor: null,
+        projectCursor: null,
+        dirty: null,
+        dirtyProject: null,
+        generation: 0,
         stop: null,
         feedFailures: 0,
+        openFailures: 0,
+        openTimer: undefined,
         readLog: null,
         readTimer: undefined,
+        readFailures: 0,
         reading: false,
         readAgain: false,
+        readProject: false,
         closed: false,
       };
       this.#workspaces.set(projectId, workspace);
     }
+    const generation = ++workspace.generation;
     workspace.stop?.();
     workspace.stop = null;
-    const startedAt = this.#replies;
-    const snapshot = await this.#transport.snapshot(projectId);
-    if (workspace.closed) return;
-    workspace.tickets.clear();
-    for (const ticket of snapshot.tickets) {
-      const { body, ...summary } = ticket;
-      workspace.tickets.set(ticket.id, summary);
-      this.#bodies.set(ticket.id, body);
+    if (workspace.openTimer !== undefined) {
+      this.#clearTimer(workspace.openTimer);
+      workspace.openTimer = undefined;
     }
+    let snapshot: Awaited<ReturnType<BoardSyncTransport["snapshot"]>>;
+    try {
+      snapshot = await this.#transport.snapshot(projectId);
+    } catch (error) {
+      if (!workspace.closed && workspace.generation === generation) this.#reopenLater(workspace);
+      throw error;
+    }
+    // Closed, or opened again since: a newer snapshot owns the base.
+    if (workspace.closed || workspace.generation !== generation) return;
+    workspace.openFailures = 0;
+    const removed = new Set(workspace.tickets.keys());
+    workspace.tickets.clear();
+    for (const { body, ...summary } of snapshot.tickets) {
+      workspace.tickets.set(summary.id, summary);
+      workspace.bodies.set(summary.id, body);
+      removed.delete(summary.id);
+    }
+    this.#forgetBodies(workspace, removed);
     workspace.labels.clear();
     for (const label of snapshot.labels) workspace.labels.set(label.id, label);
+    workspace.cursor = snapshot.cursor;
+    workspace.projectCursor = snapshot.cursor;
+    // A snapshot is the whole board, read while no feed was followed: it
+    // covers every rowless change this window had.
+    workspace.dirty = null;
+    workspace.dirtyProject = null;
     this.#view.adoptProject(snapshot.project);
-    this.#saw(workspace, snapshot.cursor);
-    this.#confirmThrough(projectId, startedAt);
+    this.#retireHeld(workspace, true);
     this.#paint(projectId);
-    this.#follow(projectId, workspace, snapshot.cursor);
+    this.#follow(workspace, snapshot.cursor);
   }
 
   /** Stops following a Workspace (removed, or this window forgot it). */
@@ -356,23 +484,26 @@ export class BoardSync {
     if (workspace === undefined) return;
     workspace.closed = true;
     workspace.stop?.();
-    if (workspace.readTimer !== undefined) this.#clearTimer(workspace.readTimer);
+    for (const timer of [workspace.readTimer, workspace.openTimer]) {
+      if (timer !== undefined) this.#clearTimer(timer);
+    }
     this.#workspaces.delete(projectId);
-    for (const [commandId, pending] of this.#pending) {
-      if (pending.projectId !== projectId) continue;
-      if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
-      this.#pending.delete(commandId);
+    for (const pending of Array.from(this.#pending.values())) {
+      if (pending.projectId === projectId) this.#drop(pending, "closed");
     }
   }
 
   /** Stops following every Workspace. */
   closeAll(): void {
     for (const projectId of Array.from(this.#workspaces.keys())) this.close(projectId);
+    for (const pending of Array.from(this.#pending.values())) this.#drop(pending, "closed");
   }
 
   /** Records a body read on its own (the open ticket), so repaints keep it. */
   adoptBody(ticketId: string, body: string): void {
-    this.#bodies.set(ticketId, body);
+    const projectId = this.workspaceOf(ticketId);
+    if (projectId === undefined) return;
+    this.#workspaces.get(projectId)!.bodies.set(ticketId, body);
   }
 
   // ---- writes ---------------------------------------------------------------
@@ -383,22 +514,26 @@ export class BoardSync {
     fields: Omit<Parameters<BoardSyncTransport["createTicket"]>[0], "commandId" | "projectId">,
   ): Promise<Ticket | null> {
     const now = this.#now();
-    const answer = await this.#write(
+    const outcome = await this.#write<BoardWriteAnswer & { ticket: Ticket | null }>({
       projectId,
-      "create ticket",
-      (commandId) => ({
+      verb: "create ticket",
+      aspects: [],
+      edit: (commandId) => ({
         tickets: (view) => {
           const column = view.filter((ticket) => ticket.status === fields.status);
           const order = column.reduce((max, ticket) => Math.max(max, ticket.order), -1) + 1;
           return [...view, placeholderTicket(commandId, projectId, fields, order, now)];
         },
       }),
-      (commandId) => this.#transport.createTicket({ commandId, projectId, ...fields }),
-      (created, workspace) => workspace.tickets.has(created.ticket.id),
-    );
-    if (answer === null) return null;
-    this.#bodies.set(answer.ticket.id, answer.ticket.body);
-    return answer.ticket;
+      bodies: new Map([[CREATED, fields.body ?? ""]]),
+      send: (commandId) => this.#transport.createTicket({ commandId, projectId, ...fields }),
+      proved: (pending) => ({
+        ...this.#provedAnswer(pending),
+        // Proved by the feed, whose row named the new ticket's id.
+        ticket: this.#row(projectId, pending.createdId!),
+      }),
+    });
+    return outcome.kind === "accepted" ? outcome.answer.ticket : null;
   }
 
   /** One card or one selected group, to a position: one edit, one command. */
@@ -410,16 +545,17 @@ export class BoardSync {
     choice?: DeliberateMoveChoice,
   ): Promise<void> {
     const now = this.#now();
-    await this.#write(
+    await this.#write({
       projectId,
-      ticketIds.length === 1 ? "move ticket" : "move tickets",
-      () => ({
+      verb: ticketIds.length === 1 ? "move ticket" : "move tickets",
+      aspects: ticketIds.map((id) => `ticket:${id}:position`),
+      edit: () => ({
         tickets: (view) =>
           ticketIds.length === 1
             ? moveTicketOp(view, ticketIds[0]!, toStatus, toIndex, now)
             : moveTicketsOp(view, ticketIds, toStatus, toIndex, now),
       }),
-      (commandId) =>
+      send: (commandId) =>
         this.#transport.moveTickets({
           commandId,
           projectId,
@@ -428,72 +564,87 @@ export class BoardSync {
           toIndex,
           ...(choice === undefined ? {} : { choice }),
         }),
-    );
+    });
   }
 
   async setPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void> {
-    await this.#write(
+    await this.#write({
       projectId,
-      "update priority",
-      () => ({ tickets: patchTicket(ticketId, { priority }) }),
-      (commandId) => this.#transport.setPriority({ commandId, ticketId, priority }),
-    );
+      verb: "update priority",
+      aspects: [`ticket:${ticketId}:priority`],
+      edit: () => ({ tickets: patchTicket(ticketId, { priority }) }),
+      send: (commandId) => this.#transport.setPriority({ commandId, ticketId, priority }),
+    });
   }
 
+  /** Resolves the updated ticket; null when it was refused or a newer edit replaced it. */
   async updateTicket(
     projectId: string,
     input: Omit<Parameters<BoardSyncTransport["updateTicket"]>[0], "commandId">,
   ): Promise<Ticket | null> {
     const { ticketId, ...fields } = input;
-    const answer = await this.#write(
-      projectId,
-      "update ticket",
-      () => ({ tickets: patchTicket(ticketId, fields) }),
-      (commandId) => this.#transport.updateTicket({ commandId, ...input }),
+    const defined = Object.keys(fields).filter(
+      (field) => fields[field as keyof typeof fields] !== undefined,
     );
-    if (answer === null) return null;
-    this.#bodies.set(answer.ticket.id, answer.ticket.body);
-    return answer.ticket;
+    const outcome = await this.#write<BoardWriteAnswer & { ticket: Ticket | null }>({
+      projectId,
+      verb: "update ticket",
+      aspects: defined.map((field) => `ticket:${ticketId}:${field}`),
+      edit: () => ({ tickets: patchTicket(ticketId, fields) }),
+      bodies: fields.body === undefined ? undefined : new Map([[ticketId, fields.body]]),
+      send: (commandId) => this.#transport.updateTicket({ commandId, ...input }),
+      proved: (pending) => ({
+        ...this.#provedAnswer(pending),
+        ticket: this.#row(projectId, ticketId),
+      }),
+    });
+    return outcome.kind === "accepted" ? outcome.answer.ticket : null;
   }
 
   async setLabels(projectId: string, ticketId: string, labels: string[]): Promise<void> {
-    await this.#write(
+    await this.#write({
       projectId,
-      "update labels",
-      () => ({ tickets: patchTicket(ticketId, { labels }) }),
-      (commandId) => this.#transport.setLabels({ commandId, ticketId, labels }),
-    );
+      verb: "update labels",
+      aspects: [`ticket:${ticketId}:labels`],
+      edit: () => ({ tickets: patchTicket(ticketId, { labels }) }),
+      send: (commandId) => this.#transport.setLabels({ commandId, ticketId, labels }),
+    });
   }
 
   async setLabelColor(projectId: string, labelId: string, color: string | null): Promise<void> {
-    await this.#write(
+    await this.#write({
       projectId,
-      "update label color",
-      () => ({
+      verb: "update label color",
+      aspects: [`label:${labelId}:color`],
+      edit: () => ({
         labels: (view) => view.map((label) => (label.id === labelId ? { ...label, color } : label)),
       }),
-      (commandId) => this.#transport.setLabelColor({ commandId, labelId, color }),
-    );
+      send: (commandId) => this.#transport.setLabelColor({ commandId, labelId, color }),
+    });
   }
 
-  /** Resolves whether the archive was accepted. */
+  /** Resolves whether the archive was accepted: true on its first proof, whichever it was. */
   async archiveTicket(projectId: string, ticketId: string): Promise<boolean> {
-    const answer = await this.#write(
+    const outcome = await this.#write({
       projectId,
-      "archive ticket",
-      () => ({ tickets: (view) => view.filter((ticket) => ticket.id !== ticketId) }),
-      (commandId) => this.#transport.archiveTicket({ commandId, ticketId }),
-    );
-    return answer !== null;
+      verb: "archive ticket",
+      aspects: [`ticket:${ticketId}:lifecycle`],
+      lifecycle: true,
+      edit: () => ({ tickets: (view) => view.filter((ticket) => ticket.id !== ticketId) }),
+      send: (commandId) => this.#transport.archiveTicket({ commandId, ticketId }),
+    });
+    return outcome.kind === "accepted";
   }
 
   /** Returns an archived ticket to the board; it shows at once, appended to its column. */
   async unarchiveTicket(projectId: string, archived: ArchivedTicket): Promise<Ticket | null> {
     const { archivedAt: _archivedAt, ...revived } = archived;
-    const answer = await this.#write(
+    const outcome = await this.#write<BoardWriteAnswer & { ticket: Ticket | null }>({
       projectId,
-      "unarchive ticket",
-      () => ({
+      verb: "unarchive ticket",
+      aspects: [`ticket:${archived.id}:lifecycle`],
+      lifecycle: true,
+      edit: () => ({
         tickets: (view) => {
           if (view.some((ticket) => ticket.id === revived.id)) return view;
           const column = view.filter((ticket) => ticket.status === revived.status);
@@ -501,23 +652,59 @@ export class BoardSync {
           return [...view, { ...revived, order }];
         },
       }),
-      (commandId) => this.#transport.unarchiveTicket({ commandId, ticketId: archived.id }),
-    );
-    if (answer === null) return null;
-    this.#bodies.set(answer.ticket.id, answer.ticket.body);
-    return answer.ticket;
+      // The archived row carries the host's body: it is the confirmed one.
+      bodies: new Map([[archived.id, archived.body]]),
+      send: (commandId) => this.#transport.unarchiveTicket({ commandId, ticketId: archived.id }),
+      proved: (pending) => ({
+        ...this.#provedAnswer(pending),
+        ticket: this.#row(projectId, archived.id),
+      }),
+    });
+    return outcome.kind === "accepted" ? outcome.answer.ticket : null;
   }
 
   async deleteTicket(projectId: string, ticketId: string): Promise<boolean> {
-    const answer = await this.#write(
+    const outcome = await this.#write({
       projectId,
-      "delete ticket",
-      () => ({}),
-      (commandId) => this.#transport.deleteTicket({ commandId, ticketId }),
-      undefined,
-      true,
-    );
-    return answer !== null;
+      verb: "delete ticket",
+      aspects: [`ticket:${ticketId}:lifecycle`],
+      lifecycle: true,
+      send: (commandId) => this.#transport.deleteTicket({ commandId, ticketId }),
+      goneMeansDone: true,
+    });
+    return outcome.kind === "accepted";
+  }
+
+  /**
+   * A per-surface command (a comment, a project setting) under one
+   * `commandId`, by the same rules as the board's writes: an unknown outcome
+   * is sent again under its id for as long as it takes, the first proof
+   * settles it (a reply, or a feed change naming it, whose row `fromFeed`
+   * turns into the answer), and only a refusal fails it, answered with the
+   * host's message for the surface to say. It paints nothing.
+   */
+  async command<Answer>(spec: {
+    verb: string;
+    send: (commandId: string) => Promise<Answer>;
+    fromFeed: (row: unknown, commandId: string) => Answer;
+    goneMeansDone?: boolean;
+  }): Promise<{ ok: true; answer: Answer } | { ok: false; error: string }> {
+    let refusal = "";
+    const outcome = await this.#write<Answer>({
+      projectId: undefined,
+      verb: spec.verb,
+      aspects: [],
+      send: spec.send,
+      proved: (pending) => spec.fromFeed(pending.fedRow, pending.commandId),
+      goneMeansDone: spec.goneMeansDone,
+      quiet: true,
+      onRefused: (message) => {
+        refusal = message;
+      },
+    });
+    return outcome.kind === "accepted"
+      ? { ok: true, answer: outcome.answer }
+      : { ok: false, error: refusal };
   }
 
   /** The Workspace's archived tickets, newest first, or null when the read failed (said). */
@@ -530,222 +717,425 @@ export class BoardSync {
     }
   }
 
+  /** A synthesized answer for a write proved without its reply. */
+  #provedAnswer(pending: Pending): BoardWriteAnswer {
+    return {
+      receipt: { commandId: pending.commandId, status: "completed", replayed: true },
+      throughCursor: pending.through ?? "",
+    };
+  }
+
+  /** A ticket as the base holds it, with its body; null when the base does not hold it. */
+  #row(projectId: string, ticketId: string): Ticket | null {
+    const workspace = this.#workspaces.get(projectId);
+    const summary = workspace?.tickets.get(ticketId);
+    /* v8 ignore if -- a proof by the feed lands its row in the same turn; only a later delete could take it. */
+    if (summary === undefined) return null;
+    // A proved write's body was adopted on its proof.
+    return { ...summary, body: workspace!.bodies.get(ticketId)! };
+  }
+
   /**
-   * Sends one write under a fresh `commandId`, its edit pending over the base
-   * until the feed confirms it. An unknown outcome is sent again under the
-   * same id; a refusal drops the edit and is said. Resolves with the answer,
-   * or null when it failed.
+   * Makes one write: its edit paints at once, older writes it covers are
+   * superseded, and it is sent (after any older overlapping write settles)
+   * under its `commandId` until its first proof or a refusal.
    */
-  async #write<Answer extends BoardWriteAnswer>(
-    projectId: string,
-    verb: string,
-    edit: (commandId: string) => Pick<Pending, "tickets" | "labels">,
-    send: (commandId: string) => Promise<Answer>,
-    held: (answer: Answer, workspace: Workspace) => boolean = () => false,
-    /**
-     * A retry that finds its resource gone was the removal itself, already
-     * applied: the first attempt's answer was lost, and a host refuses a
-     * resource that no longer exists before any receipt can answer.
-     */
-    goneMeansDone = false,
-  ): Promise<Answer | null> {
+  async #write<Answer>(spec: WriteSpec<Answer>): Promise<Outcome<Answer>> {
     const commandId = this.#mint();
-    const pending: Pending = { projectId, ...edit(commandId) };
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const edit = spec.edit?.(commandId) ?? {};
+    const pending: Pending = {
+      commandId,
+      projectId: spec.projectId,
+      aspects: new Set(spec.aspects),
+      lifecycle: spec.lifecycle === true,
+      ...edit,
+      bodies: new Map(spec.bodies ?? []),
+      state: "queued",
+      settled,
+      settle,
+    };
+    // Older writes this one covers will never be sent again; older ones it
+    // only overlaps are waited for, so the host applies them in order.
+    const blockers: Pending[] = [];
+    for (const older of this.#pending.values()) {
+      if (older.projectId !== spec.projectId || !overlaps(older, pending)) continue;
+      if (!older.lifecycle && !pending.lifecycle && covers(pending, older)) {
+        this.#supersede(older);
+      } else if (!isSettled(older)) {
+        blockers.push(older);
+      }
+    }
     this.#pending.set(commandId, pending);
-    this.#paint(projectId);
+    if (spec.projectId !== undefined) this.#paint(spec.projectId);
+    if (blockers.length > 0) await Promise.all(blockers.map((older) => older.settled));
+
+    let answer: Answer | undefined;
     for (let attempt = 1; ; attempt++) {
+      if (pending.state !== "queued" && pending.state !== "retrying") break;
+      pending.state = "sending";
       try {
-        const answer = await send(commandId);
-        // Forgotten while in flight (the Workspace was closed): nothing to paint.
-        if (!this.#pending.has(commandId)) return answer;
-        pending.throughCursor = answer.throughCursor;
-        pending.committedAt = ++this.#replies;
-        const workspace = this.#workspaces.get(projectId);
-        if (
-          workspace === undefined ||
-          workspace.seen.includes(answer.throughCursor) ||
-          // A snapshot read while the write was in flight can already hold
-          // its row, though the feed (resumed after it) never names it.
-          held(answer, workspace)
-        ) {
-          this.#retire(commandId);
-        } else {
-          // The feed normally delivers the cursor first. If it does not soon,
-          // a read (started after this reply, so it includes the write) does.
-          pending.confirmTimer = this.#setTimer(() => {
-            pending.confirmTimer = undefined;
-            if (this.#pending.has(commandId)) this.#scheduleRead(projectId);
-          }, this.#confirmTimeoutMs);
-        }
-        return answer;
+        answer = await spec.send(commandId);
+        this.#replied(pending, answer);
+        break;
       } catch (error) {
-        if (
-          this.#isAmbiguous(error) &&
-          attempt < this.#maxAttempts &&
-          this.#pending.has(commandId)
-        ) {
-          await this.#delay(this.#retryDelays[Math.min(attempt, this.#retryDelays.length) - 1]!);
-          continue;
+        if ((pending.state as Pending["state"]) === "closed") {
+          // Its Workspace closed while this attempt was out, outcome unknown.
+          if (spec.quiet !== true) {
+            this.#view.failed(`Couldn't ${spec.verb}: ${failureMessage(error)}`);
+          }
+          spec.onRefused?.(failureMessage(error));
+          return { kind: "refused" };
         }
-        if (this.#pending.delete(commandId)) this.#paint(projectId);
-        if (goneMeansDone && attempt > 1 && isNotFound(error)) {
-          return {
-            receipt: { commandId, status: "completed", replayed: true },
-            throughCursor: "",
-          } as Answer;
+        // Proved (the feed named it) or superseded while this attempt was
+        // out: its error answers nothing more.
+        if ((pending.state as Pending["state"]) !== "sending") break;
+        if (spec.goneMeansDone === true && attempt > 1 && isNotFound(error)) {
+          this.#accept(pending, undefined);
+          break;
         }
-        this.#view.failed(`Couldn't ${verb}: ${failureMessage(error)}`);
-        return null;
+        if (!this.#isAmbiguous(error)) {
+          this.#drop(pending, "refused");
+          if (spec.quiet !== true) {
+            this.#view.failed(`Couldn't ${spec.verb}: ${failureMessage(error)}`);
+          }
+          spec.onRefused?.(failureMessage(error));
+          return { kind: "refused" };
+        }
+        if (attempt === this.#maxAttempts) {
+          this.#view.unconfirmed?.(`Still trying to ${spec.verb}: ${failureMessage(error)}`);
+        }
+        pending.state = "retrying";
+        await this.#retryDelay(pending, attempt);
       }
+    }
+    switch (pending.state) {
+      case "accepted":
+        return {
+          kind: "accepted",
+          answer: answer ?? spec.proved?.(pending) ?? (this.#provedAnswer(pending) as Answer),
+        };
+      case "superseded":
+        return { kind: "superseded" };
+      default:
+        // Closed: its answer, if one came, is still its answer.
+        if (answer !== undefined) return { kind: "accepted", answer };
+        spec.onRefused?.("The board closed before the host answered");
+        return { kind: "refused" };
     }
   }
 
-  #retire(commandId: string): void {
-    const pending = this.#pending.get(commandId);
-    /* v8 ignore if -- its one caller retires a write it just found pending, in the same turn. */
-    if (pending === undefined) return;
-    /* v8 ignore if -- it retires a write on the turn its reply lands, before any confirm timer is armed. */
+  /** Waits out one retry delay, or less if a proof or a newer write settles the write first. */
+  #retryDelay(pending: Pending, attempt: number): Promise<void> {
+    const ms = this.#retryDelays[Math.min(attempt, this.#retryDelays.length) - 1]!;
+    return new Promise((resolve) => {
+      const done = (): void => {
+        pending.wake = undefined;
+        pending.retryTimer = undefined;
+        resolve();
+      };
+      pending.wake = () => {
+        this.#clearTimer(pending.retryTimer);
+        done();
+      };
+      pending.retryTimer = this.#setTimer(done, ms);
+    });
+  }
+
+  /** A reply: the host's word on the write, and on the row it answers with. */
+  #replied(pending: Pending, answer: unknown): void {
+    const { throughCursor, ticket } = answer as Partial<BoardWriteAnswer> & {
+      ticket?: Ticket | null;
+    };
+    const workspace =
+      pending.projectId === undefined ? undefined : this.#workspaces.get(pending.projectId);
+    if (ticket != null && workspace !== undefined) {
+      // A create's reply names its id; its body is the host's own.
+      learnCreated(pending, ticket.id);
+      workspace.bodies.set(ticket.id, ticket.body);
+      pending.bodies.delete(ticket.id);
+    }
+    if (pending.state === "accepted") {
+      // The feed proved it first: the reply only brings the row.
+      if (workspace !== undefined) this.#paint(workspace.projectId);
+      return;
+    }
+    this.#accept(pending, throughCursor);
+  }
+
+  /**
+   * The first proof the host took a write: its body becomes the confirmed
+   * one, its waiting retry stops, and its edit retires once the base holds
+   * the cursor it was stamped through.
+   */
+  #accept(pending: Pending, through: string | undefined): void {
+    // Already proved, or settled otherwise: a later word changes nothing.
+    if (pending.state !== "sending" && pending.state !== "retrying") return;
+    pending.state = "accepted";
+    pending.through = through ?? pending.through;
+    pending.settle();
+    pending.wake?.();
+    const workspace =
+      pending.projectId === undefined ? undefined : this.#workspaces.get(pending.projectId);
+    if (workspace === undefined) {
+      this.#pending.delete(pending.commandId);
+      return;
+    }
+    // The bodies the host took: a summary row never carries one (VC-387).
+    for (const [ticketId, body] of pending.bodies) workspace.bodies.set(ticketId, body);
+    if (pending.through === undefined || reaches(workspace.cursor, pending.through)) {
+      this.#retire(pending);
+    } else {
+      this.#armConfirm(workspace, pending);
+    }
+    this.#paint(workspace.projectId);
+  }
+
+  /** The feed normally brings an accepted write's cursor; if it does not soon, a read does. */
+  #armConfirm(workspace: Workspace, pending: Pending): void {
+    pending.confirmTimer = this.#setTimer(() => {
+      pending.confirmTimer = undefined;
+      if (this.#pending.get(pending.commandId) === pending) this.#scheduleRead(workspace);
+    }, this.#confirmTimeoutMs);
+  }
+
+  /** The base holds an accepted write's effect: its edit stops replaying. */
+  #retire(pending: Pending): void {
     if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
-    this.#pending.delete(commandId);
-    this.#paint(pending.projectId);
+    this.#pending.delete(pending.commandId);
   }
 
-  /** Retires every committed write of the Workspace a read started after the reply includes. */
-  #confirmThrough(projectId: string, readStartedAt: number): void {
-    for (const [commandId, pending] of Array.from(this.#pending)) {
-      if (
-        pending.projectId === projectId &&
-        pending.committedAt !== undefined &&
-        pending.committedAt <= readStartedAt
-      ) {
-        if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
-        this.#pending.delete(commandId);
-      }
+  /** A newer write covers this one: never sent again, its edit gone, its caller told. */
+  #supersede(pending: Pending): void {
+    if (pending.state === "accepted") return;
+    pending.tickets = undefined;
+    pending.labels = undefined;
+    if (pending.state === "sending") {
+      // Its attempt is out: whatever it answers, it is not sent again.
+      pending.state = "superseded";
+      pending.settle();
+      this.#pending.delete(pending.commandId);
+      return;
     }
+    pending.state = "superseded";
+    pending.settle();
+    pending.wake?.();
+    this.#pending.delete(pending.commandId);
   }
 
-  #delay(ms: number): Promise<void> {
-    return new Promise((resolve) => this.#setTimer(resolve, ms));
+  /** Drops a write that will not be proved: refused, or its Workspace closed. */
+  #drop(pending: Pending, state: "refused" | "closed"): void {
+    if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
+    const wasAccepted = pending.state === "accepted";
+    if (!wasAccepted) pending.state = state;
+    pending.settle();
+    pending.wake?.();
+    this.#pending.delete(pending.commandId);
+    if (pending.projectId !== undefined && state === "refused") this.#paint(pending.projectId);
+  }
+
+  /**
+   * Retires every accepted write the base now holds: its cursor is at or
+   * past theirs. After a snapshot, a write stamped on another feed is held
+   * too: that feed's host took it, and a feed only ever gives way to a later
+   * one (a restart, a new epoch), whose snapshot holds what it took.
+   */
+  #retireHeld(workspace: Workspace, snapshot = false): void {
+    for (const pending of Array.from(this.#pending.values())) {
+      if (pending.projectId !== workspace.projectId || pending.state !== "accepted") continue;
+      // An accepted write without a cursor retired on its proof.
+      const order = compareBoardCursors(workspace.cursor!, pending.through!);
+      if ((order !== null && order >= 0) || (order === null && snapshot)) this.#retire(pending);
+    }
   }
 
   // ---- the feed ---------------------------------------------------------------
 
-  #follow(projectId: string, workspace: Workspace, cursor: string): void {
-    workspace.cursor = cursor;
-    workspace.stop = this.#transport.changes(projectId, cursor, {
+  #follow(workspace: Workspace, cursor: string): void {
+    workspace.stop = this.#transport.changes(workspace.projectId, cursor, {
       onBatch: (batch) => {
         if (workspace.closed) return;
         workspace.feedFailures = 0;
-        this.#apply(projectId, workspace, batch);
+        this.#apply(workspace, batch);
       },
       onResnapshot: () => {
         if (workspace.closed) return;
-        void this.open(projectId).catch((error: unknown) =>
-          this.#feedFailed(projectId, workspace, error),
-        );
+        workspace.stop = null;
+        void this.open(workspace.projectId).catch(() => {
+          // Retried by `open` itself, with backoff.
+        });
       },
-      onError: (error) => {
+      onError: () => {
         if (workspace.closed) return;
-        this.#feedFailed(projectId, workspace, error);
+        this.#feedFailed(workspace);
       },
     });
   }
 
-  /** A feed that ended in error resumes from its last cursor, after a pause. */
-  #feedFailed(projectId: string, workspace: Workspace, _error: unknown): void {
+  /** A feed that ended in error resumes from the base's cursor, after a pause. */
+  #feedFailed(workspace: Workspace): void {
     workspace.stop = null;
     const delay =
       this.#feedRetryDelays[Math.min(workspace.feedFailures, this.#feedRetryDelays.length - 1)]!;
     workspace.feedFailures += 1;
     this.#setTimer(() => {
-      if (workspace.closed || workspace.stop !== null) return;
-      /* v8 ignore if -- a feed is only ever followed after a snapshot set its cursor, and nothing clears it. */
-      if (workspace.cursor === null) void this.open(projectId).catch(() => {});
-      else this.#follow(projectId, workspace, workspace.cursor);
+      if (workspace.closed || workspace.stop !== null || workspace.openTimer !== undefined) return;
+      this.#follow(workspace, workspace.cursor!);
     }, delay);
   }
 
-  #saw(workspace: Workspace, cursor: string): void {
-    workspace.cursor = cursor;
-    workspace.seen.push(cursor);
-    if (workspace.seen.length > SEEN_CURSORS)
-      workspace.seen.splice(0, workspace.seen.length - SEEN_CURSORS);
+  /** A snapshot that failed is read again after a pause, until it lands. */
+  #reopenLater(workspace: Workspace): void {
+    const delay =
+      this.#feedRetryDelays[Math.min(workspace.openFailures, this.#feedRetryDelays.length - 1)]!;
+    workspace.openFailures += 1;
+    workspace.openTimer = this.#setTimer(() => {
+      workspace.openTimer = undefined;
+      /* v8 ignore if -- closing clears this timer; only a clear that lost its race lands here. */
+      if (workspace.closed) return;
+      void this.open(workspace.projectId).catch(() => {
+        // Retried again by `open` itself.
+      });
+    }, delay);
   }
 
-  #apply(projectId: string, workspace: Workspace, batch: BoardFeedBatch): void {
-    workspace.readLog?.push(batch);
+  /**
+   * One feed batch. Its rows change the base only when it is newer than the
+   * base (a read may already hold it); its notices and its proofs count
+   * either way, since each is a fact whatever the base became.
+   */
+  #apply(workspace: Workspace, batch: BoardFeedBatch): void {
+    // A feed is followed only from a snapshot's cursor.
+    const order = compareBoardCursors(batch.cursor, workspace.cursor!);
+    // Another feed's batch on this subscription: nothing it says can be placed.
+    if (order === null) return;
+    const newer = order > 0;
     let read = false;
-    for (const change of batch.changes)
-      read = this.#applyChange(projectId, workspace, change) || read;
-    this.#saw(workspace, batch.cursor);
-    const named = new Set(batch.changes.map((change) => change.commandId));
-    for (const [commandId, pending] of Array.from(this.#pending)) {
-      if (pending.projectId !== projectId) continue;
-      if (pending.throughCursor === batch.cursor) {
-        if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
-        this.#pending.delete(commandId);
-      } else if (named.has(commandId)) {
-        // The write's own rows landed before its reply (the feed normally
-        // leads): the base holds its effect, so its edit stops replaying. A
-        // move replayed over its own result is not a no-op once later edits
-        // moved cards around it. Its reply (or a retry's receipt) retires it.
-        pending.tickets = undefined;
-        pending.labels = undefined;
-      }
+    for (const change of batch.changes) {
+      this.#notice(workspace, change, batch.cursor);
+      if (!newer) continue;
+      if (workspace.readLog !== null) this.#log(workspace, batch.cursor, change);
+      read = this.#applyChange(workspace, change, batch.cursor) || read;
     }
-    this.#paint(projectId);
-    if (read) this.#scheduleRead(projectId);
+    if (newer) workspace.cursor = batch.cursor;
+    // Proofs: the changes naming a write of this window's.
+    const named = new Map<Pending, BoardChange[]>();
+    for (const change of batch.changes) {
+      const pending =
+        change.commandId === undefined ? undefined : this.#pending.get(change.commandId);
+      if (pending !== undefined) named.set(pending, [...(named.get(pending) ?? []), change]);
+    }
+    for (const [pending, changes] of named) this.#proveFromFeed(pending, batch.cursor, changes);
+    this.#retireHeld(workspace);
+    this.#paint(workspace.projectId);
+    if (read) this.#scheduleRead(workspace);
   }
 
-  /** Applies one change to the base; answers whether it asks for a roster read. */
-  #applyChange(
-    projectId: string,
-    workspace: Workspace,
-    change: BoardChange,
-    replay = false,
-  ): boolean {
+  /** A batch named this write in `named`: the host took it, through this batch's cursor. */
+  #proveFromFeed(pending: Pending, cursor: string, named: readonly BoardChange[]): void {
+    for (const change of named) {
+      // A create's own ticket row names its new id.
+      if (change.kind === "ticket" && change.op === "upsert") learnCreated(pending, change.id);
+      if (change.kind === "comment" && change.comment !== undefined)
+        pending.fedRow = change.comment;
+      if (change.kind === "project" && change.project !== undefined)
+        pending.fedRow = change.project;
+    }
+    this.#accept(pending, cursor);
+  }
+
+  /** What a change tells the rest of the renderer: told once, whether or not the base takes its row. */
+  #notice(workspace: Workspace, change: BoardChange, cursor: string): void {
+    const { projectId } = workspace;
     switch (change.kind) {
       case "project":
-        if (change.project === undefined) return true;
-        if (!replay) this.#view.adoptProject(change.project);
-        return false;
+        if (change.project !== undefined && !reaches(workspace.projectCursor, cursor)) {
+          workspace.projectCursor = cursor;
+          this.#view.adoptProject(change.project);
+        }
+        return;
       case "ticket":
-        if (!replay && change.checkoutMoved === true) this.#view.checkoutMoved(change.id);
+        if (change.checkoutMoved === true) this.#view.checkoutMoved(change.id);
+        // Another writer's change, or one without its row: per-ticket surfaces re-read.
+        if (
+          change.commandId === undefined ||
+          (change.op === "upsert" && change.ticket === undefined)
+        ) {
+          this.#view.notePlanningChange({ ticketId: change.id, projectId });
+        }
+        return;
+      case "comment":
+      case "ticketEvent":
+        this.#view.notePlanningChange({ ticketId: change.ticketId, projectId });
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** Applies one newer change to the base; answers whether it asks for a read. */
+  #applyChange(workspace: Workspace, change: BoardChange, cursor: string): boolean {
+    switch (change.kind) {
+      case "project":
+        if (change.project !== undefined) return false;
+        workspace.dirtyProject = cursor;
+        return true;
+      case "ticket":
         if (change.op === "delete") {
           workspace.tickets.delete(change.id);
+          this.#forgetBodies(workspace, [change.id]);
         } else if (change.ticket === undefined) {
-          if (!replay) this.#view.notePlanningChange({ ticketId: change.id, projectId });
+          workspace.dirty = cursor;
           return true;
         } else {
           workspace.tickets.set(change.id, change.ticket);
         }
-        if (!replay && change.commandId === undefined) {
-          this.#view.notePlanningChange({ ticketId: change.id, projectId });
-        }
         return false;
       case "label":
         if (change.op === "delete") workspace.labels.delete(change.id);
-        else if (change.label === undefined) return true;
-        else workspace.labels.set(change.id, change.label);
-        return false;
-      case "comment":
-      case "ticketEvent":
-        if (!replay) this.#view.notePlanningChange({ ticketId: change.ticketId, projectId });
+        else if (change.label === undefined) {
+          workspace.dirty = cursor;
+          return true;
+        } else workspace.labels.set(change.id, change.label);
         return false;
       default:
-        // A kind this build does not know names state another reader owns
-        // (HP: the change kind is an open union).
+        // Comments and ticket events are rows the board does not hold, and a
+        // kind this build does not know names state another reader owns (HP:
+        // the change kind is an open union).
         return false;
     }
   }
 
+  /** Keeps a change for the in-flight read, latest per entity, within its bound. */
+  #log(workspace: Workspace, cursor: string, change: BoardChange): void {
+    const log = workspace.readLog!;
+    const key = `${change.kind}:${change.id}`;
+    log.delete(key);
+    log.set(key, { cursor, change });
+    if (log.size > READ_LOG_ENTITIES) workspace.readLog = null;
+  }
+
+  /** Whether `cursor` is newer than `than`: false when either is absent or they are of different feeds. */
+  #after(cursor: string | null, than: string): boolean {
+    if (cursor === null) return false;
+    const order = compareBoardCursors(cursor, than);
+    return order !== null && order > 0;
+  }
+
+  /** Drops the bodies of tickets that left the board. */
+  #forgetBodies(workspace: Workspace, ticketIds: Iterable<string>): void {
+    for (const ticketId of ticketIds) workspace.bodies.delete(ticketId);
+  }
+
   // ---- reads ------------------------------------------------------------------
 
-  /** One roster read per burst: coalesced, one in flight, at most one queued behind it. */
-  #scheduleRead(projectId: string): void {
-    const workspace = this.#workspaces.get(projectId);
-    /* v8 ignore if -- every caller holds a write or a read of a Workspace still open: closing drops both. */
-    if (workspace === undefined) return;
+  /** One read per burst: coalesced, one in flight, at most one queued behind it. */
+  #scheduleRead(workspace: Workspace): void {
+    /* v8 ignore if -- closing clears every timer that asks; only a lost race lands here. */
+    if (workspace.closed) return;
     if (workspace.reading) {
       workspace.readAgain = true;
       return;
@@ -753,37 +1143,131 @@ export class BoardSync {
     if (workspace.readTimer !== undefined) return;
     workspace.readTimer = this.#setTimer(() => {
       workspace.readTimer = undefined;
-      void this.#read(projectId, workspace);
+      void this.#read(workspace);
     }, this.#readCoalesceMs);
   }
 
-  async #read(projectId: string, workspace: Workspace): Promise<void> {
-    workspace.reading = true;
-    workspace.readLog = [];
-    const startedAt = this.#replies;
-    try {
-      const roster = await this.#transport.roster(projectId);
-      if (workspace.closed) return;
-      workspace.tickets.clear();
-      for (const ticket of roster.tickets) workspace.tickets.set(ticket.id, ticket);
-      workspace.labels.clear();
-      for (const label of roster.labels) workspace.labels.set(label.id, label);
-      // What the feed delivered while the read was in flight replays over it,
-      // oldest first: the latest word on each entity wins, whichever it was.
-      for (const batch of workspace.readLog) {
-        for (const change of batch.changes) this.#applyChange(projectId, workspace, change, true);
+  /** Whether a rowless change is still uncovered by any read. */
+  #dirty(workspace: Workspace): boolean {
+    return workspace.dirty !== null || workspace.dirtyProject !== null;
+  }
+
+  /**
+   * After a read that landed: an accepted write it still did not show (its
+   * cursor is on another feed, say) waits for its cursor again, not in a loop.
+   */
+  #rearmConfirms(workspace: Workspace): void {
+    for (const pending of this.#pending.values()) {
+      if (
+        pending.projectId === workspace.projectId &&
+        pending.state === "accepted" &&
+        pending.confirmTimer === undefined
+      ) {
+        this.#armConfirm(workspace, pending);
       }
-      workspace.seen.push(roster.cursor);
-      this.#confirmThrough(projectId, startedAt);
+    }
+  }
+
+  /** Whether the Workspace still needs a read: a rowless change uncovered, or a write unconfirmed. */
+  #needsRead(workspace: Workspace): boolean {
+    if (this.#dirty(workspace)) return true;
+    for (const pending of this.#pending.values()) {
+      if (
+        pending.projectId === workspace.projectId &&
+        pending.state === "accepted" &&
+        pending.confirmTimer === undefined
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async #read(workspace: Workspace): Promise<void> {
+    const { projectId } = workspace;
+    const generation = workspace.generation;
+    const withProject = workspace.dirtyProject !== null;
+    workspace.reading = true;
+    workspace.readLog = new Map();
+    let failed = false;
+    try {
+      const answer = withProject
+        ? await this.#transport.snapshot(projectId)
+        : await this.#transport.roster(projectId);
+      if (workspace.closed || workspace.generation !== generation || workspace.cursor === null) {
+        return;
+      }
+      workspace.readFailures = 0;
+      const order = compareBoardCursors(answer.cursor, workspace.cursor);
+      // Another feed's answer (the host restarted under it): the feed's own
+      // resnapshot replaces the base, never this.
+      if (order === null) return;
+      if (order < 0 && workspace.readLog === null) {
+        // Older than the base, and too much changed meanwhile to replay: read again.
+        workspace.readAgain = true;
+        return;
+      }
+      const log = order < 0 ? [...workspace.readLog!.values()] : [];
+      const removed = new Set(workspace.tickets.keys());
+      workspace.tickets.clear();
+      for (const row of answer.tickets) {
+        const { body, ...summary } = row as Ticket;
+        workspace.tickets.set(summary.id, summary);
+        // A snapshot's bodies are confirmed ones; never older than one this window already holds.
+        if (withProject && (order >= 0 || !workspace.bodies.has(summary.id))) {
+          workspace.bodies.set(summary.id, body);
+        }
+      }
+      workspace.labels.clear();
+      for (const label of answer.labels) workspace.labels.set(label.id, label);
+      // What the feed delivered after the read's cursor replays over it, so a
+      // slow read never moves the board backwards.
+      const answered = answer.cursor;
+      for (const { cursor, change } of log) {
+        if (this.#after(cursor, answered)) this.#applyChange(workspace, change, cursor);
+      }
+      for (const id of workspace.tickets.keys()) removed.delete(id);
+      this.#forgetBodies(workspace, removed);
+      if (order > 0) workspace.cursor = answered;
+      if (!this.#after(workspace.dirty, answered)) workspace.dirty = null;
+      if (withProject) {
+        if (!this.#after(workspace.dirtyProject, answered)) workspace.dirtyProject = null;
+        // Unless the feed already brought a newer project row.
+        if (!this.#after(workspace.projectCursor, answered)) {
+          workspace.projectCursor = answered;
+          this.#view.adoptProject((answer as unknown as { project: Project }).project);
+        }
+      }
+      this.#retireHeld(workspace);
       this.#paint(projectId);
     } catch (error) {
-      this.#view.failed(`Couldn't refresh the board: ${failureMessage(error)}`);
+      failed = true;
+      if (workspace.readFailures === 0) {
+        this.#view.failed(`Couldn't refresh the board: ${failureMessage(error)}`);
+      }
+      workspace.readFailures += 1;
     } finally {
       workspace.reading = false;
       workspace.readLog = null;
-      if (workspace.readAgain && !workspace.closed) {
+      if (!workspace.closed && workspace.generation === generation) {
+        if (!failed) this.#rearmConfirms(workspace);
+        if (failed && this.#needsRead(workspace)) {
+          // Retried with backoff until a read lands: a pending edit never sticks.
+          const delay =
+            this.#feedRetryDelays[
+              Math.min(workspace.readFailures - 1, this.#feedRetryDelays.length - 1)
+            ]!;
+          workspace.readAgain = false;
+          workspace.readTimer = this.#setTimer(() => {
+            workspace.readTimer = undefined;
+            void this.#read(workspace);
+          }, delay);
+        } else if (workspace.readAgain || (!failed && this.#dirty(workspace))) {
+          workspace.readAgain = false;
+          this.#scheduleRead(workspace);
+        }
+      } else {
         workspace.readAgain = false;
-        this.#scheduleRead(projectId);
       }
     }
   }
@@ -799,7 +1283,7 @@ export class BoardSync {
     const unloaded = new Set<string>();
     let tickets: Ticket[] = [];
     for (const summary of Array.from(workspace.tickets.values()).toSorted(byColumn)) {
-      const body = this.#bodies.get(summary.id);
+      const body = workspace.bodies.get(summary.id);
       if (body === undefined) unloaded.add(summary.id);
       tickets.push(Object.assign({}, summary, { body: body ?? "" }));
     }
@@ -811,6 +1295,33 @@ export class BoardSync {
     }
     this.#view.paint(projectId, tickets, labels, unloaded);
   }
+}
+
+/** The key a create's body sits under until its ticket's id is known. */
+const CREATED = "\u0000created";
+
+/** A create learns its ticket's id (its reply, or the feed row naming it): its body moves to that id. */
+function learnCreated(pending: Pending, ticketId: string): void {
+  const body = pending.bodies.get(CREATED);
+  if (body === undefined) return;
+  pending.createdId = ticketId;
+  pending.bodies.delete(CREATED);
+  pending.bodies.set(ticketId, body);
+}
+
+function isSettled(pending: Pending): boolean {
+  return pending.state !== "queued" && pending.state !== "sending" && pending.state !== "retrying";
+}
+
+function overlaps(left: Pending, right: Pending): boolean {
+  for (const aspect of left.aspects) if (right.aspects.has(aspect)) return true;
+  return false;
+}
+
+/** Whether `newer` sets every aspect `older` sets. */
+function covers(newer: Pending, older: Pending): boolean {
+  for (const aspect of older.aspects) if (!newer.aspects.has(aspect)) return false;
+  return true;
 }
 
 function patchTicket(ticketId: string, fields: Partial<Ticket>): (view: Ticket[]) => Ticket[] {
