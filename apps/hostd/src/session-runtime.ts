@@ -46,7 +46,7 @@ import {
 } from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
-import { agentGitEnvironment } from "./agent-git-env";
+import { withAgentGit } from "./agent-git-env";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -168,12 +168,16 @@ export function createHeadlessSessionRuntime(input: {
     // with operators and bakes nothing. Without it the agent's `volli` answers
     // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
     // The Session's identity is still composed after this, never from here.
-    concurrencyEnvFor: async (sessionId) => ({
-      ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
-      [VOLLI_SOCKET_ENV]: input.socketPath,
-      // On a Mac, git's keychain helper is never run by a Session (VC-700).
-      ...agentGitEnvironment(options.platform ?? process.platform),
-    }),
+    // On a Mac, git's keychain helper is never run by a Session (VC-700):
+    // its reset is the record's first git configuration entry.
+    concurrencyEnvFor: async (sessionId) =>
+      withAgentGit(
+        {
+          ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
+          [VOLLI_SOCKET_ENV]: input.socketPath,
+        },
+        options.platform ?? process.platform,
+      ),
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
       sessionEngine,

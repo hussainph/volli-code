@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { agentGitEnvironment } from "./agent-git-env";
+import { appendGitConfig, withAgentGit } from "./agent-git-env";
 
 let root: string;
 beforeEach(() => {
@@ -15,29 +15,40 @@ afterEach(() => {
 });
 
 describe("a Session's git environment", () => {
-  it("on a Mac, resets every credential helper and turns prompts off, then adds Volli's", () => {
-    expect(agentGitEnvironment("darwin")).toEqual({
+  it("on a Mac, resets every credential helper and turns prompts off", () => {
+    expect(withAgentGit({ PATH: "/bin" }, "darwin")).toEqual({
+      PATH: "/bin",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: "",
       GIT_TERMINAL_PROMPT: "0",
     });
-    expect(agentGitEnvironment("darwin", ["!volli-helper"])).toEqual({
+    // Elsewhere the record is left as it is.
+    expect(withAgentGit({ PATH: "/bin" }, "linux")).toEqual({ PATH: "/bin" });
+  });
+
+  it("appends after whatever the record holds, so two writers compose", () => {
+    const reset = withAgentGit({}, "darwin");
+    // VC-702's helper, appended after the reset.
+    expect(appendGitConfig(reset, [["credential.helper", "!volli-helper"]])).toMatchObject({
       GIT_CONFIG_COUNT: "2",
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: "",
       GIT_CONFIG_KEY_1: "credential.helper",
       GIT_CONFIG_VALUE_1: "!volli-helper",
-      GIT_TERMINAL_PROMPT: "0",
     });
-  });
-
-  it("elsewhere, changes nothing unless a helper is given", () => {
-    expect(agentGitEnvironment("linux")).toEqual({});
-    expect(agentGitEnvironment("linux", ["!volli-helper"])).toEqual({
+    // And the reset after an entry already there still clears it.
+    expect(
+      withAgentGit(
+        { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "x" },
+        "darwin",
+      ),
+    ).toMatchObject({ GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_1: "credential.helper" });
+    // A count that is not one starts over.
+    expect(appendGitConfig({ GIT_CONFIG_COUNT: "nope" }, [["a.b", "c"]])).toEqual({
       GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "credential.helper",
-      GIT_CONFIG_VALUE_0: "!volli-helper",
+      GIT_CONFIG_KEY_0: "a.b",
+      GIT_CONFIG_VALUE_0: "c",
     });
   });
 
@@ -84,13 +95,15 @@ describe("a Session's git environment", () => {
     rmSync(ran);
 
     // With it, never; and Volli's own helper, appended after, is the one asked.
-    const isolated = fill({ ...base, ...agentGitEnvironment("darwin", [`!${volliHelper}`]) });
+    const isolated = fill(
+      appendGitConfig(withAgentGit(base, "darwin"), [["credential.helper", `!${volliHelper}`]]),
+    );
     expect(existsSync(ran)).toBe(false);
     expect(readFileSync(volliRan, "utf8")).toContain("get");
     // Nothing answered and prompts are off: git fails rather than wait for a person.
     expect(isolated.status).not.toBe(0);
     rmSync(volliRan);
-    fill({ ...base, ...agentGitEnvironment("darwin") });
+    fill(withAgentGit(base, "darwin"));
     expect(existsSync(ran)).toBe(false);
     expect(existsSync(volliRan)).toBe(false);
   });
