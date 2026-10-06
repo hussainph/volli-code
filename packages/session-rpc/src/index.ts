@@ -121,6 +121,7 @@ export {
   type LocalRouterCaller,
   type NetworkRouterCaller,
   type ProcedurePaths,
+  type RouterProcedurePaths,
   type RouterCaller,
   type RouterContextPorts,
   type WorkspaceResource,
@@ -137,7 +138,24 @@ export {
   type BoardRouterHandlers,
   type BoardTicketMoveInput,
 } from "./board-router";
+export {
+  createDesktopRouter,
+  desktopProcedureSchemas,
+  type DesktopRouter,
+  type DesktopRouterContext,
+  type DesktopRouterHandlers,
+} from "./desktop-router";
 export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
+export {
+  DESKTOP_IPC_EXPOSURE,
+  DESKTOP_IPC_PATHS,
+  type DesktopIpcExposure,
+  type DesktopIpcPath,
+  type DesktopIpcRouter,
+  type DesktopIpcRouterPath,
+  type DesktopIpcRouters,
+  type IpcExposureTable,
+} from "./desktop-ipc";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];

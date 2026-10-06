@@ -15,6 +15,18 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
 
+// The build-artifact section reads its setting on mount over the Session RPC
+// client (`worktree.trimSettings`, VC-608).
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    worktree: {
+      trimSettings: {
+        query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+  }),
+}));
+
 const INVENTORY: PiSessionOrphanInventory = {
   revision: "scan-revision-7",
   scannedAt: 1_700_000_000_000,
@@ -138,10 +150,6 @@ function bridge(
       deleteOrphan: vi.fn(async () => ({ ok: true as const })),
       trimScan,
       trim,
-      trimSettings: vi.fn(async () => ({
-        ok: true as const,
-        settings: { keepPatterns: [".env"], trimOnFinish: true },
-      })),
       setTrimSettings,
     },
   });
