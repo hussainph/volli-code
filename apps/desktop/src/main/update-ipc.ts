@@ -11,9 +11,10 @@
  * stale build, and session-rpc is null in exactly that case. These channels
  * ride the same guarded invoke surface the retention watch uses.
  */
+import type { HostLiveWork } from "@volli/host-core/sessions";
 import { errorMessage } from "@volli/shared";
 
-import type { UpdateChannel } from "../ipc/contract";
+import type { UpdateChannel, UpdateLiveWorkResult } from "../ipc/contract";
 import type { AutoUpdateHandle } from "./auto-update";
 import { UPDATE_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
@@ -25,6 +26,15 @@ export interface UpdateIpcDeps {
   busyCommands(): string[];
   /** How many structured agent Sessions have a turn open right now — 0 when no runtime exists. */
   openAgentTurns(): Promise<number>;
+  /**
+   * The host's live work (VC-577), when the `cloud` flag is on and a host is
+   * running; null otherwise. When present it answers BOTH counts — turns
+   * (running or accepted and about to start) and running background shells —
+   * from the same synchronous read the menu-bar Tray and the quit verdict
+   * use, so the three can never disagree. Absent or null: today's
+   * `openAgentTurns` and no shells line.
+   */
+  liveWork?(): HostLiveWork | null;
   /** The renderer's last unsaved-drafts report — `unsavedDocumentNames()`. */
   unsavedDrafts(): readonly string[];
   /** Raises the quit-gate latch (`beginAcceptedUpdateInstall`) — the native gates stand down. */
@@ -72,6 +82,20 @@ export function installDownloadedUpdate(
   return { ok: true };
 }
 
+/** What the install dialog warns about — the `volli:update-live-work` answer. */
+export async function readUpdateLiveWork(
+  deps: Pick<UpdateIpcDeps, "busyCommands" | "openAgentTurns" | "unsavedDrafts" | "liveWork">,
+): Promise<UpdateLiveWorkResult> {
+  const host = deps.liveWork?.() ?? null;
+  return {
+    ok: true as const,
+    busyCommands: deps.busyCommands(),
+    openAgentSessions: host === null ? await deps.openAgentTurns() : host.turns,
+    backgroundShells: host === null ? 0 : host.shells,
+    unsavedDrafts: [...deps.unsavedDrafts()],
+  };
+}
+
 export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
   registerGuardedIpcHandlers(UPDATE_IPC, {
     "volli:update-state-get": () => ({ ok: true as const, state: deps.update.state() }),
@@ -87,12 +111,7 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
     /** The confirmed install — the ONE prompt's accept. See {@link installDownloadedUpdate}. */
     "volli:update-install": () => installDownloadedUpdate(deps),
 
-    "volli:update-live-work": async () => ({
-      ok: true as const,
-      busyCommands: deps.busyCommands(),
-      openAgentSessions: await deps.openAgentTurns(),
-      unsavedDrafts: [...deps.unsavedDrafts()],
-    }),
+    "volli:update-live-work": () => readUpdateLiveWork(deps),
 
     "volli:update-channel-get": () =>
       deps.channel === undefined

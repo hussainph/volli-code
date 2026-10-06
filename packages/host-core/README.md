@@ -333,11 +333,19 @@ not called during construction, so desktop can bind notifications after the
 database is known. Desktop wires `onFocusedSessionsChanged` to the returned
 read watch.
 
-The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) rides
-the same observe port. It counts Sessions with a turn open on a binding this
-process holds, plus running background shells, which the composition root
-feeds from the shell host's state feed. Desktop's menu-bar quit decision reads
-it synchronously; armed Automations are deliberately not live work.
+The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) is
+fed by the activity watch's `observeEvent` port: every committed turn fact,
+synchronously as its write resolves, never the 60 ms coalesced fold (which
+only seeds a Session no fact has reached yet). It counts Sessions with a turn
+open on a binding this process holds, Sessions with work the runtime accepted
+but whose turn has not opened (`HostedSessionRuntime.pendingTurnStarts`:
+admitted messages, retries, compactions, follow-up drains), and running
+background shells, which the composition root feeds from the shell host's
+state feed. Desktop's menu-bar quit decision reads it synchronously, and
+`tryBeginIdleExit()` takes the runtime's start latch (`holdTurnStarts`) in the
+same call when nothing is live: new starts are then refused before any effect
+and queued follow-ups wait, durable, for the next launch. Armed Automations
+are deliberately not live work.
 
 Two facts arrive later and are not ports, because host-core answers both
 itself: which executor bindings are open (a listing row is live only while one

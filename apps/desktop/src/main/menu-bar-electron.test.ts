@@ -55,6 +55,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  confirmCloseAgentTabs,
   confirmMenuBarQuit,
   electronMenuBarPower,
   electronMenuBarTray,
@@ -139,5 +140,23 @@ describe("menu-bar Electron adapter (VC-577)", () => {
     );
     electron.showMessageBoxSync.mockReturnValueOnce(0);
     expect(confirmMenuBarQuit({ turns: 1, shells: 0 })).toBe("quit");
+  });
+
+  it("asks before menu-bar entry closes agent Browser Tabs; Cancel is the default and Esc", () => {
+    expect(confirmCloseAgentTabs(2)).toBe("cancel");
+    expect(electron.showMessageBoxSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buttons: ["Close Tabs and Keep Running", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        message: "2 browser tabs used by running agents will close",
+        detail: "The agents keep running without them.",
+      }),
+    );
+    electron.showMessageBoxSync.mockReturnValueOnce(0);
+    expect(confirmCloseAgentTabs(1)).toBe("close");
+    expect(electron.showMessageBoxSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ message: "1 browser tab used by running agents will close" }),
+    );
   });
 });

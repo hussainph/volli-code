@@ -590,6 +590,26 @@ export interface HostedSessionRuntime extends SessionRuntime {
    * attachment here is what lets the host release it before the directory goes.
    */
   openNativeBindings(): readonly OpenNativeBinding[];
+  /**
+   * The Sessions holding work this process has ACCEPTED but whose turn has not
+   * opened yet (VC-577): a message admitted and on its way to the executor, a
+   * retry or a compaction in flight, and a host-owned follow-up release from
+   * the moment its drain is scheduled. Synchronous, because a quit decision
+   * reads it inside `before-quit`; together with the committed `turn.started`
+   * facts it is the whole of "a turn is running or about to".
+   */
+  pendingTurnStarts(): ReadonlySet<string>;
+  /**
+   * The idle-exit latch's runtime half (VC-577): from now on every NEW turn
+   * start is refused before it has any effect — a message, a retry, a
+   * compaction, an attach — with {@link SessionRuntimeExitingError}, and a
+   * follow-up drain is not scheduled, so its row stays queued and durable for
+   * the next launch. Synchronous so a caller can check "nothing is live" and
+   * take the latch in one turn of the event loop. Idempotent.
+   */
+  holdTurnStarts(): void;
+  /** Lifts {@link holdTurnStarts}, and wakes every follow-up drain it held back. */
+  releaseTurnStarts(): void;
 }
 
 export class SessionRuntimeNotFoundError extends Error {
@@ -621,6 +641,32 @@ export class SessionRuntimeCommandConflictError
     super(message);
     this.name = "SessionRuntimeCommandConflictError";
   }
+}
+
+/**
+ * A turn start refused because this host is exiting (VC-577): the idle-exit
+ * latch is up. Nothing was recorded or sent; the work is simply not started in
+ * a process that is about to end. A queued follow-up stays queued instead.
+ */
+export class SessionRuntimeExitingError extends SessionRuntimeConflictError {
+  constructor() {
+    super("Volli is quitting, so no new turn can start. Queued messages are kept for next launch.");
+    this.name = "SessionRuntimeExitingError";
+  }
+}
+
+/**
+ * The commands that start (or restart) model work. Counted from admission
+ * until their turn opens or they settle, and refused outright while the
+ * idle-exit latch is up — together with `adapter.attach`, which starts an
+ * executor process.
+ */
+function startsTurnWork(command: SessionRuntimeCommandRequest["command"]): boolean {
+  return (
+    (command.kind === "message.submit" && command.delivery !== "queue") ||
+    command.kind === "executor.retry" ||
+    command.kind === "context.compact"
+  );
 }
 
 interface BindingRecord {
@@ -865,6 +911,8 @@ interface MessageAdmission {
   /** Null when no observability sink is attached: nothing to measure for. */
   readonly receivedAt: number | null;
   readonly release: () => void;
+  /** Ends this message's place in {@link DefaultSessionRuntime.pendingTurnStarts}. Idempotent. */
+  readonly started: () => void;
   dispatched: boolean;
 }
 
@@ -898,7 +946,48 @@ class DefaultSessionRuntime implements SessionRuntime {
     { attempt: number; timer: ReturnType<typeof setTimeout> | undefined }
   >();
 
+  /** Accepted, not yet opened turn starts per Session (VC-577); see {@link pendingTurnStarts}. */
+  readonly #acceptedStarts = new Map<string, number>();
+  /** The idle-exit latch (VC-577): new turn starts are refused while it is up. */
+  #turnStartsHeld = false;
+  /** Follow-up drains the latch held back, woken when it lifts. */
+  readonly #heldFollowUpDrains = new Set<string>();
+
   constructor(private readonly ports: SessionRuntimePorts) {}
+
+  pendingTurnStarts(): ReadonlySet<string> {
+    const pending = new Set(this.#acceptedStarts.keys());
+    // A drain decides whether to release a row only after an async read, so
+    // it counts from the moment it is scheduled: "maybe about to start" is
+    // live until it has decided, which a settle window could never promise.
+    for (const sessionId of this.#followUpDrains.keys()) pending.add(sessionId);
+    return pending;
+  }
+
+  holdTurnStarts(): void {
+    this.#turnStartsHeld = true;
+  }
+
+  releaseTurnStarts(): void {
+    if (!this.#turnStartsHeld) return;
+    this.#turnStartsHeld = false;
+    const held = [...this.#heldFollowUpDrains];
+    this.#heldFollowUpDrains.clear();
+    for (const sessionId of held) this.#scheduleFollowUps(sessionId);
+  }
+
+  /** Counts one accepted start for `sessionId`; the returned call ends it, once. */
+  #acceptStart(sessionId: string): () => void {
+    this.#acceptedStarts.set(sessionId, (this.#acceptedStarts.get(sessionId) ?? 0) + 1);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      const left = this.#acceptedStarts.get(sessionId)! - 1;
+      if (left === 0) this.#acceptedStarts.delete(sessionId);
+      else this.#acceptedStarts.set(sessionId, left);
+    };
+  }
 
   openNativeBindings(): readonly OpenNativeBinding[] {
     return [...this.#bindings.values()].map(({ spec, lastProgressAt, inFlightTools }) => ({
@@ -981,6 +1070,21 @@ class DefaultSessionRuntime implements SessionRuntime {
       }
       return existing.promise;
     }
+    // The idle-exit latch (VC-577): refused here, before the intent is
+    // recorded, so a refused start leaves no trace to reconcile later.
+    if (
+      this.#turnStartsHeld &&
+      "sessionId" in request &&
+      (startsTurnWork(request.command) || request.command.kind === "adapter.attach")
+    ) {
+      return Promise.reject(new SessionRuntimeExitingError());
+    }
+    // Counted from admission — before it waits behind anything — so a quit
+    // decision sees it for its whole way to the executor.
+    const endStart =
+      "sessionId" in request && startsTurnWork(request.command)
+        ? this.#acceptStart(request.sessionId)
+        : null;
 
     // Every command that touches what the executor will next be sent, so none
     // of them can be deciding it at the same time. `context.compact` is here
@@ -1019,6 +1123,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             // Only a runtime with somewhere to send it reads the clock for it.
             receivedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
             release: admission.resolve,
+            // Non-null: a held message is always a counted start.
+            started: endStart!,
             dispatched: false,
           };
     const run = () => {
@@ -1033,6 +1139,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     };
     const operation = previous ? previous.then(run) : run();
     const promise = operation.finally(async () => {
+      endStart?.();
       this.#inFlight.delete(request.commandId);
       // A queue held behind this start (VC-675) is released once the start is
       // over, whichever way it went: the claim refused while it was pending.
@@ -1068,6 +1175,9 @@ class DefaultSessionRuntime implements SessionRuntime {
   #releaseMessageAdmission(sessionId: string, admission: MessageAdmission): void {
     if (this.#messageAdmissions.get(sessionId) !== admission) return;
     this.#messageAdmissions.delete(sessionId);
+    // Its `turn.started` is committed by now (or the command settled): the
+    // turn itself is what counts from here.
+    admission.started();
     admission.release();
   }
 
@@ -1937,6 +2047,12 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   #scheduleFollowUps(sessionId: string): void {
     if (this.#closed || !this.ports.followUps) return;
+    // The idle-exit latch (VC-577): the row stays queued and durable; the
+    // next launch's recovery sweep (or the latch lifting) releases it.
+    if (this.#turnStartsHeld) {
+      this.#heldFollowUpDrains.add(sessionId);
+      return;
+    }
     if (this.#followUpDrains.has(sessionId)) {
       this.#followUpDrainAgain.add(sessionId);
       return;

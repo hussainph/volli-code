@@ -118,10 +118,32 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
   return writesInFlight.get(key) ?? Promise.resolve(false);
 }
 
+/**
+ * The acknowledged form of {@link flushPendingAppState}: sends every pending
+ * write now and resolves once main has answered every write in flight, with
+ * whether all of them landed. Main asks for this before it destroys a window
+ * without an unload (VC-577: menu-bar mode), where `beforeunload` — and with
+ * it the flush below — never fires, and a draft typed inside the debounce
+ * window would otherwise exist nowhere but a renderer that is about to go.
+ */
+export async function flushAllPendingAppState(): Promise<boolean> {
+  flushPendingAppState();
+  const results = await Promise.all(writesInFlight.values());
+  return results.every(Boolean);
+}
+
+/** Answers main's flush request through the preload bridge, when there is one. */
+export function installAppStateFlushResponder(
+  bridge: { onFlushRequest?: (flush: () => Promise<unknown>) => () => void } | undefined,
+): void {
+  bridge?.onFlushRequest?.(flushAllPendingAppState);
+}
+
 // Renderer-only module: flush pending prefs before the window tears down so a
 // last-moment zoom/resize isn't dropped by the debounce.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", flushPendingAppState);
+  installAppStateFlushResponder(window.api?.appState);
 }
 
 /**

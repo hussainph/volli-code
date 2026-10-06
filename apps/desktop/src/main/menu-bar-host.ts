@@ -24,6 +24,25 @@
  * not refuse. Everything that is not "live work, nothing overriding it" is
  * today's quit.
  *
+ * ── THE BARRIER ───────────────────────────────────────────────────────────
+ * The settle window is presentation, not safety. Live work is the host's
+ * authoritative synchronous count — committed turn facts, accepted starts
+ * not yet opened, running shells — and every exit that is not an explicit
+ * override (the drain exit, an idle ⌘Q, install-when-idle) takes the host's
+ * start latch in the same call that reads it zero. A start after that is
+ * refused before it has any effect; a queued follow-up waits for next launch.
+ *
+ * ── LOGOUT, RESTART, SHUTDOWN ─────────────────────────────────────────────
+ * Noted from `powerMonitor` `shutdown`: the quit that follows skips every
+ * interactive refusal (the confirms' teardown still runs) so power-off is
+ * never blocked. Cleared after {@link SYSTEM_SHUTDOWN_LATCH_MS}, or on a
+ * reveal or activation — the logout was cancelled.
+ *
+ * ── BROWSER TABS ──────────────────────────────────────────────────────────
+ * Agent Browser Tabs close with the windows. Entry over tabs a Session is
+ * using asks first; after entry, an agent's Browser call is refused with
+ * {@link BROWSER_CLOSED_FOR_MENU_BAR} until a window is back.
+ *
  * No Electron import: every native effect is a port, so the whole mode is
  * tested under plain Node and `menu-bar-electron.ts` stays a thin adapter.
  */
@@ -38,6 +57,26 @@ export const MENU_BAR_SETTLE_MS = 5_000;
  * otherwise never be re-counted.
  */
 export const MENU_BAR_POLL_MS = 15_000;
+
+/**
+ * How long a noted logout/restart/shutdown keeps the branch standing down. A
+ * process still alive this long after `powerMonitor` `shutdown` was not
+ * logged out: someone cancelled it in another app, and the next ⌘Q is an
+ * ordinary one again.
+ */
+export const SYSTEM_SHUTDOWN_LATCH_MS = 60_000;
+
+/** The Browser Tabs confirm's copy, busy-terminal style (VC-577 orchestrator ruling). */
+export function closeAgentTabsCopy(count: number): { message: string; detail: string } {
+  return {
+    message: `${count} browser ${count === 1 ? "tab" : "tabs"} used by running agents will close`,
+    detail: "The agents keep running without them.",
+  };
+}
+
+/** What an agent's Browser call is told once its tabs closed with the windows. */
+export const BROWSER_CLOSED_FOR_MENU_BAR =
+  "The browser was closed when Volli moved to the menu bar. Browser tools are unavailable until the person reopens the Volli window; continue without the browser.";
 
 /** What one accepted ⌘Q does under the flag. */
 export type QuitBranch = "quit" | "menu-bar";
@@ -146,7 +185,27 @@ export interface MenuBarHostPorts {
   liveWork: {
     current(): HostLiveWork;
     subscribe(listener: (work: HostLiveWork) => void): () => void;
+    /**
+     * The idle-exit barrier: when nothing is live, take the host's start
+     * latch (new turn starts are refused) and answer true, in one synchronous
+     * call. False, and no latch, when work is live.
+     */
+    tryBeginIdleExit(): boolean;
+    /** Lift that latch: the exit it was taken for did not happen. */
+    abandonIdleExit(): void;
   };
+  /**
+   * Agent Browser Tabs, which close with the windows. Entry asks before
+   * closing any a Session is using, then closes them all and refuses agent
+   * Browser calls in words until a window is back.
+   */
+  browserTabs: {
+    sessionTabCount(): number;
+    closeForMenuBar(): void;
+    reopen(): void;
+  };
+  /** "N browser tabs used by running agents will close" — Close Tabs and Keep Running / Cancel. */
+  confirmCloseAgentTabs(count: number): "close" | "cancel";
   windows: {
     count(): number;
     /** Destroys every window without re-asking: the quit confirms already answered. */
@@ -181,12 +240,26 @@ export interface MenuBarHostPorts {
   };
   settleMs?: number;
   pollMs?: number;
+  shutdownLatchMs?: number;
   log?: (line: string) => void;
 }
 
 export interface MenuBarHost {
-  /** The quit gate's question, flag on. */
+  /**
+   * The quit gate's question, flag on, asked only for an attempt the confirms
+   * accepted. An idle `quit` verdict takes the host's start latch in the same
+   * synchronous call ({@link MenuBarHostPorts.liveWork}'s `tryBeginIdleExit`),
+   * so nothing can start between "nothing is live" and the exit.
+   */
   branch(): QuitBranch;
+  /**
+   * Before the terminal confirm: when this attempt would enter menu-bar mode
+   * and Sessions are using Browser Tabs, ask whether to close them and keep
+   * running. False: the person cancelled, and the quit is refused.
+   */
+  confirmEnter(): boolean;
+  /** A noted logout, restart or shutdown is in effect: the quit must not be refused. */
+  systemShuttingDown(): boolean;
   /** Enter menu-bar mode. Idempotent. Never a host stop. */
   enter(): void;
   isResident(): boolean;
@@ -200,8 +273,14 @@ export interface MenuBarHost {
   quitFromTray(): void;
   /** Tray → "Install Update When Idle": a toggle. */
   toggleInstallWhenIdle(): void;
-  /** macOS is ending the session; the next quit must not be refused. */
+  /**
+   * macOS is ending the session; the next quit must not be refused. Cleared
+   * after {@link SYSTEM_SHUTDOWN_LATCH_MS} still alive, or on a reveal or an
+   * activation — either means the logout did not happen.
+   */
   noteSystemShutdown(): void;
+  /** The app was activated (Dock, Spotlight, ⌘Tab): a noted logout is over. */
+  noteActivated(): void;
   /** Something the Tray shows changed (the update state). */
   refresh(): void;
 }
@@ -217,11 +296,13 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
   const timers = ports.timers ?? realTimers;
   const settleMs = ports.settleMs ?? MENU_BAR_SETTLE_MS;
   const pollMs = ports.pollMs ?? MENU_BAR_POLL_MS;
+  const shutdownLatchMs = ports.shutdownLatchMs ?? SYSTEM_SHUTDOWN_LATCH_MS;
   const log = ports.log ?? ((line: string) => console.info(line));
 
   let resident = false;
   let quitRequested = false;
   let systemShuttingDown = false;
+  let shutdownExpiry: unknown = null;
   let installArmed = false;
   let holdingPower = false;
   /**
@@ -262,14 +343,41 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     settle = null;
   }
 
+  /** The idle-exit barrier, failing toward "no latch, nothing live" — today's quit. */
+  function tryBeginIdleExit(): boolean {
+    try {
+      return ports.liveWork.tryBeginIdleExit();
+    } catch (error) {
+      log(`[menu-bar] idle exit unreadable: ${String(error)}`);
+      return true;
+    }
+  }
+
   function finishIdle(): void {
     exitAttempted = true;
     if (installArmed && ports.update.ready()) {
+      // The install skips the quit branch (an accepted install always quits),
+      // so it takes the same barrier here: a start that landed since the
+      // settle check keeps the host resident instead of being installed over.
+      if (!tryBeginIdleExit()) {
+        exitAttempted = false;
+        reevaluate();
+        return;
+      }
       log("[menu-bar] live work drained; installing the staged update");
       if (ports.update.install()) return;
+      ports.liveWork.abandonIdleExit();
     }
     log("[menu-bar] live work drained; quitting");
+    // `before-quit` runs synchronously inside: its branch takes the latch.
     ports.quit();
+  }
+
+  function clearSystemShutdown(): void {
+    systemShuttingDown = false;
+    if (shutdownExpiry === null) return;
+    timers.clearTimeout(shutdownExpiry);
+    shutdownExpiry = null;
   }
 
   function scheduleSettle(): void {
@@ -312,23 +420,52 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     exitAttempted = false;
     ports.tray.destroy();
     ports.dock.show();
+    ports.browserTabs.reopen();
     log("[menu-bar] left menu-bar mode");
   }
 
   return {
     branch() {
-      return planQuitBranch({
-        updateInstallInFlight: ports.update.installInFlight(),
+      const updateInstallInFlight = ports.update.installInFlight();
+      const verdict = planQuitBranch({
+        updateInstallInFlight,
         systemShuttingDown,
         quitRequested,
         liveWork: liveWork(),
       });
+      // Nothing live and nothing overriding: the barrier re-reads and takes
+      // the start latch in this same call, or keeps the host resident if a
+      // start landed after all. An override quits over live work anyway.
+      if (verdict === "quit" && !updateInstallInFlight && !systemShuttingDown && !quitRequested) {
+        return tryBeginIdleExit() ? "quit" : "menu-bar";
+      }
+      return verdict;
     },
+    confirmEnter() {
+      // A pure read of the branch: no latch, and nothing to ask unless this
+      // attempt would enter menu-bar mode with tabs a Session is using.
+      if (resident) return true;
+      const wouldEnter =
+        planQuitBranch({
+          updateInstallInFlight: ports.update.installInFlight(),
+          systemShuttingDown,
+          quitRequested,
+          liveWork: liveWork(),
+        }) === "menu-bar";
+      if (!wouldEnter) return true;
+      const tabs = ports.browserTabs.sessionTabCount();
+      if (tabs === 0) return true;
+      return ports.confirmCloseAgentTabs(tabs) === "close";
+    },
+    systemShuttingDown: () => systemShuttingDown,
     enter() {
       if (resident) return;
       resident = true;
       const work = liveWork();
       log(`[menu-bar] entered menu-bar mode: ${liveWorkPhrase(work) || "no live work"}`);
+      // Before the windows: a turn's next Browser call is refused in words
+      // rather than reaching for a tab (or a stage window) that is gone.
+      ports.browserTabs.closeForMenuBar();
       ports.windows.closeAll();
       ports.dock.hide();
       ports.tray.show(trayModel(work, updateState()));
@@ -338,6 +475,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     },
     isResident: () => resident,
     reveal(options) {
+      clearSystemShutdown();
       if (resident) leave();
       if (ports.windows.count() === 0) ports.windows.open();
       if (options?.focus === true) ports.focusApp();
@@ -365,7 +503,18 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
       reevaluate();
     },
     noteSystemShutdown() {
+      clearSystemShutdown();
       systemShuttingDown = true;
+      // Still alive a minute on: the logout was cancelled elsewhere, and the
+      // next ⌘Q must keep its turns again.
+      shutdownExpiry = timers.setTimeout(() => {
+        shutdownExpiry = null;
+        systemShuttingDown = false;
+        log("[menu-bar] still running after a system shutdown notice; quitting normally again");
+      }, shutdownLatchMs);
+    },
+    noteActivated() {
+      clearSystemShutdown();
     },
     refresh() {
       reevaluate();

@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostLiveWork } from "@volli/host-core/sessions";
 
 import {
+  BROWSER_CLOSED_FOR_MENU_BAR,
+  closeAgentTabsCopy,
   createMenuBarHost,
   liveWorkPhrase,
   MENU_BAR_POLL_MS,
   MENU_BAR_SETTLE_MS,
   planQuitBranch,
+  SYSTEM_SHUTDOWN_LATCH_MS,
   quitWithLiveWorkCopy,
   trayModel,
   type MenuBarHostPorts,
@@ -138,6 +141,10 @@ function harness(initial: HostLiveWork = ONE_TURN) {
   let installInFlight = false;
   let installStarts = true;
   let confirm: "quit" | "wait" = "wait";
+  let tabsAnswer: "close" | "cancel" = "close";
+  let agentTabs = 0;
+  let latched = false;
+  let latchRaces = false;
   const trays: TrayModel[] = [];
   const clock = fakeTimers();
   const ports = {
@@ -147,7 +154,27 @@ function harness(initial: HostLiveWork = ONE_TURN) {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      // The host's barrier: a re-read and the latch in one call.
+      tryBeginIdleExit: vi.fn(() => {
+        if (latchRaces || work.turns > 0 || work.shells > 0) return false;
+        if (!latched) calls.push("latch");
+        latched = true;
+        return true;
+      }),
+      abandonIdleExit: vi.fn(() => {
+        if (latched) calls.push("unlatch");
+        latched = false;
+      }),
     },
+    browserTabs: {
+      sessionTabCount: () => agentTabs,
+      closeForMenuBar: () => {
+        calls.push("tabs.close");
+        agentTabs = 0;
+      },
+      reopen: () => calls.push("tabs.reopen"),
+    },
+    confirmCloseAgentTabs: vi.fn(() => tabsAnswer),
     windows: {
       count: () => windows,
       closeAll: () => {
@@ -217,6 +244,17 @@ function harness(initial: HostLiveWork = ONE_TURN) {
     answer: (value: "quit" | "wait") => {
       confirm = value;
     },
+    answerTabs: (value: "close" | "cancel") => {
+      tabsAnswer = value;
+    },
+    openAgentTabs: (count: number) => {
+      agentTabs = count;
+    },
+    /** A start lands between the settle check and the barrier. */
+    raceTheLatch: (value: boolean) => {
+      latchRaces = value;
+    },
+    latched: () => latched,
   };
 }
 
@@ -237,6 +275,10 @@ describe("createMenuBarHost (VC-577)", () => {
     h.ports.liveWork.current.mockImplementation(() => {
       throw new Error("bindings");
     });
+    // The host's barrier reads the same count, so it cannot answer either.
+    h.ports.liveWork.tryBeginIdleExit.mockImplementation(() => {
+      throw new Error("bindings");
+    });
     expect(h.host.branch()).toBe("quit");
   });
 
@@ -245,7 +287,13 @@ describe("createMenuBarHost (VC-577)", () => {
     h.host.enter();
     h.host.enter();
     expect(h.host.isResident()).toBe(true);
-    expect(h.calls).toEqual(["windows.closeAll", "dock.hide", "tray.show", "power.hold"]);
+    expect(h.calls).toEqual([
+      "tabs.close",
+      "windows.closeAll",
+      "dock.hide",
+      "tray.show",
+      "power.hold",
+    ]);
     expect(h.trays.at(-1)?.title).toBe("Volli 1");
     expect(h.ports.quit).not.toHaveBeenCalled();
     expect(h.listenerCount()).toBe(1);
@@ -321,7 +369,13 @@ describe("createMenuBarHost (VC-577)", () => {
     h.calls.length = 0;
     h.host.reveal({ focus: true });
     expect(h.host.isResident()).toBe(false);
-    expect(h.calls).toEqual(["tray.destroy", "dock.show", "windows.open", "app.focus"]);
+    expect(h.calls).toEqual([
+      "tray.destroy",
+      "dock.show",
+      "tabs.reopen",
+      "windows.open",
+      "app.focus",
+    ]);
     expect(h.listenerCount()).toBe(0);
     expect(h.clock.pendingCount()).toBe(0);
     // Reattached to the same host: nothing quits when the old timer would have.
@@ -460,7 +514,14 @@ describe("createMenuBarHost (VC-577)", () => {
       const quit = vi.fn();
       let work = ONE_TURN;
       const host = createMenuBarHost({
-        liveWork: { current: () => work, subscribe: () => () => {} },
+        liveWork: {
+          current: () => work,
+          subscribe: () => () => {},
+          tryBeginIdleExit: () => work.turns === 0,
+          abandonIdleExit: () => {},
+        },
+        browserTabs: { sessionTabCount: () => 0, closeForMenuBar: () => {}, reopen: () => {} },
+        confirmCloseAgentTabs: () => "cancel",
         windows: { count: () => 0, closeAll: () => {}, open: () => {} },
         dock: { hide: () => {}, show: () => {} },
         tray: { show: () => {}, update: () => {}, destroy: () => {} },
@@ -483,5 +544,161 @@ describe("createMenuBarHost (VC-577)", () => {
       info.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  describe("the idle-exit barrier (VC-577 B1)", () => {
+    it("an idle verdict takes the start latch in the same call; a live one never does", () => {
+      const live = harness(ONE_TURN);
+      expect(live.host.branch()).toBe("menu-bar");
+      expect(live.ports.liveWork.tryBeginIdleExit).not.toHaveBeenCalled();
+      const idle = harness(IDLE);
+      expect(idle.host.branch()).toBe("quit");
+      expect(idle.latched()).toBe(true);
+    });
+
+    it("a start landing between the read and the barrier keeps the host resident", () => {
+      const h = harness(IDLE);
+      h.raceTheLatch(true);
+      expect(h.host.branch()).toBe("menu-bar");
+      expect(h.latched()).toBe(false);
+    });
+
+    it("an override quits over live work without latching (it stops the host anyway)", () => {
+      const h = harness(ONE_TURN);
+      h.setInstallInFlight(true);
+      expect(h.host.branch()).toBe("quit");
+      h.setInstallInFlight(false);
+      h.host.noteSystemShutdown();
+      expect(h.host.branch()).toBe("quit");
+      expect(h.ports.liveWork.tryBeginIdleExit).not.toHaveBeenCalled();
+    });
+
+    it("an unreadable barrier fails toward today's quit", () => {
+      const h = harness(IDLE);
+      h.ports.liveWork.tryBeginIdleExit.mockImplementation(() => {
+        throw new Error("runtime");
+      });
+      expect(h.host.branch()).toBe("quit");
+    });
+
+    it("the drain exit's own quit is decided by the barrier inside before-quit", () => {
+      const h = harness(ONE_TURN);
+      let verdict: string | null = null;
+      h.ports.quit.mockImplementation(() => {
+        verdict = h.host.branch();
+      });
+      h.host.enter();
+      h.setWork(IDLE);
+      h.clock.advance(MENU_BAR_SETTLE_MS);
+      expect(verdict).toBe("quit");
+      expect(h.latched()).toBe(true);
+    });
+
+    it("install-when-idle takes the same barrier first, and stays resident if a start won", () => {
+      const h = harness(ONE_TURN);
+      h.stage();
+      h.host.enter();
+      h.host.toggleInstallWhenIdle();
+      h.setWork(IDLE);
+      h.raceTheLatch(true);
+      h.clock.advance(MENU_BAR_SETTLE_MS);
+      expect(h.calls).not.toContain("update.install");
+      expect(h.ports.quit).not.toHaveBeenCalled();
+      expect(h.host.isResident()).toBe(true);
+      // The start's turn ends; the barrier holds this time and the install runs.
+      h.raceTheLatch(false);
+      h.setWork(ONE_TURN);
+      h.setWork(IDLE);
+      h.clock.advance(MENU_BAR_SETTLE_MS);
+      expect(h.calls.slice(-2)).toEqual(["latch", "update.install"]);
+    });
+
+    it("an install that cannot start lifts the latch before the ordinary quit", () => {
+      const h = harness(ONE_TURN);
+      h.stage();
+      h.failInstall();
+      h.host.enter();
+      h.host.toggleInstallWhenIdle();
+      h.setWork(IDLE);
+      h.clock.advance(MENU_BAR_SETTLE_MS);
+      expect(h.calls.slice(-4)).toEqual(["latch", "update.install", "unlatch", "app.quit"]);
+    });
+  });
+
+  describe("system logout, restart and shutdown (VC-577 B3)", () => {
+    it("stands down until the process outlives the notice by a minute", () => {
+      const h = harness(ONE_TURN);
+      h.host.noteSystemShutdown();
+      expect(h.host.systemShuttingDown()).toBe(true);
+      expect(h.host.branch()).toBe("quit");
+      h.clock.advance(SYSTEM_SHUTDOWN_LATCH_MS - 1);
+      expect(h.host.systemShuttingDown()).toBe(true);
+      h.clock.advance(1);
+      // The logout was cancelled elsewhere: ⌘Q keeps its turns again.
+      expect(h.host.systemShuttingDown()).toBe(false);
+      expect(h.host.branch()).toBe("menu-bar");
+    });
+
+    it("a second notice restarts the minute; a reveal or an activation ends it at once", () => {
+      const h = harness(ONE_TURN);
+      h.host.noteSystemShutdown();
+      h.clock.advance(SYSTEM_SHUTDOWN_LATCH_MS - 1);
+      h.host.noteSystemShutdown();
+      h.clock.advance(SYSTEM_SHUTDOWN_LATCH_MS - 1);
+      expect(h.host.systemShuttingDown()).toBe(true);
+      h.host.reveal();
+      expect(h.host.systemShuttingDown()).toBe(false);
+      expect(h.clock.pendingCount()).toBe(0);
+      h.host.noteSystemShutdown();
+      h.host.noteActivated();
+      expect(h.host.systemShuttingDown()).toBe(false);
+      expect(h.clock.pendingCount()).toBe(0);
+      h.host.noteActivated();
+      expect(h.host.branch()).toBe("menu-bar");
+    });
+  });
+
+  describe("agent Browser Tabs on entry (VC-577 orchestrator ruling)", () => {
+    it("asks only when this attempt would enter menu-bar mode over tabs a Session uses", () => {
+      const idle = harness(IDLE);
+      idle.openAgentTabs(2);
+      expect(idle.host.confirmEnter()).toBe(true);
+      const noTabs = harness(ONE_TURN);
+      expect(noTabs.host.confirmEnter()).toBe(true);
+      for (const h of [idle, noTabs]) expect(h.ports.confirmCloseAgentTabs).not.toHaveBeenCalled();
+
+      const h = harness(ONE_TURN);
+      h.openAgentTabs(2);
+      h.answerTabs("cancel");
+      expect(h.host.confirmEnter()).toBe(false);
+      expect(h.ports.confirmCloseAgentTabs).toHaveBeenCalledWith(2);
+      h.answerTabs("close");
+      expect(h.host.confirmEnter()).toBe(true);
+      // Entry closes them first, and a resident host is never asked again.
+      h.host.enter();
+      expect(h.calls.slice(0, 2)).toEqual(["tabs.close", "windows.closeAll"]);
+      h.openAgentTabs(1);
+      expect(h.host.confirmEnter()).toBe(true);
+      expect(h.ports.confirmCloseAgentTabs).toHaveBeenCalledTimes(2);
+    });
+
+    it("an override needs no question: the quit stops the agents too", () => {
+      const h = harness(ONE_TURN);
+      h.openAgentTabs(1);
+      h.setInstallInFlight(true);
+      expect(h.host.confirmEnter()).toBe(true);
+      expect(h.ports.confirmCloseAgentTabs).not.toHaveBeenCalled();
+    });
+
+    it("words the confirm and the model's refusal", () => {
+      expect(closeAgentTabsCopy(1).message).toBe("1 browser tab used by running agents will close");
+      expect(closeAgentTabsCopy(3)).toEqual({
+        message: "3 browser tabs used by running agents will close",
+        detail: "The agents keep running without them.",
+      });
+      expect(BROWSER_CLOSED_FOR_MENU_BAR).toContain(
+        "The browser was closed when Volli moved to the menu bar",
+      );
+    });
   });
 });

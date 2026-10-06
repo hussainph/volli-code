@@ -45,7 +45,14 @@ export interface HostSessionPorts {
 export interface SessionRuntimeWiring {
   openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId" | "sessionId">[];
   observeScheduledResume(projection: SessionProjection): void;
+  /** Accepted, not yet opened turn starts (VC-577): `HostedSessionRuntime.pendingTurnStarts`. */
+  pendingTurnStarts(): ReadonlySet<string>;
+  /** The runtime's idle-exit start latch (VC-577). */
+  holdTurnStarts(): void;
+  releaseTurnStarts(): void;
 }
+
+const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
 
 /** Keyed by the composed engine, which is the identity every runtime constructor receives. */
 const runtimeWiring = new WeakMap<SessionEngine, SessionRuntimeWiring>();
@@ -61,6 +68,9 @@ export function wireSessionRuntime(
   if (wiring.observeScheduledResume !== undefined) {
     slot.observeScheduledResume = wiring.observeScheduledResume;
   }
+  if (wiring.pendingTurnStarts !== undefined) slot.pendingTurnStarts = wiring.pendingTurnStarts;
+  if (wiring.holdTurnStarts !== undefined) slot.holdTurnStarts = wiring.holdTurnStarts;
+  if (wiring.releaseTurnStarts !== undefined) slot.releaseTurnStarts = wiring.releaseTurnStarts;
 }
 
 export interface HostSessionServices {
@@ -83,6 +93,9 @@ export function createHostSessionServices(
   const runtime: SessionRuntimeWiring = {
     openNativeBindings: () => [],
     observeScheduledResume: () => undefined,
+    pendingTurnStarts: () => NO_PENDING_STARTS,
+    holdTurnStarts: () => undefined,
+    releaseTurnStarts: () => undefined,
   };
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
@@ -125,6 +138,8 @@ export function createHostSessionServices(
   });
   const liveWork = createHostLiveWork({
     openSessionIds: () => new Set(runtime.openNativeBindings().map((binding) => binding.sessionId)),
+    pendingStartSessionIds: () => runtime.pendingTurnStarts(),
+    starts: { hold: () => runtime.holdTurnStarts(), release: () => runtime.releaseTurnStarts() },
     onError: (error) => ports.log.warn("[volli] live work:", error),
   });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
@@ -143,6 +158,9 @@ export function createHostSessionServices(
       sessionReadWatch.observe(projection);
       liveWork.observeSession(projection);
     },
+    // Synchronous, as each write resolves: a quit decision must never lag a
+    // committed `turn.started` behind the coalesced fold above (VC-577).
+    observeEvent: (event) => liveWork.observeEvent(event),
     observeBirth: (sessionId) => {
       runAttention.observeBirth(sessionId);
       sessionReadWatch.observeBirth(sessionId);

@@ -35,6 +35,9 @@ function runtimeWiring() {
   return {
     openNativeBindings: vi.fn(() => [{ attachmentId: "live-binding", sessionId: "live-session" }]),
     observeScheduledResume: vi.fn<SessionRuntimeWiring["observeScheduledResume"]>(),
+    pendingTurnStarts: vi.fn((): ReadonlySet<string> => new Set<string>()),
+    holdTurnStarts: vi.fn(),
+    releaseTurnStarts: vi.fn(),
   } satisfies SessionRuntimeWiring;
 }
 
@@ -154,6 +157,74 @@ describe("host Session composition", () => {
     expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
   });
 
+  it("counts a committed turn start the moment its write resolves, before any fold (VC-577)", async () => {
+    const { engine, runtime, sessionId } = await seeded();
+    runtime.openNativeBindings.mockReturnValue([{ attachmentId: "binding", sessionId }]);
+    const provenance = {
+      source: { kind: "system" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await engine.observe({
+      id: "attach",
+      sessionId,
+      occurredAt: 1,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "binding",
+        sessionId,
+        adapterId: "pi",
+        venue: provenance.venue,
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+    await services.sessionActivityWatch.flush();
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+    const heard = vi.fn();
+    services.liveWork.subscribe(heard);
+    await engine.observe({
+      id: "start",
+      sessionId,
+      occurredAt: 2,
+      provenance,
+      kind: "turn.started",
+      attachmentId: "binding",
+      turnId: "turn",
+    });
+    // No flush: the coalesced fold has not run, the count already has it.
+    expect(services.liveWork.current()).toEqual({ turns: 1, shells: 0 });
+    expect(heard).toHaveBeenCalledWith({ turns: 1, shells: 0 });
+    // A fold of the older idle projection cannot overwrite the newer write.
+    const projection = (await engine.getSession({ sessionId }))!;
+    services.liveWork.observeSession({ ...projection, turnActive: false });
+    expect(services.liveWork.current()).toEqual({ turns: 1, shells: 0 });
+    await engine.observe({
+      id: "end",
+      sessionId,
+      occurredAt: 3,
+      provenance,
+      kind: "turn.completed",
+      attachmentId: "binding",
+      turnId: "turn",
+    });
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+  });
+
+  it("counts the runtime's accepted starts and takes its start latch for an idle exit (VC-577)", async () => {
+    const { runtime } = await seeded();
+    runtime.pendingTurnStarts.mockReturnValue(new Set(["starting"]));
+    expect(services.liveWork.current()).toEqual({ turns: 1, shells: 0 });
+    expect(services.liveWork.tryBeginIdleExit()).toBe(false);
+    expect(runtime.holdTurnStarts).not.toHaveBeenCalled();
+    runtime.pendingTurnStarts.mockReturnValue(new Set());
+    expect(services.liveWork.tryBeginIdleExit()).toBe(true);
+    expect(runtime.holdTurnStarts).toHaveBeenCalledOnce();
+    services.liveWork.abandonIdleExit();
+    expect(runtime.releaseTurnStarts).toHaveBeenCalledOnce();
+  });
+
   it("reports a live-work listener failure through the host log", async () => {
     const { sinks } = await seeded();
     const failure = new Error("listener");
@@ -186,6 +257,10 @@ describe("host Session composition", () => {
       });
     const first = await create("before-the-runtime");
     await services.sessionActivityWatch.flush();
+    // No runtime yet: nothing is starting, and the latch has nothing to hold.
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+    expect(services.liveWork.tryBeginIdleExit()).toBe(true);
+    services.liveWork.abandonIdleExit();
     expect(activity(sinks).at(-1)?.row).toEqual(
       expect.objectContaining({ record: expect.objectContaining({ sessionId: first.session.id }) }),
     );
@@ -196,6 +271,14 @@ describe("host Session composition", () => {
     const late = runtimeWiring();
     wireSessionRuntime(engine, { openNativeBindings: late.openNativeBindings });
     wireSessionRuntime(engine, { observeScheduledResume: late.observeScheduledResume });
+    wireSessionRuntime(engine, { pendingTurnStarts: late.pendingTurnStarts });
+    wireSessionRuntime(engine, { holdTurnStarts: late.holdTurnStarts });
+    wireSessionRuntime(engine, { releaseTurnStarts: late.releaseTurnStarts });
+    expect(services.liveWork.tryBeginIdleExit()).toBe(true);
+    services.liveWork.abandonIdleExit();
+    expect(late.pendingTurnStarts).toHaveBeenCalled();
+    expect(late.holdTurnStarts).toHaveBeenCalledOnce();
+    expect(late.releaseTurnStarts).toHaveBeenCalledOnce();
     const second = await create("after-the-runtime");
     await services.sessionActivityWatch.flush();
     expect(late.openNativeBindings).toHaveBeenCalled();

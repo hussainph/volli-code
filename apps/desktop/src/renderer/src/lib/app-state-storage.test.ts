@@ -7,8 +7,10 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // it explicitly between tests instead, since the module is only imported once.
 import {
   appStateStorage,
+  flushAllPendingAppState,
   flushPendingAppState,
   flushPendingAppStateKey,
+  installAppStateFlushResponder,
   seedAppStateCache,
 } from "./app-state-storage";
 
@@ -173,5 +175,67 @@ describe("removeItem", () => {
       duration: 8000,
       closeButton: true,
     });
+  });
+});
+
+// BrowserWindow.destroy() contract (Electron 44 electron.d.ts:2764): no
+// beforeunload/unload is emitted, and the renderer/timers go away. Menu-bar
+// entry (VC-577) therefore asks the renderer to flush first and waits for the
+// ack; this models main's request and then the destruction itself.
+describe("VC577 forced-destroy draft durability", () => {
+  it("menu-bar entry sends the last chat draft, acknowledged, before destroying its renderer", async () => {
+    let requestFlush!: () => Promise<unknown>;
+    const unsubscribe = vi.fn();
+    installAppStateFlushResponder({
+      onFlushRequest: (flush) => {
+        requestFlush = flush;
+        return unsubscribe;
+      },
+    });
+    let acknowledge!: (result: { ok: true }) => void;
+    setMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    appStateStorage.setItem("volli:chat-drafts", '{"drafts":{"session":{"text":"last words"}}}');
+    expect(appStateStorage.getItem("volli:chat-drafts")).toContain("last words");
+    // Main asks (menu-bar entry), inside the 200ms debounce.
+    const flushed = requestFlush();
+    let acked = false;
+    void flushed.then(() => {
+      acked = true;
+    });
+    await vi.waitFor(() =>
+      expect(setMock).toHaveBeenCalledWith(
+        "volli:chat-drafts",
+        expect.stringContaining("last words"),
+      ),
+    );
+    // No ack until main has durably accepted the write: main keeps waiting.
+    expect(acked).toBe(false);
+    acknowledge({ ok: true });
+    await expect(flushed).resolves.toBe(true);
+    // Only now does main destroy the window: timers die, nothing re-sends.
+    vi.clearAllTimers();
+    await settle();
+    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(setMock).toHaveBeenCalledWith(
+      "volli:chat-drafts",
+      expect.stringContaining("last words"),
+    );
+  });
+
+  it("acks with false when a write failed, and with true when nothing was pending", async () => {
+    await expect(flushAllPendingAppState()).resolves.toBe(true);
+    setMock.mockResolvedValue({ ok: false, error: "disk full" });
+    appStateStorage.setItem("volli:ui", "{}");
+    await expect(flushAllPendingAppState()).resolves.toBe(false);
+  });
+
+  it("installs no responder without a bridge", () => {
+    expect(() => installAppStateFlushResponder(undefined)).not.toThrow();
+    expect(() => installAppStateFlushResponder({})).not.toThrow();
   });
 });

@@ -210,8 +210,14 @@ import {
   readExperiments,
   setExperiment,
 } from "./experiments";
-import { createMenuBarHost, type MenuBarHost } from "./menu-bar-host";
-import { confirmMenuBarQuit, electronMenuBarPower, electronMenuBarTray } from "./menu-bar-electron";
+import { BROWSER_CLOSED_FOR_MENU_BAR, createMenuBarHost, type MenuBarHost } from "./menu-bar-host";
+import {
+  confirmCloseAgentTabs,
+  confirmMenuBarQuit,
+  electronMenuBarPower,
+  electronMenuBarTray,
+} from "./menu-bar-electron";
+import { createClientStateFlush } from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -1464,6 +1470,8 @@ const appStartup = app.whenReady().then(async () => {
   let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
   let abortRepack = noQuitAction;
+  /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
+  let systemShutdownTeardown = noQuitAction;
   let hostClosing = false;
   /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
   let menuBarHost: MenuBarHost | null = null;
@@ -1478,7 +1486,7 @@ const appStartup = app.whenReady().then(async () => {
       terminalQuit,
       abortRepack,
       ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
-        ? { menuBar: menuBarHost }
+        ? { menuBar: menuBarHost, systemShutdownTeardown }
         : {}),
     });
   };
@@ -1861,6 +1869,12 @@ const appStartup = app.whenReady().then(async () => {
   );
   ptyManagerRef = ptyManager;
   terminalQuit = (event) => prepareTerminalQuit(ptyManager, event);
+  // Flag on, logout/restart/shutdown (VC-577): the terminal confirm's killAll
+  // and the windows' draft flush, with nothing that could refuse power-off.
+  systemShutdownTeardown = () => {
+    ptyManager.killAll();
+    void flushWindowState(liveWindows());
+  };
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them
@@ -1959,6 +1973,29 @@ const appStartup = app.whenReady().then(async () => {
       log: (message) => console.error(message),
     });
   }
+  // Menu-bar entry's flush-and-ack barrier (VC-577): windows it is about to
+  // destroy are hidden and no longer count as open, so a reopen during the
+  // (bounded) flush builds a fresh window instead of finding a doomed one.
+  const retiringWindows = new WeakSet<BrowserWindow>();
+  const liveWindows = (): BrowserWindow[] =>
+    BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed() && !retiringWindows.has(window),
+    );
+  const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
+  ipcMain.on(
+    "volli:client-state-flushed" satisfies VolliIpcChannel,
+    (_event, ...args: unknown[]): void => {
+      clientStateFlush.acknowledge(args[0]);
+    },
+  );
+  const flushWindowState = (windows: readonly BrowserWindow[]) =>
+    clientStateFlush.flush(
+      windows.map((window) => ({
+        isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+        requestFlush: (requestId: string) =>
+          window.webContents.send("volli:client-state-flush" satisfies VolliIpcEvent, requestId),
+      })),
+    );
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
     // Browser Tabs are live machine resources, not durable documents. Once the
@@ -2169,6 +2206,10 @@ const appStartup = app.whenReady().then(async () => {
             console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
           }),
     unsavedDrafts: unsavedDocumentNames,
+    // Flag on (VC-577): the same synchronous read the Tray and the quit
+    // verdict use, shells included. Flag off: null, and today's count above.
+    liveWork: () =>
+      isExperimentEnabled("cloud") && liveHost !== undefined ? liveHost.liveWork.current() : null,
     beginInstall: beginAcceptedUpdateInstall,
     abandonInstall: abandonAcceptedUpdateInstall,
     // Absent on a broken db, which is the one case this whole registration is
@@ -2193,15 +2234,36 @@ const appStartup = app.whenReady().then(async () => {
   // is exactly "open a window if none exists".
   const menuBar = createMenuBarHost({
     // Read from the host, never a renderer. A degraded host runs nothing.
-    liveWork: liveHost?.liveWork ?? { current: () => NO_LIVE_WORK, subscribe: () => () => {} },
+    liveWork: liveHost?.liveWork ?? {
+      current: () => NO_LIVE_WORK,
+      subscribe: () => () => {},
+      tryBeginIdleExit: () => true,
+      abandonIdleExit: () => {},
+    },
+    browserTabs: {
+      sessionTabCount: () => browserTabs.sessionTabCount(),
+      closeForMenuBar: () => browserTabs.closeAllForAgents(BROWSER_CLOSED_FOR_MENU_BAR),
+      reopen: () => browserTabs.reopenForAgents(),
+    },
+    confirmCloseAgentTabs,
     windows: {
-      count: () => BrowserWindow.getAllWindows().length,
+      count: () => liveWindows().length,
       // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
       // confirms already answered, and a window `close` would ask again.
+      // `destroy` skips `beforeunload`, so each renderer is asked to flush
+      // its pending drafts first and the windows go once it has acked
+      // (bounded). Hidden at once, so the person sees the quit take effect.
       closeAll: () => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) window.destroy();
+        const closing = liveWindows();
+        for (const window of closing) {
+          retiringWindows.add(window);
+          window.hide();
         }
+        void flushWindowState(closing).finally(() => {
+          for (const window of closing) {
+            if (!window.isDestroyed()) window.destroy();
+          }
+        });
       },
       open: () => {
         createOwnedWindow();
@@ -2761,6 +2823,10 @@ const appStartup = app.whenReady().then(async () => {
   }
 
   app.on("activate", () => {
+    // An activation means a noted logout did not happen (VC-577): the next
+    // ⌘Q keeps its turns again. Inert with the flag off — only the flag-on
+    // quit branch reads that latch.
+    menuBar.noteActivated();
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open. A menu-bar host (VC-577)
     // also leaves menu-bar mode and shows its Dock icon again; otherwise the

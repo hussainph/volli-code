@@ -14,6 +14,7 @@ import {
 import type { HostLiveWork } from "@volli/host-core/sessions";
 
 import {
+  closeAgentTabsCopy,
   quitWithLiveWorkCopy,
   type MenuBarTrayPort,
   type TrayItemId,
@@ -96,4 +97,22 @@ export function confirmMenuBarQuit(work: HostLiveWork): "quit" | "wait" {
     detail: copy.detail,
   });
   return choice === 0 ? "quit" : "wait";
+}
+
+/**
+ * Menu-bar entry over Browser Tabs a running agent is using (VC-577): they
+ * close with the windows. Busy-terminal style; Cancel is the default and the
+ * Esc answer, so nothing closes without a deliberate choice.
+ */
+export function confirmCloseAgentTabs(count: number): "close" | "cancel" {
+  const copy = closeAgentTabsCopy(count);
+  const choice = dialog.showMessageBoxSync({
+    type: "warning",
+    buttons: ["Close Tabs and Keep Running", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    message: copy.message,
+    detail: copy.detail,
+  });
+  return choice === 0 ? "close" : "cancel";
 }

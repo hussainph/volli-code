@@ -82,7 +82,18 @@ async function runRow(row: Row) {
   if (row.update) beginAcceptedUpdateInstall();
 
   const menuBar = createMenuBarHost({
-    liveWork: { current: () => work, subscribe: () => () => {} },
+    liveWork: {
+      current: () => work,
+      subscribe: () => () => {},
+      tryBeginIdleExit: () => {
+        if (work.turns > 0) return false;
+        calls.push("starts.latch");
+        return true;
+      },
+      abandonIdleExit: () => calls.push("starts.unlatch"),
+    },
+    browserTabs: { sessionTabCount: () => 0, closeForMenuBar: () => {}, reopen: () => {} },
+    confirmCloseAgentTabs: () => "close",
     windows: {
       count: () => 0,
       closeAll: () => calls.push("windows.closeAll"),
@@ -222,6 +233,245 @@ describe("the VC-577 quit decision table, through the real quit path", () => {
         expect(gates).toEqual(today);
         expect(calls).not.toContain("windows.closeAll");
       }
+    });
+  }
+});
+
+/**
+ * The table's VC-577 final-round extension: two more dimensions the 108 rows
+ * hold fixed — a noted system logout/restart/shutdown, and agent Browser Tabs
+ * open when ⌘Q would enter menu-bar mode — crossed with flag, live work and
+ * both confirms, through the same real path.
+ */
+interface ExtensionRow {
+  flag: boolean;
+  live: boolean;
+  shutdown: boolean;
+  tabs: "none" | "close" | "cancel";
+  unsaved: Confirm;
+  terminals: Confirm;
+}
+
+function extensionRows(): ExtensionRow[] {
+  const all: ExtensionRow[] = [];
+  const confirms: Confirm[] = ["none", "accept", "cancel"];
+  for (const flag of [false, true])
+    for (const live of [false, true])
+      for (const shutdown of [false, true])
+        for (const tabs of ["none", "close", "cancel"] as const)
+          for (const unsaved of confirms)
+            for (const terminals of confirms) {
+              // The tabs confirm belongs to the flag; flag off never asks it.
+              if (!flag && tabs !== "none") continue;
+              all.push({ flag, live, shutdown, tabs, unsaved, terminals });
+            }
+  return all;
+}
+
+/** Written out, not derived: the confirms the person sees, in order, and what happens. */
+function extensionExpected(row: ExtensionRow): {
+  outcome: "exit" | "menu-bar" | "stay";
+  automationsStopped: boolean;
+  asked: string[];
+  terminalsKilled: boolean;
+  tabsClosed: boolean;
+} {
+  if (!row.flag) {
+    // Today, call for call: a shutdown notice changes nothing with the flag off.
+    const asked: string[] = [];
+    if (row.unsaved !== "none") asked.push("unsaved.confirm");
+    const unsavedRefused = row.unsaved === "cancel";
+    if (!unsavedRefused && row.terminals !== "none") asked.push("terminal.confirm");
+    const declined = unsavedRefused || row.terminals === "cancel";
+    return {
+      outcome: declined ? "stay" : "exit",
+      automationsStopped: true,
+      asked,
+      terminalsKilled: !declined,
+      tabsClosed: false,
+    };
+  }
+  if (row.shutdown) {
+    // Power-off is never refused: no question at all, the teardown anyway.
+    return {
+      outcome: "exit",
+      automationsStopped: true,
+      asked: [],
+      terminalsKilled: true,
+      tabsClosed: false,
+    };
+  }
+  const asked: string[] = [];
+  if (row.unsaved !== "none") asked.push("unsaved.confirm");
+  if (row.unsaved === "cancel") {
+    return {
+      outcome: "stay",
+      automationsStopped: false,
+      asked,
+      terminalsKilled: false,
+      tabsClosed: false,
+    };
+  }
+  if (row.live && row.tabs !== "none") asked.push("tabs.confirm");
+  if (row.live && row.tabs === "cancel") {
+    // Asked before the terminal confirm, so a Cancel leaves every PTY alive.
+    return {
+      outcome: "stay",
+      automationsStopped: false,
+      asked,
+      terminalsKilled: false,
+      tabsClosed: false,
+    };
+  }
+  if (row.terminals !== "none") asked.push("terminal.confirm");
+  if (row.terminals === "cancel") {
+    return {
+      outcome: "stay",
+      automationsStopped: false,
+      asked,
+      terminalsKilled: false,
+      tabsClosed: false,
+    };
+  }
+  return row.live
+    ? {
+        outcome: "menu-bar",
+        automationsStopped: false,
+        asked,
+        terminalsKilled: true,
+        tabsClosed: true,
+      }
+    : {
+        outcome: "exit",
+        automationsStopped: true,
+        asked,
+        terminalsKilled: true,
+        tabsClosed: false,
+      };
+}
+
+async function runExtensionRow(row: ExtensionRow) {
+  const calls: string[] = [];
+  let beforeQuit!: (event: QuitEvent) => void;
+  const exit = vi.fn();
+  const work: HostLiveWork = row.live ? { turns: 1, shells: 0 } : { turns: 0, shells: 0 };
+  let tabs = row.tabs === "none" ? 0 : 2;
+  const menuBar = createMenuBarHost({
+    liveWork: {
+      current: () => work,
+      subscribe: () => () => {},
+      tryBeginIdleExit: () => {
+        if (work.turns > 0) return false;
+        calls.push("starts.latch");
+        return true;
+      },
+      abandonIdleExit: () => calls.push("starts.unlatch"),
+    },
+    browserTabs: {
+      sessionTabCount: () => tabs,
+      closeForMenuBar: () => {
+        calls.push("tabs.close");
+        tabs = 0;
+      },
+      reopen: () => {},
+    },
+    confirmCloseAgentTabs: () => {
+      calls.push("tabs.confirm");
+      return row.tabs === "cancel" ? "cancel" : "close";
+    },
+    windows: { count: () => 0, closeAll: () => calls.push("windows.closeAll"), open: () => {} },
+    dock: { hide: () => {}, show: () => {} },
+    tray: { show: () => {}, update: () => {}, destroy: () => {} },
+    power: { hold: () => {}, release: () => {} },
+    update: {
+      ready: () => false,
+      installInFlight: updateInstallQuitInFlight,
+      install: () => false,
+    },
+    confirmQuit: () => "quit",
+    quit: () => {},
+    focusApp: () => {},
+    timers: {
+      setTimeout: () => null,
+      clearTimeout: () => {},
+      setInterval: () => null,
+      clearInterval: () => {},
+    },
+    log: () => {},
+  });
+  if (row.shutdown) menuBar.noteSystemShutdown();
+  const confirmGate =
+    (name: "unsaved" | "terminal", answer: Confirm) =>
+    (event: QuitEvent): void => {
+      if (quitAlreadyRefused(event)) return;
+      if (answer !== "none") {
+        calls.push(`${name}.confirm`);
+        if (answer === "cancel") {
+          refuseQuit(event);
+          return;
+        }
+      }
+      if (name === "terminal") calls.push("terminal.killAll");
+    };
+  registerAcceptedQuitCoordinator({
+    lifecycle: {
+      on: (_event, listener) => {
+        beforeQuit = listener;
+      },
+      exit,
+    },
+    shutdownNativeSessions: async () => {
+      calls.push("host.stop");
+    },
+    shutdownAgentSocket: async () => {},
+    reportFailure: vi.fn(),
+    prepareQuit: (event) =>
+      prepareDesktopQuit(event, {
+        stopAutomations: () => calls.push("automations.stop"),
+        unsavedQuit: confirmGate("unsaved", row.unsaved),
+        terminalQuit: confirmGate("terminal", row.terminals),
+        abortRepack: () => calls.push("repack.abort"),
+        systemShutdownTeardown: () => calls.push("terminal.killAll", "windows.flush"),
+        ...(row.flag ? { menuBar } : {}),
+      }),
+  });
+  beforeQuit({ preventDefault: () => {} });
+  await settle();
+  return { calls, exit, menuBar };
+}
+
+describe("the table's extension: system shutdown and agent Browser Tabs (VC-577 final round)", () => {
+  const table = extensionRows();
+
+  it("covers every combination", () => {
+    // flag on: 2 live × 2 shutdown × 3 tabs × 3 unsaved × 3 terminals = 108;
+    // flag off: tabs never asked, so 2 × 2 × 9 = 36.
+    expect(table).toHaveLength(108 + 36);
+  });
+
+  for (const row of table) {
+    const want = extensionExpected(row);
+    const name =
+      `flag=${row.flag ? "on" : "off"} live=${row.live} shutdown=${row.shutdown} tabs=${row.tabs} ` +
+      `unsaved=${row.unsaved} terminals=${row.terminals} → ${want.outcome}`;
+    it(name, async () => {
+      const { calls, exit, menuBar } = await runExtensionRow(row);
+      const exited = exit.mock.calls.length > 0;
+      const outcome = exited ? "exit" : menuBar.isResident() ? "menu-bar" : "stay";
+      expect(outcome).toBe(want.outcome);
+      expect(calls.includes("automations.stop")).toBe(want.automationsStopped);
+      expect(calls.includes("host.stop")).toBe(want.outcome === "exit");
+      expect(
+        calls.filter((call) =>
+          ["unsaved.confirm", "tabs.confirm", "terminal.confirm"].includes(call),
+        ),
+      ).toEqual(want.asked);
+      expect(calls.includes("terminal.killAll")).toBe(want.terminalsKilled);
+      expect(calls.includes("tabs.close")).toBe(want.tabsClosed);
+      // An idle flag-on exit (no override) went through the start latch.
+      expect(calls.includes("starts.latch")).toBe(
+        row.flag && !row.shutdown && !row.live && want.outcome === "exit",
+      );
     });
   }
 });
