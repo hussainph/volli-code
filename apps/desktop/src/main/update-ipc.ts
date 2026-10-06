@@ -11,9 +11,10 @@
  * stale build, and session-rpc is null in exactly that case. These channels
  * ride the same guarded invoke surface the retention watch uses.
  */
+import type { HostLiveWork } from "@volli/host-core/sessions";
 import { errorMessage } from "@volli/shared";
 
-import type { UpdateChannel } from "../ipc/contract";
+import type { UpdateChannel, UpdateLiveWorkResult } from "../ipc/contract";
 import type { AutoUpdateHandle } from "./auto-update";
 import { UPDATE_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
@@ -25,6 +26,15 @@ export interface UpdateIpcDeps {
   busyCommands(): string[];
   /** How many structured agent Sessions have a turn open right now — 0 when no runtime exists. */
   openAgentTurns(): Promise<number>;
+  /**
+   * The host's live work (VC-577), when the `cloud` flag is on and a host is
+   * running; null otherwise. When present it answers BOTH counts — turns
+   * (running or accepted and about to start) and running background shells —
+   * from the same synchronous read the menu-bar Tray and the quit verdict
+   * use, so the three can never disagree. Absent or null: today's
+   * `openAgentTurns` and no shells line.
+   */
+  liveWork?(): HostLiveWork | null;
   /** The renderer's last unsaved-drafts report — `unsavedDocumentNames()`. */
   unsavedDrafts(): readonly string[];
   /** Raises the quit-gate latch (`beginAcceptedUpdateInstall`) — the native gates stand down. */
@@ -44,6 +54,48 @@ export interface UpdateIpcDeps {
   };
 }
 
+/**
+ * The accepted install, shared by the sidebar's dialog and the menu-bar
+ * Tray's "Install Update When Idle" (VC-577). Order is the whole point: the
+ * latch must be up before `quitAndInstall()` starts closing windows
+ * (Electron's native updater closes them all, then quits, and `before-quit`
+ * comes after the window `close` events — every gate on that path checks the
+ * latch). Phase is re-read here, never trusted from a caller: a stray request
+ * with nothing staged must not raise a latch that lets the next ordinary ⌘Q
+ * bypass every confirm.
+ */
+export function installDownloadedUpdate(
+  deps: Pick<UpdateIpcDeps, "update" | "beginInstall" | "abandonInstall">,
+): { ok: true } | { ok: false; error: string } {
+  if (deps.update.state().phase !== "downloaded") {
+    return { ok: false, error: "No update has been downloaded yet." };
+  }
+  deps.beginInstall();
+  try {
+    deps.update.quitAndInstall();
+  } catch (error) {
+    // The app is staying up after all — lower the latch or the next
+    // plain quit runs gateless over live work.
+    deps.abandonInstall();
+    return { ok: false, error: errorMessage(error) };
+  }
+  return { ok: true };
+}
+
+/** What the install dialog warns about — the `volli:update-live-work` answer. */
+export async function readUpdateLiveWork(
+  deps: Pick<UpdateIpcDeps, "busyCommands" | "openAgentTurns" | "unsavedDrafts" | "liveWork">,
+): Promise<UpdateLiveWorkResult> {
+  const host = deps.liveWork?.() ?? null;
+  return {
+    ok: true as const,
+    busyCommands: deps.busyCommands(),
+    openAgentSessions: host === null ? await deps.openAgentTurns() : host.turns,
+    backgroundShells: host === null ? 0 : host.shells,
+    unsavedDrafts: [...deps.unsavedDrafts()],
+  };
+}
+
 export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
   registerGuardedIpcHandlers(UPDATE_IPC, {
     "volli:update-state-get": () => ({ ok: true as const, state: deps.update.state() }),
@@ -56,37 +108,10 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
       return { ok: true as const };
     },
 
-    /**
-     * The confirmed install — the ONE prompt's accept. Order is the whole
-     * point: the latch must be up before `quitAndInstall()` starts closing
-     * windows (Electron's native updater closes them all, then quits, and
-     * `before-quit` comes after the window `close` events — every gate on
-     * that path checks the latch). Phase is re-read here, not trusted from
-     * the renderer: a stray invoke with nothing staged must not raise a
-     * latch that lets the next ordinary ⌘Q bypass every confirm.
-     */
-    "volli:update-install": () => {
-      if (deps.update.state().phase !== "downloaded") {
-        return { ok: false as const, error: "No update has been downloaded yet." };
-      }
-      deps.beginInstall();
-      try {
-        deps.update.quitAndInstall();
-      } catch (error) {
-        // The app is staying up after all — lower the latch or the next
-        // plain quit runs gateless over live work.
-        deps.abandonInstall();
-        return { ok: false as const, error: errorMessage(error) };
-      }
-      return { ok: true as const };
-    },
+    /** The confirmed install — the ONE prompt's accept. See {@link installDownloadedUpdate}. */
+    "volli:update-install": () => installDownloadedUpdate(deps),
 
-    "volli:update-live-work": async () => ({
-      ok: true as const,
-      busyCommands: deps.busyCommands(),
-      openAgentSessions: await deps.openAgentTurns(),
-      unsavedDrafts: [...deps.unsavedDrafts()],
-    }),
+    "volli:update-live-work": () => readUpdateLiveWork(deps),
 
     "volli:update-channel-get": () =>
       deps.channel === undefined

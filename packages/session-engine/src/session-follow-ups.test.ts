@@ -10,6 +10,7 @@ import {
   isSessionStreamQueue,
   sessionFollowUpDeliveryCommandId,
   SessionRuntimeCommandConflictError,
+  SessionRuntimeExitingError,
   NativeAttachmentError,
   type BindingHandle,
   type HarnessCommand,
@@ -2027,5 +2028,187 @@ describe("host follow-ups never strand a row", () => {
     expect(submits(f.adapter)).toEqual(["active"]);
     expect(f.errors.map(String)).toContainEqual(expect.stringContaining("More than one"));
     expect(await queueStates(runtime, sessionId)).toEqual(["a:releasing", "b:releasing"]);
+  });
+});
+
+/**
+ * VC-577: the menu-bar host quits only when nothing is live, and "nothing is
+ * live" must include work the runtime accepted whose turn has not opened yet.
+ * The idle-exit latch then refuses every new start before it has any effect,
+ * and a queued row waits, durable, for the next launch.
+ */
+describe("accepted turn starts and the idle-exit latch", () => {
+  async function bound(f: ReturnType<typeof fixture>) {
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    // The attach wakes the queue; let that (empty) drain decide first.
+    await runtime.recoverFollowUps();
+    return { runtime, sessionId };
+  }
+
+  it("counts a message from admission until its turn opens, not until its dispatch returns", async () => {
+    const located = Promise.withResolvers<void>();
+    let holdLocate = false;
+    const f = fixture({ locate: () => (holdLocate ? located.promise : undefined) });
+    const { runtime, sessionId } = await bound(f);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    const dispatched = Promise.withResolvers<void>();
+    f.adapter.dispatchGate = dispatched.promise;
+    f.adapter.startTurns = false;
+    holdLocate = true;
+    const first = runtime.command({
+      commandId: "first",
+      sessionId,
+      command: { kind: "message.submit", message: message("first") },
+    });
+    // A second message waits behind the first: both are accepted work.
+    const second = runtime.command({
+      commandId: "second",
+      sessionId,
+      command: { kind: "message.submit", message: message("second") },
+    });
+    // Counted synchronously at admission, before any await.
+    expect(runtime.pendingTurnStarts()).toEqual(new Set([sessionId]));
+    holdLocate = false;
+    located.resolve();
+    // Handed to the executor, no turn yet: still about to start.
+    await expect.poll(() => submits(f.adapter)).toEqual(["first"]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set([sessionId]));
+    // Its turn opens while the dispatch is still out; the second still waits.
+    await f.adapter.emit({ kind: "turn", state: "started", turnId: "turn:first", occurredAt: 200 });
+    await expect.poll(() => submits(f.adapter)).toEqual(["first", "second"]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set([sessionId]));
+    await f.adapter.emit({
+      kind: "turn",
+      state: "started",
+      turnId: "turn:second",
+      occurredAt: 201,
+    });
+    // Both turns opened; both dispatches are still held. The turns count now.
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    dispatched.resolve();
+    await first;
+    await second;
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    await runtime.close();
+  });
+
+  it("stops counting a start that failed, and counts a retry or compaction while in flight", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await bound(f);
+    f.adapter.refuse = true;
+    const refused = await runtime.command({
+      commandId: "refused",
+      sessionId,
+      command: { kind: "message.submit", message: message("refused") },
+    });
+    expect(refused.receipt?.status).toBe("rejected");
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    for (const command of [
+      { kind: "executor.retry" as const, attachmentId },
+      { kind: "context.compact" as const, attachmentId, instructions: null },
+    ]) {
+      const running = runtime.command({ commandId: command.kind, sessionId, command });
+      expect(runtime.pendingTurnStarts()).toEqual(new Set([sessionId]));
+      await running.catch(() => undefined);
+      expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    }
+    await runtime.close();
+  });
+
+  it("counts a host-owned follow-up release from the moment its drain is scheduled", async () => {
+    const located = Promise.withResolvers<void>();
+    let holdLocate = false;
+    const f = fixture({ locate: () => (holdLocate ? located.promise : undefined) });
+    const { runtime, sessionId } = await bound(f);
+    await runtime.command({
+      commandId: "active",
+      sessionId,
+      command: { kind: "message.submit", message: message("active") },
+    });
+    await queue(runtime, sessionId, "q");
+    // Queuing wakes a drain too; while the turn runs it releases nothing.
+    await runtime.recoverFollowUps();
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    holdLocate = true;
+    await f.adapter.complete("active");
+    // The turn has ended; the release it woke is claimed and on its way.
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual(["q:releasing"]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set([sessionId]));
+    holdLocate = false;
+    located.resolve();
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "q")]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    await runtime.close();
+  });
+
+  it("refuses every new start before any effect while latched, and keeps queued rows durable", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await bound(f);
+    runtime.holdTurnStarts();
+    runtime.holdTurnStarts();
+    const before = (await f.engine.getSession({ sessionId }))!.commands.length;
+    const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    for (const command of [
+      { kind: "message.submit" as const, message: message("late") },
+      { kind: "message.submit" as const, delivery: "steer" as const, message: message("late") },
+      { kind: "executor.retry" as const, attachmentId },
+      { kind: "context.compact" as const, attachmentId, instructions: null },
+      { kind: "adapter.attach" as const, continuity: "fresh" as const },
+    ]) {
+      await expect(
+        runtime.command({ commandId: `late-${command.kind}`, sessionId, command }),
+      ).rejects.toBeInstanceOf(SessionRuntimeExitingError);
+    }
+    await expect(
+      runtime.command({
+        commandId: "late-person",
+        sessionId,
+        command: { kind: "message.submit", message: message("late") },
+      }),
+    ).rejects.toThrow(/Volli is quitting/);
+    // Nothing recorded, nothing sent, nothing counted.
+    expect((await f.engine.getSession({ sessionId }))!.commands).toHaveLength(before);
+    expect(f.adapter.commands).toEqual([]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    // A queued message is storage alone: accepted, and held for next launch.
+    await queue(runtime, sessionId, "kept");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["kept:queued"]);
+    expect(submits(f.adapter)).toEqual([]);
+    // An exit that did not happen lifts the latch and wakes the held drain.
+    runtime.releaseTurnStarts();
+    runtime.releaseTurnStarts();
+    await expect.poll(() => submits(f.adapter)).toEqual([deliveryId(sessionId, "kept")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it("a follow-up whose turn-end wake races the latch is held, and its row stays queued", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await bound(f);
+    await runtime.command({
+      commandId: "active",
+      sessionId,
+      command: { kind: "message.submit", message: message("active") },
+    });
+    await queue(runtime, sessionId, "q");
+    // The exit latched first (the turn's end was the last live work)...
+    runtime.holdTurnStarts();
+    // ...then the turn-end wake tries to release the next row.
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active"]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["q:queued"]);
+    expect(runtime.pendingTurnStarts()).toEqual(new Set());
+    // The next launch's recovery sweep releases it.
+    await runtime.close();
+    const relaunched = f.runtime();
+    await relaunched.recoverFollowUps();
+    await expect.poll(() => submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "q")]);
+    await relaunched.close();
   });
 });

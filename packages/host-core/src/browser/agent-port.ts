@@ -105,6 +105,12 @@ import type { BrowserTraceStepInput } from "./trace-store";
 export interface AgentBrowserBackend {
   /** Host-wide Browser operation queues and shared debugger lifetimes. */
   agentOperations: BrowserAgentCoordinator;
+  /**
+   * Why every agent Browser call is refused right now, or null (VC-577): the
+   * desktop closed its windows, and the tabs with them, for menu-bar mode.
+   * Optional: a backend that is never closed under a running turn has none.
+   */
+  unavailableReason?(): string | null;
   list(scope: { projectId: string; ticketId?: string }): BrowserTabState[];
   open(input: BrowserTabCreateOptions): BrowserTabState;
   navigate(tabId: string, url: string): BrowserTabState;
@@ -272,6 +278,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     async (input) => {
       const signal = AbortSignal.any([input.signal, lifetime.signal]);
       signal.throwIfAborted();
+      // Refused in words before anything is touched: a closed browser never
+      // grows a hidden stage window, and the model learns why (VC-577).
+      const closed = options.host.unavailableReason?.() ?? null;
+      if (closed !== null) throw new BrowserRefusal("browser.closed", closed);
       return await run({ ...input, signal });
     };
 
