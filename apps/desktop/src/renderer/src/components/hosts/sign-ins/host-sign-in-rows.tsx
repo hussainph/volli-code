@@ -173,7 +173,7 @@ export function SignInRow({
   return (
     <div
       className={cn(
-        "rounded-[12px] transition-colors duration-150",
+        "rounded-control transition-colors duration-150",
         open && "bg-background shadow-raised",
       )}
       data-row={row.key}
@@ -437,7 +437,7 @@ export function ProviderMark({ id, name }: { id: string; name: string }) {
     <span
       aria-hidden
       className={cn(
-        "grid size-6 shrink-0 place-items-center rounded-[7px] font-mono text-ui font-semibold",
+        "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
         PROVIDER_TINT[id] ?? "bg-muted text-foreground",
       )}
     >
