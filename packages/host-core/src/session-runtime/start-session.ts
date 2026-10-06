@@ -43,12 +43,7 @@ import type { SessionOrigin } from "@volli/shared";
  */
 
 import type Database from "better-sqlite3";
-import {
-  displayTicketId,
-  errorMessage,
-  sessionOriginFromActor,
-  shortSessionId,
-} from "@volli/shared";
+import { displayTicketId, sessionOriginFromActor } from "@volli/shared";
 import type {
   AgentModelTier,
   ModelSelection,
@@ -62,6 +57,9 @@ import type { SessionStartedNotice } from "@volli/shared";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-start");
 
 /** The kickoff turn's ids, derived so a replayed start submits one message. */
 function kickoffIds(operationId: string): { commandId: string; messageId: string } {
@@ -188,12 +186,9 @@ export async function startSessionOperation(
         }),
       )
       .catch((error: unknown) => {
-        // The short handle and the bare message, exactly as the socket door
-        // logged this before the act was lifted out of it: an extraction that
-        // changes what an operator greps for has changed behavior.
-        console.error(
-          `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
-        );
+        // One stable message an operator can grep for, with the Session it
+        // was meant for as a field.
+        log.error("kickoff was not delivered", { sessionId: started.sessionId, error });
       });
   }
   // Only the heuristic door refines: a Session started with an explicit title is

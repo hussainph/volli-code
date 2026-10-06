@@ -7,12 +7,7 @@ import {
   type PiModelAccess,
   type CodeModeSandboxAssets,
 } from "@volli/agent-runtime";
-import {
-  displayTicketId,
-  errorMessage,
-  VOLLI_SOCKET_ENV,
-  type SessionExecutionVenue,
-} from "@volli/shared";
+import { displayTicketId, VOLLI_SOCKET_ENV, type SessionExecutionVenue } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
@@ -246,10 +241,11 @@ export function createHeadlessSessionRuntime(input: {
       return releaseAgentSites(recovered.runtime, directory, {
         newCommandId: randomUUID,
         onError: (sessionId, error) =>
-          ports.log.error(
-            `[volli] could not release Session ${sessionId} from ${directory}:`,
-            errorMessage(error),
-          ),
+          ports.log.error("could not release session from directory", {
+            sessionId,
+            directory,
+            error,
+          }),
       });
     },
   };

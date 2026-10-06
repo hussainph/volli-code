@@ -9,7 +9,6 @@
  */
 import {
   displayTicketId,
-  errorMessage,
   TICKET_STATUS_LABELS,
   type DeliberateMoveChoice,
   type DataChangedEvent,
@@ -31,6 +30,9 @@ import {
 import { withTicketWake } from "./ticket-wake";
 import { trimFinishedWorktree, type TrimFinishPorts } from "./worktree";
 import { getWorktreeSnapshots } from "./worktree/snapshot";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("ticket-move");
 
 export type TicketMoveCommandInput = {
   projectId: string;
@@ -73,7 +75,7 @@ export function trimFinishedTicketInBackground(
       ports.onMutation?.({ ticketId, projectId, kind: "worktree" });
     })
     .catch((error: unknown) => {
-      console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+      log.error("could not trim the ticket's worktree", { ticketId, error });
     });
   ports.detachedWork?.track(work);
 }
@@ -92,9 +94,7 @@ function moveNotificationBody(kind: TicketEventActorKind, via: string | null): s
 }
 
 function recordInterruptFailure(error: unknown): void {
-  console.error(
-    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-  );
+  log.error("failed to interrupt ticket sessions after committed move", { error });
 }
 
 export function executeTicketMove(
@@ -156,9 +156,7 @@ export function executeTicketMove(
         ...(input.choice === undefined ? {} : { choice: input.choice }),
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
-      );
+      log.error("failed to record armed-column arrival after committed move", { error });
     }
     // Operational guardrail: only non-user arrivals into Doing notify. Actor
     // policy, not transport policy, so a renderer move remains silent.

@@ -115,7 +115,16 @@ function harness(options: {
     clearTimer: () => {
       pending = null;
     },
-    log: (message) => logs.push(message),
+    // One line per call: the message, then each field (an Error as its message).
+    log: (msg, fields = {}) =>
+      logs.push(
+        [
+          msg,
+          ...Object.values(fields).map((value) =>
+            value instanceof Error ? value.message : String(value),
+          ),
+        ].join(" "),
+      ),
   };
 
   const scheduler = createAutomationScheduler(ports);

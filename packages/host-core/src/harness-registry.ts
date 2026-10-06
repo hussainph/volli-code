@@ -21,7 +21,6 @@ import { join } from "node:path";
 
 import type Database from "better-sqlite3";
 import {
-  errorMessage,
   harnessEventStatus,
   harnessTrustDecision,
   isFirstClassHarnessId,
@@ -37,6 +36,9 @@ import type {
 } from "@volli/shared";
 
 import { getRegisteredHarness, markHarnessEventVerified } from "./db/harness-registry-repo";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("harness");
 
 /** The filename inside each `~/.agents/harnesses/<slug>/` directory. */
 const MANIFEST_FILENAME = "harness.json";
@@ -126,9 +128,11 @@ async function scanOne(harnessesDir: string, slug: string): Promise<ScannedDirec
       const entry = await file.stat();
       if (!entry.isFile()) return { read: "nothing" };
       if (entry.size > MAX_MANIFEST_BYTES) {
-        console.warn(
-          `[harness] skipped ${manifestPath}: ${entry.size} bytes is larger than a manifest can be (${MAX_MANIFEST_BYTES})`,
-        );
+        log.warn("skipped oversized harness manifest", {
+          manifestPath,
+          bytes: entry.size,
+          maxBytes: MAX_MANIFEST_BYTES,
+        });
         return { read: "nothing" };
       }
       // fstat alone cannot bound a file that grows in place. Read at most one
@@ -141,7 +145,10 @@ async function scanOne(harnessesDir: string, slug: string): Promise<ScannedDirec
         length += bytesRead;
       }
       if (length > MAX_MANIFEST_BYTES) {
-        console.warn(`[harness] skipped ${manifestPath}: grew beyond ${MAX_MANIFEST_BYTES} bytes`);
+        log.warn("skipped harness manifest that grew while read", {
+          manifestPath,
+          maxBytes: MAX_MANIFEST_BYTES,
+        });
         return { read: "nothing" };
       }
       const raw = bytes.subarray(0, length).toString("utf8");
@@ -151,7 +158,7 @@ async function scanOne(harnessesDir: string, slug: string): Promise<ScannedDirec
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { read: "nothing" };
-    console.warn(`[harness] could not read ${manifestPath}: ${errorMessage(error)}`);
+    log.warn("could not read harness manifest", { manifestPath, error });
     return { read: "failed" };
   }
 }
@@ -210,7 +217,7 @@ export async function scanHarnessManifests(harnessesDir: string): Promise<Harnes
       .toSorted();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { manifests: [], gap: null };
-    console.warn(`[harness] could not list ${harnessesDir}: ${errorMessage(error)}`);
+    log.warn("could not list harness directory", { harnessesDir, error });
     return { manifests: [], gap: "directory-unreadable" };
   }
   let gap: HarnessScanGap | null = null;
@@ -218,9 +225,12 @@ export async function scanHarnessManifests(harnessesDir: string): Promise<Harnes
   const skipped = entries.slice(MAX_SCANNED_HARNESS_DIRS);
   if (skipped.length > 0) {
     gap = "too-many-manifests";
-    console.warn(
-      `[harness] ${harnessesDir} holds ${entries.length} directories; read the first ${MAX_SCANNED_HARNESS_DIRS} and skipped ${skipped.join(", ")}`,
-    );
+    log.warn("harness directory holds too many manifests; skipped the rest", {
+      harnessesDir,
+      directories: entries.length,
+      read: MAX_SCANNED_HARNESS_DIRS,
+      skipped,
+    });
   }
   const manifests: ScannedHarnessManifest[] = [];
   for (const slug of examined) {

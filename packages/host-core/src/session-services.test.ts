@@ -129,10 +129,10 @@ describe("host Session composition", () => {
     vi.spyOn(engine, "getSession").mockRejectedValue(failure);
     services.sessionReadWatch!.observeFocused(new Set([sessionId]));
     await vi.waitFor(() =>
-      expect(sinks.log.warn).toHaveBeenCalledWith(
-        `[volli] could not publish the read row of ${sessionId}:`,
-        failure,
-      ),
+      expect(sinks.log.warn).toHaveBeenCalledWith("could not publish the session's read row", {
+        sessionId,
+        error: failure,
+      }),
     );
   });
 

@@ -34,6 +34,9 @@ import {
   type NotificationRequest,
 } from "./dispatch";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("notifications");
 
 /**
  * Desktop's attention delivery (VC-554): host-core's `AttentionDeliveryPort`
@@ -145,7 +148,7 @@ let activeRuntime: NotificationRuntime | null = null;
  */
 export function deliverNotification(request: NotificationRequest): NotificationOutcome {
   if (activeRuntime === null) {
-    console.warn(`[volli] notification before boot (${request.producer}): ${request.title}`);
+    log.warn("notification before boot", { producer: request.producer, title: request.title });
     return { delivered: false, reason: "failed" };
   }
   return activeRuntime.deliver(request);
@@ -209,7 +212,10 @@ export function createNotificationRuntime(options: {
     create: nativeAlert,
     activate: (target) => activation.activate(target),
     onDeliveryFailure: (failure) => {
-      console.warn(`[volli] notification not delivered (${failure.producer}): ${failure.message}`);
+      log.warn("notification not delivered", {
+        producer: failure.producer,
+        error: failure.message,
+      });
       settings?.noteDeliveryFailure(failure);
     },
     onDeliveryShown: () => settings?.noteDeliveryShown(),

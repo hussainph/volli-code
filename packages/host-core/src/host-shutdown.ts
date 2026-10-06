@@ -1,4 +1,4 @@
-import { errorMessage } from "@volli/shared";
+import type { Logger } from "./log/logger";
 import { closeAllMcpSessionHosts } from "./mcp/session-host";
 
 /** Host drain only. Quit gates, window teardown and app.exit stay in desktop. */
@@ -9,7 +9,7 @@ export async function shutdownNativeSessions(options: {
   sessionRpc: { close(): Promise<void> } | null;
   sessionRuntime: { close(): Promise<void> } | null;
   agentObservability: { shutdown(): Promise<void> } | null;
-  log: Pick<Console, "error">;
+  log: Pick<Logger, "error">;
 }): Promise<void> {
   options.sessionWatchdog?.stop();
   options.scheduledResumeHost?.stop();
@@ -20,7 +20,7 @@ export async function shutdownNativeSessions(options: {
   ]);
   for (const result of results) {
     if (result.status === "rejected") {
-      options.log.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
+      options.log.error("failed to close native session rpc", { error: result.reason });
     }
   }
   // Every Session has closed, and with it every MCP host it owned. This is

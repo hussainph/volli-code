@@ -75,6 +75,9 @@ import {
   type BrowserTabRecord,
   type BrowserTabRegistryPorts,
 } from "./tab-registry";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("chromium");
 
 /** The product's own blank start page, the one non-HTTP(S) address a product door may open. */
 export const CHROMIUM_START_URL = "about:blank";
@@ -520,9 +523,10 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
                 // default now, not denied, so say which. A closed connection
                 // fails the whole context elsewhere.
                 if (error instanceof CdpProtocolError) {
-                  console.warn(
-                    `[volli] Chromium did not deny the "${name}" permission; it keeps the browser's default: ${error.message}`,
-                  );
+                  log.warn("chromium did not deny a permission; it keeps the default", {
+                    permission: name,
+                    error,
+                  });
                 }
               }),
           ),
@@ -697,7 +701,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   ): void {
     void entry.ready.then(step).catch((error: unknown) => {
       if (entry.closed) return;
-      console.warn(`[volli] Browser Tab ${entry.state.tabId} could not ${label}:`, error);
+      log.warn("browser tab step failed", { tabId: entry.state.tabId, step: label, error });
     });
   }
 
@@ -748,10 +752,10 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         await connection.send("Target.setAutoAttach", PAUSED_AUTO_ATTACH, sessionId);
       } catch (error) {
         if (!entry.closed && !connection.closed) {
-          console.warn(
-            `[volli] Browser Tab ${entry.state.tabId} kept a frame paused: its navigation guard could not be installed:`,
+          log.warn("browser tab kept a frame paused: navigation guard not installed", {
+            tabId: entry.state.tabId,
             error,
-          );
+          });
         }
         return;
       }
@@ -1447,7 +1451,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     entry.viewport = entry.ready
       .then((target) => this.#applyViewport(target, entry.bounds))
       .catch((error: unknown) => {
-        if (!entry.closed) console.warn(`[volli] Browser Tab ${tabId} could not resize:`, error);
+        if (!entry.closed) log.warn("browser tab could not resize", { tabId, error });
       });
     if (entry.screencasts.size > 0) this.#reconfigureCast(entry);
   }
@@ -1631,7 +1635,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         abandon = () => resolve(null);
         signal?.addEventListener("abort", abandon, { once: true });
         timer = setTimeout(() => {
-          console.warn(`[volli] Browser Tab ${tabId} preview capture timed out`);
+          log.warn("browser tab preview capture timed out", { tabId });
           resolve(null);
         }, CHROMIUM_PREVIEW_TIMEOUT_MS);
       });
@@ -1654,7 +1658,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         persist: false,
       });
     } catch (error) {
-      console.warn(`[volli] Browser Tab ${tabId} preview capture unavailable:`, error);
+      log.warn("browser tab preview capture unavailable", { tabId, error });
       return null;
     } finally {
       clearTimeout(timer);
@@ -1796,7 +1800,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       } catch (error) {
         cast.live = null;
         if (!entry.closed) {
-          console.warn(`[volli] Browser Tab ${entry.state.tabId} screencast stopped:`, error);
+          log.warn("browser tab screencast stopped", { tabId: entry.state.tabId, error });
         }
       } finally {
         cast.running = false;

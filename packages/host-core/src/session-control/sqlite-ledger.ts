@@ -42,6 +42,9 @@ import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
 import { settleTransaction } from "../db/transaction-gate";
 import { logSessionEvents } from "./session-event-log";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-ledger");
 
 type SqlRow = Record<string, unknown>;
 
@@ -579,8 +582,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       // Named, not just counted: the whole point of dropping is that this build
       // no longer knows the kind, so the kind is the only thing that identifies
       // what a reader is missing.
-      const names = [...retiredKinds].toSorted().join(", ");
-      console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
+      log.warn("skipped events of retired kinds", {
+        dropped,
+        kinds: [...retiredKinds].toSorted(),
+      });
     }
     return decoded;
   }

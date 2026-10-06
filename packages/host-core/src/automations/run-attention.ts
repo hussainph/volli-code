@@ -72,6 +72,9 @@ import {
 } from "@volli/shared";
 
 import type { NotificationRequest } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("run-attention");
 
 export interface RunAttentionPorts {
   /**
@@ -89,7 +92,7 @@ export interface RunAttentionPorts {
    * there is something to say and what it points at.
    */
   notify(request: NotificationRequest): void;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -172,7 +175,7 @@ export function runAttentionTarget(
 
 export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionWatch {
   const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] run attention:", error));
+    ports.onError ?? ((error: unknown) => log.warn("run attention failed", { error }));
   /**
    * The last need seen per Session — `null` for one that needs nobody, and NO
    * ENTRY for one this process has never seen. The two are deliberately

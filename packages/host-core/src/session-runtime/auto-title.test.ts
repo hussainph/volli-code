@@ -231,7 +231,10 @@ describe("createAutoTitler().refine", () => {
         },
       });
       await h.refine({});
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("database is locked"));
+      expect(warn).toHaveBeenCalledWith(
+        "[auto-title] auto-title skipped",
+        expect.objectContaining({ reason: expect.stringContaining("database is locked") }),
+      );
       expect(h.completeUtility.mock.calls[0]?.[0].user).not.toContain("<ticket");
       expect(h.retitle).toHaveBeenCalled();
     } finally {
@@ -368,7 +371,10 @@ describe("createAutoTitler().refine", () => {
       });
       await expect(h.refine({})).resolves.toBeUndefined();
       expect(h.retitle).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("provider down"));
+      expect(warn).toHaveBeenCalledWith(
+        "[auto-title] auto-title skipped",
+        expect.objectContaining({ reason: expect.stringContaining("provider down") }),
+      );
     } finally {
       warn.mockRestore();
     }
@@ -452,7 +458,12 @@ describe("createAutoTitler().refine", () => {
 
       // Work nobody asked for: no failure inside it may reach a person.
       await expect(h.refine({})).resolves.toBeUndefined();
-      expect(error).toHaveBeenCalledWith(expect.stringContaining("ledger refused"));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[auto-title\] /),
+        expect.objectContaining({
+          error: expect.objectContaining({ message: expect.stringContaining("ledger refused") }),
+        }),
+      );
     } finally {
       warn.mockRestore();
       error.mockRestore();
@@ -543,7 +554,14 @@ describe("createAutoTitler().refine", () => {
 
       await expect(h.refine({})).resolves.toBeUndefined();
       expect(h.retitle).toHaveBeenCalledWith(SESSION_ID, "Login button fix");
-      expect(error).toHaveBeenCalledWith(expect.stringContaining("ledger refused the usage fact"));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[auto-title\] /),
+        expect.objectContaining({
+          error: expect.objectContaining({
+            message: expect.stringContaining("ledger refused the usage fact"),
+          }),
+        }),
+      );
     } finally {
       error.mockRestore();
     }
@@ -614,7 +632,12 @@ describe("createAutoTitler().refine", () => {
         },
       });
       await expect(h.refine({})).resolves.toBeUndefined();
-      expect(error).toHaveBeenCalledWith(expect.stringContaining("ledger refused"));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/^\[auto-title\] /),
+        expect.objectContaining({
+          error: expect.objectContaining({ message: expect.stringContaining("ledger refused") }),
+        }),
+      );
     } finally {
       error.mockRestore();
     }

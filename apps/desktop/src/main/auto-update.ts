@@ -7,7 +7,7 @@
  * Squirrel.Mac. This module owns everything around that and, like the
  * retention watch (`retention-runtime.ts`), takes its Electron seams
  * injected so the policy is testable under plain Node: `index.ts` passes the
- * real `autoUpdater`, a native `Notification` and `console`.
+ * real `autoUpdater`, a native `Notification` and a host logger.
  *
  * The policy:
  * - never checks in dev (`isPackaged` guard) — `pnpm start` has no
@@ -166,7 +166,7 @@ export interface AutoUpdateDeps {
    * a title and a body.
    */
   notify(request: NotificationRequest): void;
-  /** The main-process log seam (`console.info` in production). */
+  /** The main-process log seam (the `auto-update` host logger in production). */
   log(line: string): void;
   /**
    * Announces every state transition — `index.ts` fans it out to every window

@@ -141,7 +141,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   } catch (error) {
     const failure = classifyDbOpenFailure(error);
     const message = describeDbOpenFailure(error, { dev: options.devDiagnostics });
-    ports.log.error("[volli] failed to open database:", dbOpenFailureLogLine(error));
+    ports.log.error("failed to open database", { detail: dbOpenFailureLogLine(error) });
     const owner = lifecycleOwner(ports, {}, options.stopPolicy);
     return {
       kind: "degraded",
@@ -156,7 +156,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   const worktrees = createWorktreeRuntime(ports, options);
   const client = clientCapabilities(ports.client);
   const detachedWork = createDetachedWorkTracker({
-    reportFailure: (error) => ports.log.error("[volli] detached work failed:", error),
+    reportFailure: (error) => ports.log.error("detached work failed", { error }),
   });
   const maintenance = createHostMaintenance({
     db,
@@ -275,8 +275,7 @@ function lifecycleOwner(
       },
       stopActivity: () => services.stopActivity?.(),
       closeDatabase: () => services.closeDatabase?.(),
-      reportFailure: (step, error) =>
-        ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
+      reportFailure: (step, error) => ports.log.error("host shutdown step failed", { step, error }),
     },
     stopPolicy,
   );
