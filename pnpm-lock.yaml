@@ -139,6 +139,9 @@ importers:
       '@volli/host-core':
         specifier: workspace:*
         version: link:../../packages/host-core
+      '@volli/host-install':
+        specifier: workspace:*
+        version: link:../../packages/host-install
       '@volli/host-protocol':
         specifier: workspace:*
         version: link:../../packages/host-protocol

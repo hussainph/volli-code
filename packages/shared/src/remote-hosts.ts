@@ -93,12 +93,26 @@ export interface RemoteHostsSnapshot {
   readonly hosts: readonly RemoteHost[];
   /** Project id → remote host id. Empty until a remote project is opened (VC-700 PR 3). */
   readonly projects: Readonly<Record<string, string>>;
+  /**
+   * Project id → that project's own Workspace connection (VC-670: one link,
+   * and one authority fence, per Workspace), for every project in
+   * {@link projects}. A host's `link` aggregates its projects' links, or is
+   * its tunnel's while it serves none.
+   */
+  readonly projectLinks?: Readonly<Record<string, RemoteHostLink>>;
 }
 
 /* ── Adding a host ──────────────────────────────────────────────────────── */
 
 /** The add flow's steps, in order (`@volli/host-install`'s `STEP_ORDER`). */
-export type AddHostStepId = "connect" | "probe" | "deliver" | "install" | "start" | "enroll" | "link";
+export type AddHostStepId =
+  | "connect"
+  | "probe"
+  | "deliver"
+  | "install"
+  | "start"
+  | "enroll"
+  | "link";
 
 export type AddHostStepStatus = "pending" | "running" | "done" | "skipped" | "failed";
 

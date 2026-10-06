@@ -1,0 +1,196 @@
+/**
+ * Desktop main's remote hosts (VC-700 PR 2): `@volli/host-install`'s engine
+ * (`createRemoteHosts`) composed with this app's ports, behind `cloud`.
+ *
+ * - **Registry:** `<userData>/remote-hosts.json`, plain JSON, no secret.
+ * - **Device keys:** one P-256 key per host, in the host's sealed credential
+ *   inventory (`host-credentials.enc`, the `host-private` family, purpose
+ *   `remote-host-device:<name>`), sealed by the same keychain-wrapped key the
+ *   web search keys use. Never logged, never in a snapshot.
+ * - **The hostd it installs** is the pinned one: the app's signed
+ *   `hostd-release-manifest.json` is the only trust root for release assets.
+ *   With no pinned assets (a local or CI build), an unpackaged build may name
+ *   local tarballs in `VOLLI_HOSTD_DEV_TARBALLS`; a packaged build never does.
+ * - **Transport:** the person's own `ssh` (their config, agent and
+ *   known_hosts), a tunnel per host, VC-670 links on its local end.
+ *
+ * The engine refuses everything while `cloud` is off; host-core's handlers
+ * answer that as unavailable, so flag off is unchanged.
+ */
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { basename, delimiter, dirname, join } from "node:path";
+
+import { createHostLink } from "@volli/host-protocol/client-link";
+import {
+  acceptHostKeys,
+  artifactFileName,
+  createRemoteHosts,
+  createSshTunnel,
+  discoverHostKeys,
+  parseHostdReleasePin,
+  resolveArtifact,
+  supportedTargets,
+  systemSsh,
+  type DeviceKeyStore,
+  type HostdReleasePin,
+  type InstallLogger,
+  type RegistryFile,
+  type RemoteHosts,
+  type RemoteHostsStore,
+} from "@volli/host-install";
+
+/** What the sealed credential inventory offers this module: one family's records. */
+export interface DeviceKeyInventory {
+  get(
+    family: "host-private",
+    selector: { readonly purpose: string },
+  ): { readonly value: unknown } | null;
+  put(family: "host-private", selector: { readonly purpose: string }, value: string): unknown;
+  remove(family: "host-private", selector: { readonly purpose: string }): boolean;
+}
+
+/** The selector purpose a device key is kept under. */
+export function deviceKeyPurpose(name: string): string {
+  return `remote-host-device:${name}`;
+}
+
+/**
+ * Device keys in the sealed inventory. A keychain-backed keyring fetches its
+ * key asynchronously, so each call unlocks first (a no-op once unlocked).
+ */
+export function inventoryDeviceKeys(
+  inventory: DeviceKeyInventory,
+  unlock: () => Promise<void>,
+): DeviceKeyStore {
+  return {
+    async get(name) {
+      await unlock();
+      const value = inventory.get("host-private", { purpose: deviceKeyPurpose(name) })?.value;
+      return typeof value === "string" ? value : null;
+    },
+    async put(name, pkcs8Pem) {
+      await unlock();
+      inventory.put("host-private", { purpose: deviceKeyPurpose(name) }, pkcs8Pem);
+    },
+    async remove(name) {
+      await unlock();
+      inventory.remove("host-private", { purpose: deviceKeyPurpose(name) });
+    },
+  };
+}
+
+/** The registry file: replaced whole, through a temporary file, so it is never half written. */
+export function fileRegistryStore(path: string): RemoteHostsStore {
+  return {
+    load() {
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+      try {
+        return JSON.parse(text) as RegistryFile;
+      } catch {
+        // The engine reads an unparseable registry as empty, and says so.
+        return { v: 0 } as unknown as RegistryFile;
+      }
+    },
+    save(file) {
+      mkdirSync(dirname(path), { recursive: true });
+      const temporary = `${path}.${process.pid}.tmp`;
+      try {
+        writeFileSync(temporary, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+        renameSync(temporary, path);
+      } finally {
+        rmSync(temporary, { force: true });
+      }
+    },
+  };
+}
+
+/** The app's signed pin, or `null` when this build carries none (it is not an error). */
+export function readHostdPin(manifestPath: string): HostdReleasePin | null {
+  try {
+    return parseHostdReleasePin(JSON.parse(readFileSync(manifestPath, "utf8")) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/** Local tarballs a development build may install from: never a packaged one's. */
+export function devTarballsFrom(
+  env: Readonly<Record<string, string | undefined>>,
+  packaged: boolean,
+): readonly string[] {
+  if (packaged) return [];
+  const list = env["VOLLI_HOSTD_DEV_TARBALLS"];
+  return list === undefined || list === "" ? [] : list.split(delimiter).filter(Boolean);
+}
+
+/** Lines to the app's log, `component: "host-install"`; their fields never carry a secret. */
+export function consoleInstallLogger(
+  sink: Pick<Console, "debug" | "info" | "warn" | "error">,
+): InstallLogger {
+  const line =
+    (level: "debug" | "info" | "warn" | "error") =>
+    (message: string, fields: Readonly<Record<string, unknown>> = {}) =>
+      sink[level](`[volli] host-install: ${message}`, fields);
+  return { debug: line("debug"), info: line("info"), warn: line("warn"), error: line("error") };
+}
+
+export interface DesktopRemoteHostsOptions {
+  readonly userData: string;
+  readonly appVersion: string;
+  readonly packaged: boolean;
+  /** The app's `hostd-release-manifest.json`, beside the main bundle. */
+  readonly manifestPath: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly inventory: DeviceKeyInventory;
+  readonly unlockInventory: () => Promise<void>;
+  /** The `cloud` flag, read on every call. */
+  readonly enabled: () => boolean;
+  readonly logger: InstallLogger;
+}
+
+/** The engine, composed with this app's ports. */
+export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): RemoteHosts {
+  const { logger, appVersion } = options;
+  const pin = readHostdPin(options.manifestPath);
+  const devTarballs = devTarballsFrom(options.env, options.packaged);
+  const cacheDir = join(options.userData, "hostd-cache");
+  return createRemoteHosts({
+    store: fileRegistryStore(join(options.userData, "remote-hosts.json")),
+    deviceKeys: inventoryDeviceKeys(options.inventory, options.unlockInventory),
+    ssh: (target) => systemSsh({ target, logger }),
+    hostKeys: (target) => ({
+      discover: () => discoverHostKeys({ target, logger }),
+      accept: async (offer) => {
+        await acceptHostKeys({ target, offer, home: homedir(), logger });
+      },
+    }),
+    artifact: (target) =>
+      resolveArtifact({
+        version: appVersion,
+        target,
+        cacheDir,
+        pin,
+        // The one named for the box's target (`volli-hostd-<version>-<target>.tar.gz`).
+        devTarball:
+          devTarballs.find((path) => basename(path) === artifactFileName(appVersion, target)) ??
+          null,
+        logger,
+      }),
+    supportedTargets: supportedTargets(pin),
+    appVersion,
+    deviceName: hostname().replace(/\.local$/u, ""),
+    tunnel: (tunnel) => createSshTunnel({ ...tunnel }),
+    link: (link) => createHostLink(link),
+    now: Date.now,
+    newId: randomUUID,
+    logger,
+    enabled: options.enabled,
+  });
+}

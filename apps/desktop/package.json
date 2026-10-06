@@ -60,6 +60,7 @@
     "@trpc/server": "^11.18.0",
     "@volli/agent-runtime": "workspace:*",
     "@volli/host-core": "workspace:*",
+    "@volli/host-install": "workspace:*",
     "@volli/host-protocol": "workspace:*",
     "@volli/session-engine": "workspace:*",
     "@volli/session-presentation": "workspace:*",
