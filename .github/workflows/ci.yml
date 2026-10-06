@@ -542,8 +542,12 @@ jobs:
       # host-core's Chromium backend suite (VC-619) drives a real browser:
       # Playwright's Chrome for Testing, the full build (`--no-shell`, new
       # headless), pinned by the lockfile's playwright-core and cached on its
-      # version. It runs from /opt, where the hostd unit's ProtectHome= can see
-      # it, with its sandbox: ubuntu-24.04 lets a binary make the user
+      # version. It runs from /usr/lib/volli-chromium, where the hostd unit's
+      # ProtectHome= can see it and every ancestor is root-owned: the probe
+      # refuses a binary the service user could replace through a writable
+      # ancestor, and the runner's /opt is runner-writable (a box's /opt is
+      # root-owned, so the runbook keeps /opt/volli-chromium). It runs with
+      # its sandbox: ubuntu-24.04 lets a binary make the user
       # namespaces Chromium's sandbox needs only under an AppArmor profile that
       # grants them, so the box's profile is loaded for it here. Never
       # --no-sandbox. VOLLI_REQUIRE_CHROMIUM makes a missing browser fail the
@@ -564,21 +568,24 @@ jobs:
         run: |
           node node_modules/playwright-core/cli.js install chromium --no-shell
           chrome="$(node -p 'require("playwright-core").chromium.executablePath()')"
-          sudo mkdir -p /opt/volli-chromium
-          sudo cp -a "$(dirname "$chrome")/." /opt/volli-chromium/
+          # Every ancestor's owner, for the log: the probe refuses any the
+          # runner could write.
+          stat -c '%U:%G %a %n' /usr/lib /usr /
+          sudo mkdir -p /usr/lib/volli-chromium
+          sudo cp -a "$(dirname "$chrome")/." /usr/lib/volli-chromium/
           # Root-owned, as the box's is: the AppArmor grant must not cover a
           # path the user the browser runs as could replace.
-          sudo chown -R root:root /opt/volli-chromium
-          sed 's|@CHROMIUM@|/opt/volli-chromium/chrome|' ../../apps/hostd/packaging/volli-chromium.apparmor \
+          sudo chown -R root:root /usr/lib/volli-chromium
+          sed 's|@CHROMIUM@|/usr/lib/volli-chromium/chrome|' ../../apps/hostd/packaging/volli-chromium.apparmor \
             | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
           sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
-          echo "VOLLI_CHROMIUM_PATH=/opt/volli-chromium/chrome" >> "$GITHUB_ENV"
+          echo "VOLLI_CHROMIUM_PATH=/usr/lib/volli-chromium/chrome" >> "$GITHUB_ENV"
           echo "VOLLI_REQUIRE_CHROMIUM=1" >> "$GITHUB_ENV"
 
       # The same browser, sandboxed, under every hardening directive of the
       # shipped hostd unit (packaging/volli-hostd.service).
       - name: Probe Chromium's sandbox under the hostd unit
-        run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /opt/volli-chromium/chrome "$(id -un)"
+        run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /usr/lib/volli-chromium/chrome "$(id -un)"
 
       # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
       - name: Test protected coverage surface
