@@ -5,6 +5,7 @@ import { encodeHostHello, readHostHello, type HostHello } from "../handshake";
 import {
   describeContract,
   expectHostError,
+  ipcContractLink,
   recordSubscription,
   webSocketContractLink,
   type ContractLink,
@@ -37,6 +38,10 @@ const toyRouter = t.router({
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Fell behind" });
       }
     }),
+  forever: t.procedure.subscription(async function* ({ signal }) {
+    yield tracked("1", { sequence: 1 });
+    await new Promise((resolve) => signal?.addEventListener("abort", resolve));
+  }),
 });
 type ToyRouter = typeof toyRouter;
 
@@ -59,17 +64,25 @@ const links: ContractLink<ToyHost, ToyRouter>[] = [
     }),
     connectionParams: encodeHostHello(hello),
   }),
+  // In-process IPC has no handshake: the composition root states who calls.
+  ipcContractLink({
+    router: toyRouter,
+    createContext: (host) => ({ ...host, hello }),
+  }),
 ];
 
 describeContract("the contract harness", links, ({ connect, link }) => {
   it("names the link it runs over", () => {
-    expect(link).toBe("websocket");
+    expect(["websocket", "ipc"]).toContain(link);
   });
 
-  it("serves queries from the host fixture, as JSON", async () => {
+  it("serves queries from the host fixture, as each wire carries them", async () => {
     const client = await connect({ greeting: "Hello" });
-    // `absent` is gone: the wire is JSON text, and that is what the harness is for.
-    expect(await client.greet.query({ name: "Ada" })).toStrictEqual({ text: "Hello, Ada" });
+    // `absent` is gone over JSON text and kept by structured clone: the reason
+    // every router seam proves its payloads JSON-safe.
+    expect(await client.greet.query({ name: "Ada" })).toStrictEqual(
+      link === "websocket" ? { text: "Hello, Ada" } : { text: "Hello, Ada", absent: undefined },
+    );
   });
 
   it("hands the context the hello the client sent before its first operation", async () => {
@@ -132,6 +145,21 @@ describe("the harness's own guards", () => {
     } finally {
       await connection.close();
     }
+  });
+
+  // Closing an IPC connection is a window closing: its peer is destroyed, so
+  // the server stops every stream it still holds for it.
+  it("tears down a live IPC stream when its connection closes", async () => {
+    const connection = await ipcContractLink<ToyHost, ToyRouter>({
+      router: toyRouter,
+      createContext: (host) => ({ ...host, hello: null }),
+    }).open({ greeting: "Hi" });
+    const stream = recordSubscription((handlers) =>
+      connection.client.forever.subscribe(undefined, handlers),
+    );
+    expect(await stream.received(1)).toHaveLength(1);
+    await connection.close();
+    expect(stream.frames).toHaveLength(1);
   });
 
   it("fails a case that expected a refusal and got an answer", async () => {

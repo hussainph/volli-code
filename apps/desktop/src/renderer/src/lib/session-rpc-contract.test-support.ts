@@ -1,5 +1,4 @@
 /** Real Session IPC bridge/link (structured clone) and the real WS listener (JSON), for tests only. */
-import type { TRPCClient } from "@trpc/client";
 import {
   buildHostHello,
   encodeHostHello,
@@ -7,7 +6,12 @@ import {
   isLocalDeviceActor,
   type HostCredentialVerifier,
 } from "@volli/host-protocol";
-import { servedWebSocketContractLink, type ContractLink } from "@volli/host-protocol/testing";
+import type { IpcEvent, IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
+import {
+  servedIpcContractLink,
+  servedWebSocketContractLink,
+  type ContractLink,
+} from "@volli/host-protocol/testing";
 import {
   createSessionRouter,
   RpcDiagnosticLog,
@@ -20,9 +24,6 @@ import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  type SessionRpcIpcEvent,
-  type SessionRpcIpcRequest,
-  type SessionRpcIpcResponse,
 } from "@volli/shared";
 
 import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
@@ -30,7 +31,6 @@ import {
   assertIdentityConsumed,
   judgeNextRegistrationAs,
 } from "./session-rpc-harness-identity.test-support";
-import { createSessionRpcClient } from "./session-rpc-ipc-link";
 
 /**
  * Everything a contract case can hand the Session router: who is calling, the
@@ -61,18 +61,40 @@ export const fakeElectron = {
 interface FakeSender {
   readonly id: number;
   isDestroyed(): boolean;
-  send(channel: string, event: SessionRpcIpcEvent): void;
+  send(channel: string, event: IpcEvent): void;
   once(event: "destroyed", listener: () => void): void;
-  removeListener(event: "destroyed", listener: () => void): void;
+  /** A reload or crash never happens over this link: closing destroys the peer. */
+  on(event: string, listener: (...args: never[]) => void): void;
+  removeListener(event: string, listener: (...args: never[]) => void): void;
 }
 
-let nextSenderId = 1;
-
-/** Main's real bridge and the renderer's real link, joined the way Electron joins them. */
-export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRouter> {
+/** The WebContents Electron would hand main's handlers for this peer. */
+function senderFor(peer: IpcPeer): FakeSender {
+  const detach = new Map<() => void, () => void>();
   return {
-    name: "electron-ipc",
-    async open(host) {
+    id: peer.id,
+    isDestroyed: () => peer.isDestroyed(),
+    send: (channel, event) => {
+      if (channel === SESSION_RPC_EVENT_CHANNEL) peer.send(event);
+    },
+    once: (_event, listener) => void detach.set(listener, peer.onDestroyed(listener)),
+    on: () => {},
+    removeListener: (_event, listener) => {
+      detach.get(listener as () => void)?.();
+      detach.delete(listener as () => void);
+    },
+  };
+}
+
+/**
+ * Main's real bridge registration behind a fake `ipcMain`, and the generic
+ * bridge's real client link, joined the way Electron joins them
+ * (`servedIpcContractLink`: structured clone, later delivery, and the peer
+ * destroyed on close).
+ */
+export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRouter> {
+  const link = servedIpcContractLink<SessionRouterHost, AppRouter>({
+    async serve(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
       const { caller, resourceWorkspace, diagnostics, ...ports } = host;
@@ -86,45 +108,21 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
       const cancel = fakeElectron.listeners.get(SESSION_RPC_CANCEL_CHANNEL)!;
-      const pushes = new Set<(event: SessionRpcIpcEvent) => void>();
-      const teardown = new Set<() => void>();
-      let destroyed = false;
-      const sender: FakeSender = {
-        id: nextSenderId++,
-        isDestroyed: () => destroyed,
-        // Electron delivers a push later, as a copy. A microtask preserves order.
-        send: (channel, event) => {
-          if (channel !== SESSION_RPC_EVENT_CHANNEL) return;
-          const copy = structuredClone(event);
-          queueMicrotask(() => {
-            for (const push of pushes) push(copy);
-          });
-        },
-        once: (_event, listener) => void teardown.add(listener),
-        removeListener: (_event, listener) => void teardown.delete(listener),
+      const senders = new Map<IpcPeer, FakeSender>();
+      const sender = (peer: IpcPeer): FakeSender => {
+        const known = senders.get(peer) ?? senderFor(peer);
+        senders.set(peer, known);
+        return known;
       };
-      const client = createSessionRpcClient({
-        request: async (request: SessionRpcIpcRequest) =>
-          structuredClone(
-            (await invoke({ sender }, structuredClone(request))) as SessionRpcIpcResponse,
-          ),
-        onEvent: (listener) => {
-          pushes.add(listener);
-          return () => pushes.delete(listener);
-        },
-        cancel: (subscriptionId) => void cancel({ sender }, subscriptionId),
-      });
       return {
-        // The renderer narrows the client's output types; the router is the same one.
-        client: client as unknown as TRPCClient<AppRouter>,
-        async close() {
-          destroyed = true;
-          for (const listener of teardown) listener();
-          await registration.close();
-        },
+        request: async (peer, request) =>
+          (await invoke({ sender: sender(peer) }, request)) as IpcResponse,
+        cancel: (peer, subscriptionId) => void cancel({ sender: sender(peer) }, subscriptionId),
+        close: () => registration.close(),
       };
     },
-  };
+  });
+  return { ...link, name: "electron-ipc" };
 }
 
 /** The one credential the WebSocket link presents; its verifier answers the case's caller. */

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   CredentialsResult,
   SecretReplaceInput,
@@ -47,9 +48,6 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  SessionRpcIpcEvent,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -837,8 +835,8 @@ const api = {
    * called instead.
    */
   sessionRpc: {
-    /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
-    request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
+    /** Runs one served procedure; a subscription acknowledges with the id its frames will carry. */
+    request: (request: IpcRequest): Promise<IpcResponse> =>
       invoke("volli:session-rpc" satisfies typeof SESSION_RPC_IPC_CHANNEL, request),
     /**
      * Subscribes to the frames of EVERY live subscription; returns the
@@ -846,9 +844,8 @@ const api = {
      * because the id main acknowledged with is what tells them apart, and it
      * can arrive after the first frame does.
      */
-    onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
-        callback(payload);
+    onEvent: (callback: (event: IpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) => callback(payload);
       const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
@@ -1226,6 +1223,24 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
+    /**
+     * Answers main's `volli:client-state-flush` (VC-577): runs `flush` — which
+     * resolves once main has acknowledged every pending write — then acks the
+     * request, whatever the flush concluded, so main never waits on a failure
+     * the renderer has already toasted. Returns the unsubscribe function.
+     */
+    onFlushRequest: (flush: () => Promise<unknown>): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, requestId: string) => {
+        void flush()
+          .catch(() => undefined)
+          .then(() =>
+            ipcRenderer.send("volli:client-state-flushed" satisfies VolliIpcChannel, requestId),
+          );
+      };
+      ipcRenderer.on("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+    },
   },
   /**
    * The venue a Session runs in, measured (VC-55) — its own door rather than a

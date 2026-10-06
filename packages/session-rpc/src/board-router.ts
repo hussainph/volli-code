@@ -7,9 +7,9 @@ import { procedureSchemas } from "./procedure-schema";
  * `AGENT_VERB_TABLE`), and so does the desktop's `volli:ticket-move` channel
  * until VC-565 moves the renderer onto this router.
  *
- * No production door mounts it yet: hostd's WebSocket listener is VC-663's,
- * and the desktop's generic IPC bridge VC-608's. The contract harness serves
- * it over a real WebSocket.
+ * No production door mounts it yet: VC-565 adds it to hostd's WebSocket
+ * listener and to the desktop's generic IPC bridge (`DESKTOP_IPC_EXPOSURE`).
+ * The contract harness serves it over a real WebSocket.
  */
 import {
   BOARD_ENTRIES,
