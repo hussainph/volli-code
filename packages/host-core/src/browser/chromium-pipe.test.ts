@@ -1,9 +1,11 @@
 /** The CDP pipe's framing and lifetime (VC-619), over in-memory streams. */
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  CdpBackpressureError,
+  CdpCommandAbandonedError,
   CdpConnectionClosedError,
   CdpPipeConnection,
   CdpProtocolError,
@@ -106,5 +108,96 @@ describe("CdpPipeConnection", () => {
     fromBrowser.write("42\0");
     await flush();
     expect(connection.closed).toBe(true);
+  });
+
+  it("closes on an unterminated frame past its byte bound, rather than buffering it (B2)", async () => {
+    const output = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = new CdpPipeConnection(output, fromBrowser, { maxInboundFrameBytes: 1_024 });
+    const pending = connection.send("Page.captureScreenshot");
+    for (let i = 0; i < 4; i += 1) fromBrowser.write("x".repeat(400));
+    await expect(pending).rejects.toThrow(/larger than the pipe accepts/);
+    expect(connection.closed).toBe(true);
+  });
+
+  it("closes on a terminated frame past its byte bound too", async () => {
+    const output = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = new CdpPipeConnection(output, fromBrowser, { maxInboundFrameBytes: 1_024 });
+    fromBrowser.write("y".repeat(600));
+    fromBrowser.write(`${"y".repeat(600)}\0`);
+    await flush();
+    expect(connection.closed).toBe(true);
+  });
+
+  it("refuses sends past its output bound when the browser stops reading (B2)", async () => {
+    const fromBrowser = new PassThrough();
+    // A writer that never drains: nothing it was given is ever consumed.
+    const stalled = new Writable({ highWaterMark: 16, write: () => undefined });
+    const connection = new CdpPipeConnection(stalled, fromBrowser, {
+      maxQueuedOutputBytes: 64 * 1_024,
+    });
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 1_000 }, () =>
+        Promise.race([
+          connection.send("Runtime.evaluate", { expression: "x".repeat(1_000) }),
+          flush().then(() => "waiting"),
+        ]),
+      ),
+    );
+    const refused = outcomes.filter(
+      (outcome) => outcome.status === "rejected" && outcome.reason instanceof CdpBackpressureError,
+    );
+    expect(refused.length).toBeGreaterThan(900);
+    expect(stalled.writableLength).toBeLessThanOrEqual(64 * 1_024);
+    expect(connection.pendingCount).toBe(1_000 - refused.length);
+    connection.close();
+    expect(connection.pendingCount).toBe(0);
+  });
+
+  it("refuses sends past its pending-command bound", async () => {
+    const { connection } = wire();
+    const bounded = new CdpPipeConnection(new PassThrough(), new PassThrough(), {
+      maxPendingCommands: 2,
+    });
+    void bounded.send("A.one").catch(() => undefined);
+    void bounded.send("A.two").catch(() => undefined);
+    await expect(bounded.send("A.three")).rejects.toBeInstanceOf(CdpBackpressureError);
+    bounded.close();
+    connection.close();
+  });
+
+  it("abandons a command past its deadline or on withdrawal, leaving the pending map (B2)", async () => {
+    const { connection, fromBrowser } = wire();
+    const timed = connection.send("Page.getNavigationHistory", {}, undefined, { timeoutMs: 10 });
+    await expect(timed).rejects.toBeInstanceOf(CdpCommandAbandonedError);
+    expect(connection.pendingCount).toBe(0);
+    // Its late answer is an unknown id, ignored.
+    fromBrowser.write(`${JSON.stringify({ id: 1, result: {} })}\0`);
+    await flush();
+    expect(connection.closed).toBe(false);
+
+    const controller = new AbortController();
+    const withdrawn = connection.send("Page.getNavigationHistory", {}, undefined, {
+      signal: controller.signal,
+    });
+    expect(connection.pendingCount).toBe(1);
+    controller.abort();
+    await expect(withdrawn).rejects.toThrow(/withdrawn/);
+    expect(connection.pendingCount).toBe(0);
+    await expect(
+      connection.send("A.late", {}, undefined, { signal: controller.signal }),
+    ).rejects.toBeInstanceOf(CdpCommandAbandonedError);
+  });
+
+  it("lets a close listener unsubscribe (B3)", () => {
+    const { connection } = wire();
+    const heard: string[] = [];
+    const unsubscribe = connection.onClose((reason) => heard.push(reason));
+    expect(connection.closeListenerCount).toBe(1);
+    unsubscribe();
+    expect(connection.closeListenerCount).toBe(0);
+    connection.close("done");
+    expect(heard).toEqual([]);
   });
 });

@@ -857,7 +857,7 @@ The browser is Playwright's Chrome for Testing build, pinned by the
 box$ sudo PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
        npx -y playwright-core@<the lockfile's version> install --with-deps chromium --no-shell
 box$ sudo ln -sfn /opt/ms-playwright/chromium-*/chrome-linux64 /opt/volli-chromium
-box$ sed 's|@CHROMIUM@|/opt/ms-playwright/chromium-*/chrome-linux64/chrome|' \
+box$ sed "s|@CHROMIUM@|$(readlink -f /opt/volli-chromium/chrome)|" \
        /opt/volli-hostd/share/apparmor/volli-chromium | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
 box$ sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
 box$ sudo /opt/volli-hostd/share/probe-chromium-sandbox.sh /opt/volli-chromium/chrome volli
@@ -866,7 +866,12 @@ probe: Chromium is sandboxed under volli-hostd.service's hardening
 
 `--no-shell` installs only the full build, which runs the new headless
 (`chromium-headless-shell` is the old one). AppArmor attaches a profile by the
-binary's real path, so it names the versioned directory, not the link. The AppArmor profile is what Ubuntu 24.04 needs to
+binary's real path, so the profile gets the link's resolved, versioned path
+(`readlink -f`) — exactly one binary, never a glob. After upgrading the
+browser, re-run the link, the `sed` and `apparmor_parser` lines. The tree
+must stay root-owned: the probe refuses a binary the service user could
+replace, because the profile's grant would then cover whatever that user put
+there. The AppArmor profile is what Ubuntu 24.04 needs to
 let that one binary make user namespaces; never answer "No usable sandbox!"
 with `--no-sandbox`. Why the unit allows `RestrictNamespaces=user pid net`:
 `apps/hostd/README.md`, "Running under systemd".

@@ -117,7 +117,47 @@ animation: slide 1s linear infinite alternate; } @keyframes slide { to { margin-
 <style>body { margin: 0; } .row { height: 40px; font: 24px sans-serif; }
 .row:nth-child(odd) { background: #ddd; }</style></head>
 <body>${Array.from({ length: 1_000 }, (_, i) => `<div class="row">Row ${i}</div>`).join("")}</body></html>`,
+  "/dialogs": `<!doctype html><title>Dialogs</title>
+    <button onclick="alert('fixture alert'); document.title = 'alert:done'">Raise alert</button>
+    <button onclick="document.title = 'confirm:' + confirm('Sure?')">Ask confirm</button>
+    <button onclick="document.title = 'prompt:' + prompt('Name?', 'default')">Ask prompt</button>`,
+  // A page guarding unsaved work: leaving it asks first (beforeunload).
+  "/guarded": `<!doctype html><title>Guarded draft</title>
+    <input aria-label="Draft" />
+    <a href="/second">Leave the draft</a>
+    <script>
+      addEventListener("beforeunload", (event) => { event.preventDefault(); event.returnValue = ""; });
+    </script>`,
+  // Frames of every kind a page can make. Each that runs says so in the title.
+  "/frames": `<!doctype html><title>frames:</title><body><script>
+    const ran = new Set();
+    addEventListener("message", (event) => {
+      ran.add(String(event.data));
+      document.title = "frames:" + [...ran].sort().join(",");
+    });
+    const frame = (src, srcdoc) => {
+      const element = document.createElement("iframe");
+      if (srcdoc !== undefined) element.srcdoc = srcdoc; else element.src = src;
+      document.body.appendChild(element);
+    };
+    const say = (who) => "<script>parent.postMessage('" + who + "', '*')<" + "/script>";
+    frame("data:text/html," + encodeURIComponent(say("data")));
+    frame(undefined, say("srcdoc"));
+    frame(URL.createObjectURL(new Blob([say("blob")], { type: "text/html" })));
+    // Cross-site (localhost is not 127.0.0.1): an out-of-process iframe,
+    // which then navigates itself somewhere the policy refuses.
+    frame(location.origin.replace("127.0.0.1", "localhost") + "/frame-child?who=oopif&then=long");
+    frame("/redirect-long");
+    frame("/redirect-ok");
+  </script></body>`,
+  "/external": `<!doctype html><title>External opener</title>
+    <button onclick="location.href = 'volli-test-scheme:hello'">Go external</button>`,
 };
+
+/** An HTTP(S) address longer than the policy allows: Chromium loads it, Volli must not. */
+function overlongPath(who: string): string {
+  return `/frame-child?who=${who}&pad=${"x".repeat(9_000)}`;
+}
 
 export interface BrowserFixture {
   origin: string;
@@ -146,6 +186,26 @@ export async function startBrowserFixture(): Promise<BrowserFixture> {
       response.setHeader("Content-Type", "application/octet-stream");
       response.setHeader("Content-Disposition", 'attachment; filename="fixture.bin"');
       response.end("fixture download");
+      return;
+    }
+    if (path === "/redirect-long" || path === "/redirect-ok") {
+      response.statusCode = 302;
+      response.setHeader(
+        "Location",
+        path === "/redirect-long" ? overlongPath("hop") : "/frame-child?who=hop-ok",
+      );
+      response.end();
+      return;
+    }
+    if (path === "/frame-child") {
+      response.setHeader("Content-Type", "text/html; charset=utf-8");
+      response.end(`<!doctype html><title>frame child</title><script>
+        const query = new URLSearchParams(location.search);
+        parent.postMessage(query.get("who"), "*");
+        if (query.get("then") === "long") {
+          setTimeout(() => { location.href = ${JSON.stringify(overlongPath("oopif-long"))}; }, 50);
+        }
+      </script>`);
       return;
     }
     if (path.startsWith("/hist-") || path === "/second") {

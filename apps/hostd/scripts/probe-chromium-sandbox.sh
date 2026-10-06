@@ -22,6 +22,18 @@ here="$(cd "$(dirname "$0")" && pwd)"
 unit="$here/../packaging/volli-hostd.service"
 [[ -f $unit ]] || unit="$here/systemd/volli-hostd.service"
 
+# The AppArmor profile grants user namespaces to this binary's path. If the
+# service user can replace the binary (or its directory), the grant covers
+# whatever that user puts there: refuse, rather than prove a sandbox on a
+# grant that is not scoped safely.
+resolved="$(readlink -f "$chrome")"
+for path in "$resolved" "$(dirname "$resolved")"; do
+  if runuser -u "$user" -- test -w "$path"; then
+    echo "probe: $path is writable by $user; the AppArmor grant must not cover a path the service user can replace (chown -R root:root it)" >&2
+    exit 1
+  fi
+done
+
 properties=()
 hardening=0
 while IFS= read -r line; do
@@ -53,6 +65,14 @@ for _ in $(seq 1 40); do
   sleep 0.5
   if ! kill -0 "$browser" 2>/dev/null; then verdict="exited"; break; fi
   for pid in $(pgrep -f -- "--type=renderer" || true); do
+    # Only this browser'"'"'s own renderers: another Chromium on the box proves nothing.
+    descends=0
+    ancestor=$pid
+    while [ "$ancestor" -gt 1 ] 2>/dev/null; do
+      ancestor=$(awk "/^PPid:/ {print \$2}" "/proc/$ancestor/status" 2>/dev/null || echo 0)
+      if [ "$ancestor" = "$browser" ]; then descends=1; break; fi
+    done
+    [ "$descends" = 1 ] || continue
     [ "$(readlink "/proc/$pid/ns/user")" != "$(readlink "/proc/$browser/ns/user")" ] || continue
     seccomp=$(awk "/^Seccomp:/ {print \$2}" "/proc/$pid/status")
     [ "$seccomp" = 2 ] || continue

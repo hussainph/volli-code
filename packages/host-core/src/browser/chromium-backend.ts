@@ -23,9 +23,15 @@
  * - **Denied by default:** downloads (`Browser.setDownloadBehavior`) and every
  *   permission, per context, as desktop's session handlers deny them.
  * - **Page-driven navigation stays HTTP(S)-only.** Every document request and
- *   redirect hop the page makes is checked against `isAllowedBrowserUrl` before
- *   it is sent (`Fetch`), and a main frame that commits anything else is
- *   returned to `about:blank`.
+ *   redirect hop the page makes — on its own session and every out-of-process
+ *   iframe's — is checked against `isAllowedBrowserUrl` before it is sent
+ *   (`Fetch`). A main frame asked to go anywhere else is stopped before it
+ *   commits; one that commits anyway is returned to `about:blank`. The
+ *   residual — same-process `data:`/`blob:`/`srcdoc` frames, which no CDP
+ *   hook refuses before they run — is in the package README.
+ * - **Dialogs** nobody can answer get the safe answer, never "leave".
+ * - **One shutdown** (`./chromium-launch`) however the browser ends; this
+ *   backend forgets the browser's tabs and the next tab launches another.
  * - **Popups** never open: the browser attaches every new page paused, and a
  *   page with an opener is closed before it runs. Its URL becomes a product
  *   tab under the opener's provenance and caps, as desktop's window-open
@@ -53,11 +59,12 @@ import {
 import type { CdpTransport } from "./cdp-controller";
 import {
   launchChromium,
+  sweepStaleChromiumProfiles,
   type ChromiumLaunchOptions,
   type ChromiumProcess,
   type ChromiumSpawn,
 } from "./chromium-launch";
-import type { CdpEvent, CdpPipeConnection } from "./chromium-pipe";
+import { CdpProtocolError, type CdpEvent, type CdpPipeConnection } from "./chromium-pipe";
 import { ScreencastAttachment } from "./screencast";
 import {
   BrowserTabRegistry,
@@ -74,6 +81,14 @@ export const CHROMIUM_LOAD_TIMEOUT_MS = 10_000;
 export const CHROMIUM_NAVIGATION_GRACE_MS = 50;
 /** Desktop's quiet window after the person touched a tab, before its camera reopens. */
 export const CHROMIUM_INTERACTION_QUIET_MS = 5_000;
+/** How long a created target may take to attach before its tab fails to open. */
+export const CHROMIUM_ATTACH_TIMEOUT_MS = 10_000;
+/**
+ * How long a history (and title) re-read may take. It precedes the agent
+ * controller's own bounded commands, so it carries its own bound; past it the
+ * tab answers with the facts it already tracked.
+ */
+export const CHROMIUM_HISTORY_TIMEOUT_MS = 2_000;
 /** A transcript preview is optional; a stuck compositor must not wedge a tool. */
 export const CHROMIUM_PREVIEW_TIMEOUT_MS = 1_000;
 /** The highest device scale factor a viewer may ask for, or a browser be launched at. */
@@ -90,7 +105,8 @@ const DIALOG_MESSAGE_MAX_CHARS = 200;
  * The permissions every context denies, by the names `Browser.setPermission`
  * knows. Desktop's session handler denies every request; CDP has no "deny
  * everything" call, so the list is spelled out. A name this Chromium does not
- * know is skipped, never fatal.
+ * know is not fatal, but it is logged by name (security review N7): that
+ * permission falls back to the browser's own default, and someone should see.
  */
 const DENIED_PERMISSIONS = [
   "geolocation",
@@ -138,6 +154,13 @@ interface ChromiumEngine {
   claims: Map<string, (sessionId: string) => void>;
 }
 
+/** The fixed Fetch pattern every page and frame session installs: each document request and redirect hop. */
+const DOCUMENT_FETCH_PATTERNS = [
+  { urlPattern: "*", resourceType: "Document", requestStage: "Request" },
+];
+/** Auto-attach as every page and frame session sets it: children attach paused, flattened. */
+const PAUSED_AUTO_ATTACH = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+
 /** One live tab's Chromium handles, once its target exists. */
 interface ChromiumTarget {
   engine: ChromiumEngine;
@@ -176,6 +199,12 @@ interface ChromiumTabEntry extends BrowserTabRecord {
   screencastScale: number;
   /** URLs from `Page.windowOpen`, waiting for the popup target they announce. */
   popups: string[];
+  /**
+   * Sessions onto the tab's out-of-process iframes. Each carries the same
+   * document `Fetch` guard as the page, so a cross-site frame's navigations
+   * and redirects are checked before they are sent.
+   */
+  frameSessions: Set<string>;
   closed: boolean;
 }
 
@@ -239,6 +268,29 @@ function isQuietLoadError(errorText: string): boolean {
   return code === "ERR_ABORTED" || code === "ERR_BLOCKED_BY_CLIENT";
 }
 
+export type ChromiumDialogType = "alert" | "confirm" | "prompt" | "beforeunload";
+
+function chromiumDialogType(type: string | undefined): ChromiumDialogType {
+  return type === "confirm" || type === "prompt" || type === "beforeunload" ? type : "alert";
+}
+
+/**
+ * The answer a dialog gets when nobody can give one: acknowledge an alert,
+ * decline every question, and never approve leaving a page.
+ */
+export function dialogFallback(type: ChromiumDialogType): { accept: boolean; said: string } {
+  switch (type) {
+    case "alert":
+      return { accept: true, said: "acknowledged it" };
+    case "confirm":
+      return { accept: false, said: "declined it (confirm returned false)" };
+    case "prompt":
+      return { accept: false, said: "declined it (prompt returned null)" };
+    case "beforeunload":
+      return { accept: false, said: "declined it and stayed on the page" };
+  }
+}
+
 /** Whether a product door (an address bar, an agent's navigate) may open the target. */
 export function isAllowedChromiumTarget(target: string): boolean {
   return target === CHROMIUM_START_URL || isAllowedBrowserUrl(target);
@@ -254,9 +306,15 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   ChromiumBrowserBackendPorts
 > {
   #engine: Promise<ChromiumEngine> | null = null;
+  /** The engine {@link #engine} resolved to, while it is live. */
+  #live: ChromiumEngine | null = null;
   readonly #bySession = new Map<string, ChromiumTabEntry>();
+  /** Out-of-process iframe sessions, to the tab whose page they are in. */
+  readonly #byFrameSession = new Map<string, ChromiumTabEntry>();
   readonly #byTarget = new Map<string, ChromiumTabEntry>();
   #disposed = false;
+  /** Stale profiles of a host that died without closing its browser, removed before the first launch. */
+  readonly #swept: Promise<unknown>;
 
   constructor(
     ports: ChromiumBrowserBackendPorts,
@@ -269,6 +327,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         `The browser's device scale factor is between 1 and ${CHROMIUM_MAX_SCREENCAST_SCALE}`,
       );
     }
+    this.#swept = sweepStaleChromiumProfiles(options.profileRoot).catch(() => []);
   }
 
   // ---- the engine ----------------------------------------------------------
@@ -278,6 +337,14 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     if (this.#engine !== null) return this.#engine;
     const starting = this.#launch();
     this.#engine = starting;
+    void starting.then(
+      (engine) => {
+        // Unless it is already gone: then the next tab launches another.
+        if (this.#engine === starting && !engine.connection.closed) this.#live = engine;
+        else if (this.#engine === starting) this.#engine = null;
+      },
+      () => undefined,
+    );
     // A launch that failed is not cached: the next tab tries again.
     starting.catch(() => {
       if (this.#engine === starting) this.#engine = null;
@@ -286,6 +353,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   }
 
   async #launch(): Promise<ChromiumEngine> {
+    await this.#swept;
     const process = await launchChromium(this.options, this.options.spawn);
     const engine: ChromiumEngine = {
       process,
@@ -300,11 +368,20 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       // Every new page attaches paused, so a popup can be closed before it
       // runs and our own targets are configured before their first request.
       await engine.connection.send("Target.setDiscoverTargets", { discover: true });
-      await engine.connection.send("Target.setAutoAttach", {
-        autoAttach: true,
-        waitForDebuggerOnStart: true,
-        flatten: true,
-      });
+      await engine.connection.send("Target.setAutoAttach", PAUSED_AUTO_ATTACH);
+      // The page the browser started with is nobody's tab (security review
+      // N2): close it rather than park it for the browser's lifetime. A
+      // headless browser outlives its last page.
+      const { targetInfos } = (await engine.connection.send("Target.getTargets")) as {
+        targetInfos: Array<{ targetId: string; type: string }>;
+      };
+      for (const info of targetInfos) {
+        if (info.type !== "page") continue;
+        engine.unclaimed.delete(info.targetId);
+        await engine.connection
+          .send("Target.closeTarget", { targetId: info.targetId })
+          .catch(() => undefined);
+      }
       if (this.#disposed) throw new Error("The Chromium backend was disposed");
     } catch (error) {
       await process.close();
@@ -313,15 +390,16 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     return engine;
   }
 
-  /** The browser exited: every tab it held is gone, as a crashed WebContents is on desktop. */
+  /**
+   * The browser is gone — it exited or crashed, or its pipe failed — and the
+   * launch's shutdown is already ending its processes and profile. Every tab
+   * it held is gone, as a crashed WebContents is on desktop, and the next tab
+   * launches a new browser.
+   */
   #engineGone(engine: ChromiumEngine, description: string): void {
-    if (this.#engine !== null) {
-      void this.#engine.then(
-        (current) => {
-          if (current === engine) this.#engine = null;
-        },
-        () => undefined,
-      );
+    if (this.#live === engine) {
+      this.#live = null;
+      this.#engine = null;
     }
     for (const [tabId, entry] of this.tabs) {
       if (entry.target?.engine !== engine) continue;
@@ -355,7 +433,16 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
           DENIED_PERMISSIONS.map((name) =>
             engine.connection
               .send("Browser.setPermission", { permission: { name }, setting: "denied", ...scope })
-              .catch(() => undefined),
+              .catch((error: unknown) => {
+                // The browser refused this one name: it is the browser's
+                // default now, not denied, so say which. A closed connection
+                // fails the whole context elsewhere.
+                if (error instanceof CdpProtocolError) {
+                  console.warn(
+                    `[volli] Chromium did not deny the "${name}" permission; it keeps the browser's default: ${error.message}`,
+                  );
+                }
+              }),
           ),
         );
         return browserContextId;
@@ -374,8 +461,26 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       return Promise.resolve(attached);
     }
     return new Promise((resolve, reject) => {
-      engine.claims.set(targetId, resolve);
-      engine.connection.onClose((reason) => reject(new Error(reason)));
+      let unsubscribe: (() => void) | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (): void => {
+        clearTimeout(timer);
+        unsubscribe?.();
+        if (engine.claims.get(targetId) === claim) engine.claims.delete(targetId);
+      };
+      const claim = (sessionId: string): void => {
+        settle();
+        resolve(sessionId);
+      };
+      engine.claims.set(targetId, claim);
+      timer = setTimeout(() => {
+        settle();
+        reject(new Error("The browser did not attach the new tab in time"));
+      }, CHROMIUM_ATTACH_TIMEOUT_MS);
+      unsubscribe = engine.connection.onClose((reason) => {
+        settle();
+        reject(new Error(reason));
+      });
     });
   }
 
@@ -389,7 +494,13 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       newWindow: true,
       ...(browserContextId === undefined ? {} : { browserContextId }),
     })) as { targetId: string };
-    const sessionId = await this.#claim(engine, targetId);
+    let sessionId: string;
+    try {
+      sessionId = await this.#claim(engine, targetId);
+    } catch (error) {
+      void engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
+      throw error;
+    }
     const target: ChromiumTarget = { engine, targetId, sessionId };
     if (entry.closed) {
       await engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
@@ -406,11 +517,12 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       send("Log.enable"),
       // Main-frame load failures are read off the network log; bodies are never kept.
       send("Network.enable", { maxTotalBufferSize: 1_024, maxResourceBufferSize: 1_024 }),
-      send("Fetch.enable", {
-        patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
-      }),
+      send("Fetch.enable", { patterns: DOCUMENT_FETCH_PATTERNS }),
       send("Emulation.setFocusEmulationEnabled", { enabled: true }),
     ]);
+    // Out-of-process iframes and workers attach to the page's session,
+    // paused, so a frame gets the page's document guard before it runs.
+    await send("Target.setAutoAttach", PAUSED_AUTO_ATTACH);
     await this.#applyViewport(target, entry.bounds);
     await send("Runtime.runIfWaitingForDebugger");
     return target;
@@ -458,7 +570,96 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     const entry = this.#bySession.get(event.sessionId);
     if (entry !== undefined && entry.target?.sessionId === event.sessionId) {
       this.#onTabEvent(entry, entry.target, event);
+      return;
     }
+    const framed = this.#byFrameSession.get(event.sessionId);
+    if (framed?.target != null) this.#onFrameEvent(framed, framed.target, event);
+  }
+
+  /**
+   * A child of a tab's page or of one of its frames attached, paused. An
+   * out-of-process iframe gets the page's document guard (and attaches its
+   * own children the same way) before it is let run; if the guard cannot be
+   * installed, the frame stays paused rather than run unguarded. Workers run
+   * and are let go: they navigate nothing.
+   */
+  #onChildAttached(
+    entry: ChromiumTabEntry,
+    target: ChromiumTarget,
+    params: Record<string, unknown>,
+  ): void {
+    const { connection } = target.engine;
+    const sessionId = stringParam(params, "sessionId");
+    const info = params["targetInfo"] as { type?: string } | undefined;
+    if (sessionId === undefined) return;
+    if (info?.type !== "iframe") {
+      void connection
+        .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+        .then(() => connection.send("Target.detachFromTarget", { sessionId }))
+        .catch(() => undefined);
+      return;
+    }
+    entry.frameSessions.add(sessionId);
+    this.#byFrameSession.set(sessionId, entry);
+    void (async () => {
+      try {
+        await connection.send("Fetch.enable", { patterns: DOCUMENT_FETCH_PATTERNS }, sessionId);
+        await connection.send("Target.setAutoAttach", PAUSED_AUTO_ATTACH, sessionId);
+      } catch (error) {
+        if (!entry.closed && !connection.closed) {
+          console.warn(
+            `[volli] Browser Tab ${entry.state.tabId} kept a frame paused: its navigation guard could not be installed:`,
+            error,
+          );
+        }
+        return;
+      }
+      await connection
+        .send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+        .catch(() => undefined);
+    })();
+  }
+
+  #onChildDetached(entry: ChromiumTabEntry, params: Record<string, unknown>): void {
+    const sessionId = stringParam(params, "sessionId");
+    if (sessionId === undefined || !entry.frameSessions.delete(sessionId)) return;
+    this.#byFrameSession.delete(sessionId);
+  }
+
+  /** An out-of-process iframe's own events: its guard, and its children. */
+  #onFrameEvent(entry: ChromiumTabEntry, target: ChromiumTarget, event: CdpEvent): void {
+    switch (event.method) {
+      case "Fetch.requestPaused":
+        this.#guardDocument(target, event);
+        return;
+      case "Target.attachedToTarget":
+        this.#onChildAttached(entry, target, event.params);
+        return;
+      case "Target.detachedFromTarget":
+        this.#onChildDetached(entry, event.params);
+        return;
+    }
+  }
+
+  /**
+   * Every document request and redirect hop a page or frame makes, before it
+   * is sent: HTTP(S) continues, anything else fails as blocked. Answered on
+   * the session that paused it.
+   */
+  #guardDocument(target: ChromiumTarget, event: CdpEvent): void {
+    const request = event.params["request"] as { url?: string } | undefined;
+    const requestId = stringParam(event.params, "requestId");
+    if (requestId === undefined) return;
+    const allowed = typeof request?.url === "string" && isAllowedBrowserUrl(request.url);
+    void (
+      allowed
+        ? target.engine.connection.send("Fetch.continueRequest", { requestId }, event.sessionId)
+        : target.engine.connection.send(
+            "Fetch.failRequest",
+            { requestId, errorReason: "BlockedByClient" },
+            event.sessionId,
+          )
+    ).catch(() => undefined);
   }
 
   #onBrowserEvent(engine: ChromiumEngine, event: CdpEvent): void {
@@ -548,8 +749,30 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       target.engine.connection.send(method, body, target.sessionId);
     const isMain = (frameId: unknown): boolean => frameId === target.targetId;
     switch (event.method) {
+      case "Target.attachedToTarget":
+        this.#onChildAttached(entry, target, params);
+        return;
+      case "Target.detachedFromTarget":
+        this.#onChildDetached(entry, params);
+        return;
+      case "Page.frameRequestedNavigation": {
+        // The page asked its main frame to go somewhere a page may not lead
+        // it (a blob: of its own, an external scheme): refused before the
+        // navigation commits, as desktop's `will-navigate` refuses it. The
+        // commit check below stays as the backstop.
+        const url = stringParam(params, "url");
+        if (!isMain(params["frameId"]) || url === undefined || this.#mayCommit(url)) return;
+        this.recordConsole(entry, {
+          level: "error",
+          text: "Blocked a page navigation to a non-HTTP(S) address",
+        });
+        void send("Page.stopLoading").catch(() => undefined);
+        return;
+      }
       case "Page.frameStartedNavigating":
         if (!isMain(params["frameId"])) return;
+        // A popup announced by the page it is leaving is not this page's (N11).
+        entry.popups.length = 0;
         // Desktop's `did-start-navigation`: the generation a ref is judged by moves now.
         this.publish(entry, {
           error: null,
@@ -616,34 +839,12 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         if (url !== undefined && entry.popups.length < MAX_PENDING_POPUPS) entry.popups.push(url);
         return;
       }
-      case "Page.javascriptDialogOpening": {
-        // Nobody can answer a dialog on a host with no window, and an open
-        // dialog stops the page. Alerts and leave-page prompts are accepted,
-        // questions are declined, and the console says so.
-        const type = stringParam(params, "type") ?? "alert";
-        const message = (stringParam(params, "message") ?? "").slice(0, DIALOG_MESSAGE_MAX_CHARS);
-        this.recordConsole(entry, {
-          level: "warn",
-          text: `The page opened a ${type} dialog, which Volli dismissed: ${message}`,
-        });
-        void send("Page.handleJavaScriptDialog", {
-          accept: type === "alert" || type === "beforeunload",
-        }).catch(() => undefined);
+      case "Page.javascriptDialogOpening":
+        this.#onDialog(entry, target, params);
         return;
-      }
-      case "Fetch.requestPaused": {
-        const request = params["request"] as { url?: string } | undefined;
-        const requestId = stringParam(params, "requestId");
-        if (requestId === undefined) return;
-        // Every document request and redirect hop the page makes, before it is sent.
-        const allowed = typeof request?.url === "string" && isAllowedBrowserUrl(request.url);
-        void (
-          allowed
-            ? send("Fetch.continueRequest", { requestId })
-            : send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" })
-        ).catch(() => undefined);
+      case "Fetch.requestPaused":
+        this.#guardDocument(target, event);
         return;
-      }
       case "Network.requestWillBeSent":
         if (params["type"] === "Document" && isMain(params["frameId"])) {
           const requestId = stringParam(params, "requestId");
@@ -695,6 +896,41 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     }
   }
 
+  /**
+   * A page opened a dialog, and an open dialog stops the page. On a tab
+   * nobody is looking at, nobody can answer it, so the safe answer is given
+   * at once and said aloud (console, and the tab's error for a refused
+   * departure, which every agent answer carries):
+   *
+   * - an alert is acknowledged; a confirm or prompt is declined (`false`, `null`);
+   * - a leave-page prompt (`beforeunload`) is declined: the tab STAYS, as
+   *   desktop's does when nothing handles `will-prevent-unload`. Volli never
+   *   approves leaving a page on anyone's behalf, so unsaved work a page
+   *   guards is never discarded by a fallback. An agent that must leave
+   *   closes the tab (closing runs no unload veto) or opens another.
+   */
+  #onDialog(
+    entry: ChromiumTabEntry,
+    target: ChromiumTarget,
+    params: Record<string, unknown>,
+  ): void {
+    const type = chromiumDialogType(stringParam(params, "type"));
+    const message = (stringParam(params, "message") ?? "").slice(0, DIALOG_MESSAGE_MAX_CHARS);
+    const outcome = dialogFallback(type);
+    this.recordConsole(entry, {
+      level: "warn",
+      text: `The page opened a ${type} dialog nobody could answer; Volli ${outcome.said}${message === "" ? "" : `: ${message}`}`,
+    });
+    if (type === "beforeunload") {
+      this.publish(entry, {
+        error: "The page asked to confirm leaving it; Volli stayed on the page.",
+      });
+    }
+    void target.engine.connection
+      .send("Page.handleJavaScriptDialog", { accept: outcome.accept }, target.sessionId)
+      .catch(() => undefined);
+  }
+
   /** What a main frame may come to rest on: HTTP(S), the blank page, or Chromium's error page. */
   #mayCommit(url: string): boolean {
     return (
@@ -712,17 +948,28 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     this.#notifyLoad(entry);
   }
 
-  /** Re-reads history, and the title it carries for the current entry. Never rejects. */
-  #refreshHistory(entry: ChromiumTabEntry, target: ChromiumTarget): Promise<void> {
+  /**
+   * Re-reads history, and the title it carries for the current entry —
+   * empty included: a page that cleared its title has no title. Bounded by
+   * {@link CHROMIUM_HISTORY_TIMEOUT_MS} and by `signal`; an abandoned read
+   * leaves the pipe's pending map at once. Never rejects.
+   */
+  #refreshHistory(
+    entry: ChromiumTabEntry,
+    target: ChromiumTarget,
+    signal?: AbortSignal,
+  ): Promise<void> {
     return target.engine.connection
-      .send("Page.getNavigationHistory", {}, target.sessionId)
+      .send("Page.getNavigationHistory", {}, target.sessionId, {
+        timeoutMs: CHROMIUM_HISTORY_TIMEOUT_MS,
+        ...(signal === undefined ? {} : { signal }),
+      })
       .then((answer) => {
         if (entry.closed) return;
         const history = answer as NavigationHistory & { entries: Array<{ title?: string }> };
         entry.chrome.history = history;
         const title = history.entries[history.currentIndex]?.title;
-        // An untitled page keeps the title the target reported, its address.
-        if (typeof title === "string" && title !== "") entry.chrome.title = title;
+        if (typeof title === "string") entry.chrome.title = title;
         this.publish(entry);
       })
       .catch(() => undefined);
@@ -790,6 +1037,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       screencasts: new Set(),
       screencastScale: 1,
       popups: [],
+      frameSessions: new Set(),
       closed: false,
     };
     entry.ready = this.#createTarget(entry);
@@ -845,6 +1093,8 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       this.#byTarget.delete(entry.target.targetId);
     }
     this.#endScreencasts(entry);
+    for (const sessionId of entry.frameSessions) this.#byFrameSession.delete(sessionId);
+    entry.frameSessions.clear();
     this.#notifyLoad(entry);
     if (this.tabs.get(tabId) === entry) this.forgetEntry(tabId, entry);
   }
@@ -879,7 +1129,12 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         target.engine.connection.send(method, params, target.sessionId);
       // Read now rather than trust the tracked copy: a navigation may have
       // landed since it was taken.
-      const history = (await send("Page.getNavigationHistory")) as NavigationHistory;
+      const history = (await target.engine.connection.send(
+        "Page.getNavigationHistory",
+        {},
+        target.sessionId,
+        { timeoutMs: CHROMIUM_HISTORY_TIMEOUT_MS },
+      )) as NavigationHistory;
       const destination = history.entries[history.currentIndex + step];
       if (destination === undefined) {
         entry.chrome.loading = false;
@@ -938,14 +1193,34 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       try {
         target = await entry.ready;
         engine = target.engine;
-        const attached = (await engine.connection.send("Target.attachToTarget", {
+        const live = engine;
+        const attached = (await live.connection.send("Target.attachToTarget", {
           targetId: target.targetId,
           flatten: true,
         })) as { sessionId: string };
-        assertLive();
+        const detach = (): void => {
+          void live.connection
+            .send("Target.detachFromTarget", { sessionId: attached.sessionId })
+            .catch(() => undefined);
+        };
+        // Disposed while the attach was on the wire: its answer is a session
+        // nobody will use, so it goes at once.
+        if (disposed) {
+          detach();
+          assertLive();
+        }
         sessionId = attached.sessionId;
-        for (const method of ["Accessibility.enable", "DOM.enable", "Page.enable"]) {
-          await engine.connection.send(method, {}, attached.sessionId);
+        try {
+          for (const method of ["Accessibility.enable", "DOM.enable", "Page.enable"]) {
+            await live.connection.send(method, {}, attached.sessionId);
+          }
+        } catch (error) {
+          // Half-made: let go of it, rather than keep a session nobody drives.
+          if (sessionId === attached.sessionId) {
+            sessionId = null;
+            detach();
+          }
+          throw error;
         }
         assertLive();
         return attached.sessionId;
@@ -996,9 +1271,10 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     const entry = this.requireTab(tabId);
     await this.#settle(entry, signal, mode);
     // Chromium reports a script's title change late (its target info is
-    // throttled); a read is answered with the title as it stands now.
+    // throttled); a read is answered with the title as it stands now —
+    // within the history bound, and never past the caller's withdrawal.
     if (entry.target !== null && !entry.closed && !signal.aborted) {
-      await this.#refreshHistory(entry, entry.target);
+      await this.#refreshHistory(entry, entry.target, signal);
     }
   }
 
@@ -1122,6 +1398,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     this.#disposed = true;
     const engine = this.#engine;
     this.#engine = null;
+    this.#live = null;
     if (engine === null) return;
     const live = await engine.catch(() => null);
     await live?.process.close();
