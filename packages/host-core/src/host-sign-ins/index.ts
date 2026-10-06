@@ -15,6 +15,7 @@ export type {
 } from "./ports";
 export {
   answerGitCredential,
+  appendGitConfig,
   fileGitCredentialStore,
   GIT_CREDENTIALS_FILE,
   gitCredentialHelperEnv,

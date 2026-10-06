@@ -181,13 +181,19 @@ export function createHeadlessSessionRuntime(input: {
     // with operators and bakes nothing. Without it the agent's `volli` answers
     // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
     // The Session's identity is still composed after this, never from here.
-    concurrencyEnvFor: async (sessionId) => ({
-      ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
-      [VOLLI_SOCKET_ENV]: input.socketPath,
+    concurrencyEnvFor: async (sessionId) => {
+      const environment: Record<string, string> = {
+        ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
+        [VOLLI_SOCKET_ENV]: input.socketPath,
+      };
       // A Session's `git push` over HTTPS asks Volli's helper for the push
-      // credential a person sent this host (VC-702). Behind `cloud`.
-      ...(gitHelper === null ? {} : gitCredentialHelperEnv(gitHelper)),
-    }),
+      // credential a person sent this host (VC-702), behind `cloud`. Appended
+      // after any command-scope git configuration composed above it (a
+      // platform's reset of the helper list goes first), never over it.
+      return gitHelper === null
+        ? environment
+        : { ...environment, ...gitCredentialHelperEnv(gitHelper, environment) };
+    },
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
       sessionEngine,

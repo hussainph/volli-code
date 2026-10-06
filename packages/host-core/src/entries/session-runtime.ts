@@ -10,6 +10,7 @@ export type { HostDecisions } from "../decision/host-decisions";
 export { ModelAccessSignInService, type SignInOwner } from "../model-access/sign-in-service";
 export {
   answerGitCredential,
+  appendGitConfig,
   fileGitCredentialStore,
   GIT_CREDENTIALS_FILE,
   gitCredentialHelperEnv,

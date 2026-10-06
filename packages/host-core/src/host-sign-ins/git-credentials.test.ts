@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   answerGitCredential,
+  appendGitConfig,
   fileGitCredentialStore,
   GIT_CREDENTIALS_FILE,
   gitCredentialHelperEnv,
@@ -128,6 +129,25 @@ describe("the helper's protocol", () => {
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: helper,
+    });
+  });
+
+  it("appends after configuration a layer before it already set, never over it", () => {
+    // A platform's reset of the helper list (an empty value clears it), then Volli's.
+    const reset = appendGitConfig({}, [["credential.helper", ""]]);
+    expect(reset).toEqual({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+    });
+    expect(gitCredentialHelperEnv("!volli", reset)).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_VALUE_1: "!volli",
+    });
+    expect(appendGitConfig({ GIT_CONFIG_COUNT: "nonsense" }, [["a.b", "c"]])).toMatchObject({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "a.b",
     });
   });
 });

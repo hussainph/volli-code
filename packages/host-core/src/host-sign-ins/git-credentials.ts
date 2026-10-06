@@ -195,20 +195,42 @@ export async function answerGitCredential(
 }
 
 /**
- * The environment that installs Volli's helper for one command: command-scope
- * git configuration, appended after every file git reads. A Session's
- * environment is built fresh (never carried over from the host's), so the
- * helper is entry 0.
+ * Appends command-scope git configuration to an environment record: entries
+ * go after any `GIT_CONFIG_COUNT` entries `base` already holds, never over
+ * them, so every layer that configures a Session's git (a platform's reset of
+ * the helper list, then Volli's helper) composes in order. Answers the
+ * variables to merge over `base`.
+ */
+export function appendGitConfig(
+  base: Readonly<Record<string, string | undefined>>,
+  entries: readonly (readonly [key: string, value: string])[],
+): Record<string, string> {
+  const held = Number(base["GIT_CONFIG_COUNT"] ?? "0");
+  const start = Number.isSafeInteger(held) && held > 0 ? held : 0;
+  const appended: Record<string, string> = {
+    GIT_CONFIG_COUNT: String(start + entries.length),
+  };
+  entries.forEach(([key, value], index) => {
+    appended[`GIT_CONFIG_KEY_${start + index}`] = key;
+    appended[`GIT_CONFIG_VALUE_${start + index}`] = value;
+  });
+  return appended;
+}
+
+/**
+ * The environment that installs Volli's helper for one command:
+ * command-scope git configuration, appended after every file git reads and
+ * after any command-scope entries `base` already holds (a reset of the
+ * helper list composes before it).
  *
  * `helperCommand` is a `!`-prefixed shell command git runs with the action
  * appended (`!'/opt/volli-hostd/bin/volli-hostd' git-credential --data-dir '…'`).
  */
-export function gitCredentialHelperEnv(helperCommand: string): Record<string, string> {
-  return {
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "credential.helper",
-    GIT_CONFIG_VALUE_0: helperCommand,
-  };
+export function gitCredentialHelperEnv(
+  helperCommand: string,
+  base: Readonly<Record<string, string | undefined>> = {},
+): Record<string, string> {
+  return appendGitConfig(base, [["credential.helper", helperCommand]]);
 }
 
 /** One POSIX shell word. */
