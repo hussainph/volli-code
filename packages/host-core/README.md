@@ -277,6 +277,11 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
   per request; code deeper in adds what it knows with `withLogContext({ sessionId })`.
   Lines carry both without a parameter threaded through.
 - **Cheap.** The level check runs before anything is built; sinks buffer.
+- **No bare console.** Production code in host-core and Electron main logs only
+  through a host logger; `src/log/no-console.test.ts` (and its twin in
+  `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
+  the log module itself. A seam that takes a log function takes the logger's
+  `(msg, fields)` shape, never `Pick<Console, …>`.
 
 ## Ports
 
