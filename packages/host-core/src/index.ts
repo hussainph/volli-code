@@ -36,6 +36,7 @@ import {
   type HostSessionServices,
 } from "./session-services";
 import { createHostLifecycle, type HostStopPolicy, type HostStopReport } from "./host-lifecycle";
+import { stampFollowUpCleanClose } from "./db/session-follow-up-repo";
 import { createDetachedWorkTracker, type DetachedWorkTracker } from "./detached-work";
 import { SecretStore } from "./secrets/store";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-key";
@@ -96,6 +97,8 @@ interface HostLifecycleOwner {
   readonly database: DbHandle;
   start(runtime?: HostRuntimeOwner): Promise<void>;
   stop(reason: string): Promise<HostStopReport>;
+  /** Host-edge deadline diagnostics; never changes the drain or stamp policy. */
+  warnIfFollowUpCleanCloseSkipped(reason: string): void;
 }
 
 /** Failure is one variant, not a live host with six null Session services. */
@@ -185,6 +188,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         await detachedWork.drain();
       },
       stopActivity: sessionServices.sessionActivityWatch.stop,
+      stampCleanClose: () => stampFollowUpCleanClose(db, Date.now()),
       closeDatabase: () => checkpointAndCloseDatabase(db),
     },
     options.stopPolicy,
@@ -249,9 +253,10 @@ function lifecycleOwner(
     drainDetached?(): Promise<void>;
     stopActivity?(): void;
     closeDatabase?(): void;
+    stampCleanClose?(): void;
   },
   stopPolicy: HostStopPolicy | undefined,
-): Pick<HostLifecycleOwner, "start" | "stop"> {
+): Pick<HostLifecycleOwner, "start" | "stop" | "warnIfFollowUpCleanCloseSkipped"> {
   let runtime: HostRuntimeOwner | undefined;
   let adopted = false;
   const lifecycle = createHostLifecycle(
@@ -274,7 +279,10 @@ function lifecycleOwner(
         }
       },
       stopActivity: () => services.stopActivity?.(),
+      stampCleanClose: services.stampCleanClose,
       closeDatabase: () => services.closeDatabase?.(),
+      reportSkippedCleanClose: (reason) =>
+        ports.log.warn(`[volli] follow-up clean-close watermark was not stamped: ${reason}`),
       reportFailure: (step, error) =>
         ports.log.error(`[volli] host shutdown failed at ${step}:`, error),
     },
@@ -289,5 +297,6 @@ function lifecycleOwner(
       return lifecycle.start();
     },
     stop: lifecycle.stop,
+    warnIfFollowUpCleanCloseSkipped: lifecycle.warnIfCleanCloseSkipped,
   };
 }

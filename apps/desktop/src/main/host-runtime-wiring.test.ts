@@ -189,6 +189,7 @@ function liftedQuitPath(options: {
     stop: vi.fn(async () => {
       calls.push("host.stop");
     }),
+    warnIfFollowUpCleanCloseSkipped: vi.fn(),
   };
   const scope: Record<string, unknown> = {
     // Real modules index.ts imports.
@@ -313,6 +314,29 @@ function menuBarFake(
 }
 
 describe("index.ts quit wiring", () => {
+  it("routes the 15-second shutdown deadline to the host's one-time watermark warning", async () => {
+    vi.useFakeTimers();
+    try {
+      const quit = liftedQuitPath({ declineUnsaved: false });
+      quit.hostCore.stop.mockImplementation(() => new Promise<void>(() => {}));
+      quit.listeners[0]?.({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(quit.hostCore.warnIfFollowUpCleanCloseSkipped).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(quit.hostCore.warnIfFollowUpCleanCloseSkipped).toHaveBeenCalledExactlyOnceWith(
+        "quit: shutdown deadline expired after 15000ms",
+      );
+      await vi.runOnlyPendingTimersAsync();
+      expect(await quit.exited).toBe(0);
+      quit.listeners[0]?.({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(quit.hostCore.stop).toHaveBeenCalledOnce();
+      expect(quit.hostCore.warnIfFollowUpCleanCloseSkipped).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("has one accepted-quit hold, registered through the Session runtime lifecycle", () => {
     const hold = exactlyOne(
       callsTo("registerAcceptedQuitCoordinator"),
