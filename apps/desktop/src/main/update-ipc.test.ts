@@ -145,7 +145,26 @@ describe("registerUpdateIpcHandlers", () => {
       ok: true,
       busyCommands: ["claude", "pnpm"],
       openAgentSessions: 1,
+      backgroundShells: 0,
       unsavedDrafts: ["notes.md"],
+    });
+  });
+
+  it("answers turns and shells from the host's live work when it is offered (VC-577, flag on)", async () => {
+    const fixture = makeFixture();
+    const openAgentTurns = vi.fn(() => Promise.resolve(9));
+    let host: { turns: number; shells: number } | null = { turns: 2, shells: 1 };
+    registerUpdateIpcHandlers({ ...fixture.deps, openAgentTurns, liveWork: () => host });
+    await expect(invoke("volli:update-live-work")).resolves.toMatchObject({
+      openAgentSessions: 2,
+      backgroundShells: 1,
+    });
+    expect(openAgentTurns).not.toHaveBeenCalled();
+    // Flag off (or no host): today's count, no shells line.
+    host = null;
+    await expect(invoke("volli:update-live-work")).resolves.toMatchObject({
+      openAgentSessions: 9,
+      backgroundShells: 0,
     });
   });
 

@@ -479,6 +479,28 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
+  it("hands every committed fact over synchronously as its write resolves, before any fold (VC-577)", async () => {
+    const engine = stubEngine(() => projection());
+    const observeEvent = vi.fn();
+    const onError = vi.fn();
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeEvent,
+      onError,
+    });
+    const event = await watch.engine.observe({} as never);
+    expect(observeEvent).toHaveBeenCalledExactlyOnceWith(event);
+    // A throwing reader is reported, and the write's own result still returns.
+    const failure = new Error("reader");
+    observeEvent.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(watch.engine.observe({} as never)).resolves.toEqual({ sessionId: "session-1" });
+    expect(onError).toHaveBeenCalledWith(failure);
+    watch.stop();
+  });
+
   it("does not require an observer", async () => {
     // Optional for the reason `provenanceOf` is: a test that only asks whether
     // a write was noticed has no notification channel to hand in.

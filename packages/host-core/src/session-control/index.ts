@@ -17,6 +17,8 @@ export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
 export { createSessionReadWatch } from "./session-read-watch";
 export type { SessionReadWatch, SessionReadWatchPorts } from "./session-read-watch";
+export { createHostLiveWork, hasLiveWork, NO_LIVE_WORK } from "./live-work";
+export type { HostLiveWork, HostLiveWorkPorts, HostLiveWorkWatch } from "./live-work";
 export { readSessionPeekContent } from "./peek-content";
 export type { SessionPeekContentPorts } from "./peek-content";
 export { createSessionWatchdog } from "./session-watchdog";

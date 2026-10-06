@@ -9,10 +9,12 @@ import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/s
 import { createRunAttentionWatch } from "./automations/run-attention";
 import {
   createSqliteSessionLedger,
+  createHostLiveWork,
   createSessionReadWatch,
   publishSessionListingRow,
   watchSessionActivity,
   type SessionActivityWatch,
+  type HostLiveWorkWatch,
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
@@ -42,9 +44,16 @@ export interface HostSessionPorts {
  * and nothing is scheduled.
  */
 export interface SessionRuntimeWiring {
-  openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId">[];
+  openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId" | "sessionId">[];
   observeScheduledResume(projection: SessionProjection): void;
+  /** Accepted, not yet opened turn starts (VC-577): `HostedSessionRuntime.pendingTurnStarts`. */
+  pendingTurnStarts(): ReadonlySet<string>;
+  /** The runtime's idle-exit start latch (VC-577). */
+  holdTurnStarts(): void;
+  releaseTurnStarts(): void;
 }
+
+const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
 
 /** Keyed by the composed engine, which is the identity every runtime constructor receives. */
 const runtimeWiring = new WeakMap<SessionEngine, SessionRuntimeWiring>();
@@ -60,6 +69,9 @@ export function wireSessionRuntime(
   if (wiring.observeScheduledResume !== undefined) {
     slot.observeScheduledResume = wiring.observeScheduledResume;
   }
+  if (wiring.pendingTurnStarts !== undefined) slot.pendingTurnStarts = wiring.pendingTurnStarts;
+  if (wiring.holdTurnStarts !== undefined) slot.holdTurnStarts = wiring.holdTurnStarts;
+  if (wiring.releaseTurnStarts !== undefined) slot.releaseTurnStarts = wiring.releaseTurnStarts;
 }
 
 export interface HostSessionServices {
@@ -67,6 +79,8 @@ export interface HostSessionServices {
   readonly hostNoticeOutbox: HostNoticeOutbox;
   readonly sessionWakeBus: SessionWakeBus;
   readonly sessionReadWatch: SessionReadWatch;
+  /** Running turns and shells, read synchronously by a quit decision (VC-577). */
+  readonly liveWork: HostLiveWorkWatch;
   readonly sessionActivityWatch: SessionActivityWatch;
   readonly sessionEngine: SessionEngine;
 }
@@ -80,6 +94,9 @@ export function createHostSessionServices(
   const runtime: SessionRuntimeWiring = {
     openNativeBindings: () => [],
     observeScheduledResume: () => undefined,
+    pendingTurnStarts: () => NO_PENDING_STARTS,
+    holdTurnStarts: () => undefined,
+    releaseTurnStarts: () => undefined,
   };
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
@@ -120,6 +137,12 @@ export function createHostSessionServices(
       publishSessionRow(sessionId);
     },
   });
+  const liveWork = createHostLiveWork({
+    openSessionIds: () => new Set(runtime.openNativeBindings().map((binding) => binding.sessionId)),
+    pendingStartSessionIds: () => runtime.pendingTurnStarts(),
+    starts: { hold: () => runtime.holdTurnStarts(), release: () => runtime.releaseTurnStarts() },
+    onError: (error) => ports.log.warn("[volli] live work:", error),
+  });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
     publish: publishSessionActivity,
     provenanceOf: (born) => readSessionProvenance(db, born),
@@ -133,7 +156,11 @@ export function createHostSessionServices(
       runAttention.observe(projection);
       runtime.observeScheduledResume(projection);
       sessionReadWatch.observe(projection);
+      liveWork.observeSession(projection);
     },
+    // Synchronous, as each write resolves: a quit decision must never lag a
+    // committed `turn.started` behind the coalesced fold above (VC-577).
+    observeEvent: (event) => liveWork.observeEvent(event),
     observeBirth: (sessionId) => {
       runAttention.observeBirth(sessionId);
       sessionReadWatch.observeBirth(sessionId);
@@ -146,6 +173,7 @@ export function createHostSessionServices(
     hostNoticeOutbox,
     sessionWakeBus,
     sessionReadWatch,
+    liveWork,
     sessionActivityWatch,
     sessionEngine,
   };

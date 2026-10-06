@@ -42,6 +42,7 @@
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
 import type {
+  SessionEvent,
   SessionListingRow,
   SessionProjection,
   SessionProvenance,
@@ -121,6 +122,18 @@ export interface SessionActivityWatchPorts {
    * without a guard because {@link RunAttentionWatch.observe} is total.
    */
   observe?: (projection: SessionProjection) => void;
+  /**
+   * Every fact `observe` committed, handed over synchronously the moment the
+   * write resolves — before the coalescing timer, and before the caller that
+   * wrote it continues (VC-577).
+   *
+   * For a reader that must never lag a durable write: the host's live-work
+   * count, which a quit decision reads inside `before-quit` and so cannot
+   * wait out {@link DEFAULT_COALESCE_MS}. Only `observe` can write the facts
+   * that open or close a turn. Must not throw; a throw is reported and the
+   * write's own result is still returned.
+   */
+  observeEvent?: (event: SessionEvent) => void;
   /**
    * A Session this process just minted, announced from the create itself
    * rather than from a fold (VC-133).
@@ -263,6 +276,13 @@ export function watchSessionActivity(
     },
     async observe(observation) {
       const event = await engine.observe(observation);
+      if (ports.observeEvent !== undefined) {
+        try {
+          ports.observeEvent(event);
+        } catch (error) {
+          onError(error);
+        }
+      }
       mark(event.sessionId);
       return event;
     },
