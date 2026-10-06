@@ -285,9 +285,9 @@ describe("workspace scope, before any read", () => {
   it("refuses a call that names no resource this caller could own", async () => {
     const router = catalogRouter({
       session: {
-        projection: workspaceProcedure("session.projection", z.object({}), () => null).query(
-          () => "read",
-        ),
+        projection: workspaceProcedure("session.projection", z.object({}), () => null)
+          .output(z.string())
+          .query(() => "read"),
       },
     });
     const call = (caller: RouterCaller) =>
@@ -497,14 +497,14 @@ describe("binding procedures to the catalog (D2)", () => {
     ).toThrow("Procedure settings.experiments binds no output validator");
     expect(() =>
       catalogRouter({
-        session: {
-          projection: workspaceProcedure("session.projection", z.object({}), () => null)
+        labDiagnostics: {
+          list: hostProcedure("labDiagnostics.list")
             .output(z.null())
             .query(() => null),
         },
       }),
     ).toThrow(
-      "Procedure session.projection binds an output validator; strike it from the legacy exceptions",
+      "Procedure labDiagnostics.list binds an output validator; strike it from the legacy exceptions",
     );
   });
 

@@ -1,4 +1,4 @@
-import { TRPCError, tracked } from "@trpc/server";
+import { TRPCError, tracked, type AnyProcedure } from "@trpc/server";
 import type { JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 import {
@@ -50,6 +50,21 @@ import {
   type ProcedurePaths,
 } from "./catalog";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
+import {
+  diagnosticEntrySchema,
+  interactionResolutionWireSchema,
+  sessionAttachOutputSchema,
+  sessionCommandOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+  streamEmissionSchema,
+  uiMessageWireSchema,
+} from "./output-schema";
+export {
+  sessionCommandOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+} from "./output-schema";
 import {
   catalogRouter,
   hostProcedure,
@@ -376,7 +391,7 @@ const nonEmptyString = z
  * the answer to an unusable label live in {@link usableLabel}, which the
  * enclosing objects apply once they can see the ids to fall back to.
  */
-const displayLabel = z.string().transform((value) => value.trim());
+const displayLabel = z.string().trim();
 /**
  * The label to show, or the entry's own identity when the catalog's is unusable.
  *
@@ -484,11 +499,7 @@ const codeModePolicySchema = z.object({
     ),
 });
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
-const experimentIdSchema = z.custom<ExperimentId>(
-  (id): id is ExperimentId =>
-    typeof id === "string" && EXPERIMENTS.some((experiment) => experiment.id === id),
-  "Unknown experiment id",
-);
+const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
@@ -568,7 +579,7 @@ const modelAccessSnapshotSchema = z.object({
         hasStoredCredential: z.boolean(),
         usageLimits: usageLimitsSchema.optional(),
       })
-      .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
+      .overwrite((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),
   models: z.array(
     z
@@ -586,7 +597,7 @@ const modelAccessSnapshotSchema = z.object({
         // should not silently disable attachments across the whole catalog.
         acceptsImageInput: z.boolean().optional().default(true),
       })
-      .transform((model) => ({
+      .overwrite((model) => ({
         ...model,
         label: usableLabel(model.label, `${model.providerId}/${model.modelId}`),
       })),
@@ -932,7 +943,9 @@ export function createSessionRouter() {
         "session.snapshot",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+      )
+        .output(sessionSnapshotOutputSchema)
+        .query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
@@ -942,7 +955,9 @@ export function createSessionRouter() {
         "session.projection",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      ).query(async ({ ctx, input }) => rendererProjection(await ctx.runtime.projection(input))),
+      )
+        .output(sessionProjectionOutputSchema)
+        .query(async ({ ctx, input }) => rendererProjection(await ctx.runtime.projection(input))),
       subscribe: workspaceProcedure(
         "session.subscribe",
         sessionSubscriptionSchema,
@@ -1038,20 +1053,22 @@ export function createSessionRouter() {
         // `session.create`, the one kind that names no Session, is withheld
         // before this resolves; every other kind requires `sessionId`.
         (input) => sessionResource({ sessionId: input.sessionId! }),
-      ).mutation(async ({ ctx, input }) => {
-        // The start kinds are refused before this line on every door: the
-        // catalog entry withholds them (`refusedIntents`), whoever asks.
-        try {
-          return rendererCommandResult(
-            await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
-          );
-        } catch (error) {
-          if (error instanceof SuperviseSessionError) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) => {
+          // The start kinds are refused before this line on every door: the
+          // catalog entry withholds them (`refusedIntents`), whoever asks.
+          try {
+            return rendererCommandResult(
+              await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
           }
-          throw error;
-        }
-      }),
+        }),
       // A pending interaction the user walked away from. The reason is fixed
       // here rather than taken as input: this transport is the user seam, and
       // the only thing it can honestly report is that they left it undecided.
@@ -1214,6 +1231,102 @@ function unavailable(message: string): never {
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;
+
+/**
+ * Publishable wire grammar for every catalog procedure, including subscriptions
+ * (their output is one untracked emission, not the transport's SSE envelope).
+ * No-input and void-result calls have no JSON value: null is the document
+ * sentinel, explicitly distinguished by the booleans, never a runtime rewrite.
+ * The two command-input adapters describe custom/transform parsers without
+ * weakening their runtime checks. Refinements remain runtime-only constraints.
+ */
+export interface SessionProcedureSchema {
+  readonly type: "query" | "mutation" | "subscription";
+  readonly input: z.ZodType;
+  readonly output: z.ZodType;
+  readonly noInput: boolean;
+  readonly voidOutput: boolean;
+  readonly outputValidation: "runtime" | "documented-yield" | "legacy-documentation";
+}
+
+function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
+  if (
+    !(input instanceof z.ZodObject) ||
+    !(input.shape.command instanceof z.ZodDiscriminatedUnion)
+  ) {
+    throw new Error("session.command needs a structural command envelope for publication");
+  }
+  const commandWireSchema = z.union(
+    input.shape.command.options.map((option) => {
+      if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
+        throw new Error("session.command needs object alternatives with literal kinds");
+      }
+      if (option.shape.kind.value === "message.submit") {
+        return option.extend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      if (option.shape.kind.value === "interaction.resolve") {
+        return option.extend({ resolution: interactionResolutionWireSchema });
+      }
+      return option;
+    }),
+  );
+  // Preserve the actual envelope's required fields, bounds and refinements.
+  // Rebuilding it here would hide a breaking router change from the CI diff.
+  return input.safeExtend({ command: commandWireSchema });
+}
+
+export function sessionProcedureSchemas(
+  router: AppRouter = createSessionRouter(),
+): Record<string, SessionProcedureSchema> {
+  const supplementalOutputs: Record<string, z.ZodType> = {
+    "sessions.create": z.object({ sessionId: z.string() }),
+    "sessions.attach": sessionAttachOutputSchema,
+    "session.subscribe": streamEmissionSchema,
+    "session.cancelInteraction": z.null(),
+    "session.reconcile": z.null(),
+    "labDiagnostics.list": z.array(diagnosticEntrySchema),
+    "labDiagnostics.subscribe": diagnosticEntrySchema,
+  };
+  // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
+  const procedures = router._def.procedures as unknown as Record<string, AnyProcedure>;
+  return Object.fromEntries(
+    Object.entries(procedures).map(([key, procedure]): [string, SessionProcedureSchema] => {
+      // oxlint-disable-next-line no-underscore-dangle -- as above.
+      const definition = procedure._def as unknown as {
+        type: "query" | "mutation" | "subscription";
+        inputs: readonly z.ZodType[];
+        output?: z.ZodType;
+      };
+      const inputs = definition.inputs;
+      if (inputs.length > 1) throw new Error(`Procedure ${key} has multiple input schemas`);
+      const input =
+        key === "session.command" ? publishCommandInput(inputs[0]) : (inputs[0] ?? z.null());
+      const output = definition.output ?? supplementalOutputs[key];
+      if (output === undefined)
+        throw new Error(`Procedure ${key} has no publishable output schema`);
+      return [
+        key,
+        {
+          type: definition.type,
+          input,
+          output,
+          noInput: inputs.length === 0,
+          voidOutput: key === "session.cancelInteraction" || key === "session.reconcile",
+          outputValidation: definition.output
+            ? "runtime"
+            : definition.type === "subscription"
+              ? "documented-yield"
+              : "legacy-documentation",
+        },
+      ];
+    }),
+  );
+}
 
 /**
  * Every Session-router procedure is one catalog entry and every catalog entry
