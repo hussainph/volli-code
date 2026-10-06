@@ -70,30 +70,29 @@ const MIB = 1024 * 1024;
 /**
  * hostd's listener bounds while the enrolled-device verifier is its only
  * one (VC-700): a few devices of one person, over SSH tunnels to loopback.
- * Until VC-575's host-wide budget, these are the budget. Worst case, every
+ * A client holds one connection per Workspace, and the desktop opens every
+ * project a host serves, so the cap is **32 connections per host** (across
+ * every Mac), with a burst of 32 handshakes. Until VC-575's host-wide byte
+ * budget, the per-connection bounds are the budget. Worst case, every
  * connection full at once:
  *
- *   8 connections × (8 MiB unsent + 8 streams × 2 × 4 MiB staged replay
- *   + 1 MiB inbound frame) = 8 × 73 MiB = 584 MiB
+ *   32 connections × (4 MiB unsent + 4 streams × 2 × 1.5 MiB staged replay
+ *   + 1 MiB inbound frame) = 32 × 17 MiB = 544 MiB
  *
  * against the defaults' 128 × (32 + 64 × 32 + 8) MiB. An answer or event
- * past 4 MiB is refused whole (`response-too-large`; `session.history`
- * pages), and a resume past 4 MiB re-reads its snapshot instead. The
- * connection cap is **host-wide**: at most 8 active client/Workspace
- * connections per host, across every Mac (a client holds one per
- * Workspace). One Mac with a few projects open fits, with room to
- * reconnect; two Macs with four projects each fill it.
+ * past 2 MiB is refused whole (`response-too-large`; `session.history`
+ * pages), and a resume past 1.5 MiB re-reads its snapshot instead.
  */
 export const HOSTD_LISTENER_LIMITS: HostProtocolListenerLimits = Object.freeze({
   ...DEFAULT_LISTENER_LIMITS,
-  maxConnections: 8,
-  handshakeBurst: 8,
-  handshakesPerSecond: 4,
-  maxSubscriptions: 8,
-  maxFrameBytes: 4 * MIB,
-  maxReplayBytes: 4 * MIB,
+  maxConnections: 32,
+  handshakeBurst: 32,
+  handshakesPerSecond: 16,
+  maxSubscriptions: 4,
+  maxFrameBytes: 2 * MIB,
+  maxReplayBytes: 1.5 * MIB,
   // A full resume, and the next frame behind it.
-  maxOutboundBytes: 8 * MIB,
+  maxOutboundBytes: 4 * MIB,
   maxInboundBytes: 1 * MIB,
 });
 

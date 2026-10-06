@@ -164,6 +164,13 @@ export interface HostdManagedStatus {
     readonly enabled: string;
   } | null;
   readonly linger: boolean | null;
+  /**
+   * When the host comes up on its own: `boot` (a system unit, or a user unit
+   * that lingers), `login` (a Mac's launchd agent, or a user unit that does
+   * not linger: it starts when its person logs in), `null` with nothing
+   * installed. Additive: a hostd before it prints none.
+   */
+  readonly startsAt?: "boot" | "login" | null;
   readonly dataDir: string | null;
   readonly verdict: "serving" | "refusing" | "not-serving";
   readonly detail: string | null;

@@ -45,10 +45,10 @@ and ignores it); without `--listen` nothing listens either.
 - **Loopback only**, a literal address (`127.0.0.1`, `[::1]`; not `localhost`),
   until pairing and TLS land (VC-575); `--listen` refuses anything else. Port
   `0` picks one; the status file's `hostProtocol` names it. Its limits are
-  tight while devices enrolled over SSH are all it admits: at most 8 active
+  tight while devices enrolled over SSH are all it admits: at most 32 active
   client/Workspace connections per host (host-wide, across every Mac; a
-  client holds one per Workspace), 4 MiB frames, 8 MiB unsent each
-  (`HOSTD_LISTENER_LIMITS`).
+  client holds one per Workspace), 2 MiB frames, 4 MiB unsent each, 544 MiB
+  worst case in all (`HOSTD_LISTENER_LIMITS`).
 - **Devices enrolled over SSH** are admitted (VC-700): `volli-hostd enroll`
   trusts a device's public key, and the device signs a short-lived `vdc1`
   credential per handshake. A device acts as you, so a system install keeps
@@ -109,11 +109,30 @@ answer `system-unsupported`. `install --user` writes the person's launchd agent,
 `LimitLoadToSessionType` `Background`, `VOLLI_EXPERIMENTAL=cloud`, the key, and
 `--listen 127.0.0.1:N`), with data in `~/Library/Application Support/volli-hostd`
 and output in `~/Library/Logs/volli-hostd.log`; it runs no `launchctl` itself.
-`start --user` boots the agent out of `gui/<uid>` and `user/<uid>`, enables it
-and bootstraps it into `user/<uid>`, the per-user domain an SSH login reaches
-and outlives; a failure comes back with launchctl's words and the log's tail.
-After the Mac restarts the agent loads again at the person's next login.
-`status --json` reads the agent from `launchctl print`; there is no lingering.
+`start --user` boots the agent out of `gui/<uid>` and `user/<uid>` (a bootout
+that fails is a `start-failed` unless `launchctl print` shows the job gone),
+sets aside a log grown past 10 MiB as `volli-hostd.log.1`, enables the agent and
+bootstraps it into `user/<uid>`, the per-user domain an SSH login reaches and
+outlives. It counts the host started only when a **new** process serves the
+recorded version: the pid that served before the restart answering again is an
+old host still holding the port, never the new release. A failure comes back
+with launchctl's words and the last lines of the log (its tail is read, never
+the whole file). `status --json` reads the agent from `launchctl print`; there
+is no lingering.
+
+**A Mac host starts when its person logs in, not at boot** (v1 ruling): a
+LaunchAgent loads at login, so after the Mac restarts the host is down until
+someone logs in to that account (or `start --user` runs over SSH).
+`status --json` says so as `startsAt: "login"` (a system unit, or a user unit
+that lingers, is `"boot"`), and the add-a-host checklist shows "Starts when you
+log in to <host>". A LaunchDaemon with `UserName` for no-login boot is deferred.
+
+**Git in a Mac host's Sessions never reaches the keychain.** Apple's git
+configures `credential.helper=osxkeychain`, which on a host would ask a login
+keychain nobody is there to unlock. Every Session command on a Mac gets
+command-scope git configuration that empties the helper list
+(`GIT_CONFIG_COUNT`, `credential.helper` set to the empty string) and
+`GIT_TERMINAL_PROMPT=0`; a Volli helper (VC-702) is appended after the reset.
 
 ## Ports
 

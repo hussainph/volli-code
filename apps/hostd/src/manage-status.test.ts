@@ -109,6 +109,7 @@ describe("status --json", () => {
       },
       unit: { name: "volli-hostd.service", active: "active", enabled: "enabled" },
       linger: null,
+      startsAt: "boot",
       dataDir: layouts.system.dataDir,
       verdict: "serving",
       detail: null,
@@ -160,10 +161,26 @@ describe("status --json", () => {
     ).toMatchObject({
       mode: "user",
       linger: true,
+      // A user unit that lingers starts at boot.
+      startsAt: "boot",
       verdict: "not-serving",
       detail: "no status file",
       running: null,
     });
+    // One that does not linger starts only when its person logs in.
+    expect(
+      (
+        await managedStatus(
+          { kind: "status-json", mode: "user", dataDir: null },
+          ports({
+            run: (tool): CommandResult =>
+              tool === "loginctl"
+                ? { code: 0, stdout: "no\n", stderr: "" }
+                : { code: 0, stdout: "", stderr: "" },
+          }),
+        )
+      ).startsAt,
+    ).toBe("login");
     rmSync(layouts.user.managedFile);
     mkdirSync(layouts.user.unitDir, { recursive: true });
     writeFileSync(join(layouts.user.unitDir, "volli-hostd.service"), "");
@@ -179,6 +196,7 @@ describe("status --json", () => {
       mode: null,
       install: null,
       unit: null,
+      startsAt: null,
       dataDir: null,
       verdict: "not-serving",
       detail: "not installed",
@@ -224,6 +242,8 @@ describe("status --json on a Mac", () => {
       mode: "user",
       unit: { name: "com.volli.hostd", active: "active", enabled: "enabled" },
       linger: null,
+      // A Mac's host starts when its person logs in, not at boot (v1 ruling).
+      startsAt: "login",
       dataDir: mac.user.dataDir,
     });
     expect(calls).toEqual(["launchctl print user/501/com.volli.hostd"]);

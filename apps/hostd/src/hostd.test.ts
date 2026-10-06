@@ -1438,7 +1438,7 @@ describe("the host protocol listener (VC-663)", () => {
   });
 
   // B9: while this verifier is hostd's, its own bounds are the budget.
-  it("composes the listener with hostd's tight limits", async () => {
+  it("composes the listener with hostd's limits: 32 connections, the 33rd refused", async () => {
     const log = logger();
     const host = await boot({ env: CLOUD, listen: LOOPBACK }, log);
     const { port } = host.status().hostProtocol!;
@@ -1454,7 +1454,7 @@ describe("the host protocol listener (VC-663)", () => {
         socket.on("error", () => undefined);
         await new Promise((resolve) => socket.once("connect", resolve));
       }
-      // The defaults (128 connections, a burst of 64) would take a ninth.
+      // The 33rd is refused; the defaults (128 connections, a burst of 64) would take it.
       await vi.waitFor(() => expect(answers.at(-1)!.text).toMatch(/^HTTP\/1\.1 503/u));
       expect(answers.slice(0, -1).every((answer) => answer.text === "")).toBe(true);
       expect(log.warn).toHaveBeenCalledWith("host protocol: connection-refused", {

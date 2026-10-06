@@ -31,7 +31,7 @@
  */
 import type { HostdStartResult, InstallMode } from "@volli/host-install/contract";
 
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, renameSync, statSync } from "node:fs";
 
 import type { InstallLayout } from "./layout";
 import { LAUNCHD_LABEL, SERVICE_UNIT, SOCKET_UNIT } from "./layout";
@@ -129,11 +129,27 @@ export async function runStart(
   let { report, ok } = await matches();
   const restarted = !ok || !releaseStarted;
   if (restarted) {
+    // The process serving before this restart, if one was: what answers after
+    // it must be another, or an old host still holding the port (one launchd
+    // would not stop, a hand-started one) would pass for the new release.
+    const replaced = report.verdict === "serving" ? report.status!.pid : null;
+    const isReplacement = () => replaced === null || report.status?.pid !== replaced;
     if (domain !== null) {
-      // One agent only: out of both domains (either may say it was not there), then in.
+      // One agent only: out of both domains, then in. A bootout that fails is
+      // fine only when the job is verifiably gone from that domain.
       for (const each of ["gui", "user"] as const) {
-        run("launchctl", ["bootout", launchdTarget(each, ports.uid())]);
+        const target = launchdTarget(each, ports.uid());
+        const out = run("launchctl", ["bootout", target]);
+        if (out.code !== 0 && run("launchctl", ["print", target]).code === 0) {
+          throw new ManagementError(
+            "start-failed",
+            `Couldn't stop the volli-hostd already loaded in ${each}/${ports.uid()}; it is still running.`,
+            lines(out.stderr),
+          );
+        }
       }
+      // Bounded: the agent's log is launchd's to write and nobody else's to rotate.
+      rotateLog(layout.logFile!);
       // A person's `launchctl disable` would refuse the bootstrap.
       run("launchctl", ["enable", launchdTarget(domain, ports.uid())]);
       const bootstrapped = run("launchctl", [
@@ -163,7 +179,8 @@ export async function runStart(
     const deadline = ports.now() + command.timeoutMs;
     for (;;) {
       ({ report, ok } = await matches());
-      if (ok) break;
+      if (ok && isReplacement()) break;
+      ok = false;
       if (report.verdict === "refusing" && report.status?.version === managed.version) {
         const database = report.status.database;
         throw new ManagementError(
@@ -233,15 +250,46 @@ function lines(text: string): string[] {
   return text.trim().split("\n").filter(Boolean).slice(-10);
 }
 
-/** The agent's last log lines (`StandardErrorPath`), for the log under Details. */
-function logTail(layout: InstallLayout): string[] {
-  let text: string;
+/** Past this, the agent's log is set aside at the next (re)start: one generation, `.1`. */
+export const AGENT_LOG_MAX_BYTES = 10 * 1024 * 1024;
+/** How much of the log's end a failure's detail reads: never the whole file. */
+const LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * Sets a grown log aside before launchd reopens it: launchd appends to
+ * `StandardErrorPath` forever and rotates nothing. Only while the agent is
+ * booted out, so no writer holds the old file.
+ */
+export function rotateLog(path: string, maxBytes = AGENT_LOG_MAX_BYTES): void {
+  let size: number;
   try {
-    text = readFileSync(layout.logFile!, "utf8");
+    size = statSync(path).size;
+  } catch {
+    return;
+  }
+  if (size > maxBytes) renameSync(path, `${path}.1`);
+}
+
+/** The agent's last log lines (`StandardErrorPath`), for the log under Details: its tail only. */
+export function logTail(layout: InstallLayout, tailBytes = LOG_TAIL_BYTES): string[] {
+  let fd: number;
+  try {
+    fd = openSync(layout.logFile!, "r");
   } catch {
     return [];
   }
-  return text.split("\n").filter(Boolean).slice(-20);
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, tailBytes);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const tail = buffer.toString("utf8").split("\n");
+    // A cut first line is a fragment, not a line.
+    if (length < size) tail.shift();
+    return tail.filter(Boolean).slice(-20);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** The unit's last journal lines, for the log under Details. */

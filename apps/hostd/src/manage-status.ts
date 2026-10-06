@@ -70,6 +70,10 @@ export async function managedStatus(
         : dataDirDeviceStore(dataDir);
   const devices = store === null ? null : readEnrolledDevices(store);
   const managed = layout === null ? null : readManaged(layout);
+  const linger =
+    layout?.mode === "user" && layout.manager === "systemd"
+      ? lingerOf(ports.run, ports.login())
+      : null;
   const releases = layout === null ? [] : installedReleases(layout);
   const flat = layout?.mode === "system" && existsSync(join(layout.root, "bin/volli-hostd"));
   return {
@@ -94,10 +98,13 @@ export async function managedStatus(
           ? agentState(ports.run, layout, ports.uid())
           : unitState(ports.run, layout.mode),
     // Lingering is logind's; a Mac's agent outlives an SSH login regardless.
-    linger:
-      layout?.mode === "user" && layout.manager === "systemd"
-        ? lingerOf(ports.run, ports.login())
-        : null,
+    linger,
+    startsAt:
+      layout === null
+        ? null
+        : layout.manager === "launchd" || (layout.mode === "user" && linger !== true)
+          ? "login"
+          : "boot",
     dataDir,
     verdict: report?.verdict ?? "not-serving",
     detail: report === null ? "not installed" : (report.detail ?? null),

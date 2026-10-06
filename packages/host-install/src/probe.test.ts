@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   artifactTarget,
   compareVersions,
+  describeStartup,
   describeSystem,
   parseProbe,
   PROBE_SCRIPT,
@@ -186,5 +187,13 @@ describe("the probe", () => {
     expect(compareVersions("1.0.0-canary.1", "1.0.0-canary.2")).toBe(-1);
     expect(compareVersions("1.0.0-canary.2", "1.0.0-canary.1")).toBe(1);
     expect(compareVersions("x.y", "0.0")).toBe(0);
+  });
+});
+
+// VC-700 PR 1c, v1 ruling: a Mac host comes up when its person logs in, and says so.
+describe("when a host starts", () => {
+  it("tells the checklist a Mac starts at its person's login, and says nothing for Linux", () => {
+    expect(describeStartup({ launchd: true }, "studio")).toBe("Starts when you log in to studio");
+    expect(describeStartup({ launchd: false }, "hetzner-1")).toBeNull();
   });
 });
