@@ -14,7 +14,8 @@ describe("Session RPC round-trip primitive", () => {
 
     expect(JSON.parse(JSON.stringify(request))).toEqual(request);
     expect(bridge.request).toHaveBeenCalledWith({
-      procedure: "session.projection",
+      path: "session.projection",
+      type: "query",
       input: { sessionId: "session-353" },
     });
     expect(result).toEqual({
@@ -27,7 +28,7 @@ describe("Session RPC round-trip primitive", () => {
   it("rejects non-JSON requests and transport failures", async () => {
     await expect(
       sessionRpcRoundTrip(
-        { procedure: "session.projection", input: { sequence: 1n } },
+        { path: "session.projection", type: "query", input: { sequence: 1n } },
         { request: vi.fn() },
       ),
     ).rejects.toThrow("JSON-safe");

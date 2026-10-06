@@ -997,7 +997,8 @@ export async function seedDefaultModel(page, pin = null, purpose = "global") {
   const result = await page.evaluate(
     async ({ pinned, forPurpose }) => {
       const inspected = await window.api.sessionRpc.request({
-        procedure: "modelAccess.inspect",
+        path: "modelAccess.inspect",
+        type: "query",
         input: {},
       });
       if (!inspected.ok) return { ok: false, error: inspected };
@@ -1038,7 +1039,8 @@ export async function seedDefaultModel(page, pin = null, purpose = "global") {
         reasoningLevel,
       };
       const saved = await window.api.sessionRpc.request({
-        procedure: "modelAccess.setDefault",
+        path: "modelAccess.setDefault",
+        type: "mutation",
         // `{ purpose, selection }`, which is what the edge has taken since
         // purposes landed. Passing the bare selection made every call here a
         // BAD_REQUEST, and since a `catch`-free `evaluate` reported it as a

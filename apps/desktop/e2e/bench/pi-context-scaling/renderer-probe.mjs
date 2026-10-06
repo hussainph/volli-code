@@ -50,7 +50,8 @@ export function startRendererSampler({ echoPauseMs, rpcPauseMs }) {
     loop(state.echo, echoPauseMs, () => window.api.window.isFullScreen()),
     loop(state.rpc, rpcPauseMs, async () => {
       const response = await window.api.sessionRpc.request({
-        procedure: "modelAccess.defaults",
+        path: "modelAccess.defaults",
+        type: "query",
         input: undefined,
       });
       if (response?.ok !== true) throw new Error("modelAccess.defaults failed");
@@ -73,7 +74,11 @@ export async function stopRendererSampler() {
 export async function warmIpc({ count }) {
   for (let index = 0; index < count; index += 1) {
     await window.api.window.isFullScreen();
-    await window.api.sessionRpc.request({ procedure: "modelAccess.defaults", input: undefined });
+    await window.api.sessionRpc.request({
+      path: "modelAccess.defaults",
+      type: "query",
+      input: undefined,
+    });
   }
   return count;
 }
@@ -95,7 +100,8 @@ export async function hydrateSessions({ sessionIds, selection }) {
     const startedEpochMs = performance.timeOrigin + performance.now();
     const started = performance.now();
     const response = await window.api.sessionRpc.request({
-      procedure: "session.command",
+      path: "session.command",
+      type: "mutation",
       input: {
         commandId: crypto.randomUUID(),
         sessionId,
@@ -136,7 +142,8 @@ export async function bindingCensus({ projectId }) {
   let durableOpen = 0;
   for (const row of chats) {
     const projected = await window.api.sessionRpc.request({
-      procedure: "session.projection",
+      path: "session.projection",
+      type: "query",
       input: { sessionId: row.record.sessionId },
     });
     if (!projected.ok) throw new Error(`session.projection failed for ${row.record.sessionId}`);
