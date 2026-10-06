@@ -33,6 +33,19 @@ function resnapshot(run: () => unknown): void {
   expect(isFeedResnapshotRequired(thrown)).toBe(true);
 }
 
+/** A subscriber that also hears its feed end. */
+function following(feed: BoardChangeFeed, workspaceId: string, after: string | null = null) {
+  const batches: BoardFeedBatch[] = [];
+  const ended: unknown[] = [];
+  feed.subscribe(
+    workspaceId,
+    after,
+    (batch) => batches.push(batch),
+    (error) => ended.push(error),
+  );
+  return { batches, ended };
+}
+
 const seqOf = (cursor: string): number => Number(cursor.split(":")[2]);
 
 describe("stamp and cursor", () => {
@@ -227,6 +240,76 @@ describe("subscribe: resume or resnapshot", () => {
     expect(capture(feed, "p", cursor).batches[0]!.changes).toHaveLength(BOARD_FEED_RETENTION);
     feed.stamp("p", [ticketChange("one-more")]);
     resnapshot(() => feed.subscribe("p", cursor, () => {}));
+  });
+});
+
+describe("epoch and lifecycle", () => {
+  it("re-reads the epoch on every use: an old epoch's cursor resnapshots, and new cursors carry the new one", () => {
+    let epoch = 1;
+    const feed = createBoardChangeFeed({ epochOf: () => epoch });
+    feed.stamp("p", [ticketChange("a")]);
+    const old = feed.cursor("p");
+    expect(old.startsWith("1:")).toBe(true);
+    const live = following(feed, "p", old);
+    epoch = 2;
+    const fresh = feed.cursor("p");
+    expect(fresh.startsWith("2:")).toBe(true);
+    // A new instance: no seq from the old epoch's feed carries over.
+    expect(fresh.split(":")[1]).not.toBe(old.split(":")[1]);
+    expect(seqOf(fresh)).toBe(0);
+    resnapshot(() => feed.subscribe("p", old, () => {}));
+    // The subscriber that was following is told to resnapshot, once, and hears nothing more.
+    expect(live.ended).toHaveLength(1);
+    expect(isFeedResnapshotRequired(live.ended[0])).toBe(true);
+    feed.stamp("p", [ticketChange("b")]);
+    expect(live.batches).toEqual([]);
+    expect(live.ended).toHaveLength(1);
+    expect(capture(feed, "p", fresh).batches[0]!.changes).toEqual([ticketChange("b")]);
+  });
+
+  it("ends a subscription on the stamp that first sees the new epoch, before delivering it", () => {
+    let epoch = 0;
+    const feed = createBoardChangeFeed({ epochOf: () => epoch });
+    const live = following(feed, "p");
+    epoch = 5;
+    feed.stamp("p", [ticketChange("a")]);
+    expect(live.batches).toEqual([]);
+    expect(live.ended).toHaveLength(1);
+    expect(feed.cursor("p")).toMatch(/^5:[^:]+:1$/);
+  });
+
+  it("disposes a removed Workspace's feed, telling its subscribers to resnapshot", () => {
+    const feed = createBoardChangeFeed();
+    feed.stamp("p", [ticketChange("a")]);
+    const old = feed.cursor("p");
+    const live = following(feed, "p");
+    feed.cursor("q");
+    expect(feed.size).toBe(2);
+    feed.dispose("p");
+    feed.dispose("never-held");
+    expect(feed.size).toBe(1);
+    expect(live.ended).toHaveLength(1);
+    expect(isFeedResnapshotRequired(live.ended[0])).toBe(true);
+    resnapshot(() => feed.subscribe("p", old, () => {}));
+  });
+
+  it("releases the feeds of Workspaces the host no longer holds", () => {
+    let held = ["p", "gone"];
+    const feed = createBoardChangeFeed({ workspaces: () => held });
+    feed.stamp("gone", [ticketChange("a", "gone")]);
+    const live = following(feed, "gone");
+    feed.cursor("p");
+    held = ["p"];
+    // An untargeted change releases them...
+    feed.noteDataChanged({});
+    expect(feed.size).toBe(1);
+    expect(live.ended).toHaveLength(1);
+    // ...and so does the next Workspace the feed first meets.
+    held = ["p", "new"];
+    feed.stamp("gone-too", [ticketChange("b", "gone-too")]);
+    expect(feed.size).toBe(2);
+    feed.cursor("new");
+    expect(feed.size).toBe(2);
   });
 });
 

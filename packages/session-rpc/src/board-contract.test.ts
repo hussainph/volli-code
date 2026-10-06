@@ -340,6 +340,24 @@ describeContract("the board", [link], ({ connect }) => {
       expectHostError(
         client.board.snapshot.query({ projectId: "1d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f" }),
       ),
+      // A comment on this board linking another Workspace's Session, or one
+      // that does not exist: the reference refuses like the subject would.
+      expectHostError(
+        client.board.createComment.mutate({
+          commandId: COMMAND,
+          ticketId: "ticket-a",
+          body: "Linked",
+          sessionId: "session-x",
+        }),
+      ),
+      expectHostError(
+        client.board.createComment.mutate({
+          commandId: SECOND_COMMAND,
+          ticketId: "ticket-a",
+          body: "Linked",
+          sessionId: "session-none",
+        }),
+      ),
     ]);
     for (const refusal of refusals) {
       expect(refusal).toStrictEqual({
@@ -352,10 +370,10 @@ describeContract("the board", [link], ({ connect }) => {
     expect(
       await expectHostError(client.session.list.query({ projectId: OTHER_WORKSPACE })),
     ).toStrictEqual(refusals[0]);
-    // The one port answers every family's kinds: a Session is no board kind,
-    // and the board's answer for it is no Workspace.
+    // The one port answers every family's kinds: a Session in another
+    // Workspace refuses its own family's read the same way.
     expect(
-      await expectHostError(client.session.snapshot.query({ sessionId: "session-a" })),
+      await expectHostError(client.session.snapshot.query({ sessionId: "session-x" })),
     ).toStrictEqual(refusals[0]);
     expect(board.reached).toEqual([]);
   });

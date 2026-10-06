@@ -14,6 +14,11 @@
  *   per stamp within one instance (this process's feed for one Workspace).
  *   Never compared across Workspaces, instances or epochs: a cursor from
  *   another is `subscription-resnapshot-required`.
+ * - **Epoch.** Read on every use, never cached: when a Workspace's authority
+ *   epoch changes, its feed ends (every subscriber is told to resnapshot) and
+ *   a new instance starts, so no cursor minted under the old epoch resumes and
+ *   no new cursor carries it. A Workspace the host no longer holds has its
+ *   feed ended the same way ({@link BoardChangeFeed.dispose}).
  * - **Retention.** A bounded window compacted to the latest change per
  *   entity, tombstones included. A cursor older than what the window still
  *   answers for is `subscription-resnapshot-required`; a host restart starts a
@@ -32,6 +37,9 @@ export interface BoardFeedBatch {
 }
 
 export type BoardFeedListener = (batch: BoardFeedBatch) => void;
+
+/** Told once when a subscription's feed ends under it: the error says resnapshot. */
+export type BoardFeedEnded = (error: FeedResnapshotRequiredError) => void;
 
 /** Entities a Workspace's window answers for before it compacts the oldest away. */
 export const BOARD_FEED_RETENTION = 2_048;
@@ -58,7 +66,8 @@ class WorkspaceFeed {
   /** Changes past this seq were compacted away: a cursor below it cannot resume. */
   floor = 0;
   readonly latest = new Map<string, Stamped>();
-  readonly listeners = new Set<BoardFeedListener>();
+  /** Each subscriber, with what to tell it if this feed ends under it. */
+  readonly listeners = new Map<BoardFeedListener, BoardFeedEnded | undefined>();
 
   constructor(readonly epoch: number) {}
 }
@@ -79,19 +88,56 @@ export class BoardChangeFeed {
     this.#retention = options.retention ?? BOARD_FEED_RETENTION;
   }
 
+  /**
+   * The Workspace's live feed, under its epoch as it stands now: a feed made
+   * under another epoch ends here and a new instance takes its place.
+   */
   #feed(workspaceId: string): WorkspaceFeed {
-    let feed = this.#feeds.get(workspaceId);
-    if (feed === undefined) {
-      feed = new WorkspaceFeed(this.#options.epochOf?.(workspaceId) ?? 0);
-      this.#feeds.set(workspaceId, feed);
-    }
+    const epoch = this.#options.epochOf?.(workspaceId) ?? 0;
+    const held = this.#feeds.get(workspaceId);
+    if (held !== undefined && held.epoch === epoch) return held;
+    if (held === undefined) this.#prune();
+    else this.#end(workspaceId, held);
+    const feed = new WorkspaceFeed(epoch);
+    this.#feeds.set(workspaceId, feed);
     return feed;
+  }
+
+  /** Drops a feed and tells each of its subscribers to resnapshot. */
+  #end(workspaceId: string, feed: WorkspaceFeed): void {
+    if (this.#feeds.get(workspaceId) === feed) this.#feeds.delete(workspaceId);
+    const ended = [...feed.listeners.values()];
+    feed.listeners.clear();
+    for (const onEnded of ended) onEnded?.(new FeedResnapshotRequiredError());
+  }
+
+  /** Ends the feeds of Workspaces the host no longer holds, when it can say which it holds. */
+  #prune(): void {
+    if (this.#options.workspaces === undefined || this.#feeds.size === 0) return;
+    const held = new Set(this.#options.workspaces());
+    // Deleting the entry being visited is safe in a Map's own iteration.
+    for (const [workspaceId, feed] of this.#feeds) {
+      if (!held.has(workspaceId)) this.#end(workspaceId, feed);
+    }
+  }
+
+  /**
+   * Ends one Workspace's feed (it was removed): its cache is released and its
+   * subscribers told to resnapshot. A later use starts a new instance.
+   */
+  dispose(workspaceId: string): void {
+    const feed = this.#feeds.get(workspaceId);
+    if (feed !== undefined) this.#end(workspaceId, feed);
+  }
+
+  /** How many Workspaces have a feed in memory (a test's view of disposal). */
+  get size(): number {
+    return this.#feeds.size;
   }
 
   /** The Workspace's current cursor: what a snapshot read in the same turn reflects. */
   cursor(workspaceId: string): string {
-    const feed = this.#feed(workspaceId);
-    return `${feed.epoch}:${feed.instance}:${feed.seq}`;
+    return cursorOf(this.#feed(workspaceId));
   }
 
   /**
@@ -114,12 +160,12 @@ export class BoardChangeFeed {
       feed.floor = oldest.seq;
     }
     const batch: BoardFeedBatch = {
-      cursor: this.cursor(workspaceId),
+      cursor: cursorOf(feed),
       changes,
     };
     // A copy: a listener may unsubscribe while the batch is delivered.
     // oxlint-disable-next-line unicorn/no-useless-spread
-    for (const listener of [...feed.listeners]) listener(batch);
+    for (const listener of [...feed.listeners.keys()]) listener(batch);
   }
 
   /**
@@ -148,6 +194,7 @@ export class BoardChangeFeed {
       scope.projectId ??
       (ticketId === undefined ? undefined : this.#options.projectOfTicket?.(ticketId));
     if (projectId === undefined) {
+      this.#prune();
       const every = this.#options.workspaces?.() ?? [...this.#feeds.keys()];
       for (const workspaceId of every) {
         this.stamp(workspaceId, [
@@ -183,19 +230,25 @@ export class BoardChangeFeed {
    * the latest change of every entity stamped after that cursor, then live;
    * without one, live only (a Client that read a snapshot in this turn).
    * Throws {@link FeedResnapshotRequiredError} for a cursor this feed cannot
-   * resume: another epoch or instance, compacted past, or never minted.
-   * Returns the unsubscribe.
+   * resume: another epoch or instance, compacted past, or never minted. Once
+   * following, `onEnded` hears the same error if the feed ends under it (an
+   * epoch change, or the Workspace removed). Returns the unsubscribe.
    */
-  subscribe(workspaceId: string, after: string | null, listener: BoardFeedListener): () => void {
+  subscribe(
+    workspaceId: string,
+    after: string | null,
+    listener: BoardFeedListener,
+    onEnded?: BoardFeedEnded,
+  ): () => void {
     const feed = this.#feed(workspaceId);
     if (after !== null) {
       const seq = this.#resumable(feed, after);
       const replay = [...feed.latest.values()]
         .filter((stamped) => stamped.seq > seq)
         .map((stamped) => stamped.change);
-      if (replay.length > 0) listener({ cursor: this.cursor(workspaceId), changes: replay });
+      if (replay.length > 0) listener({ cursor: cursorOf(feed), changes: replay });
     }
-    feed.listeners.add(listener);
+    feed.listeners.set(listener, onEnded);
     return () => {
       feed.listeners.delete(listener);
     };
@@ -216,6 +269,10 @@ export class BoardChangeFeed {
     }
     return seq;
   }
+}
+
+function cursorOf(feed: WorkspaceFeed): string {
+  return `${feed.epoch}:${feed.instance}:${feed.seq}`;
 }
 
 /** One host's board feeds. A composition root makes one and hands it to its handlers and its bus. */

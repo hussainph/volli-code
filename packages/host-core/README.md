@@ -755,12 +755,16 @@ echoes to the desktop window that asked unless the change moved a checkout.
 Doors hold no repository: desktop's legacy board channels, the board router
 and the socket's `ticket.move` all invoke the map.
 
-- `receipts.ts`: `board_command_receipts` (migration 062). Same `commandId`
-  and intent replays the recorded answer; another intent is a branded
-  `CommandIntentConflict`. Pruned after seven days; excluded from backups.
+- `receipts.ts`: `board_command_receipts` (migration 062), written in the
+  effect's own transaction (a move's through `TicketMoveSeam`). Same
+  `commandId` and intent replays: the recorded outcome with the resource as it
+  stands now; another intent is a branded `CommandIntentConflict`. Seven days
+  is a hard expiry (an expired receipt never answers); excluded from backups.
 - `change-feed.ts`: `BoardChangeFeed`, one in-memory feed per Workspace with an
   opaque `epoch:instance:seq` cursor, a compacted 2,048-entity window, and
-  resume-or-resnapshot. A root makes one, hands it to `createHostHandlers`
+  resume-or-resnapshot. The epoch is read on every use: a changed epoch, or a
+  removed Workspace (`dispose`), ends the feed and tells its followers to
+  resnapshot. A root makes one, hands it to `createHostHandlers`
   (`boardFeed`) and feeds it every `data-changed` its bus carries
   (`noteDataChanged`): desktop through `tapDataChanged` (`broadcast.ts`), hostd
   through `headlessPorts`.

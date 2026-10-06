@@ -1676,6 +1676,8 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
+    // A removed Workspace's board feed is released, its followers told to resnapshot.
+    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its

@@ -14,7 +14,9 @@
  *   command; a feed cursor is `feed-a:<seq>`, and `board.changes` replays
  *   strictly after one this feed minted, then goes live, and throws
  *   `FeedResnapshotRequiredError` for any other;
- * - `resourceWorkspace` answers a ticket's, comment's and label's project.
+ * - `resourceWorkspace` answers a ticket's, comment's and label's project,
+ *   and a Session's: `session-a` and `session-b` work on this board,
+ *   `session-x` in {@link OTHER_WORKSPACE}.
  *
  * Ids and clocks are counters, so two fakes driven alike answer byte-for-byte
  * alike.
@@ -43,6 +45,7 @@ import {
   type BoardRouterHandlers,
 } from "./board-router";
 import type { WorkspaceResource } from "./catalog";
+import { SESSION_RESOURCE } from "./session-catalog";
 
 export const BOARD_WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 export const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
@@ -126,6 +129,13 @@ function withoutArchive({ archivedAt: _archivedAt, ...row }: Row): Ticket {
 function summary({ body: _body, ...row }: Ticket) {
   return row;
 }
+
+/** The Sessions the fake knows, by Workspace. */
+const SESSIONS: Readonly<Record<string, string>> = {
+  "session-a": BOARD_WORKSPACE,
+  "session-b": BOARD_WORKSPACE,
+  "session-x": OTHER_WORKSPACE,
+};
 
 export function fakeBoard(): FakeBoard {
   let clock = 1_000;
@@ -554,6 +564,8 @@ export function fakeBoard(): FakeBoard {
         }
         case LABEL_RESOURCE:
           return labels.get(resource.id)?.projectId ?? null;
+        case SESSION_RESOURCE:
+          return SESSIONS[resource.id] ?? null;
         default:
           return null;
       }

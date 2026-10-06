@@ -44,7 +44,7 @@ import { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";
 import type { EnsureOutcome } from "../worktree";
 import type { WorktreeResult } from "../worktree/types";
 import { createBoardChangeFeed, type BoardChangeFeed, type BoardFeedBatch } from "./change-feed";
-import { ticketSummary } from "./commands";
+import { createBoardHandlers, ticketSummary } from "./commands";
 
 const USER: HandlerCall = { actor: { kind: "user" } };
 const WINDOW: HandlerCall = { actor: { kind: "user" }, origin: "desktop-window" };
@@ -614,6 +614,35 @@ describe("ticket writes", () => {
     ).toBe(true);
   });
 
+  it("replays with the row as it stands now and the cursor through it, after someone else's edit", async () => {
+    seed("t-1");
+    const map = handlers();
+    const input = { ticketId: "t-1", commandId: "c-mine", priority: "high" as const };
+    const first = await map["board.setPriority"](input, USER);
+    await map["board.updateTicket"](
+      { ticketId: "t-1", title: "Theirs", commandId: "c-theirs" },
+      SESSION,
+    );
+    const again = await map["board.setPriority"](input, USER);
+    expect(again.receipt).toEqual({ ...first.receipt, replayed: true });
+    // Never a row older than the cursor it names.
+    expect(again.ticket).toEqual(getTicket(ctx.db, "t-1"));
+    expect(again.ticket).toMatchObject({ title: "Theirs", priority: "high" });
+    expect(again.throughCursor).toBe(feed.cursor(PROJECT));
+  });
+
+  it("refuses the retry of a ticket write once the ticket is gone, as it refuses any write", async () => {
+    seed("t-1");
+    const map = handlers();
+    const input = { ticketId: "t-1", commandId: "c-gone", priority: "low" as const };
+    await map["board.setPriority"](input, WINDOW);
+    await map["board.archiveTicket"]({ ticketId: "t-1" }, WINDOW);
+    await map["board.deleteTicket"]({ ticketId: "t-1" }, WINDOW);
+    await expect(async () => map["board.setPriority"](input, WINDOW)).rejects.toThrow(
+      "Unknown ticket",
+    );
+  });
+
   it("refuses an unknown ticket without a receipt", async () => {
     const map = handlers();
     await expect(async () =>
@@ -1103,6 +1132,119 @@ describe("moves", () => {
     expect(published()).toEqual([]);
   });
 
+  it("commits a move's receipt in the move's transaction: a receipt that cannot be written undoes the move", async () => {
+    seed("a", "todo");
+    seed("b", "todo");
+    ctx.db.exec(
+      "CREATE TEMP TRIGGER deny_receipt BEFORE INSERT ON board_command_receipts BEGIN SELECT RAISE(ABORT, 'receipt denied'); END",
+    );
+    const map = handlers();
+    const input = {
+      projectId: PROJECT,
+      ticketId: "a",
+      toStatus: "doing" as const,
+      toIndex: 0,
+      commandId: "c-atomic",
+    };
+    const before = counts();
+    const ticketsBefore = listTicketsByProject(ctx.db, PROJECT);
+    await expect(async () => map["board.moveTickets"](input, USER)).rejects.toThrow(
+      "receipt denied",
+    );
+    // Nothing committed, so nothing was woken, stamped or announced.
+    expect(listTicketsByProject(ctx.db, PROJECT)).toEqual(ticketsBefore);
+    expect(counts()).toEqual(before);
+    expect(wakes).toEqual([]);
+    expect(batches).toEqual([]);
+    expect(published()).toEqual([]);
+    // The retry, once the receipt can be written, moves exactly once.
+    ctx.db.exec("DROP TRIGGER deny_receipt");
+    const answer = await map["board.moveTickets"](input, USER);
+    expect(answer.receipt).toEqual(receipt("c-atomic"));
+    expect(getTicket(ctx.db, "a")?.status).toBe("doing");
+    expect(counts().board_command_receipts).toBe(1);
+  });
+
+  it("stamps a move and records its receipt before any wake: a retry the wake sets off replays", async () => {
+    seed("a", "todo");
+    const map = handlers();
+    const input = {
+      projectId: PROJECT,
+      ticketId: "a",
+      toStatus: "doing" as const,
+      toIndex: 0,
+      commandId: "c-reentrant",
+    };
+    const seen: { stamped: number; receipts: number }[] = [];
+    let retried: unknown;
+    const stop = subscribeTicketWake(() => {
+      seen.push({ stamped: batches.length, receipts: counts().board_command_receipts });
+      // A listener that retries the same command in the wake's own turn.
+      retried ??= map["board.moveTickets"](input, USER);
+    });
+    try {
+      const first = await map["board.moveTickets"](input, USER);
+      expect(first.receipt).toEqual(receipt("c-reentrant"));
+      expect(await retried).toEqual({
+        receipt: { ...receipt("c-reentrant"), replayed: true },
+        throughCursor: first.throughCursor,
+        tickets: first.tickets,
+      });
+    } finally {
+      stop();
+    }
+    // Every wake saw the feed already stamped and the receipt already durable.
+    expect(seen.length).toBeGreaterThan(0);
+    for (const at of seen) expect(at).toEqual({ stamped: 1, receipts: 1 });
+    expect(
+      listTicketEvents(ctx.db, "a").filter((e) => e.payload.kind === "status_changed"),
+    ).toHaveLength(1);
+  });
+
+  it("refuses a move port that never runs the receipt it was handed", async () => {
+    seed("a", "todo");
+    const board = createBoardHandlers({
+      db: ctx.db,
+      now: () => 50,
+      events: { publish } as never,
+      feed,
+      worktree: () => ({ db: ctx.db }) as never,
+      busyWorktreeSites: async () => [],
+      ticketSignals: null,
+      // Moves, but ignores the seam: no receipt joins its transaction.
+      move: (input) => {
+        void input;
+        return listTicketsByProject(ctx.db, PROJECT);
+      },
+    });
+    expect(() =>
+      board["board.moveTickets"](
+        { projectId: PROJECT, ticketId: "a", toStatus: "doing", toIndex: 0, commandId: "c-x" },
+        USER,
+      ),
+    ).toThrow("The move did not record its receipt in its transaction");
+    expect(counts().board_command_receipts).toBe(0);
+  });
+
+  it("records the receipt of a column-only no-op, so its retry replays rather than moving", async () => {
+    seed("a", "todo");
+    const map = handlers();
+    const input = {
+      projectId: PROJECT,
+      ticketId: "a",
+      toStatus: "todo" as const,
+      commandId: "c-noop",
+    };
+    const first = await map["board.moveTickets"](input, USER);
+    expect(first.receipt).toEqual(receipt("c-noop"));
+    expect(counts().board_command_receipts).toBe(1);
+    // Someone else moves it; the retry of the no-op must not move it back.
+    await map["ticket.move"]({ projectId: PROJECT, ticketId: "a", toStatus: "doing" }, SESSION);
+    const again = await map["board.moveTickets"](input, USER);
+    expect(again.receipt?.replayed).toBe(true);
+    expect(getTicket(ctx.db, "a")?.status).toBe("doing");
+  });
+
   it("stamps nothing for a move to the column a ticket already holds", async () => {
     seed("a", "todo");
     await handlers()["ticket.move"]({ projectId: PROJECT, ticketId: "a", toStatus: "todo" }, USER);
@@ -1253,12 +1395,74 @@ describe("worktree scope", () => {
       USER,
     );
     const again = await map["board.updateTicket"](on, USER);
+    // The replay answers the ticket as it stands now, scope off.
     expect(again).toEqual({
       ...first,
       receipt: { ...first.receipt, replayed: true },
       throughCursor: feed.cursor(PROJECT),
+      ticket: getTicket(ctx.db, "t-1"),
     });
+    expect(again.ticket.usesWorktree).toBe(false);
     expect(ensure).toHaveBeenCalledTimes(1);
     expect(getTicketRow(ctx.db, "t-1")?.uses_worktree).toBe(0);
+  });
+
+  it("replays a successful materialization with the checkout it made, not the row before it", async () => {
+    seed("t-1");
+    const ensure = vi.spyOn(worktreeModule, "ensure").mockImplementation(async () => {
+      ctx.db
+        .prepare("UPDATE tickets SET worktree_path = ?, branch = ? WHERE id = ?")
+        .run("/made/checkout", "volli/VC-1-t-1", "t-1");
+      return ENSURED;
+    });
+    const map = handlers();
+    const input = { ticketId: "t-1", usesWorktree: true, commandId: "c-made" };
+    const first = await map["board.updateTicket"](input, USER);
+    expect(first.ticket).toMatchObject({
+      worktreePath: "/made/checkout",
+      branch: "volli/VC-1-t-1",
+    });
+    const stamped = batches.length;
+    const again = await map["board.updateTicket"](input, USER);
+    expect(again).toEqual({ ...first, receipt: { ...first.receipt, replayed: true } });
+    expect(again.ticket).toEqual(getTicket(ctx.db, "t-1"));
+    expect(again.throughCursor).toBe(feed.cursor(PROJECT));
+    expect(batches).toHaveLength(stamped);
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a retry during the materialization with the row as it stands, and runs one ensure", async () => {
+    seed("t-1");
+    const pending = deferred<Ensured>();
+    const ensure = vi.spyOn(worktreeModule, "ensure").mockReturnValue(pending.promise);
+    const map = handlers();
+    const input = { ticketId: "t-1", usesWorktree: true, commandId: "c-flight" };
+    const first = map["board.updateTicket"](input, USER);
+    const during = await map["board.updateTicket"](input, USER);
+    expect(during.receipt?.replayed).toBe(true);
+    expect(during.ticket).toEqual(getTicket(ctx.db, "t-1"));
+    expect(during.throughCursor).toBe(feed.cursor(PROJECT));
+    ctx.db.prepare("UPDATE tickets SET worktree_path = '/made' WHERE id = 't-1'").run();
+    pending.resolve(ENSURED);
+    expect((await first).ticket.worktreePath).toBe("/made");
+    expect((await map["board.updateTicket"](input, USER)).ticket.worktreePath).toBe("/made");
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the committed switch's receipt when materialization fails: the retry replays, never ensures", async () => {
+    seed("t-1");
+    const ensure = vi
+      .spyOn(worktreeModule, "ensure")
+      .mockResolvedValue({ ok: false, error: "git exploded" } satisfies Ensured);
+    const map = handlers();
+    const input = { ticketId: "t-1", usesWorktree: true, commandId: "c-fail" };
+    await expect(async () => map["board.updateTicket"](input, USER)).rejects.toThrow(
+      "worktree scope is on, but git exploded",
+    );
+    const again = await map["board.updateTicket"](input, USER);
+    expect(again.receipt?.replayed).toBe(true);
+    expect(again.ticket).toEqual(getTicket(ctx.db, "t-1"));
+    expect(again.ticket.usesWorktree).toBe(true);
+    expect(ensure).toHaveBeenCalledTimes(1);
   });
 });

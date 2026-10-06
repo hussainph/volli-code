@@ -452,6 +452,22 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+describe("project removal", () => {
+  it("tells the host after the project is gone, so it releases the board feed it held", () => {
+    const removed = vi.fn<(projectId: string) => void>();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, onProjectRemoved: removed },
+    );
+    const projectId = createProject();
+    removed.mockImplementation(() => {
+      expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    });
+    expect(invoke<ProjectMutationResult>("volli:project-remove", projectId)).toEqual({ ok: true });
+    expect(removed).toHaveBeenCalledExactlyOnceWith(projectId);
+  });
+});
+
 describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);

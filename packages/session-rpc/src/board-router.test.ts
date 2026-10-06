@@ -42,6 +42,7 @@ import {
   catalogErrorFormatter,
   hostErrorOf,
   LOCAL_DESKTOP_CALLER,
+  PROJECT_RESOURCE,
   WORKSPACE_UNKNOWN_MESSAGE,
   type RouterCaller,
   type RouterTransport,
@@ -49,6 +50,7 @@ import {
 } from "./catalog";
 import { createHostRouter } from "./host-router";
 import { createSessionRouter, RpcDiagnosticLog } from "./index";
+import { SESSION_RESOURCE } from "./session-catalog";
 
 const WORKSPACE = "9f6a2d4e-0b7c-4c1e-8a35-2f6d9e0c7b14";
 const OTHER = "1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081";
@@ -152,24 +154,28 @@ interface Names {
   ticketId: string;
   commentId: string;
   labelId: string;
+  sessionId: string;
 }
 const OWNED: Names = {
   projectId: WORKSPACE,
   ticketId: "ticket-1",
   commentId: "comment-1",
   labelId: "label-1",
+  sessionId: "session-1",
 };
 const FOREIGN: Names = {
   projectId: OTHER,
   ticketId: "ticket-x",
   commentId: "comment-x",
   labelId: "label-x",
+  sessionId: "session-x",
 };
 const MISSING: Names = {
   projectId: ABSENT,
   ticketId: "ticket-gone",
   commentId: "comment-gone",
   labelId: "label-gone",
+  sessionId: "session-gone",
 };
 
 /** Where each resource the context's port answers lives; anything else is absent. */
@@ -181,10 +187,18 @@ const WORKSPACE_OF: Readonly<Record<string, string>> = {
   [`${TICKET_RESOURCE}:ticket-x`]: OTHER,
   [`${COMMENT_RESOURCE}:comment-x`]: OTHER,
   [`${LABEL_RESOURCE}:label-x`]: OTHER,
+  [`${SESSION_RESOURCE}:session-1`]: WORKSPACE,
+  [`${SESSION_RESOURCE}:session-x`]: OTHER,
 };
 
 /** One valid input per board path, naming `names`' resources. */
-function inputs({ projectId, ticketId, commentId, labelId }: Names): Record<BoardPath, unknown> {
+function inputs({
+  projectId,
+  ticketId,
+  commentId,
+  labelId,
+  sessionId,
+}: Names): Record<BoardPath, unknown> {
   return {
     "ticket.move": { projectId, ticketId, toStatus: "done" },
     "board.snapshot": { projectId },
@@ -214,7 +228,7 @@ function inputs({ projectId, ticketId, commentId, labelId }: Names): Record<Boar
     "board.archiveTicket": { commandId: COMMAND, ticketId },
     "board.unarchiveTicket": { commandId: COMMAND, ticketId },
     "board.deleteTicket": { commandId: COMMAND, ticketId },
-    "board.createComment": { commandId: COMMAND, ticketId, body: "Hi" },
+    "board.createComment": { commandId: COMMAND, ticketId, body: "Hi", sessionId },
     "board.updateComment": { commandId: COMMAND, commentId, body: "Edited" },
     "board.removeComment": { commandId: COMMAND, commentId },
     "board.setLabelColor": { commandId: COMMAND, labelId, color: null },
@@ -258,6 +272,23 @@ const ANSWERS: Record<Exclude<BoardPath, "board.changes">, { handler: unknown; w
 
 function same(value: unknown) {
   return { handler: value, wire: value };
+}
+
+/** Every property name ending `Id`/`Ids` anywhere in a JSON schema. */
+function idFieldsOf(schema: unknown, into = new Set<string>()): Set<string> {
+  if (Array.isArray(schema)) {
+    for (const item of schema) idFieldsOf(item, into);
+  } else if (schema !== null && typeof schema === "object") {
+    for (const [key, value] of Object.entries(schema)) {
+      if (key === "properties") {
+        for (const field of Object.keys(value as object)) {
+          if (/Ids?$/.test(field)) into.add(field);
+        }
+      }
+      idFieldsOf(value, into);
+    }
+  }
+  return into;
 }
 
 // ------------------------------------------------------------------ harness
@@ -433,6 +464,91 @@ describe("another Workspace's board answers exactly as an absent one", () => {
       ),
     ).toMatchObject({ reason: "workspace-unknown" });
     expect(board.calls).toEqual([]);
+  });
+
+  /**
+   * Every id an input names, by field: the resource the router authorizes it
+   * as, or why it is none. A new id field fails here until it is classified,
+   * so no operation can grow an unauthorized reference unnoticed.
+   */
+  const ID_FIELDS: Record<string, string | null> = {
+    projectId: PROJECT_RESOURCE,
+    ticketId: TICKET_RESOURCE,
+    ticketIds: TICKET_RESOURCE,
+    commentId: COMMENT_RESOURCE,
+    labelId: LABEL_RESOURCE,
+    sessionId: SESSION_RESOURCE,
+    // The Client's idempotency key, scoped by the receipt's Workspace.
+    commandId: null,
+    // An Option-drag's pick: the host looks it up only among the Automations
+    // of the board the move lands on, so a foreign id picks nothing.
+    automationId: null,
+    // The feed's own cursor, minted for this Workspace's feed and refused
+    // (resnapshot) from any other.
+    lastEventId: null,
+    // Host-wide catalogs (models, harnesses), not anything a Workspace owns.
+    providerId: null,
+    modelId: null,
+    preferredHarnessId: null,
+  };
+
+  it("classifies every id every board input names", () => {
+    const unclassified = Object.entries(boardProcedureSchemas()).flatMap(([path, schema]) =>
+      [...idFieldsOf(z.toJSONSchema(schema.input, { io: "input" }))]
+        .filter((field) => !(field in ID_FIELDS))
+        .map((field) => `${path}.${field}`),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  it.each(
+    PATHS.flatMap((path) =>
+      Object.keys(inputs(OWNED)[path] as object)
+        .filter((field) => ID_FIELDS[field] !== null && field in ID_FIELDS)
+        .map((field) => [path, field] as const),
+    ),
+  )("%s refuses a foreign or absent %s, even beside resources it owns", async (path, field) => {
+    const board = boardHarness({ answers: cannedAnswers() });
+    const procedure = procedureAt(board.caller, path);
+    const naming = (names: Names) => {
+      const named = names[(field === "ticketIds" ? "ticketId" : field) as keyof Names];
+      return {
+        ...(inputs(OWNED)[path] as object),
+        [field]: field === "ticketIds" ? [named] : named,
+      };
+    };
+    const foreign = reasonOf(await refusal(procedure, naming(FOREIGN)));
+    expect(foreign).toEqual({
+      code: "NOT_FOUND",
+      reason: "workspace-unknown",
+      message: WORKSPACE_UNKNOWN_MESSAGE,
+    });
+    expect(reasonOf(await refusal(procedure, naming(MISSING)))).toEqual(foreign);
+    expect(board.calls).toEqual([]);
+  });
+
+  it("asks for the Session a comment links to as a reference, and serves it in the Workspace", async () => {
+    const board = boardHarness({ answers: cannedAnswers() });
+    await board.caller.board.createComment(inputs(OWNED)["board.createComment"] as never);
+    expect(board.asked).toEqual([
+      { kind: TICKET_RESOURCE, id: "ticket-1" },
+      { kind: SESSION_RESOURCE, id: "session-1", relation: "reference" },
+    ]);
+    // No Session named, nothing more to ask.
+    board.asked.length = 0;
+    for (const sessionId of [null, undefined]) {
+      await board.caller.board.createComment({
+        commandId: COMMAND,
+        ticketId: "ticket-1",
+        body: "Hi",
+        ...(sessionId === undefined ? {} : { sessionId }),
+      });
+    }
+    expect(board.asked).toEqual([
+      { kind: TICKET_RESOURCE, id: "ticket-1" },
+      { kind: TICKET_RESOURCE, id: "ticket-1" },
+    ]);
+    expect(board.calls).toHaveLength(3);
   });
 
   it("refuses every ticket, comment and label without a port, and still serves its board", async () => {
@@ -827,6 +943,25 @@ describe("board.changes", () => {
     expect(reasonOf(error)).toMatchObject({
       code: "INTERNAL_SERVER_ERROR",
       reason: "subscription-source-failed",
+    });
+    expect(state.unsubscribed).toBe(1);
+  });
+
+  it("drains what it holds, then ends subscription-resnapshot-required when the feed ends under it", async () => {
+    const { state, answers } = feed((sink) => {
+      sink.emit(batch("c-1"));
+      // The Workspace's epoch changed, or it was removed.
+      sink.fail(new FeedResnapshotRequiredError());
+    });
+    const board = boardHarness({ answers });
+    const iterator = (await board.caller.board.changes({ projectId: WORKSPACE }))[
+      Symbol.asyncIterator
+    ]();
+    expect(await iterator.next()).toEqual({ done: false, value: tracked("c-1", batch("c-1")) });
+    const error = await iterator.next().catch((caught: unknown) => caught);
+    expect(reasonOf(error)).toMatchObject({
+      code: "PRECONDITION_FAILED",
+      reason: "subscription-resnapshot-required",
     });
     expect(state.unsubscribed).toBe(1);
   });

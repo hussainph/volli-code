@@ -1146,6 +1146,28 @@ describe("the host protocol listener (VC-663)", () => {
       expect(
         await expectHostError(trpc.board.snapshot.query({ projectId: OTHER_WORKSPACE })),
       ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      // So does every resource a write only refers to: a comment on this
+      // Workspace's ticket linking another Workspace's Session, or a Session
+      // that does not exist, is refused before anything is written.
+      db.prepare(
+        "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("foreign-session", OTHER_WORKSPACE, null, "Elsewhere", 1);
+      for (const [sessionId, linkCommand] of [
+        ["foreign-session", "7d444840-9dc0-4c2c-9bd1-0e3fdb6e6c7c"],
+        ["no-such-session", "a3bb189e-8bf9-4888-9912-ace4e6543002"],
+      ] as const) {
+        expect(
+          await expectHostError(
+            trpc.board.createComment.mutate({
+              commandId: linkCommand,
+              ticketId: created.ticket.id,
+              body: "Linked",
+              sessionId,
+            }),
+          ),
+        ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      }
+      expect(await trpc.board.comments.query({ ticketId: created.ticket.id })).toEqual([]);
       // A cursor this feed never minted resnapshots instead of pretending to resume.
       const stale = recordSubscription((handlers) =>
         trpc.board.changes.subscribe(
