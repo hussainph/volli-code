@@ -675,9 +675,20 @@ What the backend owns, beyond the registry's policy:
   Chromium's frames acked on arrival; `next(signal)` cancels, and the tab
   closing or going headless ends every attachment. A viewer asks for a scale
   (2 on Retina) and gets the highest any attachment asked for, up to the
-  browser's own. The person's input arrives through `viewerInput` (pointer,
-  wheel, keys, committed text and IME composition) and closes the transcript
-  camera for desktop's quiet window. Both are optional `BrowserBackend`
+  browser's own. Each tab's cast is reconfigured by one serial, coalescing
+  worker: from a request (attach, detach, resize, scale) no frame is offered
+  until a cast of the new shape has started, and only then do attachments
+  hear the new metadata; every frame's real JPEG size is checked against the
+  live cast, and one from before (or of another scale) is dropped, though
+  every frame is still acked. A zero-viewer stop is always the last word. The
+  person's input arrives through `viewerInput` (pointer with the DOM
+  `buttons` mask, so a drag is a drag; wheel, keys, committed text and IME
+  composition) and closes the transcript camera for desktop's quiet window;
+  it never takes or moves the agent hold. A shown tab's JavaScript dialog,
+  while a viewer is attached, waits for the person: `pendingDialog`,
+  `respondToDialog` and each attachment's `onDialog` carry it, and nobody
+  answering within `CHROMIUM_DIALOG_ANSWER_TIMEOUT_MS` (or the last viewer
+  leaving) gets the safe answer. These are optional `BrowserBackend`
   members, refused for a headless tab: the seam stays open to capabilities
   one engine has and another does not.
 - **The parity bench** (`chromium-parity.test.ts`) measures, at 1× and 2×,

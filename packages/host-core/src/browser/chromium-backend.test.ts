@@ -315,6 +315,11 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     one.onMetadata((metadata) => scales.push(metadata.deviceScaleFactor));
     const two = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 2 });
     expect(two.metadata().deviceScaleFactor).toBe(2);
+    // The first viewer hears the new shape only once frames of it can follow.
+    await eventually(
+      async () => scales,
+      (heard) => heard.length === 1,
+    );
     expect(scales).toEqual([2]);
     // The person's click reaches the page, and closes the camera for the quiet window.
     for (const type of ["pressed", "released"] as const) {
@@ -324,18 +329,21 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
         x: 50,
         y: 50,
         button: "left",
+        buttons: type === "pressed" ? 1 : 0,
         clickCount: 1,
         modifiers: 0,
       });
     }
-    const sharp = await eventually(
-      async () => jpegSize((await two.next(AbortSignal.timeout(5_000)))!.bytes),
-      (size) => size?.width === 2_560,
-    );
+    // Every frame a 2x attachment is given is drawn at 2x: none from before.
+    const sharp = jpegSize((await two.next(AbortSignal.timeout(5_000)))!.bytes);
     expect(sharp).toEqual({ width: 2_560, height: 1_440 });
     expect(await backend.capturePicture(nav.tabId)).toBeNull();
 
     two.detach();
+    await eventually(
+      async () => scales,
+      (heard) => heard.length === 2,
+    );
     expect(scales).toEqual([2, 1]);
     backend.setPresentation(nav.tabId, "headless");
     await expect(one.next()).resolves.toBeNull();
@@ -344,6 +352,89 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     );
     driver.dispose();
   }, 30_000);
+
+  it("drags with the pressed button held: the page sees event.buttons and selects text (B7)", async () => {
+    const driver = port("drag", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/drag") },
+      signal: signal(),
+    });
+    backend.setPresentation(nav.tabId, "preview");
+    const holder = backend.heldBy(nav.tabId);
+    const mouse = (
+      type: "pressed" | "moved" | "released",
+      x: number,
+      buttons: number,
+    ): Promise<void> =>
+      backend.viewerInput(nav.tabId, {
+        kind: "mouse",
+        type,
+        x,
+        y: 24,
+        button: type === "moved" ? "none" : "left",
+        buttons,
+        clickCount: type === "moved" ? 0 : 1,
+        modifiers: 0,
+      });
+    await mouse("moved", 12, 0);
+    await mouse("pressed", 12, 1);
+    for (const x of [80, 160, 240, 320]) await mouse("moved", x, 1);
+    await mouse("released", 320, 0);
+    const settled = await eventually(
+      () => driver.snapshot({ tabId: nav.tabId, signal: signal() }),
+      (snap) => snap.title.startsWith("buttons:"),
+    );
+    expect(settled.title).toMatch(/^buttons:1 selected:Select these/);
+    // The person's drag neither took nor moved the agent hold.
+    expect(backend.heldBy(nav.tabId)).toEqual(holder);
+    driver.dispose();
+  });
+
+  it("lets the person answer a shown tab's dialogs through the viewer seam (B8)", async () => {
+    const driver = port("person-dialogs", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/dialogs") },
+      signal: signal(),
+    });
+    backend.setPresentation(nav.tabId, "preview");
+    const viewer = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 });
+    const heard: string[] = [];
+    viewer.onDialog((dialog) => heard.push(dialog === null ? "gone" : dialog.type));
+    const answer = async (button: string, response: { accept: boolean; promptText?: string }) => {
+      const snap = await driver.snapshot({ tabId: nav.tabId, signal: signal() });
+      // The person's click: an agent's would wait on the open dialog.
+      const clicked = driver.act({
+        tabId: nav.tabId,
+        generation: snap.generation,
+        kind: "click",
+        ref: refNamed(snap.snapshotText, button),
+        signal: signal(),
+      });
+      const dialog = await eventually(
+        async () => backend.pendingDialog(nav.tabId),
+        (pending) => pending !== null,
+      );
+      expect(backend.respondToDialog(nav.tabId, dialog!.dialogId, response)).toBe(true);
+      await clicked;
+      return dialog!;
+    };
+    const confirmDialog = await answer("Ask confirm", { accept: true });
+    expect(confirmDialog).toMatchObject({ type: "confirm", message: "Sure?" });
+    const promptDialog = await answer("Ask prompt", { accept: true, promptText: "Ada" });
+    expect(promptDialog).toMatchObject({
+      type: "prompt",
+      message: "Name?",
+      defaultPrompt: "default",
+    });
+    const settled = await eventually(
+      () => driver.snapshot({ tabId: nav.tabId, signal: signal() }),
+      (snap) => snap.title === "prompt:Ada",
+    );
+    expect(settled.title).toBe("prompt:Ada");
+    expect(heard).toEqual(["confirm", "gone", "prompt", "gone"]);
+    viewer.detach();
+    driver.dispose();
+  });
 
   it("forgets every tab when the browser exits, and launches again for the next", async () => {
     const lonely = chromiumBackend();

@@ -14,7 +14,7 @@
  *   attachment, and the tab closing or going headless ends it from the host's
  *   side. An ended attachment answers `null`.
  */
-import type { BrowserScreencastMetadata } from "@volli/shared";
+import type { BrowserPendingDialog, BrowserScreencastMetadata } from "@volli/shared";
 
 /** One frame as a consumer takes it: the next sequence, and the image's bytes. */
 export interface BrowserScreencastFrame {
@@ -36,6 +36,13 @@ export interface BrowserScreencastAttachment {
   next(signal?: AbortSignal): Promise<BrowserScreencastFrame | null>;
   /** Frames replaced before anyone took them. */
   readonly dropped: number;
+  /**
+   * The dialog the tab's page is waiting on, for the viewer to render; the
+   * person answers through the backend's `respondToDialog`. Null when none.
+   */
+  dialog(): BrowserPendingDialog | null;
+  /** Told when a dialog opens or goes (answered, timed out, closed by the page). Returns the unsubscribe. */
+  onDialog(listener: (dialog: BrowserPendingDialog | null) => void): () => void;
   /** Ends this attachment. Idempotent. */
   detach(): void;
 }
@@ -49,6 +56,8 @@ export class ScreencastAttachment implements BrowserScreencastAttachment {
   #dropped = 0;
   #ended = false;
   readonly #listeners = new Set<(metadata: BrowserScreencastMetadata) => void>();
+  #dialog: BrowserPendingDialog | null = null;
+  readonly #dialogListeners = new Set<(dialog: BrowserPendingDialog | null) => void>();
 
   constructor(
     metadata: BrowserScreencastMetadata,
@@ -76,6 +85,25 @@ export class ScreencastAttachment implements BrowserScreencastAttachment {
     return () => {
       this.#listeners.delete(listener);
     };
+  }
+
+  dialog(): BrowserPendingDialog | null {
+    return this.#dialog === null ? null : { ...this.#dialog };
+  }
+
+  onDialog(listener: (dialog: BrowserPendingDialog | null) => void): () => void {
+    this.#dialogListeners.add(listener);
+    return () => {
+      this.#dialogListeners.delete(listener);
+    };
+  }
+
+  /** The host's word that a dialog opened (or, `null`, went). */
+  setDialog(dialog: BrowserPendingDialog | null): void {
+    if (this.#ended) return;
+    if (dialog === null && this.#dialog === null) return;
+    this.#dialog = dialog === null ? null : { ...dialog };
+    for (const listener of this.#dialogListeners) listener(this.dialog());
   }
 
   /** A new frame from the engine: handed to a waiting consumer, or held in place of the last. */
@@ -139,7 +167,9 @@ export class ScreencastAttachment implements BrowserScreencastAttachment {
     if (this.#ended) return;
     this.#ended = true;
     this.#pending = null;
+    this.#dialog = null;
     this.#listeners.clear();
+    this.#dialogListeners.clear();
     const waiter = this.#waiter;
     this.#waiter = null;
     waiter?.(null);

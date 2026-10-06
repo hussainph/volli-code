@@ -159,6 +159,7 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
         kind: "mouse",
         type: "moved",
         button: "none",
+        buttons: 0,
         clickCount: 0,
         ...target,
       });
@@ -170,6 +171,7 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
           kind: "mouse",
           type: "pressed",
           button: "left",
+          buttons: 1,
           clickCount: 1,
           ...target,
         });
@@ -178,6 +180,7 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
           kind: "mouse",
           type: "released",
           button: "left",
+          buttons: 0,
           clickCount: 1,
           ...target,
         });
@@ -191,6 +194,7 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
           kind: "mouse",
           type,
           button: "left",
+          buttons: type === "pressed" ? 1 : 0,
           clickCount: 1,
           ...field,
         });

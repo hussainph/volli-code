@@ -105,6 +105,13 @@ export type BrowserViewerInput =
       x: number;
       y: number;
       button: "none" | "left" | "middle" | "right";
+      /**
+       * The buttons held down after this event, as the DOM's
+       * `MouseEvent.buttons` bitmask: left 1, right 2, middle 4, back 8,
+       * forward 16. A move while dragging carries the held button, so the
+       * page sees a drag (text selection, sliders) rather than a hover.
+       */
+      buttons: number;
       clickCount: number;
       modifiers: number;
     }
@@ -126,3 +133,27 @@ export type BrowserViewerInput =
   | { kind: "text"; text: string }
   /** An IME's in-progress composition. */
   | { kind: "composition"; text: string; selectionStart: number; selectionEnd: number };
+
+/**
+ * A JavaScript dialog a shown tab's page is waiting on (VC-619), for a viewer
+ * to render and the person to answer. The page is stopped until it is
+ * answered; a host that hears no answer in its own time gives the safe one
+ * (acknowledge an alert, decline anything else — never "leave the page").
+ */
+export interface BrowserPendingDialog {
+  /** Names this dialog; an answer to an older one is refused. */
+  dialogId: string;
+  type: "alert" | "confirm" | "prompt" | "beforeunload";
+  /** The page's message, bounded by the host. */
+  message: string;
+  /** A prompt's default text; empty for every other type. */
+  defaultPrompt: string;
+}
+
+/** The person's answer to a {@link BrowserPendingDialog}. */
+export interface BrowserDialogResponse {
+  /** OK (or "Leave") rather than Cancel (or "Stay"). */
+  accept: boolean;
+  /** A prompt's text, when accepted. */
+  promptText?: string;
+}

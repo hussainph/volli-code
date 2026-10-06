@@ -24,6 +24,8 @@
  * overlay — is not here; it stays with the desktop.
  */
 import type {
+  BrowserDialogResponse,
+  BrowserPendingDialog,
   BrowserTabBounds,
   BrowserTabCreatedBy,
   BrowserTabHolder,
@@ -270,4 +272,14 @@ export interface BrowserBackend extends AgentBrowserBackend {
   ): BrowserScreencastAttachment;
   /** A person's input in a client's view of one shown tab. A headless tab refuses. */
   viewerInput?(tabId: string, input: BrowserViewerInput): Promise<void>;
+  /**
+   * The JavaScript dialog a shown tab's page waits on while a viewer is
+   * attached, or null. A backend that offers it never answers such a dialog
+   * itself before the person can, and gives the safe answer (never "leave
+   * the page") when nobody does in its time. Attachments hear it too
+   * (`BrowserScreencastAttachment.onDialog`).
+   */
+  pendingDialog?(tabId: string): BrowserPendingDialog | null;
+  /** The person's answer to dialog `dialogId`; false when it is no longer the one waiting. */
+  respondToDialog?(tabId: string, dialogId: string, response: BrowserDialogResponse): boolean;
 }

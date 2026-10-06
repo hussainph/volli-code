@@ -90,4 +90,26 @@ describe("ScreencastAttachment", () => {
     expect(onDetach).toHaveBeenCalledTimes(1);
     expect(onDetach).toHaveBeenCalledWith(attachment);
   });
+
+  it("carries the tab's pending dialog to the viewer, and forgets it when the attachment ends", () => {
+    const attachment = new ScreencastAttachment(META, 1, () => undefined);
+    const heard: Array<string | null> = [];
+    attachment.onDialog((dialog) => heard.push(dialog?.dialogId ?? null));
+    const dialog = {
+      dialogId: "d-1",
+      type: "confirm" as const,
+      message: "Sure?",
+      defaultPrompt: "",
+    };
+    attachment.setDialog(dialog);
+    expect(attachment.dialog()).toEqual(dialog);
+    attachment.setDialog(null);
+    attachment.setDialog(null);
+    expect(heard).toEqual(["d-1", null]);
+    attachment.setDialog(dialog);
+    attachment.end();
+    expect(attachment.dialog()).toBeNull();
+    attachment.setDialog(dialog);
+    expect(heard).toEqual(["d-1", null, "d-1"]);
+  });
 });

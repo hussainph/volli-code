@@ -150,6 +150,16 @@ animation: slide 1s linear infinite alternate; } @keyframes slide { to { margin-
     frame("/redirect-long");
     frame("/redirect-ok");
   </script></body>`,
+  // A viewer's drag: what buttons the page saw while the pointer moved, and what it selected.
+  "/drag": `<!doctype html><html><head><meta charset="utf-8"><title>drag</title>
+<style>body { margin: 0; font: 24px monospace; } p { margin: 0; padding: 10px; }</style></head>
+<body><p>Select these words by dragging across them</p><script>
+  const moves = [];
+  addEventListener("mousemove", (event) => moves.push(event.buttons));
+  addEventListener("mouseup", () => {
+    document.title = "buttons:" + Math.max(0, ...moves) + " selected:" + getSelection().toString();
+  });
+</script></body></html>`,
   "/external": `<!doctype html><title>External opener</title>
     <button onclick="location.href = 'volli-test-scheme:hello'">Go external</button>`,
 };
