@@ -6,6 +6,23 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  */
+export {
+  BOARD_FEED_RETENTION,
+  BoardChangeFeed,
+  createBoardChangeFeed,
+  type BoardChangeFeedOptions,
+  type BoardFeedBatch,
+  type BoardFeedListener,
+} from "../board/change-feed";
+export {
+  ticketSummary,
+  type BoardHandlerSignatures,
+  type BoardRoster,
+  type BoardSnapshot,
+  type BoardWriteResult,
+} from "../board/commands";
+export { BOARD_RECEIPT_RETENTION_MS, BoardCommandIntentConflictError } from "../board/receipts";
+export { boardResourceWorkspace } from "../board/resources";
 export type { DetachedWorkPort } from "../detached-work";
 export { createProject } from "../project-create";
 export { inspectProjectFolder, relinkProject } from "../project-relink";

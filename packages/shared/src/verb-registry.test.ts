@@ -271,6 +271,33 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.editQueued": "coordination",
   "session.cancelInteraction": "coordination",
   "session.reconcile": "coordination",
+  // The board router's own operations (VC-565): the person's, on no agent
+  // surface, so coordination by the same rule.
+  "board.snapshot": "coordination",
+  "board.roster": "coordination",
+  "board.changes": "coordination",
+  "board.projectFolder": "coordination",
+  "board.ticketBody": "coordination",
+  "board.archivedTickets": "coordination",
+  "board.ticketEvents": "coordination",
+  "board.latestSignals": "coordination",
+  "board.statusEntries": "coordination",
+  "board.comments": "coordination",
+  "board.updateProject": "coordination",
+  "board.setSkillModes": "coordination",
+  "board.setSessionDefaults": "coordination",
+  "board.createTicket": "coordination",
+  "board.moveTickets": "coordination",
+  "board.setPriority": "coordination",
+  "board.updateTicket": "coordination",
+  "board.setLabels": "coordination",
+  "board.archiveTicket": "coordination",
+  "board.unarchiveTicket": "coordination",
+  "board.deleteTicket": "coordination",
+  "board.createComment": "coordination",
+  "board.updateComment": "coordination",
+  "board.removeComment": "coordination",
+  "board.setLabelColor": "coordination",
   // Declared and policed, projected by no door: no tier, like ticket.archive.
   "labDiagnostics.list": null,
   "labDiagnostics.subscribe": null,
@@ -1320,9 +1347,34 @@ describe("the host-protocol command catalog (VC-564)", () => {
     readonly [string, string]
   >;
 
-  /** The board router: the first command both kinds of door serve (VC-668). */
+  /** The board router: `ticket.move`, both doors' (VC-668), and the board's own (VC-565). */
   const BOARD_ROUTER = {
     "ticket.move": ["workspace", "natural"],
+    "board.snapshot": ["workspace", "read"],
+    "board.roster": ["workspace", "read"],
+    "board.changes": ["workspace", "read"],
+    "board.projectFolder": ["workspace", "read"],
+    "board.ticketBody": ["workspace", "read"],
+    "board.archivedTickets": ["workspace", "read"],
+    "board.ticketEvents": ["workspace", "read"],
+    "board.latestSignals": ["workspace", "read"],
+    "board.statusEntries": ["workspace", "read"],
+    "board.comments": ["workspace", "read"],
+    "board.updateProject": ["workspace", "command-id"],
+    "board.setSkillModes": ["workspace", "command-id"],
+    "board.setSessionDefaults": ["workspace", "command-id"],
+    "board.createTicket": ["workspace", "command-id"],
+    "board.moveTickets": ["workspace", "command-id"],
+    "board.setPriority": ["workspace", "command-id"],
+    "board.updateTicket": ["workspace", "command-id"],
+    "board.setLabels": ["workspace", "command-id"],
+    "board.archiveTicket": ["workspace", "command-id"],
+    "board.unarchiveTicket": ["workspace", "command-id"],
+    "board.deleteTicket": ["workspace", "command-id"],
+    "board.createComment": ["workspace", "command-id"],
+    "board.updateComment": ["workspace", "command-id"],
+    "board.removeComment": ["workspace", "command-id"],
+    "board.setLabelColor": ["workspace", "command-id"],
   } as const satisfies Record<
     CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>,
     readonly [string, string]
@@ -1367,6 +1419,31 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expectTypeOf<Exclude<HostApiKey, CatalogKey>>().toEqualTypeOf<never>();
     expectTypeOf<CatalogKeyScopedTo<"workspace">>().toEqualTypeOf<
       | "ticket.move"
+      | "board.snapshot"
+      | "board.roster"
+      | "board.changes"
+      | "board.projectFolder"
+      | "board.ticketBody"
+      | "board.archivedTickets"
+      | "board.ticketEvents"
+      | "board.latestSignals"
+      | "board.statusEntries"
+      | "board.comments"
+      | "board.updateProject"
+      | "board.setSkillModes"
+      | "board.setSessionDefaults"
+      | "board.createTicket"
+      | "board.moveTickets"
+      | "board.setPriority"
+      | "board.updateTicket"
+      | "board.setLabels"
+      | "board.archiveTicket"
+      | "board.unarchiveTicket"
+      | "board.deleteTicket"
+      | "board.createComment"
+      | "board.updateComment"
+      | "board.removeComment"
+      | "board.setLabelColor"
       | "session.list"
       | "session.show"
       | "session.peek"

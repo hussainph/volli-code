@@ -28,6 +28,7 @@ import {
   moveTicketsCommand,
   type TicketCommandContext,
 } from "./ticket-commands";
+import { withTransaction } from "./db/transaction-gate";
 import { withTicketWake } from "./ticket-wake";
 import { trimFinishedWorktree, type TrimFinishPorts } from "./worktree";
 import { getWorktreeSnapshots } from "./worktree/snapshot";
@@ -52,6 +53,19 @@ export interface TicketMovePorts extends TrimFinishPorts {
    * the trim still runs, exactly as before, but nothing waits for it.
    */
   detachedWork?: DetachedWorkPort;
+}
+
+/**
+ * What a caller that keeps its own record of a move adds to it (VC-565): the
+ * Board module's receipt and feed rows. `inTransaction` runs inside the
+ * move's own transaction, after its write, so whatever it records commits or
+ * rolls back with the move; `committed` runs after COMMIT and before any
+ * wake, notice or interrupt, so nothing the move sets off can observe the
+ * move without what the caller recorded.
+ */
+export interface TicketMoveSeam {
+  readonly inTransaction?: () => void;
+  readonly committed?: () => void;
 }
 
 /** The archive path shares the same best-effort trim, without being a move. */
@@ -101,6 +115,7 @@ export function executeTicketMove(
   ports: TicketMovePorts,
   input: TicketMoveCommandInput,
   context: TicketCommandContext,
+  seam: TicketMoveSeam = {},
 ): Ticket[] | Promise<Ticket[]> {
   const db = ports.worktree.db;
   const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
@@ -115,16 +130,34 @@ export function executeTicketMove(
     before.get(input.ticketId)?.project_id === input.projectId &&
     before.get(input.ticketId)?.status === input.toStatus
   ) {
+    // Nothing moves, but a caller's record of the no-op is still kept.
+    if (seam.inTransaction !== undefined) withTransaction(db, seam.inTransaction);
+    seam.committed?.();
     return listTicketsByProject(db, input.projectId);
   }
   const toIndex =
     input.toIndex ??
     listTicketsByProject(db, input.projectId).filter((ticket) => ticket.status === input.toStatus)
       .length;
-  const runMove = () =>
+  const writeMove = () =>
     "ticketIds" in input
       ? moveTicketsCommand(db, { ...input, toIndex }, context)
       : moveTicketCommand(db, { ...input, toIndex }, context);
+  // The caller's record joins the move's transaction; its post-commit step
+  // runs inside every ticket's wake, so before any wake fans out.
+  const runMove = (): Ticket[] => {
+    const inTransaction = seam.inTransaction;
+    const moved =
+      inTransaction === undefined
+        ? writeMove()
+        : withTransaction(db, () => {
+            const written = writeMove();
+            inTransaction();
+            return written;
+          });
+    seam.committed?.();
+    return moved;
+  };
   const tickets = ticketIds.reduceRight<() => Ticket[]>(
     (write, ticketId) => () => withTicketWake(db, ticketId, write),
     runMove,
