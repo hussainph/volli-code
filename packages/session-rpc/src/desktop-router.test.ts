@@ -55,7 +55,11 @@ function context(fixture: Host): DesktopRouterContext {
 }
 
 const device: RouterCaller = {
-  actor: { kind: "device", deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b", workspaceId: WORKSPACE },
+  actor: {
+    kind: "device",
+    deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+    workspaceId: WORKSPACE,
+  },
   current: () => true,
 };
 const session: RouterCaller = {
@@ -94,13 +98,11 @@ describeContract<Host, DesktopRouter>(
       for (const caller of [device, session]) {
         const fixture = host(caller);
         const client = await connect(fixture);
-        expect(await expectHostError(client.ticket.body.query({ ticketId: "ticket-1" }))).toEqual(
-          {
-            code: "FORBIDDEN",
-            message: "ticket.body is not open to this caller.",
-            reason: "verb-refused",
-          },
-        );
+        expect(await expectHostError(client.ticket.body.query({ ticketId: "ticket-1" }))).toEqual({
+          code: "FORBIDDEN",
+          message: "ticket.body is not open to this caller.",
+          reason: "verb-refused",
+        });
         expect(
           await expectHostError(client.label.setColor.mutate({ labelId: BUG.id, color: null })),
         ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });

@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import { parseSync } from "vite/rolldown/utils";
 import { describe, expect, it } from "vite-plus/test";
-import { CLOUD_PLACEMENTS, CLOUD_PLACEMENT_OWNERS } from "@volli/shared";
+import { CLOUD_PLACEMENTS, CLOUD_PLACEMENT_OWNERS, DESKTOP_ENTRIES } from "@volli/shared";
 import {
   AGENT_OBSERVABILITY_IPC,
   AUTOMATION_IPC,
@@ -42,7 +42,12 @@ import {
   CURSOR_STATE_CHANNEL,
   CURSOR_TAKE_OVER_CHANNEL,
 } from "./cursor-contract";
-import { CHANNEL_PLACEMENT, THEME_OWNER_RULING, type ChannelPlacement } from "./placement";
+import {
+  BRIDGED_CHANNELS,
+  CHANNEL_PLACEMENT,
+  THEME_OWNER_RULING,
+  type ChannelPlacement,
+} from "./placement";
 
 const PLACED = new Set(Object.keys(CHANNEL_PLACEMENT));
 const ENTRIES = Object.entries(CHANNEL_PLACEMENT) as [string, ChannelPlacement][];
@@ -297,6 +302,20 @@ describe("CHANNEL_PLACEMENT invariants", () => {
     for (const [, entry] of decided) {
       expect(entry.placement).toBe("workspace");
       expect(entry.owner).toBe("VC-565");
+    }
+  });
+});
+
+// VC-608: a channel moved onto the bridge's desktop-only tier leaves the
+// catalog and this table in the same PR, and its row lives on beside the key
+// that replaced it, with the placement that is now that key's whole policy.
+describe("BRIDGED_CHANNELS", () => {
+  it("records each moved channel's placement as its desktop-only entry's", () => {
+    for (const [channel, row] of Object.entries(BRIDGED_CHANNELS)) {
+      expect(Object.hasOwn(CHANNEL_PLACEMENT, channel), channel).toBe(false);
+      const entry = DESKTOP_ENTRIES.find(({ key }) => key === row.key);
+      expect(entry?.placement, channel).toBe(row.placement);
+      expect(row.reason.trim(), channel).not.toBe("");
     }
   });
 });

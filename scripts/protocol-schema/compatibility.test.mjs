@@ -96,9 +96,10 @@ test("a desktop-only entry leaves its tier only by promotion, under its key, com
   assert.deepEqual(protocolChanges(before, promoted({ ...read, kind: "mutation" })), [
     { path: "/tiers/desktop/read/kind", reason: "operation kind changed" },
   ]);
-  assert.deepEqual(protocolChanges(before, { ...before, tiers: { ...before.tiers, desktop: {} } }), [
-    { path: "/tiers/desktop/read", reason: "catalog entry removed" },
-  ]);
+  assert.deepEqual(
+    protocolChanges(before, { ...before, tiers: { ...before.tiers, desktop: {} } }),
+    [{ path: "/tiers/desktop/read", reason: "catalog entry removed" }],
+  );
   // A public entry never leaves for the desktop tier.
   const demoted = {
     ...before,

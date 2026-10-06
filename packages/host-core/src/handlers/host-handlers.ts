@@ -450,7 +450,6 @@ function hostHandlerEntries(
     // The desktop-only tier: the bodies `volli:ticket-body` and
     // `volli:label-set-color` had in `data-ipc.ts`, moved, not copied.
     "ticket.body": ({ ticketId }) => getTicketBody(board(), ticketId) ?? null,
-    "label.setColor": ({ labelId, color }) =>
-      setLabelColor(board(), labelId, color, now()) ?? null,
+    "label.setColor": ({ labelId, color }) => setLabelColor(board(), labelId, color, now()) ?? null,
   };
 }

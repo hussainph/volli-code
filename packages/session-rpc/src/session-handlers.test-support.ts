@@ -166,8 +166,7 @@ export function sessionHandlersFrom(
   };
   const desktop: DesktopRouterHandlers = {
     "ticket.body": (input, call) => need(ports.desktop?.["ticket.body"], BOARD)(input, call),
-    "label.setColor": (input, call) =>
-      need(ports.desktop?.["label.setColor"], BOARD)(input, call),
+    "label.setColor": (input, call) => need(ports.desktop?.["label.setColor"], BOARD)(input, call),
   };
   return { ...handlers, ...desktop };
 }

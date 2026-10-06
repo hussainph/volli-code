@@ -403,9 +403,10 @@ describe("desktop-only commands", () => {
     expect(
       await handlers()["label.setColor"]({ labelId: label.id, color: "#123456" }, WINDOW),
     ).toEqual({ ...label, color: "#123456" });
-    expect(await handlers()["label.setColor"]({ labelId: label.id, color: null }, WINDOW)).toEqual(
-      { ...label, color: null },
-    );
+    expect(await handlers()["label.setColor"]({ labelId: label.id, color: null }, WINDOW)).toEqual({
+      ...label,
+      color: null,
+    });
     expect(
       await handlers()["label.setColor"]({ labelId: "no-such-label", color: null }, WINDOW),
     ).toBeNull();
