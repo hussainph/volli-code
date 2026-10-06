@@ -566,6 +566,9 @@ jobs:
           chrome="$(node -p 'require("playwright-core").chromium.executablePath()')"
           sudo mkdir -p /opt/volli-chromium
           sudo cp -a "$(dirname "$chrome")/." /opt/volli-chromium/
+          # Root-owned, as the box's is: the AppArmor grant must not cover a
+          # path the user the browser runs as could replace.
+          sudo chown -R root:root /opt/volli-chromium
           sed 's|@CHROMIUM@|/opt/volli-chromium/chrome|' ../../apps/hostd/packaging/volli-chromium.apparmor \
             | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
           sudo apparmor_parser -r /etc/apparmor.d/volli-chromium

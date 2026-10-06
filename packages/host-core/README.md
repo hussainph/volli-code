@@ -591,7 +591,10 @@ tab and keeps it until `dispose()`. Every option is the host's to state:
   headless. The same revision runs on dev Macs, CI and a Linux box, where
   Ubuntu ships Chromium only as a snap.
 - **`profileRoot`.** Each launch makes a private 0700 profile directory under
-  it and removes it on close. Nothing a page stores outlives the browser.
+  it (`volli-chromium-<host pid>-<random>`) and removes it however the browser
+  ends. Nothing a page stores outlives the browser. A host killed outright
+  leaves its directory; the next backend on the same root sweeps every
+  profile whose host is gone.
 - **`noSandbox`.** `false` everywhere a host can provide user namespaces,
   which is every host Volli ships for: the hostd systemd unit allows the three
   Chromium's sandbox makes, and on Ubuntu 23.10+ the binary needs the AppArmor
@@ -602,6 +605,19 @@ tab and keeps it until `dispose()`. Every option is the host's to state:
 
 What the backend owns, beyond the registry's policy:
 
+- **One shutdown, however the browser ends.** The browser leads its own
+  process group and starts with an allowlisted environment (no host
+  secrets). A close, a failed launch, an exit or crash, and a pipe that fails
+  or overflows all run the same finalization: every waiting command rejects,
+  the streams close, the whole group gets SIGTERM, a grace, then SIGKILL
+  (survivors of the leader included), the child is reaped and the profile
+  removed. The backend forgets the browser's tabs, and the next tab launches
+  another. A host that runs browsers relies on no service manager for this.
+- **A bounded pipe.** Inbound frames, pending commands, unsent output bytes
+  (the writable's own buffer is the only queue) and every command's time are
+  bounded (`CdpPipeLimits`); a withdrawn or timed-out command leaves the
+  pending map at once. An oversized frame is a broken browser: the pipe
+  closes, which finalizes it.
 - **Ids are ours.** `open` returns synchronously; Chromium's target is created
   behind the entry's `ready` promise, and every engine call waits on it.
 - **Contexts by `browserSessionPartition`.** A Session's tabs share their
@@ -610,17 +626,40 @@ What the backend owns, beyond the registry's policy:
 - **Chrome facts from events.** url, title, loading and history are tracked
   for the synchronous `liveChrome`; the generation bumps on main-frame
   navigation start. A read refreshes the title first, because Chromium reports
-  a script's title change late.
-- **Page-driven navigation is HTTP(S)-only.** Every document request and
-  redirect hop is checked before it is sent (`Fetch`); a main frame that
-  commits anything else (a page's own `blob:`) is sent to `about:blank`.
-  Chromium itself refuses `file:`, `chrome:` and top-level `data:`.
+  a script's title change late; that read is bounded and follows the caller's
+  withdrawal. An empty title is a real title.
+- **Page-driven navigation is HTTP(S)-only, with one residual.** Every
+  document request and redirect hop is checked before it is sent (`Fetch`),
+  on the page's session and on every out-of-process iframe's, which attaches
+  paused and runs only once its guard is installed. A main frame the page
+  sends anywhere else (its own `blob:`, an external scheme) is refused when
+  it asks (`Page.frameRequestedNavigation`, before commit) and stays put, as
+  desktop's `will-navigate` keeps it; a commit that slips past is sent to
+  `about:blank`. Chromium itself refuses `file:`, `chrome:` and top-level
+  `data:`.
+
+  **The residual (not desktop parity):** same-process `data:`, `blob:` and
+  `srcdoc` iframes make no network request, so no `Fetch` guard sees them,
+  and CDP has no per-frame pre-commit refusal; they run, where desktop's
+  `will-frame-navigate` refuses them. None gains a privilege the page lacks
+  (`blob:` and `srcdoc` share its origin, `data:` is opaque). The candidates
+  were rejected: injecting a `frame-src` CSP through `Fetch` response
+  interception rewrites every document's headers, is visible to the page
+  (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
+  element races the commit and changes the page's DOM. A test pins the
+  behavior (`chromium-backend.test.ts`, "guards frames"). **VC-571 must not
+  wire hostd's browser for people until this is resolved.**
+
 - **Popups never run.** Every new page is attached paused; one with an opener
   is closed, and its URL becomes a product tab under the opener's provenance
   and caps.
-- **Dialogs are dismissed** (alerts accepted, questions declined) and noted in
-  the console: nobody can answer one on a host with no window, and an open
-  dialog stops the page.
+- **Dialogs nobody can answer get the safe answer, said aloud.** An alert is
+  acknowledged; a confirm or prompt is declined (`false`, `null`); a
+  leave-page prompt (`beforeunload`) is declined, so the tab stays, as
+  desktop's does — Volli never approves leaving a page that guards unsaved
+  work. Each is recorded in the console with its outcome, and a refused
+  departure also sets the tab's error, which every agent answer carries.
+  Closing a tab runs no unload veto.
 - **No wake policy.** Each tab is its own window, never occluded, and the
   launch turns background throttling off.
 
