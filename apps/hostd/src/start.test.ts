@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -290,5 +290,106 @@ describe("start, after the final review", () => {
     const again = box();
     expect(await runStart(SYSTEM, ports({ run: again.run }))).toMatchObject({ restarted: false });
     expect(again.calls).toEqual([]);
+  });
+});
+
+// VC-700 PR 1c: a Mac's host is the person's launchd agent, in user/<uid>.
+describe("start --user on a Mac", () => {
+  const USER: StartCommand = { kind: "start", mode: "user", timeoutMs: 5_000 };
+  let mac: InstallLayout;
+  beforeEach(() => {
+    mac = installLayout("user", { home: join(root, "Users/alice"), env: {}, platform: "darwin" });
+    mkdirSync(mac.root, { recursive: true });
+    mkdirSync(join(root, "Users/alice/Library/Logs"), { recursive: true });
+    writeManaged(mac, { v: 1, mode: "user", version: "1.1.0", port: 7420, installedAt: "t" });
+  });
+  const macPorts = (overrides: Partial<StartPorts> = {}) =>
+    ports({ uid: () => 501, layout: mac, ...overrides });
+
+  it("bootstraps the agent into the per-user domain, out of every domain first", async () => {
+    const fake = box({
+      launchctl: (args) => (args[0] === "bootout" ? { code: 3, stderr: "No such process" } : {}),
+    });
+    const p = macPorts({ run: fake.run, probes: probes(null, status()) });
+    expect(await runStart(USER, p)).toEqual({
+      v: 1,
+      ok: true,
+      mode: "user",
+      version: "1.1.0",
+      restarted: true,
+      hostId: "host-1",
+      listen: { host: "127.0.0.1", port: 7420 },
+      linger: null,
+    });
+    expect(fake.calls).toEqual([
+      "launchctl bootout gui/501/com.volli.hostd",
+      "launchctl bootout user/501/com.volli.hostd",
+      "launchctl enable user/501/com.volli.hostd",
+      `launchctl bootstrap user/501 ${mac.agentPlist}`,
+    ]);
+    // No logind on a Mac: nothing asked of it.
+    expect(fake.calls.some((call) => call.startsWith("loginctl"))).toBe(false);
+  });
+
+  it("does nothing when the agent already serves the recorded version", async () => {
+    const fake = box();
+    expect(await runStart(USER, macPorts({ run: fake.run }))).toMatchObject({
+      restarted: false,
+      linger: null,
+    });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("answers start-failed with launchctl's words and the agent's log when bootstrap fails", async () => {
+    writeFileSync(mac.logFile!, "earlier\nvolli-hostd: the data directory is not 0700\n");
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "bootstrap"
+          ? { code: 5, stderr: "Bootstrap failed: 5: Input/output error\n" }
+          : {},
+    });
+    expect(
+      await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) }))),
+    ).toMatchObject({
+      code: "start-failed",
+      detail: [
+        "Bootstrap failed: 5: Input/output error",
+        "earlier",
+        "volli-hostd: the data directory is not 0700",
+      ],
+    });
+  });
+
+  it("answers start-failed when launchd says the agent exited non-zero, with the log", async () => {
+    writeFileSync(mac.logFile!, "refusing to boot\n");
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "print" ? { stdout: "\tstate = not running\n\tlast exit code = 78\n" } : {},
+    });
+    expect(
+      await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) }))),
+    ).toMatchObject({ code: "start-failed", detail: ["refusing to boot"] });
+  });
+
+  it("keeps waiting while launchd has it running or has not seen it exit, then times out with the log", async () => {
+    const answers = [
+      { stdout: "\tstate = running\n\tlast exit code = 1\n" },
+      { stdout: "\tstate = spawn scheduled\n\tlast exit code = (never exited)\n" },
+      { code: 113 },
+    ];
+    let printed = 0;
+    const fake = box({
+      launchctl: (args) => (args[0] === "print" ? answers[Math.min(printed++, 2)]! : {}),
+    });
+    const error = await refusal(
+      runStart({ ...USER, timeoutMs: 1_000 }, macPorts({ run: fake.run, probes: probes(null) })),
+    );
+    expect(error).toMatchObject({ code: "start-timeout", detail: ["no status file"] });
+  });
+
+  it("refuses a system start: a Mac has none", async () => {
+    expect(await refusal(runStart(SYSTEM, macPorts()))).toMatchObject({
+      code: "system-unsupported",
+    });
   });
 });

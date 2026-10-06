@@ -40,6 +40,7 @@ function ports(overrides: Partial<ManagedStatusPorts> = {}): ManagedStatusPorts 
   return {
     layouts,
     trustedOwnerUid: process.getuid!(),
+    uid: () => 501,
     run: (tool): CommandResult =>
       tool === "loginctl"
         ? { code: 0, stdout: "yes\n", stderr: "" }
@@ -200,5 +201,59 @@ describe("status --json", () => {
     expect(
       (await managedStatus({ kind: "status-json", mode: "user", dataDir: null }, ports())).install,
     ).toBeNull();
+  });
+});
+
+// VC-700 PR 1c.
+describe("status --json on a Mac", () => {
+  it("finds the launchd agent, reads its state from launchd, and reports no lingering", async () => {
+    const where = { prefix: root, home: join(root, "Users/alice"), env: {}, platform: "darwin" };
+    const mac = { system: installLayout("system", where), user: installLayout("user", where) };
+    mkdirSync(mac.user.unitDir, { recursive: true });
+    writeFileSync(mac.user.agentPlist!, "<plist/>");
+    const calls: string[] = [];
+    const run = (tool: string, args: readonly string[]): CommandResult => {
+      calls.push([tool, ...args].join(" "));
+      return { code: 0, stdout: "\tstate = running\n", stderr: "" };
+    };
+    const status = await managedStatus(
+      { kind: "status-json", mode: null, dataDir: null },
+      ports({ layouts: mac, run }),
+    );
+    expect(status).toMatchObject({
+      mode: "user",
+      unit: { name: "com.volli.hostd", active: "active", enabled: "enabled" },
+      linger: null,
+      dataDir: mac.user.dataDir,
+    });
+    expect(calls).toEqual(["launchctl print user/501/com.volli.hostd"]);
+    const stopped = await managedStatus(
+      { kind: "status-json", mode: "user", dataDir: null },
+      ports({ layouts: mac, run: () => ({ code: 113, stdout: "", stderr: "not found" }) }),
+    );
+    expect(stopped.unit).toEqual({
+      name: "com.volli.hostd",
+      active: "inactive",
+      enabled: "enabled",
+    });
+    const waiting = await managedStatus(
+      { kind: "status-json", mode: "user", dataDir: null },
+      ports({ layouts: mac, run: () => ({ code: 0, stdout: "\tstate = waiting\n", stderr: "" }) }),
+    );
+    expect(waiting.unit).toMatchObject({ active: "inactive" });
+    rmSync(mac.user.agentPlist!);
+    const removed = await managedStatus(
+      { kind: "status-json", mode: "user", dataDir: null },
+      ports({ layouts: mac, run: () => ({ code: 113, stdout: "", stderr: "" }) }),
+    );
+    expect(removed.unit).toMatchObject({ enabled: "not-found" });
+    writeFileSync(mac.user.agentPlist!, "<plist/>");
+    rmSync(mac.user.agentPlist!);
+    expect(
+      await managedStatus(
+        { kind: "status-json", mode: null, dataDir: null },
+        ports({ layouts: mac }),
+      ),
+    ).toMatchObject({ mode: null, unit: null });
   });
 });

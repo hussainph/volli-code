@@ -151,7 +151,7 @@ function fakeBox(...overrides: Handler[]) {
     if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
     if (options.label === "upload: check") return { stdout: "\n" };
     if (script.includes("cat > ")) return {};
-    if (script.includes(".part' | cut")) return { stdout: `${SHA}\n` };
+    if (script.includes(".part' 2>/dev/null; } | cut")) return { stdout: `${SHA}\n` };
     if (script.includes("tar -xzf")) return { stdout: `dir=${STAGED}\nversion=1.1.0\n` };
     if (script.includes(" install --"))
       return json(INSTALLED(script.includes("--user") ? "user" : "system"));
@@ -497,25 +497,26 @@ describe("probe", () => {
   });
 });
 
-describe("a Mac", () => {
-  const MAC = {
-    kernel: "Darwin",
-    arch: "arm64",
-    os_id: "macos",
-    os_version: "26.5.1",
-    os_name: "macOS 26.5.1",
-    groups: "staff admin",
-    systemd: null,
-    user_manager: null,
-    linger: null,
-    glibc: null,
-    disk_system: "1",
-    sudo: null,
-    mem_kb: null,
-    launchd: "yes",
-    mem_bytes: "17179869184",
-  };
+/** A Mac's probe answer (VC-700 PR 1c). */
+const MAC = {
+  kernel: "Darwin",
+  arch: "arm64",
+  os_id: "macos",
+  os_version: "26.5.1",
+  os_name: "macOS 26.5.1",
+  groups: "staff admin",
+  systemd: null,
+  user_manager: null,
+  linger: null,
+  glibc: null,
+  disk_system: "1",
+  sudo: null,
+  mem_kb: null,
+  launchd: "yes",
+  mem_bytes: "17179869184",
+};
 
+describe("a Mac", () => {
   it("installs a launchd agent as the person once this build carries a Mac host", async () => {
     const box = fakeBox((script) =>
       script === PROBE_SCRIPT ? { stdout: probeOutput(MAC) } : undefined,
@@ -526,6 +527,66 @@ describe("a Mac", () => {
     expect(done.results.probe?.artifactTarget).toBe("darwin-arm64");
     expect(box.ran()).toContain(`'${STAGED}/bin/volli-hostd' install --user </dev/null`);
     expect(box.ran().some((script) => script.startsWith("sudo"))).toBe(false);
+  });
+
+  // VC-700 PR 1c: the release pin carries darwin, so a Mac is no longer target-unavailable.
+  it("installs on a Mac end to end from a four-target VC-701 manifest, and dev defaults refuse it", async () => {
+    const macName = "volli-hostd-1.1.0-darwin-arm64.tar.gz";
+    const asset = (platform: string, arch: string) => ({
+      platform,
+      arch,
+      name: `volli-hostd-1.1.0-${platform}-${arch}.tar.gz`,
+      sha256: SHA,
+    });
+    const pin = parseHostdReleasePin({
+      schemaVersion: 1,
+      version: "1.1.0",
+      releaseTag: "v1.1.0",
+      assets: [
+        asset("linux", "x64"),
+        asset("linux", "arm64"),
+        asset("darwin", "arm64"),
+        asset("darwin", "x64"),
+      ],
+    });
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput(MAC) } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(box)))).toMatchObject({
+      code: "target-unavailable",
+      target: "darwin-arm64",
+    });
+    const fetched: string[] = [];
+    const p = ports(box, {
+      artifact: (target) =>
+        resolveArtifact({
+          version: "1.1.0",
+          target,
+          pin,
+          cacheDir: join(root, "cache"),
+          logger: recordingLogger().logger,
+          fetch: async (url) => {
+            fetched.push(String(url));
+            return new Response(BYTES);
+          },
+        }),
+    });
+    const done = await advanceWith(start({ supportedTargets: supportedTargets(pin) }), p);
+    expect(done.status).toBe("done");
+    expect(done.results.probe?.artifactTarget).toBe("darwin-arm64");
+    expect(fetched).toEqual([
+      `https://github.com/hussainph/volli-code/releases/download/v1.1.0/${macName}`,
+    ]);
+    const ran = box.ran();
+    expect(ran.some((script) => script.includes(macName))).toBe(true);
+    for (const verb of ["install --user", "start --user", "enroll --user"]) {
+      expect(
+        ran.some((script) => script.includes(` ${verb} `) || script.includes(` ${verb}`)),
+      ).toBe(true);
+    }
+    expect(
+      ran.some((script) => /\bsudo\b|loginctl|systemctl/u.test(script) && script !== PROBE_SCRIPT),
+    ).toBe(false);
   });
 
   it("checks a Mac's disk in the home directory, whatever sudo allows", async () => {
@@ -674,14 +735,14 @@ describe("upload", () => {
 
   it("refuses what arrived different from what was sent, and discards it", async () => {
     const box = fakeBox((script) =>
-      script.includes(".part' | cut") ? { stdout: "deadbeef\n" } : undefined,
+      script.includes(".part' 2>/dev/null; } | cut") ? { stdout: "deadbeef\n" } : undefined,
     );
     expect(stoppedWith(await advanceWith(start(), ports(box)))).toMatchObject({
       code: "remote-checksum",
     });
     expect(box.ran().some((script) => script.startsWith("rm -f "))).toBe(true);
     const empty = fakeBox((script) =>
-      script.includes(".part' | cut") ? { stdout: "" } : undefined,
+      script.includes(".part' 2>/dev/null; } | cut") ? { stdout: "" } : undefined,
     );
     expect(stoppedWith(await advanceWith(start(), ports(empty)))).toMatchObject({
       detail: expect.stringContaining("arrived as nothing"),
@@ -694,7 +755,12 @@ describe("upload", () => {
         script.includes(marker) ? { code: 255, stderr: "Connection reset by peer" } : undefined,
       );
     // At the check, the copy, the verification and the extraction alike.
-    for (const marker of ["2>/dev/null | cut", "cat > ", ".part' | cut", "tar -xzf"]) {
+    for (const marker of [
+      ".tar.gz' 2>/dev/null; } | cut",
+      "cat > ",
+      ".part' 2>/dev/null; } | cut",
+      "tar -xzf",
+    ]) {
       const state = await advanceWith(start(), ports(lostAt(marker)));
       expect(stoppedWith(state)).toMatchObject({ code: "connection-lost", step: "deliver" });
     }
@@ -725,7 +791,7 @@ describe("upload", () => {
 
   it("classifies a disconnect during upload verification as connection-lost", async () => {
     const box = fakeBox((script) =>
-      script.includes(".part' | cut")
+      script.includes(".part' 2>/dev/null; } | cut")
         ? { code: 255, stdout: "", stderr: "Connection reset by peer" }
         : undefined,
     );
@@ -1420,6 +1486,36 @@ describe("delivering the pinned release, on a real local shell", { timeout: 30_0
     expect(existsSync(join(cache, "stage.OLD123"))).toBe(false);
     expect(box.ran()).toContain(
       `sudo -n '${deliver.releaseDir}/bin/volli-hostd' install --system --operator 'deploy' </dev/null`,
+    );
+  });
+
+  // VC-700 PR 1c: a Mac's shell has shasum, not GNU sha256sum.
+  it("delivers to a Mac, whose shell has no sha256sum, and installs the launchd agent", async () => {
+    const file = "volli-hostd-1.1.0-darwin-arm64.tar.gz";
+    const { artifact, binary } = buildRelease(file);
+    const home = join(root, "Users/alice");
+    mkdirSync(home, { recursive: true });
+    const stubs = join(root, "stubs");
+    mkdirSync(stubs);
+    writeFileSync(join(stubs, "sha256sum"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({ ...MAC, home }) } : undefined,
+    );
+    const ssh = partlyReal(
+      box,
+      deliverOnly,
+      localShell(root, `${stubs}:${process.env["PATH"] ?? ""}`),
+    );
+    const done = await advanceWith(
+      start({ supportedTargets: ["darwin-arm64"] }),
+      ports(box, { ssh, artifact: async () => ({ ...artifact, target: "darwin-arm64" }) }),
+    );
+    expect(done.status).toBe("done");
+    const deliver = done.results.deliver as UploadResult;
+    expect(deliver).toMatchObject({ reused: false, sha256: artifact.sha256 });
+    expect(readFileSync(join(deliver.releaseDir, "bin/volli-hostd"), "utf8")).toBe(binary);
+    expect(box.ran()).toContain(
+      `'${deliver.releaseDir}/bin/volli-hostd' install --user </dev/null`,
     );
   });
 

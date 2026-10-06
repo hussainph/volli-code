@@ -53,6 +53,8 @@ export type HostdFailureCode =
    * makes no new key rather than risk orphaning the old one.
    */
   | "secret-key-unclear"
+  /** A Mac runs hostd as the person's launchd agent only: `install --user`. */
+  | "system-unsupported"
   | "data-dir-owner";
 
 export interface HostdFailure {
@@ -95,7 +97,7 @@ export interface HostdStartResult {
   readonly restarted: boolean;
   readonly hostId: string | null;
   readonly listen: ListenAddress | null;
-  /** User units: whether they outlive logout. `null` for a system unit. */
+  /** systemd user units: whether they outlive logout. `null` for a system unit and on a Mac. */
   readonly linger: boolean | null;
 }
 

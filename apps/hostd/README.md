@@ -103,6 +103,18 @@ data directory or by `secret-key.conf`) and every drop-in of yours stay. The
 flat `/opt/volli-hostd/bin` stays beside `releases/` as the rollback. A user
 install refuses to run beside a system unit (`other-mode-installed`).
 
+**macOS** (VC-700 PR 1c) is user-only: `install --system` and `start --system`
+answer `system-unsupported`. `install --user` writes the person's launchd agent,
+`~/Library/LaunchAgents/com.volli.hostd.plist` (the shipped template's settings,
+`LimitLoadToSessionType` `Background`, `VOLLI_EXPERIMENTAL=cloud`, the key, and
+`--listen 127.0.0.1:N`), with data in `~/Library/Application Support/volli-hostd`
+and output in `~/Library/Logs/volli-hostd.log`; it runs no `launchctl` itself.
+`start --user` boots the agent out of `gui/<uid>` and `user/<uid>`, enables it
+and bootstraps it into `user/<uid>`, the per-user domain an SSH login reaches
+and outlives; a failure comes back with launchctl's words and the log's tail.
+After the Mac restarts the agent loads again at the person's next login.
+`status --json` reads the agent from `launchctl print`; there is no lingering.
+
 ## Ports
 
 | Port                    | hostd passes                                                                          |

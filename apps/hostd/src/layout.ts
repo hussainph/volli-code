@@ -12,6 +12,14 @@
  * | agent socket | `/run/volli-hostd.sock`, bound by systemd as root | `<data dir>/volli.sock` |
  * | runs as | `volli`, so agents never act as you | you: agents share your account |
  *
+ * **macOS** (VC-700 PR 1c) is user-only: the host is a launchd agent,
+ * `~/Library/LaunchAgents/com.volli.hostd.plist`, running as the person, with
+ * its data in `~/Library/Application Support/volli-hostd` (never the desktop
+ * app's own `Volli Code`) and its log in `~/Library/Logs/volli-hostd.log`.
+ * Releases, the key and the CLI links sit where a Linux user install keeps
+ * them. A system install (a LaunchDaemon under its own account) is not
+ * offered: `install --system` refuses on a Mac (`system-unsupported`).
+ *
  * Enrolled devices act as the person, so a system install keeps them where
  * only root writes (`enrolled-devices.ts`): never in the data directory,
  * which the account every agent runs as owns.
@@ -38,9 +46,15 @@ export const SOCKET_UNIT = "volli-hostd.socket";
 export const MANAGED_DROP_IN = "50-volli-managed.conf";
 /** The runbook's name for the secret-key drop-in, kept so adoption recognises it. */
 export const SECRET_KEY_DROP_IN = "secret-key.conf";
+/** The launchd label of a Mac's host, as the shipped plist template names it. */
+export const LAUNCHD_LABEL = "com.volli.hostd";
+
+/** What supervises the host: systemd on Linux, launchd on a Mac. */
+export type ServiceManager = "systemd" | "launchd";
 
 export interface InstallLayout {
   readonly mode: InstallMode;
+  readonly manager: ServiceManager;
   readonly root: string;
   readonly releasesDir: string;
   readonly currentLink: string;
@@ -56,6 +70,9 @@ export interface InstallLayout {
   readonly socketPath: string;
   /** The account the unit runs as; `null` for a user unit. */
   readonly serviceUser: string | null;
+  /** launchd only: the agent's plist, and where it sends hostd's output. */
+  readonly agentPlist: string | null;
+  readonly logFile: string | null;
 }
 
 export interface LayoutEnvironment {
@@ -63,15 +80,19 @@ export interface LayoutEnvironment {
   readonly prefix?: string;
   readonly home: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** The box's platform (`process.platform`); anything but `darwin` is laid out for systemd. */
+  readonly platform?: string;
 }
 
 export function installLayout(mode: InstallMode, where: LayoutEnvironment): InstallLayout {
+  const manager: ServiceManager = where.platform === "darwin" ? "launchd" : "systemd";
   if (mode === "system") {
     const at = (path: string) => `${where.prefix ?? ""}${path}`;
     const root = at("/opt/volli-hostd");
     const unitDir = at("/etc/systemd/system");
     return {
       mode,
+      manager,
       root,
       releasesDir: join(root, "releases"),
       currentLink: join(root, "current"),
@@ -84,6 +105,8 @@ export function installLayout(mode: InstallMode, where: LayoutEnvironment): Inst
       devicesFile: at(DEFAULT_DEVICES_FILE),
       socketPath: "/run/volli-hostd.sock",
       serviceUser: "volli",
+      agentPlist: null,
+      logFile: null,
     };
   }
   const xdg = (name: string, fallback: string) => {
@@ -92,10 +115,14 @@ export function installLayout(mode: InstallMode, where: LayoutEnvironment): Inst
   };
   const root = join(xdg("XDG_DATA_HOME", ".local/share"), "volli-hostd");
   const config = xdg("XDG_CONFIG_HOME", ".config");
-  const dataDir = join(xdg("XDG_STATE_HOME", ".local/state"), "volli-hostd");
-  const unitDir = join(config, "systemd/user");
+  const mac = manager === "launchd";
+  const dataDir = mac
+    ? join(where.home, "Library/Application Support/volli-hostd")
+    : join(xdg("XDG_STATE_HOME", ".local/state"), "volli-hostd");
+  const unitDir = mac ? join(where.home, "Library/LaunchAgents") : join(config, "systemd/user");
   return {
     mode,
+    manager,
     root,
     releasesDir: join(root, "releases"),
     currentLink: join(root, "current"),
@@ -108,6 +135,8 @@ export function installLayout(mode: InstallMode, where: LayoutEnvironment): Inst
     devicesFile: enrolledDevicesPath(dataDir),
     socketPath: join(dataDir, "volli.sock"),
     serviceUser: null,
+    agentPlist: mac ? join(unitDir, `${LAUNCHD_LABEL}.plist`) : null,
+    logFile: mac ? join(where.home, "Library/Logs/volli-hostd.log") : null,
   };
 }
 

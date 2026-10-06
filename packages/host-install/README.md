@@ -15,8 +15,10 @@ link over its own route, plugging in without touching the engine.
 
 Linux (systemd) and macOS (a launchd user agent, always as the person) are
 both first-class branches of the probe and the SSH steps. Which targets a
-build installs is `supportedTargets(pin)`; a Mac is refused until a darwin
-hostd and hostd's launchd install ship.
+build installs is `supportedTargets(pin, devTarballs)`: the release pin's
+assets (VC-701's manifest carries linux and darwin, x64 and arm64), else the
+dev tarballs' targets, read from their names. A Mac's checksums use `shasum`
+where it has no `sha256sum`.
 
 | Module                      | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

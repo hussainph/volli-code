@@ -29,7 +29,7 @@ import { dataDirDeviceStore, describeDevice, readEnrolledDevices } from "./enrol
 import { currentVersion, installedReleases } from "./install";
 import type { InstallLayout } from "./layout";
 import { layoutDeviceStore, SERVICE_UNIT } from "./layout";
-import { lingerOf, readManaged, unitState, type RunTool } from "./management";
+import { agentState, lingerOf, readManaged, unitState, type RunTool } from "./management";
 import { checkStatus, type StatusProbes } from "./status";
 
 export interface ManagedStatusCommand {
@@ -45,6 +45,7 @@ export interface ManagedStatusPorts {
   readonly run: RunTool;
   readonly probes: StatusProbes;
   readonly login: () => string;
+  readonly uid: () => number;
   readonly version: string;
   /** Who a system install's device store must belong to: root (0) on a box. */
   readonly trustedOwnerUid: number;
@@ -86,8 +87,17 @@ export async function managedStatus(
             flat,
             port: managed?.port ?? null,
           },
-    unit: mode === null ? null : unitState(ports.run, mode),
-    linger: mode === "user" ? lingerOf(ports.run, ports.login()) : null,
+    unit:
+      layout === null
+        ? null
+        : layout.manager === "launchd"
+          ? agentState(ports.run, layout, ports.uid())
+          : unitState(ports.run, layout.mode),
+    // Lingering is logind's; a Mac's agent outlives an SSH login regardless.
+    linger:
+      layout?.mode === "user" && layout.manager === "systemd"
+        ? lingerOf(ports.run, ports.login())
+        : null,
     dataDir,
     verdict: report?.verdict ?? "not-serving",
     detail: report === null ? "not installed" : (report.detail ?? null),
@@ -114,8 +124,12 @@ export async function managedStatus(
  */
 function installedMode(layouts: Readonly<Record<InstallMode, InstallLayout>>): InstallMode | null {
   const { system, user } = layouts;
-  if (existsSync(system.managedFile) || existsSync(join(system.unitDir, SERVICE_UNIT)))
+  if (
+    system.manager === "systemd" &&
+    (existsSync(system.managedFile) || existsSync(join(system.unitDir, SERVICE_UNIT)))
+  )
     return "system";
-  if (existsSync(user.managedFile) || existsSync(join(user.unitDir, SERVICE_UNIT))) return "user";
+  const userUnit = user.agentPlist ?? join(user.unitDir, SERVICE_UNIT);
+  if (existsSync(user.managedFile) || existsSync(userUnit)) return "user";
   return null;
 }
