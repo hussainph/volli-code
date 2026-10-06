@@ -280,3 +280,48 @@ describe("browserAgentPort over a backend (VC-561)", () => {
     expect(() => backend.entry(born.tabId)).toThrow("Unknown Browser Tab");
   });
 });
+
+describe("closing agent tabs for menu-bar mode (VC-577)", () => {
+  it("counts the tabs Sessions are using, and refuses agent calls in words once closed", async () => {
+    const backend: MemoryBackend & BrowserBackend = new MemoryBackend();
+    expect(backend.sessionTabCount()).toBe(0);
+    const person = backend.open({
+      url: "https://example.com/",
+      projectId: "p1",
+      ticketId: "t1",
+      createdBy: "user",
+      ownerSessionId: null,
+    });
+    // A person's tab is no agent's until a Session takes it.
+    expect(backend.sessionTabCount()).toBe(0);
+    backend.hold(person.tabId, ME);
+    backend.open(sessionTab(OTHER.sessionId));
+    expect(backend.sessionTabCount()).toBe(2);
+    expect(backend.unavailableReason()).toBeNull();
+
+    const reason = "The browser was closed when Volli moved to the menu bar.";
+    backend.closeAllForAgents(reason);
+    expect(backend.list({ projectId: "p1" })).toEqual([]);
+    expect(backend.sessionTabCount()).toBe(0);
+    expect(backend.unavailableReason()).toBe(reason);
+
+    const port = browserAgentPort({ backend, scope: SCOPE, session: ME, cursorFor: undefined });
+    const signal = new AbortController().signal;
+    const refused = port.navigate({
+      navigation: { kind: "url", url: "https://example.com/" },
+      signal,
+    });
+    await expect(refused).rejects.toBeInstanceOf(BrowserRefusal);
+    await expect(refused).rejects.toMatchObject({ rule: "browser.closed", message: reason });
+    await expect(port.tabs({ signal })).rejects.toMatchObject({ rule: "browser.closed" });
+    // Nothing was opened behind the refusal.
+    expect(backend.list({ projectId: "p1" })).toEqual([]);
+
+    backend.reopenForAgents();
+    expect(backend.unavailableReason()).toBeNull();
+    await expect(
+      port.navigate({ navigation: { kind: "url", url: "https://example.com/" }, signal }),
+    ).resolves.toMatchObject({ ownerSessionId: ME.sessionId });
+    port.dispose();
+  });
+});
