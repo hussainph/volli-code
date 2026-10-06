@@ -98,6 +98,20 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   };
 });
 
+// The handler map hostd builds (VC-668): the move's guard and drain are its.
+vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/host-core/src/handlers/host-handlers")>();
+  return {
+    ...actual,
+    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) => {
+      faults.busySites = options.busyWorktreeSites;
+      faults.detachedWork = options.detachedWork ?? null;
+      return actual.createHostHandlers(ports, options);
+    },
+  };
+});
+
 vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../packages/host-core/src/agent-services")>();
@@ -106,8 +120,6 @@ vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal)
     createHostAgentCommands: (
       ...[ports, options]: Parameters<typeof actual.createHostAgentCommands>
     ) => {
-      faults.busySites = options.busyWorktreeSites;
-      faults.detachedWork = options.detachedWork ?? null;
       const commands = actual.createHostAgentCommands(ports, options);
       return {
         execute: async (request: AgentRequest) => {
@@ -896,7 +908,7 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
     ]);
   });
 
-  it("hands commands the host's detached work, and drains it after the socket, before the database", async () => {
+  it("hands its handlers the host's detached work, and drains it after the socket, before the database", async () => {
     const host = await boot();
     if (!isLiveHost(host.host)) throw new Error("database did not open");
     const live = host.host;

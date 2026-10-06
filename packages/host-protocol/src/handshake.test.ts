@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildHostHello,
   checkWorkspaceFence,
+  createHostNonce,
   encodeHostHello,
   HOST_HELLO_PARAM,
+  HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_VERSIONS,
   isHostFeature,
   isHostHello,
+  isHostNonce,
   isProtocolVersionRange,
   negotiateFeatures,
   negotiateProtocolVersion,
@@ -30,6 +34,7 @@ const hello: HostHello = {
   lastSeen: { epoch: 2, hostId: HOST },
   features: ["sessions", "terminals.stream", "from-the-future"],
   credential: "device-token",
+  nonce: "q2Vh7wJcJ0rX3m3d4cQ9tA",
 };
 const offer: HostOffer = {
   host: { id: HOST, version: "0.3.0" },
@@ -68,6 +73,7 @@ describe("negotiateWelcome", () => {
         workspace: { id: WORKSPACE, epoch: 2 },
         actor: device,
         features: ["sessions", "terminals.stream"],
+        proof: null,
       },
     });
   });
@@ -161,6 +167,8 @@ describe("the hello on the wire", () => {
       { ...hello, features: ["Sessions"] },
       { ...hello, features: Array.from({ length: 257 }, (_, index) => `f${index}`) },
       { ...hello, credential: 7 },
+      { ...hello, credential: "c".repeat(8193) },
+      { ...hello, client: { kind: "desktop", version: "v".repeat(129) } },
     ];
     for (const value of broken) expect(isHostHello(value)).toBe(false);
   });
@@ -172,5 +180,84 @@ describe("the hello on the wire", () => {
     expect(isHostFeature("terminals..stream")).toBe(false);
     expect(isHostFeature(`a${"b".repeat(128)}`)).toBe(false);
     expect(isHostFeature(7)).toBe(false);
+  });
+});
+
+describe("the hello's nonce (VC-663, D6)", () => {
+  it("is required v1 wire: a hello without one, or with a short or non-base64url one, is refused", () => {
+    const { nonce: _nonce, ...withoutNonce } = hello;
+    for (const value of [
+      withoutNonce,
+      { ...hello, nonce: null },
+      { ...hello, nonce: "too-short" },
+      { ...hello, nonce: "q2Vh7wJcJ0rX3m3d4cQ9tA==" },
+      { ...hello, nonce: "a".repeat(129) },
+    ]) {
+      expect(isHostHello(value)).toBe(false);
+    }
+    expect(readHostHello(encodeHostHello({ ...hello, nonce: "" }))).toBeNull();
+  });
+
+  it("is minted fresh with 256 bits per handshake, base64url without padding", () => {
+    const nonces = new Set(Array.from({ length: 64 }, () => createHostNonce()));
+    expect(nonces.size).toBe(64);
+    for (const nonce of nonces) {
+      expect(nonce).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      expect(isHostNonce(nonce)).toBe(true);
+    }
+  });
+});
+
+describe("buildHostHello", () => {
+  it("builds a hello the host can read, with every version this build speaks and a fresh nonce", () => {
+    const input = {
+      client: { kind: "mobile" as const, version: "1.0.0" },
+      workspaceId: WORKSPACE,
+      credential: "device-token",
+      features: ["sessions"],
+      lastSeen: null,
+    };
+    const first = buildHostHello(input);
+    expect(first).toStrictEqual({
+      protocol: HOST_PROTOCOL_VERSIONS,
+      client: { kind: "mobile", version: "1.0.0" },
+      workspaceId: WORKSPACE,
+      lastSeen: null,
+      features: ["sessions"],
+      credential: "device-token",
+      nonce: first.nonce,
+    });
+    expect(isHostHello(first)).toBe(true);
+    expect(readHostHello(encodeHostHello(first))).toStrictEqual(first);
+    expect(buildHostHello(input).nonce).not.toBe(first.nonce);
+  });
+
+  it("keeps a narrower version range the client chose", () => {
+    const range = { min: 1, max: 1 };
+    expect(
+      buildHostHello({
+        client: { kind: "cli", version: "1" },
+        workspaceId: WORKSPACE,
+        credential: "c",
+        features: [],
+        lastSeen: { epoch: 2, hostId: HOST },
+        protocol: range,
+      }).protocol,
+    ).toBe(range);
+  });
+});
+
+describe("HOST_PROTOCOL_CLOSE_CODES", () => {
+  it("are fixed application codes, distinct, and frozen", () => {
+    expect(HOST_PROTOCOL_CLOSE_CODES).toStrictEqual({
+      handshakeRefused: 4400,
+      credentialInvalid: 4401,
+      helloTimeout: 4408,
+      responseTooLarge: 4413,
+    });
+    const codes = Object.values(HOST_PROTOCOL_CLOSE_CODES);
+    expect(new Set(codes).size).toBe(codes.length);
+    for (const code of codes) expect(code >= 4000 && code <= 4999).toBe(true);
+    expect(Object.isFrozen(HOST_PROTOCOL_CLOSE_CODES)).toBe(true);
   });
 });

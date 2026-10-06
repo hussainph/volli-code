@@ -55,6 +55,7 @@ import {
   type AgentCommandServiceOptions,
 } from "./agent-commands";
 import { createTestSessionEngine } from "./testing/session-engine";
+import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
@@ -160,10 +161,11 @@ function asSession(
 
 /** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
-  options: Omit<AgentCommandServiceOptions, "sessionEngine" | "busyWorktreeSites"> & {
-    sessionEngine?: SessionEngine;
-    busyWorktreeSites?: AgentCommandServiceOptions["busyWorktreeSites"];
-  },
+  options: Omit<AgentCommandServiceOptions, "sessionEngine" | "handlers"> &
+    Omit<TestHandlerPorts, "db" | "notify" | "onMutation"> & {
+      sessionEngine?: SessionEngine;
+      handlers?: AgentCommandServiceOptions["handlers"];
+    },
 ) {
   // The acting Session has to EXIST for the door to resolve it: a valid token
   // naming a Session the Engine cannot find is an error, not an actor. Seeded
@@ -175,9 +177,26 @@ function createAgentCommandService(
       testSession(project.id, null, { id: ACTING_SESSION, cwd: project.path }),
     );
   }
+  // `ticket.move` is the host's handler now (VC-668): the move ports a case
+  // states build the real map the socket projects, as a root builds it.
+  const { busyWorktreeSites, interruptTicketSessions, onDeliberateMove, detachedWork, ...service } =
+    options;
   return createAgentCommandServiceBase({
-    ...options,
-    busyWorktreeSites: options.busyWorktreeSites ?? (async () => []),
+    ...service,
+    handlers:
+      options.handlers ??
+      testHostHandlers({
+        db: options.db,
+        busyWorktreeSites,
+        interruptTicketSessions,
+        onDeliberateMove,
+        detachedWork,
+        notify: options.notify,
+        onMutation: options.onMutation,
+        git: options.git,
+        gitAsync: options.gitAsync,
+        now: options.now,
+      }),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
   });

@@ -66,6 +66,7 @@ Everything else is an implementation detail.
 | `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
 | `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
 | `@volli/host-core/board`           | `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                           | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes                                                                            |
+| `@volli/host-core/handlers`        | `handlers/`                                                                                                                                                                                                                                                                                                                                                                                                                 | `createHostHandlers`, `invokeHandler`, `admittedHandlers`, the door policies: the [one handler map](#the-handler-map) every door projects                        |
 | `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                                                                                                                                                                                                                                                      | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                                         |
 | `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                                                                                                                                                                                                                                                  | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))                                  |
 | `@volli/host-core/automations`     | `automations/`, `automation-services.ts`                                                                                                                                                                                                                                                                                                                                                                                    | The Automation service and its types                                                                                                                             |
@@ -216,7 +217,8 @@ One convention for what a module asks for and what it is (VC-632):
 and scheduler, started at recovered readiness. Execution is an explicit
 idle/unavailable/ready variant. After timer producers stop, `settled()` joins
 recovery, attempts and Run boots before SQLite closes.
-`createHostAgentCommands` builds the socket verb door; `session-runtime/agents`
+`createHostAgentCommands` builds the socket verb door over the host's
+[handler map](#the-handler-map); `session-runtime/agents`
 owns the lazy tool door and watches. `createHostAgentSocket` composes the
 early socket lifecycle before database boot, on the caller's
 `<dataDir>/volli.sock`: mode 0600, v1 NDJSON, request limits, shutdown drain.
@@ -702,7 +704,7 @@ What the backend owns, beyond the registry's policy:
 
 ## Ticket moves
 
-`executeTicketMove` (`@volli/host-core/board`, VC-629) is the whole
+`executeTicketMove` (`ticket-move.ts`, VC-629; since VC-668 reachable only through the handler map) is the whole
 Deliberate move: atomic single/group write, post-commit Ticket wakes, immediate
 background Done trim, armed arrivals, non-user Doing notification, and backward
 Session interrupts. IPC and `ticket.move` only resolve/map their inputs and
@@ -719,9 +721,40 @@ The renderer still receives the board projection in its reply, not a new
 agent projection and targeted invalidation. There is no new receipt ledger or
 migration; backward-interrupt receipts remain Session evidence.
 
-This is a handler seam for the future command catalog, not a second catalog.
-The pre-change audit on VC-629 records remaining projection/delivery and harness
-policy differences for the board-area migration.
+Since VC-668 the move is the host's `ticket.move` handler: `createHostHandlers`
+assembles its ports once (the busy supplier, interrupts, the armed arrival,
+attention and the event bus), so neither door wires them. The desktop window's
+call carries `origin: "desktop-window"`, which keeps the reply-carries-the-board
+rule above; every other caller's change is published. No production entry
+serves `executeTicketMove`, and `package-interface.test.ts` refuses any
+production importer of it but the handler map.
+
+## The handler map
+
+`createHostHandlers(ports, services)` (`@volli/host-core/handlers`, VC-668)
+builds the host's one map from catalog key to the whole command. A
+composition root calls it once with the recovered services (database, runtime,
+Sessions facade, Model Access, Automations, busy-worktree guard, and
+desktop's experiments and interrupts) and hands the same object to every door:
+the routers' `ctx.handlers`, the socket's `handlers` option (whose
+`AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
+any legacy IPC channel that still serves a catalog command. `HostHandlers` is
+total over the catalog's keys, so a missing handler fails `pnpm typecheck`; a
+service a host lacks makes its handlers throw `OperationUnavailableError`
+rather than leaving a hole.
+
+The map it returns is sealed (`HostHandlerMap`, `handlers/handler-map.ts`):
+no entry is callable. A door reaches one only through
+`invokeHandler(map, policy, …)` or the `admittedHandlers(map, policy)` view,
+and the door's `HandlerPolicy` runs first; a refusal throws
+`HandlerRefusedError` and the handler never runs. The policies:
+`ROUTER_POLICY` for a router's context, `DESKTOP_WINDOW_POLICY` for a legacy
+desktop IPC channel (`handlers/policies.ts`), and the socket's per-request
+`socketHandlerPolicy`, its coordination policy judged again at the map
+(`agent-dispatch/admission.ts`). Tests build the real map over a test
+database with `testHostHandlers`, or seal their own entries with
+`sealTestHandlers` (`./testing`). The contract: HP § Command catalog, "One
+handler map".
 
 ## Moving a service cluster in
 

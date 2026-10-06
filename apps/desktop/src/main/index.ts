@@ -35,7 +35,6 @@ import {
   memoizedPathExists,
   DEFAULT_CODE_MODE_POLICY,
   resolveShell,
-  roleImpliedByTicket,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
@@ -155,24 +154,19 @@ import {
   recoveredSessionAutomationPorts,
   type RuntimeSessionFacade,
   createTicketSessionDelegationStore,
-  assertDefaultModelAvailable,
   readCodeModePolicy,
-  readCompactionPolicy,
-  readHiddenModels,
-  readModelAccessDefaults,
-  readModelPickerView,
-  reconcileModelAccessPreferences,
-  writeCodeModePolicy,
-  writeCompactionPolicy,
-  writeHiddenModels,
-  writeModelAccessDefault,
-  writeModelPickerView,
   buildSessionEnvReport,
   BackgroundShellHost,
   type BackgroundShellNotice,
   createAttachmentIdentities,
 } from "@volli/host-core/session-runtime";
 import type { OpenNativeBinding } from "@volli/session-engine";
+import {
+  admittedHandlers,
+  createHostHandlers,
+  ROUTER_POLICY,
+  type HostHandlerMap,
+} from "@volli/host-core/handlers";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import {
@@ -1239,92 +1233,115 @@ const appStartup = app.whenReady().then(async () => {
     delegation: sessionDelegation,
   });
   let sessionRpc: ReturnType<typeof registerSessionRpcIpcHandlers> | null = null;
-  const createSessionRpc = (ready: RecoveredSessionServices<RuntimeSessionFacade>) => {
-    const { runtime: rpcRuntime, sessions: rpcSessions } = recoveredRuntimeSessionServices(ready);
-    return rpcRuntime === null
-      ? null
-      : registerSessionRpcIpcHandlers({
-          runtime: rpcRuntime,
-          readExperiments,
-          writeExperiment: setExperiment,
-          inspectModelAccess:
-            piRuntimeHost === null
-              ? undefined
-              : async (input) => {
-                  const access = await piRuntimeHost.inspectModelAccess(input);
-                  if (input.refresh && sessionDb !== null) {
-                    reconcileModelAccessPreferences(sessionDb, access, Date.now());
-                  }
-                  return access;
-                },
-          readModelAccessDefaults:
-            sessionDb !== null ? () => readModelAccessDefaults(sessionDb) : undefined,
-          writeModelAccessDefault:
-            sessionDb !== null && piRuntimeHost !== null
-              ? async (purpose, selection) => {
-                  // Clearing an explicit choice needs no availability check —
-                  // it resolves to the global default, which had one when saved.
-                  if (selection !== null) {
-                    const access = await piRuntimeHost.inspectModelAccess({});
-                    assertDefaultModelAvailable(access, selection, purpose);
-                  }
-                  return writeModelAccessDefault(sessionDb, purpose, selection, Date.now());
-                }
-              : undefined,
-          readHiddenModels: sessionDb !== null ? () => readHiddenModels(sessionDb) : undefined,
-          writeHiddenModels:
-            sessionDb !== null
-              ? (hidden) => {
-                  writeHiddenModels(sessionDb, hidden, Date.now());
-                }
-              : undefined,
-          readCompactionPolicy:
-            sessionDb !== null ? () => readCompactionPolicy(sessionDb) : undefined,
-          writeCompactionPolicy:
-            sessionDb !== null
-              ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
-              : undefined,
-          // Read again at each Session's birth, never pushed: a write here
-          // reaches the next Session created and no Session already running.
-          readCodeModePolicy: sessionDb !== null ? () => readCodeModePolicy(sessionDb) : undefined,
-          writeCodeModePolicy:
-            sessionDb !== null
-              ? (policy) => writeCodeModePolicy(sessionDb, policy, Date.now())
-              : undefined,
-          readModelPickerView:
-            sessionDb !== null ? () => readModelPickerView(sessionDb) : undefined,
-          writeModelPickerView:
-            sessionDb !== null
-              ? (view) => writeModelPickerView(sessionDb, view, Date.now())
-              : undefined,
-          // A person's create door chooses a Ticket or none; the Role is what
-          // that choice implies (VC-9). No renderer input can name a
-          // `subagent` — only the bound delegate tool door mints one.
-          createSession:
-            rpcSessions === null
-              ? undefined
-              : (input) =>
-                  rpcSessions.create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
-          // Every renderer Retry rides this wrapper. A ready attachment is the
-          // recovery point for an Automation's durable first-message intent;
-          // the runner's fixed Session command id reconciles rather than
-          // duplicates if a crash happened after dispatch but before its mark.
-          attachSession:
-            rpcSessions === null
-              ? undefined
-              : async (input) => {
-                  const attached = await rpcSessions.attach(input);
-                  if (attached.state === "ready") {
-                    if (runtimeAutomations.kind === "live") {
-                      const execution = runtimeAutomations.execution;
-                      if (execution.kind === "ready")
-                        await execution.runner.resumeDeliveryForSession(input.sessionId);
-                    }
-                  }
-                  return attached;
-                },
-        });
+  // The terminal ref declared before host construction is filled later; the
+  // interrupt and the worktree guards below read it lazily, after boot.
+  // The ONE interrupt entry the host's `ticket.move` handler takes, whichever
+  // door moved the ticket (renderer IPC, socket, router): Escs the ticket's live agent sessions
+  // and, when any were actually interrupted, announces it to every window
+  // (issue #78 — automation de-escalates, but never silently). Lazy through
+  // the ref: registration below runs before the PtyManager is built, but the
+  // seam only ever fires at invoke time, long after boot.
+  const interruptTicketSessionsAnnounced = async (ticketId: string): Promise<string[]> => {
+    let sessionIds: string[] = [];
+    try {
+      sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
+    } catch (error) {
+      console.error(`[volli] failed to interrupt ticket ${ticketId}:`, errorMessage(error));
+    }
+    if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
+    return sessionIds;
   };
+  /**
+   * Where work is genuinely in flight in `target` right now, for the
+   * destructive worktree guards. The execution surfaces answer differently ON PURPOSE.
+   *
+   * A live PTY holds its cwd whatever it is doing: a shell whose directory was
+   * deleted underneath it is broken whether or not anything was running in it.
+   * Every live cwd is reported, unfiltered, and the guard does the containment.
+   * Background shells hold theirs between turns too, including while an ended
+   * attachment's shells are still terminating; only process exit clears them.
+   *
+   * An agent binding does not. It opens on attach and is dropped only by an
+   * explicit release, by the executor closing itself, or by app shutdown, so it
+   * survives an idle chat and outlives the tab that opened it — reading its mere
+   * existence as "busy" is what made a ticket with one empty chat in it
+   * permanently unarchivable, with nothing the user could close to clear it. So
+   * a binding counts only while its Session has a turn open, which is the same
+   * `turnActive` the Session listing reads to call a chat "working"
+   * (session-control/chat-attachment.ts). A turn that is open but blocked on a
+   * question still counts: the loop is suspended inside it and resumes writing
+   * into that directory the moment it is answered.
+   *
+   * That read is scoped to `target` before any projection is loaded, which is
+   * why the parameter exists (worktree/agent-sites.ts): asking it of every open
+   * binding costs one durable projection each, and past the runtime's own cache
+   * limit one gate check evicts and replays the ledger of the Session the live
+   * chat is reading.
+   *
+   * A Session whose history cannot be read leaves its binding OUT — the
+   * fail-open stance the renderer's busy probe already takes (though not the
+   * same KIND of thing: `remove-project-dialog.tsx` only decorates a dialog with
+   * a warning and never blocks, so it is a precedent for the stance, not for the
+   * gate). The reason is the one that matters: a ticket nothing can ever archive
+   * is the worse failure.
+   *
+   * Be precise about what that costs, because it is not uniform across the
+   * paths. A NON-FORCED remove re-checks cleanliness right before deleting, so
+   * an unreadable Session cannot lose uncommitted work there. The other two
+   * destroy paths do not re-check, and both are explicitly confirmed: `force:
+   * true` means the user read a dialog naming the dirtiness and said yes, and
+   * Settings → Worktrees → delete is the same act on an orphan — that list holds
+   * ONLY dirty orphans (the sweep already removed the clean ones), each row
+   * printing its own dirtiness reason behind a confirm, so a cleanliness gate
+   * there would refuse every row and leave no way to clear one. So the residual
+   * exposure is: history unreadable AND a turn open AND the user confirming a
+   * destructive action against a directory already described to them as dirty.
+   *
+   * The gate is also not the last line. Whatever it lets through, the destroy
+   * then RELEASES every binding rooted at the path before deleting it, so a turn
+   * that started inside the gap between this read and the delete is stopped and
+   * recorded rather than having its directory pulled out from under it.
+   */
+  const busyWorktreeSites = createDesktopBusyWorktreeSites({
+    terminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+    shells: backgroundShells,
+    runtime: () => sessionRuntime,
+    onUnreadable: (sessionId, error) => {
+      console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+    },
+  });
+  /**
+   * The host's one handler map (VC-668), built once from the recovered
+   * services and handed to every door: the Session RPC bridge, the
+   * `volli:ticket-move` channel and the agent socket each project it, under
+   * that door's own policy (the map is sealed: no door can call it without
+   * one). What
+   * this root used to write around each call (reconciling preferences on a
+   * refresh, the availability check before a default, the Role a ticket
+   * implies, resuming an Automation's delivery after attach, a deliberate
+   * move's armed arrival) is the handler's now.
+   */
+  let hostHandlers: HostHandlerMap | undefined;
+  const createHandlers = (
+    ready: RecoveredSessionServices<RuntimeSessionFacade>,
+  ): HostHandlerMap => {
+    const { runtime, sessions } = recoveredRuntimeSessionServices(ready);
+    return createHostHandlers(hostPorts, {
+      db: sessionDb,
+      dataDir: hostCore.dataDir,
+      runtime,
+      sessions,
+      modelAccess: piRuntimeHost,
+      experiments: { snapshot: readExperiments, set: setExperiment },
+      automations: runtimeAutomations,
+      busyWorktreeSites,
+      interruptTicketSessions: interruptTicketSessionsAnnounced,
+      ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
+    });
+  };
+  /** Built once, at the first door that needs it; every later door gets the same object. */
+  const handlersFor = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlerMap =>
+    (hostHandlers ??= createHandlers(ready));
   const runtimeSessionAgents = preparedSessionFacade.agents({
     host: hostCore,
     delegation: sessionDelegation,
@@ -1466,7 +1483,7 @@ const appStartup = app.whenReady().then(async () => {
     host: hostCore,
     lifecycle: runtimeLifecycle,
     bindReady: (ready) => {
-      sessionRpc = createSessionRpc(ready);
+      sessionRpc = createSessionRpc(ready, handlersFor(ready));
       runtimeSessionAgents.toolDoor(ready);
     },
     stopProducers: () => {
@@ -1537,83 +1554,6 @@ const appStartup = app.whenReady().then(async () => {
   // #67). Registered after the db opens because the chain read needs the
   // resolved mode, which lives in `app_state`.
   registerGhosttyConfigIpc(fsDeps, currentAppearance);
-  // The terminal ref declared before host construction is filled below.
-  // Worktree guards read it lazily, after boot.
-  // The ONE interrupt entry both choke points (renderer `volli:ticket-move`
-  // IPC, socket `ticket.move`) inject: Escs the ticket's live agent sessions
-  // and, when any were actually interrupted, announces it to every window
-  // (issue #78 — automation de-escalates, but never silently). Lazy through
-  // the ref: registration below runs before the PtyManager is built, but the
-  // seam only ever fires at invoke time, long after boot.
-  const interruptTicketSessionsAnnounced = async (ticketId: string): Promise<string[]> => {
-    let sessionIds: string[] = [];
-    try {
-      sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
-    } catch (error) {
-      console.error(`[volli] failed to interrupt ticket ${ticketId}:`, errorMessage(error));
-    }
-    if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
-    return sessionIds;
-  };
-  /**
-   * Where work is genuinely in flight in `target` right now, for the
-   * destructive worktree guards. The execution surfaces answer differently ON PURPOSE.
-   *
-   * A live PTY holds its cwd whatever it is doing: a shell whose directory was
-   * deleted underneath it is broken whether or not anything was running in it.
-   * Every live cwd is reported, unfiltered, and the guard does the containment.
-   * Background shells hold theirs between turns too, including while an ended
-   * attachment's shells are still terminating; only process exit clears them.
-   *
-   * An agent binding does not. It opens on attach and is dropped only by an
-   * explicit release, by the executor closing itself, or by app shutdown, so it
-   * survives an idle chat and outlives the tab that opened it — reading its mere
-   * existence as "busy" is what made a ticket with one empty chat in it
-   * permanently unarchivable, with nothing the user could close to clear it. So
-   * a binding counts only while its Session has a turn open, which is the same
-   * `turnActive` the Session listing reads to call a chat "working"
-   * (session-control/chat-attachment.ts). A turn that is open but blocked on a
-   * question still counts: the loop is suspended inside it and resumes writing
-   * into that directory the moment it is answered.
-   *
-   * That read is scoped to `target` before any projection is loaded, which is
-   * why the parameter exists (worktree/agent-sites.ts): asking it of every open
-   * binding costs one durable projection each, and past the runtime's own cache
-   * limit one gate check evicts and replays the ledger of the Session the live
-   * chat is reading.
-   *
-   * A Session whose history cannot be read leaves its binding OUT — the
-   * fail-open stance the renderer's busy probe already takes (though not the
-   * same KIND of thing: `remove-project-dialog.tsx` only decorates a dialog with
-   * a warning and never blocks, so it is a precedent for the stance, not for the
-   * gate). The reason is the one that matters: a ticket nothing can ever archive
-   * is the worse failure.
-   *
-   * Be precise about what that costs, because it is not uniform across the
-   * paths. A NON-FORCED remove re-checks cleanliness right before deleting, so
-   * an unreadable Session cannot lose uncommitted work there. The other two
-   * destroy paths do not re-check, and both are explicitly confirmed: `force:
-   * true` means the user read a dialog naming the dirtiness and said yes, and
-   * Settings → Worktrees → delete is the same act on an orphan — that list holds
-   * ONLY dirty orphans (the sweep already removed the clean ones), each row
-   * printing its own dirtiness reason behind a confirm, so a cleanliness gate
-   * there would refuse every row and leave no way to clear one. So the residual
-   * exposure is: history unreadable AND a turn open AND the user confirming a
-   * destructive action against a directory already described to them as dirty.
-   *
-   * The gate is also not the last line. Whatever it lets through, the destroy
-   * then RELEASES every binding rooted at the path before deleting it, so a turn
-   * that started inside the gap between this read and the delete is stopped and
-   * recorded rather than having its directory pulled out from under it.
-   */
-  const busyWorktreeSites = createDesktopBusyWorktreeSites({
-    terminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
-    shells: backgroundShells,
-    runtime: () => sessionRuntime,
-    onUnreadable: (sessionId, error) => {
-      console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
-    },
-  });
   /**
    * Ends every structured binding rooted at a directory that is about to stop
    * existing (`worktree/agent-sites.ts` carries the reasoning).
@@ -1654,17 +1594,10 @@ const appStartup = app.whenReady().then(async () => {
       : { detachedWork: liveHost.detachedWork, maintenance: liveHost.maintenance }),
     busyWorktreeSites,
     releaseAgentSites,
-    // Backward-move interrupt (issue #78): a user move that leaves the active
-    // columns Esc's the ticket's live agent sessions, announced via toast.
-    interruptTicketSessions: interruptTicketSessionsAnnounced,
-    // Renderer moves now reach main's one durable armed-column arrival owner,
-    // carrying an Option-drag choice when that gesture supplied one.
-    onDeliberateMove: (notice) => {
-      if (runtimeAutomations.kind === "live") {
-        const execution = runtimeAutomations.execution;
-        if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
-      }
-    },
+    // `volli:ticket-move` projects the host's move: its backward-move
+    // interrupt and armed arrival (an Option-drag choice included) are the
+    // handler's, exactly as they are for the socket's.
+    handlers: handlersFor(readyRuntimeServices),
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -2558,7 +2491,6 @@ const appStartup = app.whenReady().then(async () => {
       liveHost !== undefined
         ? createHostAgentCommands(hostPorts, {
             db: liveHost.database.db,
-            detachedWork: liveHost.detachedWork,
             appVersion: app.getVersion(),
             // The verifying half of the same registry the attachments mint from.
             // Without it every socket caller is unauthenticated by default, which
@@ -2566,21 +2498,10 @@ const appStartup = app.whenReady().then(async () => {
             verifySessionToken: sessionTokens.verify,
             observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
             ...recoveredSessionCommandPorts(readyRuntimeServices),
-            // Backward-move interrupt (issue #78): a socket `ticket.move` that
-            // leaves the active columns Esc's the ticket's live agent sessions,
-            // announced via toast exactly like the renderer's own move path.
-            busyWorktreeSites,
-            interruptTicketSessions: interruptTicketSessionsAnnounced,
-            // An explicit `volli ticket move` is the other Deliberate-move door.
-            // It reaches the same one main-owned pending arrival as renderer IPC;
-            // no renderer has to exist for the timer to fire.
-            onDeliberateMove: (notice) => {
-              if (runtimeAutomations.kind === "live") {
-                const execution = runtimeAutomations.execution;
-                if (execution.kind !== "idle")
-                  execution.pendingArmedRuns.noteDeliberateMove(notice);
-              }
-            },
+            // The same map the renderer's channel projects: an explicit
+            // `volli ticket move` is the other Deliberate-move door, with the
+            // same interrupt and the same main-owned pending arrival (VC-668).
+            handlers: handlersFor(readyRuntimeServices),
             // The `env` block `volli identify` prints (VC-94): the PATH main
             // adopted, its latest non-interactive provenance, the measured tools
             // resolved against it (and which of them this workspace implies),
@@ -2766,3 +2687,14 @@ registerAgentSocketWillQuit({
     );
   },
 });
+
+/** No runtime, no bridge: the degraded Session RPC handlers answer instead. */
+function createSessionRpc(
+  ready: RecoveredSessionServices<RuntimeSessionFacade>,
+  handlers: HostHandlerMap,
+): ReturnType<typeof registerSessionRpcIpcHandlers> | null {
+  return recoveredRuntimeSessionServices(ready).runtime === null
+    ? null
+    : // The router's projection of the map: its policy at the map, then the handler.
+      registerSessionRpcIpcHandlers({ handlers: admittedHandlers(handlers, ROUTER_POLICY) });
+}

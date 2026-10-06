@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
 import { insertProject, updateProjectAuthorityPolicy } from "./db/projects-repo";
 import { listTicketsByProject, insertTicket } from "./db/tickets-repo";
 import { listComments } from "./db/comments-repo";
@@ -53,7 +54,7 @@ function scenario() {
 
   const tokens = createSessionTokenRegistry();
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: ctx.db }),
     db: ctx.db,
     sessionEngine: createTestSessionEngine(ctx.db),
     appVersion: "1.2.3",

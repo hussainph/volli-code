@@ -8,6 +8,7 @@ import {
   HOST_ERROR_REASON_CODES,
   hostError,
   isHostError,
+  isResnapshotRequired,
   readHostError,
   type HostErrorCode,
 } from "./errors";
@@ -15,6 +16,18 @@ import { isEpoch, isIdentifier, isUuidV4 } from "./identity";
 
 const WORKSPACE = "6f1cbc6b-0b8e-4d4e-9a39-2a0c5f4f2d11";
 const ID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+
+describe("isResnapshotRequired", () => {
+  it("is a typed, checkable reason on either link's envelope, never a message match", () => {
+    const resnapshot = hostError("subscription-resnapshot-required", "Re-read the snapshot");
+    expect(isResnapshotRequired(resnapshot)).toBe(true);
+    expect(isResnapshotRequired({ message: "x", data: { hostError: resnapshot } })).toBe(true);
+    expect(
+      isResnapshotRequired(hostError("subscription-overflow", "subscription-resnapshot-required")),
+    ).toBe(false);
+    expect(isResnapshotRequired(new Error("subscription-resnapshot-required"))).toBe(false);
+  });
+});
 
 describe("the error envelope", () => {
   it("speaks tRPC's code vocabulary exactly", () => {

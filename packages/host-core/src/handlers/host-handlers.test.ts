@@ -1,0 +1,362 @@
+/**
+ * The host's one handler map (VC-668): total over the catalog, and each entry
+ * the whole command, with the behaviour composition roots used to write
+ * around a low-level call.
+ */
+import type { SessionRuntime } from "@volli/session-engine";
+import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  HOST_HANDLER_KEYS,
+  isOperationUnavailable,
+  type DataChangedEvent,
+  type HandlerCall,
+  type ModelAccessSnapshot,
+  type TicketEventActor,
+} from "@volli/shared";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
+
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { getTicketRow } from "../db/tickets-repo";
+import type { RuntimeAutomations } from "../session-runtime/automations";
+import { createTicketCommand } from "../ticket-commands";
+import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
+import {
+  createHostHandlers,
+  type HostHandlerCoverage,
+  type HostHandlerOptions,
+  type HostHandlers,
+} from "./host-handlers";
+
+vi.mock("../session-runtime/model-access-preferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-runtime/model-access-preferences")>()),
+  reconcileModelAccessPreferences: vi.fn(),
+  assertDefaultModelAvailable: vi.fn(),
+}));
+const preferences = await import("../session-runtime/model-access-preferences");
+
+const USER: HandlerCall = { actor: { kind: "user" } };
+const WINDOW: HandlerCall = { actor: { kind: "user" }, origin: "desktop-window" };
+const PROJECT = "project";
+
+let ctx: TestDb;
+let publish: ReturnType<typeof vi.fn>;
+let deliver: ReturnType<typeof vi.fn>;
+let noteDeliberateMove: ReturnType<typeof vi.fn>;
+let resumeDeliveryForSession: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  ctx = openTestDb();
+  insertProject(ctx.db, testProject({ id: PROJECT, ticketPrefix: "VC" }));
+  publish = vi.fn();
+  deliver = vi.fn(() => ({ delivered: true }));
+  noteDeliberateMove = vi.fn();
+  resumeDeliveryForSession = vi.fn(async () => {});
+});
+
+afterEach(() => {
+  ctx.cleanup();
+  vi.clearAllMocks();
+});
+
+function automations(kind: "ready" | "idle" | "degraded" = "ready"): RuntimeAutomations {
+  if (kind === "degraded") return { kind: "degraded" } as RuntimeAutomations;
+  return {
+    kind: "live",
+    execution:
+      kind === "idle"
+        ? { kind: "idle" }
+        : {
+            kind: "ready",
+            runner: { resumeDeliveryForSession },
+            pendingArmedRuns: { noteDeliberateMove },
+          },
+  } as unknown as RuntimeAutomations;
+}
+
+/** Admits everything: these cases are about what each handler does, not who may call it. */
+const OPEN: HandlerPolicy = { door: "test", admit: () => ADMITTED };
+
+function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
+  return admittedHandlers(sealedMap(options), OPEN);
+}
+
+function sealedMap(options: Partial<HostHandlerOptions> = {}) {
+  return createHostHandlers(
+    {
+      events: { publish },
+      attention: { deliver, focusedSessionIds: () => new Set() },
+    } as never,
+    {
+      db: ctx.db,
+      dataDir: "",
+      runtime: null,
+      sessions: null,
+      modelAccess: null,
+      experiments: null,
+      automations: automations(),
+      busyWorktreeSites: async () => [],
+      now: () => 50,
+      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      ...options,
+    },
+  );
+}
+
+async function unavailable(run: () => unknown): Promise<string> {
+  try {
+    await run();
+  } catch (error) {
+    expect(isOperationUnavailable(error)).toBe(true);
+    return (error as Error).message;
+  }
+  throw new Error("expected the handler to answer unavailable");
+}
+
+function ticket(id: string, status: "todo" | "doing" | "done" = "todo") {
+  return createTicketCommand(
+    ctx.db,
+    { id, projectId: PROJECT, title: id, status },
+    { now: 1, actor: { kind: "user" } },
+  );
+}
+
+describe("the map", () => {
+  it("has a handler for every catalog key, and no other", () => {
+    expectTypeOf<HostHandlerCoverage>().toEqualTypeOf<never>();
+    expect(Object.keys(handlers()).toSorted()).toEqual([...HOST_HANDLER_KEYS].toSorted());
+  });
+
+  it("refuses to build without the busy-worktree guard, for a JavaScript caller too", () => {
+    expect(() => handlers({ busyWorktreeSites: undefined as never })).toThrow(
+      "The busy-worktree supplier is required.",
+    );
+  });
+
+  it("answers unavailable for every service this host lacks, with the client's message", async () => {
+    const empty = handlers({ db: null });
+    expect(await unavailable(() => empty["sessions.create"]({} as never, USER))).toBe(
+      "Sessions are unavailable on this transport",
+    );
+    expect(await unavailable(() => empty["settings.experiments"](undefined, USER))).toBe(
+      "Experimental settings are unavailable on this transport",
+    );
+    expect(await unavailable(() => empty["modelAccess.inspect"]({}, USER))).toBe(
+      "Model Access is unavailable on this transport",
+    );
+    expect(await unavailable(() => empty["modelAccess.defaults"](undefined, USER))).toBe(
+      "Model Access preferences are unavailable on this transport",
+    );
+    expect(await unavailable(() => empty["session.snapshot"]({ sessionId: "s" }, USER))).toBe(
+      "The Session runtime is unavailable on this host",
+    );
+    expect(
+      await unavailable(() =>
+        empty["ticket.move"]({ projectId: PROJECT, ticketId: "t", toStatus: "done" }, USER),
+      ),
+    ).toBe("The board is unavailable: the database did not open");
+    // A default needs Model Access as well as the database.
+    expect(
+      await unavailable(() =>
+        handlers()["modelAccess.setDefault"]({ purpose: "ticket", selection: null }, USER),
+      ),
+    ).toBe("Model Access preferences are unavailable on this transport");
+  });
+});
+
+describe("Session commands", () => {
+  it("passes each runtime command through, fixing what a person's door may say", async () => {
+    const runtime = {
+      snapshot: vi.fn(async () => "snapshot"),
+      projection: vi.fn(async () => "projection"),
+      subscribe: vi.fn(async (_input, listener, onFailure) => {
+        await listener("emission");
+        onFailure?.("failure");
+        return () => {};
+      }),
+      command: vi.fn(async () => "result"),
+      cancelInteraction: vi.fn(async () => {}),
+      reconcile: vi.fn(async () => {}),
+    } as unknown as SessionRuntime;
+    const map = handlers({ runtime });
+    await expect(map["session.snapshot"]({ sessionId: "s" }, USER)).resolves.toBe("snapshot");
+    await expect(map["session.projection"]({ sessionId: "s" }, USER)).resolves.toBe("projection");
+    const emit = vi.fn();
+    const fail = vi.fn();
+    await map["session.subscribe"]({ sessionId: "s", afterSequence: 3 }, USER, { emit, fail });
+    expect(runtime.subscribe).toHaveBeenCalledWith(
+      { sessionId: "s", afterSequence: 3 },
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(emit).toHaveBeenCalledWith("emission");
+    expect(fail).toHaveBeenCalledWith("failure");
+    await expect(map["session.command"]({} as never, USER)).resolves.toBe("result");
+    await map["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, USER);
+    expect(runtime.cancelInteraction).toHaveBeenCalledWith({
+      sessionId: "s",
+      interactionId: "i",
+      reason: "abandoned",
+      origin: { kind: "user" },
+    });
+    await map["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, USER);
+    expect(runtime.reconcile).toHaveBeenCalledWith({ sessionId: "s", attachmentId: "a" });
+  });
+
+  it("states the Role a person's choice of ticket implies", async () => {
+    const create = vi.fn(async (_input: { role: string }) => ({
+      sessionId: "s",
+      model: {} as never,
+    }));
+    const map = handlers({ sessions: { create, attach: vi.fn() } });
+    const input = { operationId: "op", projectId: PROJECT, title: null };
+    await map["sessions.create"]({ ...input, ticketId: "t" }, USER);
+    await map["sessions.create"]({ ...input, ticketId: null }, USER);
+    expect(create.mock.calls.map(([call]) => call.role)).toEqual(["ticket", "project"]);
+  });
+
+  it("resumes an Automation's delivery after a ready attach, and only then", async () => {
+    const attach = vi.fn(async () => ({ state: "ready" }) as never);
+    const ready = handlers({ sessions: { create: vi.fn(), attach } });
+    await ready["sessions.attach"]({ operationId: "op", sessionId: "s" }, USER);
+    expect(resumeDeliveryForSession).toHaveBeenCalledExactlyOnceWith("s");
+
+    resumeDeliveryForSession.mockClear();
+    for (const kind of ["idle", "degraded"] as const) {
+      await handlers({ sessions: { create: vi.fn(), attach }, automations: automations(kind) })[
+        "sessions.attach"
+      ]({ operationId: "op", sessionId: "s" }, USER);
+    }
+    attach.mockResolvedValueOnce({ state: "starting" } as never);
+    await ready["sessions.attach"]({ operationId: "op", sessionId: "s" }, USER);
+    expect(resumeDeliveryForSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("host settings", () => {
+  it("reads and writes experiments through the host's settings", async () => {
+    const snapshot = { cloud: { enabled: false, source: "default" } } as never;
+    const set = vi.fn(() => snapshot);
+    const map = handlers({ experiments: { snapshot: () => snapshot, set } });
+    expect(await map["settings.experiments"](undefined, USER)).toBe(snapshot);
+    await map["settings.setExperiment"]({ id: "cloud", enabled: true }, USER);
+    expect(set).toHaveBeenCalledWith("cloud", true);
+  });
+
+  it("reconciles stored preferences after a refresh, and only a refresh", async () => {
+    const access = { models: [] } as unknown as ModelAccessSnapshot;
+    const inspectModelAccess = vi.fn(async () => access);
+    await handlers({ modelAccess: { inspectModelAccess } })["modelAccess.inspect"]({}, USER);
+    expect(preferences.reconcileModelAccessPreferences).not.toHaveBeenCalled();
+    await handlers({ modelAccess: { inspectModelAccess } })["modelAccess.inspect"](
+      { refresh: true },
+      USER,
+    );
+    expect(preferences.reconcileModelAccessPreferences).toHaveBeenCalledWith(ctx.db, access, 50);
+    vi.mocked(preferences.reconcileModelAccessPreferences).mockClear();
+    await handlers({ db: null, modelAccess: { inspectModelAccess } })["modelAccess.inspect"](
+      { refresh: true },
+      USER,
+    );
+    expect(preferences.reconcileModelAccessPreferences).not.toHaveBeenCalled();
+  });
+
+  it("checks a default is runnable before saving it, and clears one without asking", async () => {
+    const access = { models: [] } as unknown as ModelAccessSnapshot;
+    const map = handlers({ modelAccess: { inspectModelAccess: async () => access } });
+    const selection = { providerId: "p", modelId: "m", reasoningLevel: "medium" } as const;
+    await expect(
+      map["modelAccess.setDefault"]({ purpose: "ticket", selection }, USER),
+    ).resolves.toMatchObject({ ticket: selection });
+    expect(preferences.assertDefaultModelAvailable).toHaveBeenCalledWith(
+      access,
+      selection,
+      "ticket",
+    );
+    vi.mocked(preferences.assertDefaultModelAvailable).mockClear();
+    await expect(
+      map["modelAccess.setDefault"]({ purpose: "ticket", selection: null }, USER),
+    ).resolves.toMatchObject({ ticket: null });
+    expect(preferences.assertDefaultModelAvailable).not.toHaveBeenCalled();
+    expect(await map["modelAccess.defaults"](undefined, USER)).toEqual(EMPTY_MODEL_ACCESS_DEFAULTS);
+  });
+
+  it("round-trips every stored preference", async () => {
+    const map = handlers();
+    const hidden = [{ providerId: "p", modelId: "m" }];
+    await map["modelAccess.setHiddenModels"](hidden, USER);
+    expect(await map["modelAccess.hiddenModels"](undefined, USER)).toEqual(hidden);
+    const compaction = { autoCompaction: false };
+    expect(await map["modelAccess.setCompactionPolicy"](compaction, USER)).toEqual(compaction);
+    expect(await map["modelAccess.compactionPolicy"](undefined, USER)).toEqual(compaction);
+    const codeMode = { enabled: true, models: {} };
+    expect(await map["modelAccess.setCodeModePolicy"](codeMode, USER)).toEqual(codeMode);
+    expect(await map["modelAccess.codeModePolicy"](undefined, USER)).toEqual(codeMode);
+    expect(await map["modelAccess.setPickerView"]("all", USER)).toBe("all");
+    expect(await map["modelAccess.pickerView"](undefined, USER)).toBe("all");
+  });
+});
+
+describe("ticket.move, the whole command", () => {
+  const SESSION: TicketEventActor = { kind: "session", sessionId: "s-1", ticketId: null };
+
+  function changes(): Omit<DataChangedEvent, "entity">[] {
+    return publish.mock.calls
+      .filter(([topic]) => topic === "data-changed")
+      .map(([, change]) => change as Omit<DataChangedEvent, "entity">);
+  }
+
+  it("moves, records the armed arrival, and publishes the change for any other caller", async () => {
+    ticket("t-1");
+    const moved = await handlers()["ticket.move"](
+      { projectId: PROJECT, ticketId: "t-1", toStatus: "doing" },
+      USER,
+    );
+    expect(moved.find(({ id }) => id === "t-1")?.status).toBe("doing");
+    expect(getTicketRow(ctx.db, "t-1")?.updated_at).toBe(50);
+    expect(noteDeliberateMove).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "t-1", from: "todo", to: "doing" }),
+    );
+    expect(changes()).toEqual([{ projectId: PROJECT, ticketId: "t-1", kind: "ticket" }]);
+    // A person's move into Doing is silent: only a non-user arrival notifies.
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("echoes no board change to the desktop window, which holds it in the reply", async () => {
+    ticket("t-1");
+    await handlers()["ticket.move"](
+      { projectId: PROJECT, ticketId: "t-1", toStatus: "doing" },
+      WINDOW,
+    );
+    expect(changes()).toEqual([]);
+    expect(noteDeliberateMove).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies a Session's arrival into Doing, and records no arrival without a live runner", async () => {
+    ticket("t-1");
+    await handlers({ automations: automations("idle") })["ticket.move"](
+      { projectId: PROJECT, ticketId: "t-1", toStatus: "doing" },
+      { actor: SESSION },
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ producer: "ticket-moved-to-doing" }),
+    );
+    expect(noteDeliberateMove).not.toHaveBeenCalled();
+    ticket("t-2");
+    await handlers({ automations: automations("degraded") })["ticket.move"](
+      { projectId: PROJECT, ticketId: "t-2", toStatus: "doing" },
+      USER,
+    );
+    expect(noteDeliberateMove).not.toHaveBeenCalled();
+  });
+
+  it("interrupts a backward move's live Sessions, and uses the host's own worktree bundle by default", async () => {
+    ticket("t-1", "doing");
+    const interruptTicketSessions = vi.fn(() => ["s-1"]);
+    // The host's clock, and its own worktree bundle, when the root states neither.
+    const map = handlers({ interruptTicketSessions, worktree: undefined, now: undefined });
+    await map["ticket.move"]({ projectId: PROJECT, ticketId: "t-1", toStatus: "todo" }, USER);
+    expect(interruptTicketSessions).toHaveBeenCalledWith("t-1");
+  });
+});
