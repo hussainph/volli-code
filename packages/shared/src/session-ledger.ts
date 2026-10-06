@@ -26,6 +26,7 @@ import {
   roundSessionUsageCost,
   summarizeSessionUsage,
 } from "./session-usage";
+import type { SessionTodoList } from "./session-todo";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 import type { SessionUsageEntry } from "./session-usage-report";
 
@@ -361,6 +362,38 @@ export interface TranscriptReference {
   id: string;
   mediaType: string | null;
   digest: string | null;
+}
+
+/**
+ * The few facts about one settled transcript message that the Session's
+ * current state depends on, recorded beside its reference (VC-315).
+ *
+ * The body stays in the artifact store; this is what lets the projection know
+ * the Session's current plan and where its current turn's latest reply is
+ * without reading any body back. A Client that opens a Session holds only the
+ * newest window of its transcript, so "the plan as it stands" and "what
+ * `/copy` copies" must be answerable from the checkpoint, not from a fold of
+ * messages the Client may never page in.
+ *
+ * Absent on events recorded before VC-315: those say nothing, and the fold
+ * leaves its state as it was rather than guessing.
+ */
+export interface SessionTranscriptDigest {
+  /** Who spoke. A user message starts a new current turn: the latest reply resets. */
+  readonly role: "user" | "assistant" | "system";
+  /** Present when an assistant message said something a reader would call a reply. */
+  readonly reply?: true;
+  /**
+   * The todo list the message's last settled plan call left — `[]` when it
+   * cleared the list. Absent when the message holds no plan call.
+   */
+  readonly todoList?: SessionTodoList;
+}
+
+/** Where the current turn's latest reply lives: the transcript event that recorded it. */
+export interface SessionReplyLocation {
+  readonly sequence: number;
+  readonly reference: TranscriptReference;
 }
 
 export const SESSION_ATTENTION_KINDS = [
@@ -735,6 +768,8 @@ export type SessionEventPayload =
       attachmentId: string | null;
       turnId: string | null;
       reference: TranscriptReference;
+      /** What the message means for current state (VC-315); absent before it. */
+      digest?: SessionTranscriptDigest;
     }
   | { kind: "attention.raised"; attention: SessionAttention }
   | { kind: "attention.cleared"; attentionId: string }
@@ -1097,6 +1132,7 @@ export function observationPayload(
         attachmentId: observation.attachmentId,
         turnId: observation.turnId,
         reference: observation.reference,
+        ...(observation.digest === undefined ? {} : { digest: observation.digest }),
       };
     case "attention.raised":
       return { kind: observation.kind, attention: observation.attention };
@@ -1580,6 +1616,23 @@ export interface SessionProjection {
    * today, but only the Board Session was ever meant to.
    */
   readonly bornTicketless: boolean;
+  /**
+   * The Session's current todo list, as its newest settled plan call left it
+   * (VC-315). `[]` is a list the model cleared, which is not the same as
+   * never having had one: absent is "no plan recorded" — never written, or
+   * written only before transcript digests existed. Folded from
+   * {@link SessionTranscriptDigest}, so it is there however little of the
+   * transcript a Client holds.
+   */
+  readonly todoList?: SessionTodoList;
+  /**
+   * Where the current turn's latest reply is, or absent when the current
+   * turn has said nothing yet (VC-315). Reset by every user message — a
+   * submitted one, a steer, an answer to an interaction — and moved by every
+   * assistant message that says something. What `/copy` copies, without the
+   * Client holding the message.
+   */
+  readonly latestReply?: SessionReplyLocation;
 }
 
 /**
@@ -1609,6 +1662,20 @@ export interface SessionProjectionCheckpoint {
   stoppedRecoveryAttachmentId: string | null;
   pendingAttachmentCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
   pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
+  /**
+   * The projection's plan and reply baseline (`todoList`, `latestReply`) is
+   * whole (VC-315). Present when every transcript fact folded into this
+   * checkpoint carried its {@link SessionTranscriptDigest} — a Session born
+   * with digests — or when the host recovered the baseline from the bodies of
+   * the digest-less facts written before them. Absent on a checkpoint written
+   * by an older build, or folded over a digest-less fact: the host recovers
+   * the baseline once and writes it back with this set.
+   *
+   * Optional and additive, not a version bump: an older reader ignores it, and
+   * a checkpoint without it costs one recovery, never a refold of every
+   * Session.
+   */
+  baselineComplete?: true;
 }
 
 export const SESSION_PROJECTION_CHECKPOINT_VERSION = 4 as const;
@@ -1799,6 +1866,11 @@ function foldSessionProjection(
   // every real Session's `session.created` immediately overrides it with the
   // immutable birth fact below.
   let bornTicketless = base?.bornTicketless ?? session.ticketId === null;
+  let todoList: SessionTodoList | null = base?.todoList ?? null;
+  let latestReply: SessionReplyLocation | null = base?.latestReply ?? null;
+  // A fold from the first event knows its baseline is whole until it meets a
+  // digest-less transcript fact; a fold over a checkpoint inherits its word.
+  let baselineComplete = checkpoint === null || checkpoint.baselineComplete === true;
   const throughSequence = checkpoint?.throughSequence ?? 0;
 
   const ordered = [...events]
@@ -1855,6 +1927,14 @@ function foldSessionProjection(
         }
         if (command.intent.kind === "executor.start") {
           pendingExecutorStarts.set(command.id, command);
+        }
+        // A user message is a new current turn, whatever turn the executor
+        // folds it into: the reply before it is no longer "the last reply".
+        if (
+          command.intent.kind === "message.submit" ||
+          command.intent.kind === "interaction.resolve"
+        ) {
+          latestReply = null;
         }
         break;
       }
@@ -2080,9 +2160,24 @@ function foldSessionProjection(
       case "context.reasoning_dropped":
       case "run.started":
       case "run.completed":
-      case "transcript.referenced":
       case "adapter.observed":
         break;
+      // The body is the transcript's; only the digest moves state (VC-315).
+      case "transcript.referenced": {
+        const { digest } = event.payload;
+        if (digest === undefined) {
+          // Written before digests: what it meant for the plan and the reply
+          // is only in its body, which the host recovers (VC-315).
+          baselineComplete = false;
+          break;
+        }
+        if (digest.todoList !== undefined) todoList = digest.todoList;
+        if (digest.role === "user") latestReply = null;
+        else if (digest.role === "assistant" && digest.reply === true) {
+          latestReply = { sequence: event.sequence, reference: event.payload.reference };
+        }
+        break;
+      }
       // Collected rather than summed in place: `summarizeSessionUsage` owns
       // what a mixed basis and a partial coverage mean, and a second addition
       // written here would be a second opinion about the same money.
@@ -2147,6 +2242,8 @@ function foldSessionProjection(
     },
     lastActivityAt,
     bornTicketless,
+    ...(todoList === null ? {} : { todoList }),
+    ...(latestReply === null ? {} : { latestReply }),
   };
   return {
     version: SESSION_PROJECTION_CHECKPOINT_VERSION,
@@ -2166,6 +2263,7 @@ function foldSessionProjection(
       commandId,
       origin,
     })),
+    ...(baselineComplete ? { baselineComplete: true as const } : {}),
   };
 }
 

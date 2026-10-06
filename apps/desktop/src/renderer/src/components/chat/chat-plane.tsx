@@ -64,6 +64,7 @@ import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   groupTurns,
   isAwaitingFirstOutput,
+  currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
   segmentTurn,
@@ -99,7 +100,6 @@ import {
   hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
-  lastAssistantText,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -141,6 +141,7 @@ import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
   rememberTranscriptView,
+  TRANSCRIPT_PAGE_ROWS,
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
@@ -402,6 +403,8 @@ export function ChatPlane({
     deliverable,
     projection,
     liveCompaction,
+    historyBefore,
+    latestReply,
   } = session;
   const projectModel = useProjectsStore(
     (state) => state.projects.find((project) => project.id === projectId)?.sessionModel ?? null,
@@ -1135,7 +1138,15 @@ export function ChatPlane({
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
   // prop of the memoized composer, so the press must read the latest text
   // without the handler re-creating itself once per streamed frame.
-  const lastReply = React.useMemo(() => lastAssistantText(messages), [messages]);
+  //
+  // Read against the whole Session, not just the messages held (VC-315): a
+  // bounded open can hold a current turn's tool calls without the reply that
+  // preceded them, and `currentTurnReply` falls back on the host's baseline
+  // there rather than silently offering nothing.
+  const lastReply = React.useMemo(
+    () => currentTurnReply({ messages, before: historyBefore, latestReply }),
+    [historyBefore, latestReply, messages],
+  );
   const lastReplyRef = React.useRef<string | null>(lastReply);
   lastReplyRef.current = lastReply;
   // The facts every verb's offer rule reads, gathered once (`ComposerVerbMoment`).
@@ -1500,13 +1511,13 @@ export function ChatPlane({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
               <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                {messages.length === 0 && historyPending ? (
+                {messages.length === 0 && session.historyBefore === null && historyPending ? (
                   // History is on its way (VC-383). A null projection with no
                   // Draft behind it means the snapshot has not landed, and the
                   // empty state below would say "nothing was ever said here"
                   // about a Session that may hold a thousand turns.
                   <TranscriptSkeleton />
-                ) : messages.length === 0 ? (
+                ) : messages.length === 0 && session.historyBefore === null ? (
                   // Where this Session runs, drawn (VC-55). It replaces the bare
                   // mark that stood here — see `empty/chat-empty-state.tsx` for why
                   // that reversal is deliberate. What blocks TYPING still sits on
@@ -1520,6 +1531,8 @@ export function ChatPlane({
                     rows={rows}
                     context={turnContext}
                     liveTurn={liveTurn}
+                    historyBefore={session.historyBefore}
+                    onLoadOlder={controller.loadOlder}
                     {...(onOpenSession === undefined ? {} : { onOpenSession })}
                   >
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
@@ -1988,12 +2001,33 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * day of reading history does not leave a thousand rows mounted behind a reader
  * who is watching the live tail. The drop happens while the reader is pinned to
  * the bottom, where removing rows far above the viewport moves nothing.
+ *
+ * AND THE HOST PAGES TOO (VC-315). A Session opens on the host's newest window
+ * of history, not the whole log, so the rows held here can run out before the
+ * Session does. `historyBefore` says the host has more: the same affordance
+ * then reads the next window, with the window pinned to the row at its top so
+ * the page lands above it unmounted, and reveals it once it arrives — the
+ * reader's place kept exactly as for rows that were already here. A reveal that
+ * leaves less than a page above it reads the next window ahead of the reader.
+ *
+ * A page does not always bring a row (VC-315 review, B3). When the window began
+ * partway through a turn, the page completes that turn instead: the first row
+ * grows at its top, no row is added, and nothing above is left to reveal. So
+ * the reader's place is held by what they can SEE rather than by rows: before
+ * every page the reader asked for, the visible transcript anchors (one per
+ * segment) and their offsets are written down, and when the page lands the
+ * first one still drawn is put back where it was — or, with none left, the
+ * offset moves by the height that arrived. A row keeps its React identity
+ * while a page completes it (`stableRowKeys`), so its open disclosures and
+ * the anchors inside it survive.
  */
 function ChatTranscript({
   sessionId,
   rows,
   context,
   liveTurn,
+  historyBefore,
+  onLoadOlder,
   onOpenSession,
   children,
 }: {
@@ -2002,6 +2036,10 @@ function ChatTranscript({
   context: TurnContext;
   /** The turn the harness is still writing into, by identity, or `null`. */
   liveTurn: readonly UIMessage[] | null;
+  /** The host's cursor for history above these rows, or `null` when they reach the start. */
+  historyBefore: number | null;
+  /** Reads the next window of history above the rows. */
+  onLoadOlder(): Promise<boolean>;
   onOpenSession?(sessionId: string): void;
   /** The live tail's own marks — compaction progress, the working mark. */
   children?: React.ReactNode;
@@ -2017,18 +2055,29 @@ function ChatTranscript({
   // the tail, and the tail needs no search. A retired anchor (a compaction can
   // take its row) answers -1, which `transcriptWindow` reads as the tail.
   const anchor = React.useMemo(
-    () => (anchorKey === null ? -1 : rows.findIndex((row) => transcriptRowKey(row) === anchorKey)),
+    () => (anchorKey === null ? -1 : transcriptRowIndex(rows, anchorKey)),
     [anchorKey, rows],
   );
   const shown = transcriptWindow(rows.length, anchor);
   const mounted = React.useMemo(() => rows.slice(shown.start), [rows, shown.start]);
+  const rowKeys = React.useRef<ReadonlyMap<string, string>>(new Map());
+  const mountedKeys = React.useMemo(() => {
+    const keyed = stableRowKeys(mounted, rowKeys.current);
+    rowKeys.current = keyed.byNatural;
+    return keyed.keys;
+  }, [mounted]);
   const earlierRow = shown.earlierStart < 0 ? undefined : rows[shown.earlierStart];
   const earlierKey = earlierRow === undefined ? null : transcriptRowKey(earlierRow);
 
-  // What the scroller looked like before a reveal, read at the press rather than
-  // in the effect: by then the rows are already in the document and the height
-  // it grew by is no longer measurable.
-  const before = React.useRef<{ height: number; top: number } | null>(null);
+  // What the scroller looked like before a prepend, read at the press rather
+  // than in the effect: by then the rows are already in the document and where
+  // the reader's anchors were is no longer measurable. `cursor` is `null` for a
+  // reveal of rows already held, applied on the next commit; for a host page it
+  // is the cursor the page answers, applied on the commit that moves past it.
+  const prepend = React.useRef<{ geometry: PrependGeometry; cursor: number | null } | null>(null);
+  // A host page still on its way, so a reveal restored before it lands can
+  // write down the reader's place again for it.
+  const inflight = React.useRef<number | null>(null);
 
   // Where the reader stands, written down for the next mount. Called from the
   // two places the answer changes — a reveal and a scroll — rather than from an
@@ -2050,29 +2099,71 @@ function ChatTranscript({
     [control, sessionId],
   );
 
-  const reveal = React.useCallback(() => {
-    if (earlierKey === null) return;
+  const hostHasOlder = historyBefore !== null;
+  // A host page asked for by a reveal, to be revealed in its turn once it lands.
+  const pendingPage = React.useRef(false);
+  const topRow = React.useRef<string | null>(null);
+
+  // The reader asked for this page: their place is written down before it is
+  // read, and growth it brings is not followed — the rule a disclosure obeys
+  // (see `useStopFollowing`).
+  const readPage = React.useCallback(() => {
+    const cursor = historyBefore;
+    if (cursor === null) return;
     const scroller = control.scroller();
-    before.current =
-      scroller === null ? null : { height: scroller.scrollHeight, top: scroller.scrollTop };
+    if (scroller !== null && prepend.current === null) {
+      prepend.current = { geometry: measurePrepend(scroller), cursor };
+    }
+    control.stopFollowing();
+    inflight.current = cursor;
+    void onLoadOlder().then((applied) => {
+      if (inflight.current === cursor) inflight.current = null;
+      // Nothing landed: a place written down for it would be applied to
+      // whatever moves the cursor next.
+      if (!applied && prepend.current?.cursor === cursor) prepend.current = null;
+    });
+  }, [control, historyBefore, onLoadOlder]);
+
+  const reveal = React.useCallback(() => {
+    if (earlierKey === null) {
+      if (!hostHasOlder) return;
+      // Pinned first, so the page lands above the window instead of in it.
+      const top = topRow.current;
+      if (anchorKey === null && top !== null) {
+        record(top);
+        setAnchorKey(top);
+      }
+      pendingPage.current = true;
+      readPage();
+      return;
+    }
+    const scroller = control.scroller();
+    prepend.current =
+      scroller === null ? null : { geometry: measurePrepend(scroller), cursor: null };
     // Growth the reader revealed is not followed — the same rule a disclosure
     // obeys (see `useStopFollowing`).
     control.stopFollowing();
+    if (hostHasOlder && shown.earlierStart < TRANSCRIPT_PAGE_ROWS) readPage();
     record(earlierKey);
     setAnchorKey(earlierKey);
-  }, [control, earlierKey, record]);
+  }, [anchorKey, control, earlierKey, hostHasOlder, readPage, record, shown.earlierStart]);
 
+  // The reader's place, put back once what they asked for is drawn: on the
+  // commit that mounts revealed rows, or the one where a host page lands —
+  // whether that page added rows or only completed the first one.
   React.useLayoutEffect(() => {
-    const previous = before.current;
-    before.current = null;
     const scroller = control.scroller();
-    if (previous === null || scroller === null) return;
-    // Reading `scrollHeight` forces the layout the prepend dirtied, so the
-    // browser's own scroll anchoring has already run by the time this compares:
-    // an offset that is already correct is left alone rather than applied twice.
-    const target = previous.top + (scroller.scrollHeight - previous.height);
-    if (Math.abs(scroller.scrollTop - target) > 1) scroller.scrollTop = target;
-  }, [anchorKey, control]);
+    const pending = prepend.current;
+    if (pending !== null && (pending.cursor === null || pending.cursor !== historyBefore)) {
+      prepend.current = null;
+      if (scroller !== null) restorePrepend(scroller, pending.geometry);
+    }
+    // A page still on its way lands against where the reader is now.
+    const page = inflight.current;
+    if (prepend.current === null && page !== null && page === historyBefore && scroller !== null) {
+      prepend.current = { geometry: measurePrepend(scroller), cursor: page };
+    }
+  }, [anchorKey, control, historyBefore, mounted]);
 
   // The press and the sentinel reveal the same page; the ref is what lets one
   // observer outlive the callback's identity instead of being torn down and
@@ -2082,8 +2173,33 @@ function ChatTranscript({
     revealRef.current = reveal;
   }, [reveal]);
 
+  // The host page a reveal asked for: shown once there are rows above the
+  // window, asked for again if it held nothing to draw, dropped once the host
+  // has nothing more.
+  React.useLayoutEffect(() => {
+    if (!pendingPage.current) return;
+    if (earlierKey !== null) {
+      pendingPage.current = false;
+      revealRef.current();
+      return;
+    }
+    if (historyBefore === null) {
+      pendingPage.current = false;
+      return;
+    }
+    readPage();
+  }, [earlierKey, historyBefore, readPage]);
+
+  // A window with nothing to draw — the tail was all tool traffic and turn
+  // marks — is not a transcript yet: read back until there is a row or no
+  // more history.
+  const empty = rows.length === 0;
+  React.useEffect(() => {
+    if (empty && historyBefore !== null) void onLoadOlder();
+  }, [empty, historyBefore, onLoadOlder]);
+
   const sentinel = React.useRef<HTMLDivElement>(null);
-  const hasEarlier = shown.earlier > 0;
+  const hasEarlier = shown.earlier > 0 || hostHasOlder;
   // THE SENTINEL IS ARMED BY A READER, NOT BY A MOUNT, and that is not a nicety.
   // A plane mounts with its scroller at the top and is moved to the bottom a
   // frame later by the library's first resize — so for that one frame the
@@ -2116,7 +2232,6 @@ function ChatTranscript({
   // leaves the bottom, so pressing "Show earlier" while already pinned (a
   // transcript shorter than its viewport) is never undone by the press itself.
   const anchorRef = React.useRef(anchorKey);
-  const topRow = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     anchorRef.current = anchorKey;
     const first = mounted[0];
@@ -2213,9 +2328,9 @@ function ChatTranscript({
           </Button>
         </div>
       ) : null}
-      {mounted.map((row) => (
+      {mounted.map((row, index) => (
         <ChatTranscriptRow
-          key={transcriptRowKey(row)}
+          key={mountedKeys[index]}
           row={row}
           context={context}
           live={row.kind === "turn" && row.messages === liveTurn}
@@ -2224,6 +2339,103 @@ function ChatTranscript({
       ))}
       {children}
     </ContentColumn>
+  );
+}
+
+/** Where the reader's visible anchors were, and the scroller's size, before a prepend. */
+interface PrependGeometry {
+  height: number;
+  top: number;
+  anchors: readonly { key: string; offset: number }[];
+}
+
+/** How many visible anchors a prepend writes down: enough that one survives a regroup. */
+const PREPEND_ANCHORS = 8;
+
+/**
+ * The transcript anchors the reader can see, top first, each with its offset
+ * from the scroller's top edge. An anchor is one segment of a turn, keyed by
+ * the message part it starts at, so it outlives a page that completes the
+ * turn around it.
+ */
+function measurePrepend(scroller: HTMLElement): PrependGeometry {
+  const edge = scroller.getBoundingClientRect().top;
+  const anchors: { key: string; offset: number }[] = [];
+  for (const node of scroller.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom <= edge) continue;
+    if (rect.top >= edge + scroller.clientHeight) break;
+    anchors.push({ key: node.dataset["transcriptAnchor"] ?? "", offset: rect.top - edge });
+    if (anchors.length === PREPEND_ANCHORS) break;
+  }
+  return { height: scroller.scrollHeight, top: scroller.scrollTop, anchors };
+}
+
+/**
+ * Puts the first written-down anchor still drawn back where it was. Reading
+ * its position forces the layout the prepend dirtied, so the browser's own
+ * scroll anchoring has already run by the time this compares: an anchor that
+ * is already in place is left alone rather than corrected twice. With no
+ * anchor left, everything that grew is taken to have grown above the reader.
+ */
+function restorePrepend(scroller: HTMLElement, geometry: PrependGeometry): void {
+  const wanted = new Map(geometry.anchors.map(({ key, offset }) => [key, offset]));
+  if (wanted.size > 0) {
+    const edge = scroller.getBoundingClientRect().top;
+    for (const node of scroller.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+      const offset = wanted.get(node.dataset["transcriptAnchor"] ?? "");
+      if (offset === undefined) continue;
+      const drift = node.getBoundingClientRect().top - edge - offset;
+      if (Math.abs(drift) > 1) scroller.scrollTop += drift;
+      return;
+    }
+  }
+  const target = geometry.top + (scroller.scrollHeight - geometry.height);
+  if (Math.abs(scroller.scrollTop - target) > 1) scroller.scrollTop = target;
+}
+
+/**
+ * React keys for the mounted rows that hold still while a host page completes
+ * a turn (VC-315). A turn's natural key is its first message, which the page
+ * just changed; keyed by it, the turn would remount — losing its open
+ * disclosures and every anchor the reader's place was written against. So a
+ * row whose natural key is new keeps the key of the row it grew from: the
+ * one whose first message it still holds.
+ */
+function stableRowKeys(
+  rows: readonly TranscriptRow[],
+  previous: ReadonlyMap<string, string>,
+): { keys: string[]; byNatural: Map<string, string> } {
+  const byNatural = new Map<string, string>();
+  const used = new Set<string>();
+  const keys = rows.map((row) => {
+    const natural = transcriptRowKey(row);
+    let key = previous.get(natural);
+    if (key === undefined && row.kind === "turn") {
+      for (const message of row.messages) {
+        key = previous.get(message.id);
+        if (key !== undefined) break;
+      }
+    }
+    if (key === undefined || used.has(key)) key = natural;
+    used.add(key);
+    byNatural.set(natural, key);
+    return key;
+  });
+  return { keys, byNatural };
+}
+
+/**
+ * Where the row keyed `key` is now. A host page can complete a turn that the
+ * window began partway through (VC-315), and that turn's key is its first
+ * message, which the page just changed: the row the reader was anchored on is
+ * then the one that now holds that message, not nowhere.
+ */
+function transcriptRowIndex(rows: readonly TranscriptRow[], key: string): number {
+  const exact = rows.findIndex((row) => transcriptRowKey(row) === key);
+  if (exact >= 0) return exact;
+  return rows.findIndex(
+    (row) => row.kind === "turn" && row.messages.some((message) => message.id === key),
   );
 }
 
@@ -2367,7 +2579,10 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
+                // An anchor for the reader's place across a history page (VC-315).
+                <div key={segment.key} data-transcript-anchor={segment.key}>
+                  {renderSegment(segment, role, context, live)}
+                </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>

@@ -78,7 +78,9 @@ function fixture() {
     projection: createSessionProjectionCheckpoint(session, []).projection,
     throughSequence: 4,
     frames: [frame(4)],
+    before: 4,
     transcript: [],
+    latestReply: null,
   };
   const receipt = {
     id: "receipt-1",
@@ -97,6 +99,10 @@ function fixture() {
     snapshot: async () => {
       reads.push("snapshot");
       return snapshot;
+    },
+    history: async ({ before }) => {
+      reads.push("history");
+      return { frames: [frame(before - 1)], before: before > 2 ? before - 1 : null };
     },
     projection: async () => {
       reads.push("projection");
@@ -165,6 +171,16 @@ describeContract("Session router", sessionRouterContractLinks(), ({ connect }) =
     expect(await client.session.snapshot.query(input)).toStrictEqual(
       await caller.session.snapshot(input),
     );
+    // The paged history behind the snapshot's tail (VC-315), cursor and all.
+    for (const before of [4, 2]) {
+      expect(await client.session.history.query({ ...input, before })).toStrictEqual(
+        await caller.session.history({ ...input, before }),
+      );
+    }
+    expect(await client.session.history.query({ ...input, before: 2 })).toMatchObject({
+      frames: [{ sequence: 1 }],
+      before: null,
+    });
   });
 
   it("routes a modelAccess facade and reports an absent facade", async () => {

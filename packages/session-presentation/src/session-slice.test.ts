@@ -15,6 +15,7 @@ import {
   foldStreamBatch,
   markAttaching,
   markDelivered,
+  prependSliceHistory,
   retitleSlice,
   seedSlice,
   settleSlice,
@@ -213,5 +214,25 @@ describe("retitleSlice", () => {
     const slice: ChatSessionSlice = seedSlice("ready");
 
     expect(retitleSlice(slice, "Parser")).toBe(slice);
+  });
+});
+
+describe("prependSliceHistory (VC-315)", () => {
+  it("hands back the very slice for a page the transcript no longer asks for", () => {
+    const slice = seedSlice("ready");
+
+    expect(prependSliceHistory(slice, 7, { frames: [], before: null })).toBe(slice);
+  });
+
+  it("records the cursor a page moves to without consulting lifecycle", () => {
+    const slice = {
+      ...seedSlice("working"),
+      transcript: { ...EMPTY_TRANSCRIPT, before: 7 },
+    };
+
+    const next = prependSliceHistory(slice, 7, { frames: [], before: 3 });
+
+    expect(next.transcript.before).toBe(3);
+    expect(next.lifecycle).toBe("working");
   });
 });
