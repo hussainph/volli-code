@@ -17,16 +17,19 @@ import type { IpcClientRouter } from "@volli/host-protocol/ipc";
 
 import type { AnyRouter } from "@trpc/server";
 
+import type { BoardRouter } from "./board-router";
 import type { RouterProcedurePaths } from "./catalog";
 import type { DesktopRouter } from "./desktop-router";
 import type { AppRouter } from "./index";
 
 /**
  * The routers the desktop's IPC bridge serves, composed by
- * `src/main/session-rpc-ipc.ts`: the Session router and the desktop-only
- * tier's (VC-608). An area router joins here when its area moves.
+ * `src/main/session-rpc-ipc.ts`: the Session router, the board router
+ * (VC-565) the renderer reads and writes the board through with `cloud` on,
+ * and the desktop-only tier's (VC-608). An area router joins here when its
+ * area moves.
  */
-export type DesktopIpcRouters = AppRouter | DesktopRouter;
+export type DesktopIpcRouters = AppRouter | BoardRouter | DesktopRouter;
 
 /** Every procedure path those routers publish: each router's, together. */
 export type DesktopIpcRouterPath = RouterProcedurePaths<DesktopIpcRouters>;
@@ -86,6 +89,34 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "protocol.welcome": "websocket-only",
   "labDiagnostics.list": "lab-only",
   "labDiagnostics.subscribe": "lab-only",
+  // The board (VC-565): the desktop window's board with `cloud` on, the same
+  // operations a WebSocket client reaches under `board.read`/`board.write`.
+  "board.snapshot": "ipc",
+  "board.roster": "ipc",
+  "board.changes": "ipc",
+  "board.projectFolder": "ipc",
+  "board.ticketBody": "ipc",
+  "board.archivedTickets": "ipc",
+  "board.ticketEvents": "ipc",
+  "board.latestSignals": "ipc",
+  "board.statusEntries": "ipc",
+  "board.comments": "ipc",
+  "ticket.move": "ipc",
+  "board.updateProject": "ipc",
+  "board.setSkillModes": "ipc",
+  "board.setSessionDefaults": "ipc",
+  "board.createTicket": "ipc",
+  "board.moveTickets": "ipc",
+  "board.setPriority": "ipc",
+  "board.updateTicket": "ipc",
+  "board.setLabels": "ipc",
+  "board.archiveTicket": "ipc",
+  "board.unarchiveTicket": "ipc",
+  "board.deleteTicket": "ipc",
+  "board.createComment": "ipc",
+  "board.updateComment": "ipc",
+  "board.removeComment": "ipc",
+  "board.setLabelColor": "ipc",
   // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",

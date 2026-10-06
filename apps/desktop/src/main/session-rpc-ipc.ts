@@ -3,12 +3,14 @@ import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
 import type { IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import {
+  createBoardRouter,
   createDesktopRouter,
   createSessionRouter,
   DESKTOP_IPC_PATHS,
   type DesktopRouterHandlers,
   LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
+  type BoardRouterHandlers,
   type RpcProcedurePerformanceObserver,
   type SessionRouterHandlers,
 } from "@volli/session-rpc";
@@ -34,7 +36,7 @@ export interface RegisterSessionRpcIpcOptions {
    * callable form). The bridge forwards this one object; it carries no
    * per-behaviour port of its own.
    */
-  handlers: SessionRouterHandlers & DesktopRouterHandlers;
+  handlers: SessionRouterHandlers & BoardRouterHandlers & DesktopRouterHandlers;
   diagnostics?: RpcDiagnosticLog;
   /** Optional payload-free timing tap for benchmark runs. */
   performanceObserver?: RpcProcedurePerformanceObserver;
@@ -57,9 +59,10 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
 } {
   const diagnostics = options.diagnostics ?? new RpcDiagnosticLog();
   const server = createIpcServer({
-    // The Session router and the desktop-only tier's: an area router joins
-    // here, and in `DesktopIpcRouters`, when its area moves.
-    routers: [createSessionRouter(), createDesktopRouter()],
+    // The board router too (VC-565): the renderer's board with `cloud` on;
+    // and the desktop-only tier's (VC-608). An area router joins here, and in
+    // `DesktopIpcRouters`, when its area moves.
+    routers: [createSessionRouter(), createBoardRouter(), createDesktopRouter()],
     served: DESKTOP_IPC_PATHS,
     createContext: () => ({
       caller: LOCAL_DESKTOP_CALLER,
