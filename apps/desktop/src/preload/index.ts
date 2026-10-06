@@ -1226,6 +1226,24 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
+    /**
+     * Answers main's `volli:client-state-flush` (VC-577): runs `flush` — which
+     * resolves once main has acknowledged every pending write — then acks the
+     * request, whatever the flush concluded, so main never waits on a failure
+     * the renderer has already toasted. Returns the unsubscribe function.
+     */
+    onFlushRequest: (flush: () => Promise<unknown>): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, requestId: string) => {
+        void flush()
+          .catch(() => undefined)
+          .then(() =>
+            ipcRenderer.send("volli:client-state-flushed" satisfies VolliIpcChannel, requestId),
+          );
+      };
+      ipcRenderer.on("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+    },
   },
   /**
    * The venue a Session runs in, measured (VC-55) — its own door rather than a

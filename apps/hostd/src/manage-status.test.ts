@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -39,6 +39,7 @@ function probes(status: HostdStatus | null): StatusProbes {
 function ports(overrides: Partial<ManagedStatusPorts> = {}): ManagedStatusPorts {
   return {
     layouts,
+    trustedOwnerUid: process.getuid!(),
     run: (tool): CommandResult =>
       tool === "loginctl"
         ? { code: 0, stdout: "yes\n", stderr: "" }
@@ -67,8 +68,16 @@ describe("status --json", () => {
   it("describes a managed system install, its unit, the running host and its devices", async () => {
     installed(layouts.system, "1.0.0", "1.1.0");
     mkdirSync(layouts.system.dataDir, { recursive: true });
+    // A system install's devices are root's, outside the data directory:
+    // a store in the data directory (the service account's) is not them.
     writeFileSync(
       join(layouts.system.dataDir, "enrolled-devices.json"),
+      JSON.stringify({ v: 1, devices: [] }),
+    );
+    mkdirSync(join(root, "etc"), { mode: 0o755 });
+    chmodSync(join(root, "etc"), 0o755);
+    writeFileSync(
+      layouts.system.devicesFile,
       JSON.stringify({
         v: 1,
         devices: [

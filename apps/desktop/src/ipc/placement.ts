@@ -1127,6 +1127,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "stays",
     reason: "Feeds this desktop's quit gate.",
   },
+  "volli:client-state-flushed": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "This window's ack that its app_state writes reached main before it is destroyed.",
+  },
   "volli:terminal-ack": {
     placement: "workspace",
     owner: "VC-568",
@@ -1243,6 +1248,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "client-local",
     owner: "stays",
     reason: "Window state.",
+  },
+  "volli:client-state-flush": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Asks this window to flush its debounced app_state writes before main destroys it.",
   },
   "volli:browser-tab-state": {
     placement: "workspace",

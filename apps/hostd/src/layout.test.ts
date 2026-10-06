@@ -15,6 +15,8 @@ describe("the managed install's layout", () => {
       unitDir: "/etc/systemd/system",
       dropInDir: "/etc/systemd/system/volli-hostd.service.d",
       keyFile: "/etc/volli-hostd/session-secrets.key",
+      // Root's, beside the operators file: never the data directory `volli` owns.
+      devicesFile: "/etc/volli-hostd-devices",
       socketPath: "/run/volli-hostd.sock",
       serviceUser: "volli",
     });
@@ -30,6 +32,7 @@ describe("the managed install's layout", () => {
       dataDir: "/state/volli-hostd",
       unitDir: "/home/alice/.config/systemd/user",
       keyFile: "/home/alice/.config/volli-hostd/session-secrets.key",
+      devicesFile: "/state/volli-hostd/enrolled-devices.json",
       binLinkDir: "/home/alice/.local/bin",
       socketPath: "/state/volli-hostd/volli.sock",
       serviceUser: null,

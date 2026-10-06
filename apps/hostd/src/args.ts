@@ -6,6 +6,7 @@ import { HostdBootError } from "./boot-error";
 import type { CredentialsResetCommand } from "./credentials";
 import { parseListen, type HostProtocolBind } from "./host-protocol";
 import type { DatabaseRestoreCommand } from "./database";
+import type { DevicesCommand } from "./devices";
 import type { EnrollCommand } from "./enroll";
 import type { InstallCommand } from "./install";
 import type { ManagedStatusCommand } from "./manage-status";
@@ -20,7 +21,8 @@ export const DEFAULT_SERVICE_USER = "volli";
 
 export const USAGE = `Usage:
   volli-hostd --data-dir <dir> [--socket <path>] [--operators <file>]
-              [--listen <host>:<port>]             Serve this data directory.
+              [--listen <host>:<port>] [--devices <file>]
+                                                   Serve this data directory.
   volli-hostd status --data-dir <dir>              Report health; exit 0 serving,
                                                    1 refusing, 3 not serving.
   volli-hostd credentials reset --data-dir <dir> [--yes]
@@ -43,8 +45,13 @@ export const USAGE = `Usage:
                                                    Run what install recorded; wait until
                                                    it serves.
   volli-hostd enroll --system|--user|--data-dir <dir> --public-key <spki> --name <label>
-                                                   As hostd's account: trust a device key
-                                                   (enrollment over SSH).
+                                                   Trust a device key (enrollment over
+                                                   SSH): --system as root, else as
+                                                   hostd's account.
+  volli-hostd devices list --system|--user|--data-dir <dir>
+  volli-hostd devices revoke <deviceId> --system|--user|--data-dir <dir>
+                                                   The enrolled devices; revoke one
+                                                   (--system as root).
   volli-hostd status --json [--system|--user|--data-dir <dir>]
                                                    The install, unit, host and devices.
   volli-hostd --version | --help
@@ -61,7 +68,9 @@ is {"ok":false,"code":…,"message":…}. Their contract: @volli/host-install.
 
 With VOLLI_EXPERIMENTAL=cloud, --listen serves the host protocol's WebSocket
 on a loopback address (127.0.0.1:<port>, [::1]:<port>); port 0 picks one, and
-the status file names it. Until pairing lands it refuses every credential.
+the status file names it. It admits devices enrolled with this host: those in
+--devices <file> (root's, as a system install has: /etc/volli-hostd-devices),
+or else the data directory's own enrolled-devices.json.
 `;
 
 export type HostdCommand =
@@ -72,6 +81,11 @@ export type HostdCommand =
       operatorsFile: string;
       /** `--listen`: the host protocol's loopback address, or `null`. */
       listen: HostProtocolBind | null;
+      /**
+       * `--devices`: a root-owned enrolled-devices file (a system install's);
+       * `null`: the data directory's own.
+       */
+      devicesFile: string | null;
     }
   | { kind: "status"; dataDir: string }
   | CredentialsResetCommand
@@ -80,6 +94,7 @@ export type HostdCommand =
   | InstallCommand
   | StartCommand
   | EnrollCommand
+  | DevicesCommand
   | ManagedStatusCommand
   | { kind: "help" }
   | { kind: "version" };
@@ -133,6 +148,9 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   }
   if (verb !== undefined && values.listen !== undefined) {
     throw new HostdBootError("usage", `--listen belongs to serving, not to ${verb}.`);
+  }
+  if (verb !== undefined && values.devices !== undefined) {
+    throw new HostdBootError("usage", `--devices belongs to serving, not to ${verb}.`);
   }
   if (verb !== "database" && (values.from !== undefined || values.schema !== undefined))
     throw new HostdBootError("usage", "--from and --schema belong to database restore.");
@@ -197,12 +215,16 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
       : resolve(cwd, values.socket);
   const listen = values.listen === undefined ? null : parseListen(values.listen);
   if (typeof listen === "string") throw new HostdBootError("usage", listen);
+  if (values.devices !== undefined && values.devices.length === 0) {
+    throw new HostdBootError("usage", "--devices takes a file.");
+  }
   return {
     kind: "serve",
     dataDir,
     socketPath,
     operatorsFile: operatorsFileFrom(values.operators, cwd),
     listen,
+    devicesFile: values.devices === undefined ? null : resolve(cwd, values.devices),
   };
 }
 
@@ -288,8 +310,9 @@ function managementCommand(
   rest: readonly string[],
   values: ParsedValues,
   cwd: string,
-): InstallCommand | StartCommand | EnrollCommand | ManagedStatusCommand | null {
+): InstallCommand | StartCommand | EnrollCommand | DevicesCommand | ManagedStatusCommand | null {
   const json = verb === "status" && values.json === true;
+  if (verb === "devices") return devicesCommand(rest, values, cwd);
   if (verb !== "install" && verb !== "start" && verb !== "enroll" && !json) return null;
   if (rest.length > 0) throw new HostdBootError("usage", `Unknown argument: ${rest[0]}`);
   const { mode, dataDir } = where(values, cwd);
@@ -346,6 +369,42 @@ function managementCommand(
   };
 }
 
+const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+/** `devices list` and `devices revoke <deviceId>`, each naming one store. */
+function devicesCommand(
+  rest: readonly string[],
+  values: ParsedValues,
+  cwd: string,
+): DevicesCommand {
+  const [action, deviceId, ...extra] = rest;
+  if (action !== "list" && action !== "revoke") {
+    throw new HostdBootError(
+      "usage",
+      action === undefined
+        ? "devices needs an action: list or revoke."
+        : `Unknown argument: ${action}`,
+    );
+  }
+  only(`devices ${action}`, values, []);
+  const { mode, dataDir } = where(values, cwd);
+  if (mode === null && dataDir === null) {
+    throw new HostdBootError(
+      "usage",
+      `devices ${action} needs --system, --user or --data-dir <dir>.`,
+    );
+  }
+  if (action === "list") {
+    if (deviceId !== undefined) throw new HostdBootError("usage", `Unknown argument: ${deviceId}`);
+    return { kind: "devices", action, mode, dataDir, deviceId: null };
+  }
+  if (deviceId === undefined || !DEVICE_ID.test(deviceId)) {
+    throw new HostdBootError("usage", "devices revoke needs a device id (a UUID).");
+  }
+  if (extra.length > 0) throw new HostdBootError("usage", `Unknown argument: ${extra[0]}`);
+  return { kind: "devices", action, mode, dataDir, deviceId };
+}
+
 function parse(argv: readonly string[]) {
   return parseArgs({
     args: [...argv],
@@ -356,6 +415,7 @@ function parse(argv: readonly string[]) {
       socket: { type: "string" },
       operators: { type: "string" },
       listen: { type: "string" },
+      devices: { type: "string" },
       for: { type: "string" },
       revoke: { type: "string" },
       "service-user": { type: "string" },

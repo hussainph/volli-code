@@ -26,7 +26,8 @@ import { chownSync, existsSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { runEnroll } from "./enroll";
-import { runInstall } from "./install";
+import { ROOT_UID, runInstall } from "./install";
+import { runDevices } from "./devices";
 import { installLayout, SERVICE_UNIT } from "./layout";
 import { answer, type RunTool } from "./management";
 import { spawnSync } from "node:child_process";
@@ -103,6 +104,7 @@ async function main(): Promise<number> {
     case "install":
     case "start":
     case "enroll":
+    case "devices":
     case "status-json":
       return manage(command);
     case "serve":
@@ -114,9 +116,12 @@ const out = (text: string) => process.stdout.write(text);
 const uid = () => process.getuid!();
 const login = () => userInfo().username;
 
-/** install, start, enroll and `status --json` on this box (VC-700): one line of JSON each. */
+/** install, start, enroll, devices and `status --json` on this box (VC-700): one line of JSON each. */
 async function manage(
-  command: Extract<HostdCommand, { kind: "install" | "start" | "enroll" | "status-json" }>,
+  command: Extract<
+    HostdCommand,
+    { kind: "install" | "start" | "enroll" | "devices" | "status-json" }
+  >,
 ): Promise<number> {
   const where = { home: userInfo().homedir, env: process.env };
   const layouts = { system: installLayout("system", where), user: installLayout("user", where) };
@@ -157,7 +162,12 @@ async function manage(
           version: HOSTD_VERSION,
           now: () => new Date(),
           newId: randomUUID,
+          trustedOwnerUid: ROOT_UID,
         }),
+      );
+    case "devices":
+      return answer(out, () =>
+        runDevices(command, { uid, layouts, now: () => new Date(), trustedOwnerUid: ROOT_UID }),
       );
     case "status-json": {
       const report = await managedStatus(command, {
@@ -166,6 +176,7 @@ async function manage(
         probes: LIVE_PROBES,
         login,
         version: HOSTD_VERSION,
+        trustedOwnerUid: ROOT_UID,
       });
       out(`${JSON.stringify(report)}\n`);
       return statusExitCode(report.verdict);
@@ -262,6 +273,7 @@ async function serve(
       listenFd,
       operatorsFile: command.operatorsFile,
       listen: command.listen,
+      devicesFile: command.devicesFile,
       version: HOSTD_VERSION,
       env: process.env,
       logger,

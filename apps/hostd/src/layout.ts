@@ -8,8 +8,13 @@
  * | data directory | `/var/lib/volli-hostd` (the `volli` account's home, 0700) | `$XDG_STATE_HOME/volli-hostd` (0700) |
  * | unit | `/etc/systemd/system/volli-hostd.{service,socket}` + drop-ins | `$XDG_CONFIG_HOME/systemd/user/volli-hostd.service` |
  * | secret key | `/etc/volli-hostd/session-secrets.key` | `$XDG_CONFIG_HOME/volli-hostd/session-secrets.key` |
+ * | enrolled devices | `/etc/volli-hostd-devices` (root's, 0644) | `<data dir>/enrolled-devices.json` (0600) |
  * | agent socket | `/run/volli-hostd.sock`, bound by systemd as root | `<data dir>/volli.sock` |
  * | runs as | `volli`, so agents never act as you | you: agents share your account |
+ *
+ * Enrolled devices act as the person, so a system install keeps them where
+ * only root writes (`enrolled-devices.ts`): never in the data directory,
+ * which the account every agent runs as owns.
  *
  * Releases sit side by side and `current` is a symlink, so an upgrade is one
  * rename and the release before it is the rollback, as the M1 runbook kept
@@ -19,6 +24,13 @@
 import { join } from "node:path";
 
 import type { InstallMode } from "@volli/host-install/contract";
+
+import {
+  DEFAULT_DEVICES_FILE,
+  enrolledDevicesPath,
+  rootDeviceStore,
+  type DeviceStore,
+} from "./enrolled-devices";
 
 export const SERVICE_UNIT = "volli-hostd.service";
 export const SOCKET_UNIT = "volli-hostd.socket";
@@ -39,6 +51,8 @@ export interface InstallLayout {
   readonly unitDir: string;
   readonly dropInDir: string;
   readonly keyFile: string;
+  /** Where enrolled device keys live; a system install's is root's. */
+  readonly devicesFile: string;
   readonly socketPath: string;
   /** The account the unit runs as; `null` for a user unit. */
   readonly serviceUser: string | null;
@@ -67,6 +81,7 @@ export function installLayout(mode: InstallMode, where: LayoutEnvironment): Inst
       unitDir,
       dropInDir: join(unitDir, `${SERVICE_UNIT}.d`),
       keyFile: at("/etc/volli-hostd/session-secrets.key"),
+      devicesFile: at(DEFAULT_DEVICES_FILE),
       socketPath: "/run/volli-hostd.sock",
       serviceUser: "volli",
     };
@@ -90,7 +105,19 @@ export function installLayout(mode: InstallMode, where: LayoutEnvironment): Inst
     unitDir,
     dropInDir: join(unitDir, `${SERVICE_UNIT}.d`),
     keyFile: join(config, "volli-hostd/session-secrets.key"),
+    devicesFile: enrolledDevicesPath(dataDir),
     socketPath: join(dataDir, "volli.sock"),
     serviceUser: null,
   };
+}
+
+/**
+ * The enrolled-devices store a layout's host reads: root's file for a
+ * system install (believed only while owned by `trustedOwnerUid`, root in
+ * production), the data directory's own for a user one.
+ */
+export function layoutDeviceStore(layout: InstallLayout, trustedOwnerUid = 0): DeviceStore {
+  return layout.mode === "system"
+    ? rootDeviceStore(layout.devicesFile, trustedOwnerUid)
+    : { path: layout.devicesFile, trustedOwnerUid: null };
 }

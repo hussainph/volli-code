@@ -106,6 +106,10 @@ export interface ManagedRecord {
   readonly v: 1;
   readonly mode: InstallMode;
   readonly version: string;
+  /** The release directory `current` names (`<version>-<revision>`); absent before it was recorded. */
+  readonly release?: string;
+  /** The release `start` last brought up: a revision change restarts even at one version. */
+  readonly started?: string;
   readonly port: number;
   readonly installedAt: string;
 }

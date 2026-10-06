@@ -1,6 +1,6 @@
 /**
  * The box-side contract (VC-700): what `volli-hostd install | start | enroll |
- * status --json` print, one JSON object on stdout each.
+ * devices | status --json` print, one JSON object on stdout each.
  *
  * hostd writes these shapes and this package reads them, so both import them
  * from here: a field one side renames fails the other's typecheck. Pure
@@ -42,6 +42,17 @@ export type HostdFailureCode =
   | "not-serving"
   | "bad-key"
   | "store-unreadable"
+  /** A system install's device store is not root's alone, so it is not believed. */
+  | "store-untrusted"
+  /** Another enroll or revoke held the device store too long. */
+  | "busy"
+  | "unknown-device"
+  /**
+   * The unit's effective configuration might already name a secret key that
+   * install cannot see (an `EnvironmentFile=`, systemd unreadable): install
+   * makes no new key rather than risk orphaning the old one.
+   */
+  | "secret-key-unclear"
   | "data-dir-owner";
 
 export interface HostdFailure {
@@ -108,6 +119,23 @@ export interface HostdDeviceSummary {
   readonly enrolledAt: string;
   readonly via: string;
   readonly revokedAt: string | null;
+}
+
+/** `volli-hostd devices list`. */
+export interface HostdDevicesResult {
+  readonly v: 1;
+  readonly ok: true;
+  /** Revoked ones included, with `revokedAt`; never a key. */
+  readonly devices: readonly HostdDeviceSummary[];
+}
+
+/** `volli-hostd devices revoke <deviceId>`. */
+export interface HostdRevokeResult {
+  readonly v: 1;
+  readonly ok: true;
+  readonly device: HostdDeviceSummary;
+  /** `false` when it was already revoked. */
+  readonly changed: boolean;
 }
 
 export interface HostdManagedStatus {

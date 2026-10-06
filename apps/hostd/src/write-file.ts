@@ -1,6 +1,6 @@
-/** Whole-file writes for the management commands (VC-700): never half a file, never a needless one. */
+/** Whole-file writes for the management commands (VC-700): never half a file. */
 import { randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 /** Replaces `path` whole: a temporary file beside it, renamed over. */
 export function atomicWrite(path: string, content: string, mode: number): void {
@@ -13,17 +13,4 @@ export function atomicWrite(path: string, content: string, mode: number): void {
   } finally {
     rmSync(temporary, { force: true });
   }
-}
-
-/** Writes `content` only when it differs; answers whether it wrote. */
-export function writeIfChanged(path: string, content: string, mode: number): boolean {
-  let current: string | null;
-  try {
-    current = readFileSync(path, "utf8");
-  } catch {
-    current = null;
-  }
-  if (current === content) return false;
-  atomicWrite(path, content, mode);
-  return true;
 }

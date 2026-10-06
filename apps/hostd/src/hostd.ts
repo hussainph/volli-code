@@ -60,7 +60,13 @@ import {
 import type { HostCredentialVerifier } from "@volli/host-protocol";
 import type { HostProtocolListener } from "@volli/session-rpc/websocket";
 
-import { createEnrolledDeviceVerifier } from "./enrolled-devices";
+import {
+  createEnrolledDeviceVerifier,
+  dataDirDeviceStore,
+  readDeviceStore,
+  rootDeviceStore,
+  type DeviceStore,
+} from "./enrolled-devices";
 import { cloudEnabled, startHostdProtocolListener, type HostProtocolBind } from "./host-protocol";
 import {
   createHeadlessSessionRuntime,
@@ -114,11 +120,17 @@ export interface HostdOptions {
    */
   readonly listen?: HostProtocolBind | null;
   /**
+   * `--devices`: the root-owned enrolled-devices file a system install's
+   * listener admits from (VC-700, `/etc/volli-hostd-devices`), judged as the
+   * operators file is and owned by `operatorsOwnerUid` (root). Absent or `null`:
+   * the data directory's own `enrolled-devices.json`, as a user install has.
+   */
+  readonly devicesFile?: string | null;
+  /**
    * The host protocol's credential verifier. A test seam only, never an
    * argument or a variable: production composes the enrolled-device
-   * verifier (VC-700, `enrolled-devices.ts`), which admits only devices
-   * enrolled in this data directory and so refuses every handshake until
-   * one is.
+   * verifier (VC-700, `enrolled-devices.ts`), which admits only enrolled
+   * devices and so refuses every handshake until one is.
    */
   readonly hostProtocolVerifier?: HostCredentialVerifier;
   readonly runtime?: HeadlessRuntimeOptions;
@@ -209,12 +221,20 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     logCredentials(secrets, logger);
     // The person's credential (VC-623): judged now, so an operators file the
     // service account could write refuses boot rather than minting people.
+    // Root, who alone may write who is a person here (operators, devices).
+    const trustedOwnerUid = options.operatorsOwnerUid ?? 0;
     const operators = openOperators({
       path: options.operatorsFile,
-      trustedOwnerUid: options.operatorsOwnerUid ?? 0,
+      trustedOwnerUid,
       processUid: process.getuid!(),
       logger,
     });
+    // Who the listener admits (VC-700): judged now too, so a system store
+    // the service account could write refuses boot rather than minting people.
+    const deviceStore =
+      cloud && listen !== null
+        ? openDeviceStore(dataDir, options.devicesFile ?? null, trustedOwnerUid)
+        : null;
 
     // Every execution the socket accepted, until it settles. The socket's own
     // close stops waiting at its request timeout; the stop below waits for
@@ -337,7 +357,15 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
               // Devices enrolled over SSH (VC-700); a test may supply its own.
               verifier:
                 options.hostProtocolVerifier ??
-                createEnrolledDeviceVerifier({ dataDir, hostId: venue.id }),
+                createEnrolledDeviceVerifier({
+                  store: deviceStore!,
+                  hostId: venue.id,
+                  onStoreProblem: (problem, reason) =>
+                    logger.error("host protocol: the enrolled-devices store admits no one", {
+                      problem,
+                      reason,
+                    }),
+                }),
               handlers,
               sessionEngine: sessionPorts.sessionEngine,
               logger,
@@ -578,4 +606,28 @@ function prepareDataDir(dataDir: string, logger: HostdLogger): void {
       },
     );
   }
+}
+
+/**
+ * The enrolled-devices store the listener admits from: `--devices`' root
+ * file (a system install's), else the data directory's own. A root file
+ * hostd could not trust refuses boot, as an unsafe operators file does;
+ * one that turns unsafe later admits no one until it is fixed.
+ */
+function openDeviceStore(
+  dataDir: string,
+  devicesFile: string | null,
+  trustedOwnerUid: number,
+): DeviceStore {
+  if (devicesFile === null) return dataDirDeviceStore(dataDir);
+  const store = rootDeviceStore(devicesFile, trustedOwnerUid);
+  const read = readDeviceStore(store);
+  if (!read.ok && read.problem === "untrusted") {
+    throw new HostdBootError(
+      "devices",
+      `Refusing the enrolled-devices file: ${read.reason}. Run: sudo chown root:root ${devicesFile} && sudo chmod 644 ${devicesFile}`,
+      { devicesFile },
+    );
+  }
+  return store;
 }

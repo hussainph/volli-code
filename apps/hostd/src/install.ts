@@ -10,12 +10,16 @@
  * nothing and says so (`changed: false`). It never starts or restarts the
  * host: `start` does, and converges whatever is running to what this left in
  * `managed.json`. So an install interrupted anywhere is finished by running
- * it again.
+ * it again: what the filesystem cannot show was finished converges anyway —
+ * a managed key's ownership is set every run, and a unit change leaves
+ * `.reload-pending` until systemd has reloaded it.
  *
- * **Upgrade.** A new release goes beside the old ones and `current` is
- * renamed onto it: the release before stays as the rollback. The data
- * directory is never touched; hostd migrates it at boot and keeps its own
- * safety copy (VC-633).
+ * **Upgrade.** A release goes into its own directory, named by its version
+ * and the immutable revision it was built from (`1.1.0-<rev>`; a digest of
+ * its files when it names none), never replaced once there; `current` is
+ * renamed onto it in one step, and the release before stays as the rollback,
+ * even when only the revision changed. The data directory is never touched;
+ * hostd migrates it at boot and keeps its own safety copy (VC-633).
  *
  * **Adopt.** A box set up by hand (the runbook's flat `/opt/volli-hostd`,
  * its units, its `volli` account, its secret-key drop-in) is brought under
@@ -27,9 +31,13 @@
  * **The secret key** is made only on a fresh box, outside the data directory
  * (runbook step 4). If one is already configured or hostd already made one
  * in the data directory, it is left alone: a new key would lock every secret
- * sealed under the old one.
+ * sealed under the old one. "Configured" is judged on the unit's effective
+ * configuration — every drop-in, in order, and what systemd itself reports
+ * — not on one file name; when that cannot be known (an
+ * `EnvironmentFile=`, a systemd that will not say), install refuses
+ * (`secret-key-unclear`) rather than make a key.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -63,7 +71,7 @@ import {
   SOCKET_UNIT,
   type InstallLayout,
 } from "./layout";
-import { atomicWrite, writeIfChanged } from "./write-file";
+import { atomicWrite } from "./write-file";
 import { SECRET_KEY_FILE_NAME } from "@volli/host-core/secrets";
 
 export interface InstallCommand {
@@ -126,6 +134,9 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
 
   // The service account (runbook step 3), and the operator's way to the socket.
   let owner: { uid: number; gid: number } | null = null;
+  // `useradd --create-home` makes the data directory as the account's home,
+  // with whatever mode the system's useradd uses: still ours to make private.
+  const freshDataDir = !existsSync(layout.dataDir);
   if (layout.serviceUser !== null) {
     const name = layout.serviceUser;
     let account = ports.lookupUser(name);
@@ -156,7 +167,7 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
   }
 
   // The data directory: made private if new, never changed if not.
-  if (!existsSync(layout.dataDir)) {
+  if (freshDataDir) {
     mkdirSync(layout.dataDir, { recursive: true, mode: 0o700 });
     chmodSync(layout.dataDir, 0o700);
     if (owner !== null) ports.chown(layout.dataDir, owner.uid, owner.gid);
@@ -165,37 +176,31 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
 
   // The release, beside the others, then `current` onto it (runbook step 2).
   const flat = layout.serviceUser !== null && existsSync(join(layout.root, "bin/volli-hostd"));
-  const previous = currentVersion(layout);
-  const target = join(layout.releasesDir, manifest.version);
-  if (release !== target) {
-    const installed = existsSync(target) ? readManifest(target) : null;
-    if (installed === null || installed.revision !== manifest.revision) {
-      mkdirSync(layout.releasesDir, { recursive: true, mode: mode === "system" ? 0o755 : 0o700 });
-      const staging = join(layout.releasesDir, `.${manifest.version}.${process.pid}.tmp`);
-      rmSync(staging, { recursive: true, force: true });
-      cpSync(release, staging, { recursive: true, verbatimSymlinks: true });
-      if (installed !== null) {
-        const aside = join(layout.releasesDir, `.${manifest.version}.replaced.${process.pid}`);
-        renameSync(target, aside);
-        renameSync(staging, target);
-        rmSync(aside, { recursive: true, force: true });
-      } else {
-        renameSync(staging, target);
-      }
-      did(`installed release ${manifest.version}`);
-    }
+  const before = currentRelease(layout);
+  const previous = before?.version ?? null;
+  const name = releaseName(release, manifest);
+  const target = join(layout.releasesDir, name);
+  if (release !== target && !existsSync(target)) {
+    // A release directory is never replaced: one name is one build.
+    mkdirSync(layout.releasesDir, { recursive: true, mode: mode === "system" ? 0o755 : 0o700 });
+    const staging = join(layout.releasesDir, `.${name}.${process.pid}.tmp`);
+    rmSync(staging, { recursive: true, force: true });
+    cpSync(release, staging, { recursive: true, verbatimSymlinks: true });
+    renameSync(staging, target);
+    did(`installed release ${name}`);
   }
-  if (previous !== manifest.version) {
-    replaceSymlink(join("releases", manifest.version), layout.currentLink);
+  if (before?.name !== name) {
+    replaceSymlink(join("releases", name), layout.currentLink);
+    const sameVersion = before !== null && before.version === manifest.version;
     did(
-      previous === null
+      before === null
         ? `current is ${manifest.version}`
-        : `current moved from ${previous} to ${manifest.version}`,
+        : `current moved from ${sameVersion ? before.name : before.version} to ${sameVersion ? name : manifest.version}`,
     );
   }
-  for (const name of ["volli-hostd", "volli"]) {
-    const link = join(layout.binLinkDir, name);
-    const to = join(layout.currentLink, "bin", name);
+  for (const program of ["volli-hostd", "volli"]) {
+    const link = join(layout.binLinkDir, program);
+    const to = join(layout.currentLink, "bin", program);
     if (linkTarget(link) === to) continue;
     // Someone's own file: not ours to replace.
     if (existsSync(link) && !lstatSync(link).isSymbolicLink()) continue;
@@ -205,42 +210,78 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
   }
 
   // The secret key, only where none is configured or made yet (runbook step 4).
-  let keyFile: string | null = null;
   const keyDropIn = join(layout.dropInDir, SECRET_KEY_DROP_IN);
   const keyInDataDir = existsSync(join(layout.dataDir, SECRET_KEY_FILE_NAME));
-  if (mode === "system" && existsSync(keyDropIn)) {
-    // Configured by hand or by an earlier install: theirs.
+  const configured = configuredKeys(layout);
+  const theirs = configured.paths.filter((path) => path !== layout.keyFile);
+  /** Whether the unit should name `layout.keyFile`; `null`: it names theirs, or none. */
+  let keyFile: string | null = null;
+  /** Whether this run may (re)write the key drop-in: never over one that exists. */
+  const keyDropInFree = mode === "system" && !existsSync(keyDropIn);
+  const mustKnow = (doing: string): void => {
+    // Before writing anything that could supersede a key configured where
+    // the files do not show (another directory, an EnvironmentFile=).
+    const effective = configured.doubt ?? effectiveKeys(run, layout, configured.paths);
+    if (effective !== null) {
+      throw new ManagementError(
+        "secret-key-unclear",
+        `Not ${doing}: ${effective}. A new key would lock every secret sealed under the one already configured; set VOLLI_SECRET_KEY_FILE in a drop-in by hand, then install again.`,
+      );
+    }
+  };
+  if (theirs.length > 0) {
+    // Configured by hand or by an earlier install: theirs, and the unit keeps naming it.
   } else if (existsSync(layout.keyFile)) {
     keyFile = layout.keyFile;
+    if (keyDropInFree) mustKnow(`pointing the unit at ${layout.keyFile}`);
+  } else if (configured.paths.length > 0) {
+    throw new ManagementError(
+      "secret-key-unclear",
+      `The unit names ${layout.keyFile}, which is gone: not making another, since secrets sealed under it would stay locked. Restore it, then install again.`,
+    );
   } else if (!keyInDataDir) {
+    mustKnow("making a secret key");
     mkdirSync(dirname(layout.keyFile), { recursive: true, mode: 0o700 });
     atomicWrite(layout.keyFile, `${randomBytes(32).toString("base64")}\n`, 0o600);
-    if (owner !== null) {
-      ports.chown(dirname(layout.keyFile), owner.uid, owner.gid);
-      ports.chown(layout.keyFile, owner.uid, owner.gid);
-    }
     keyFile = layout.keyFile;
     did(`made the secret key ${layout.keyFile}`);
   }
+  // Ownership converges every run, without touching the bytes: an install
+  // interrupted between making the key and handing it over is finished here.
+  if (keyFile !== null && owner !== null) {
+    for (const path of [dirname(keyFile), keyFile]) ports.chown(path, owner.uid, owner.gid);
+  }
 
-  // The units.
-  let unitsChanged = false;
+  // The units. A change is marked pending before it is written and cleared
+  // only once systemd reloaded: a retry after an interrupted reload, which
+  // finds every file already right, still reloads.
+  const pendingFile = join(layout.root, RELOAD_PENDING);
+  let unitsChanged = existsSync(pendingFile);
+  const unitWrite = (path: string, content: string, label: string): void => {
+    if (readText(path) === content) return;
+    if (!existsSync(pendingFile)) atomicWrite(pendingFile, "", 0o644);
+    atomicWrite(path, content, 0o644);
+    unitsChanged = true;
+    did(`wrote ${label}`);
+  };
   mkdirSync(layout.unitDir, { recursive: true });
   const exec = execStart(layout, command.port);
   if (mode === "system") {
     for (const unit of [SERVICE_UNIT, SOCKET_UNIT]) {
-      const content = readFileSync(join(target, "share/systemd", unit), "utf8");
-      if (writeIfChanged(join(layout.unitDir, unit), content, 0o644)) {
-        unitsChanged = true;
-        did(`wrote ${unit}`);
-      }
+      unitWrite(
+        join(layout.unitDir, unit),
+        readFileSync(join(target, "share/systemd", unit), "utf8"),
+        unit,
+      );
     }
     mkdirSync(layout.dropInDir, { recursive: true, mode: 0o755 });
-    if (keyFile !== null) {
+    if (keyFile !== null && keyDropInFree) {
       // Only reached when no key drop-in exists: one that does is never rewritten.
-      atomicWrite(keyDropIn, `[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=${keyFile}\n`, 0o644);
-      unitsChanged = true;
-      did(`wrote ${SECRET_KEY_DROP_IN}`);
+      unitWrite(
+        keyDropIn,
+        `[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=${keyFile}\n`,
+        SECRET_KEY_DROP_IN,
+      );
     }
     const managed = [
       "# Written by `volli-hostd install` (VC-700) and rewritten by every install:",
@@ -251,16 +292,13 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
       `ExecStart=${exec}`,
       "",
     ].join("\n");
-    if (writeIfChanged(join(layout.dropInDir, MANAGED_DROP_IN), managed, 0o644)) {
-      unitsChanged = true;
-      did(`wrote ${MANAGED_DROP_IN}`);
-    }
-  } else if (writeIfChanged(join(layout.unitDir, SERVICE_UNIT), userUnit(exec, keyFile), 0o644)) {
-    unitsChanged = true;
-    did(`wrote ${SERVICE_UNIT}`);
+    unitWrite(join(layout.dropInDir, MANAGED_DROP_IN), managed, MANAGED_DROP_IN);
+  } else {
+    unitWrite(join(layout.unitDir, SERVICE_UNIT), userUnit(exec, keyFile), SERVICE_UNIT);
   }
   if (unitsChanged) {
     must(run, "systemctl", systemctlArgs(mode, "daemon-reload"));
+    rmSync(pendingFile, { force: true });
     did("reloaded systemd");
   }
   const units = mode === "system" ? [SOCKET_UNIT, SERVICE_UNIT] : [SERVICE_UNIT];
@@ -274,13 +312,20 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
   }
 
   const record = readManaged(layout);
-  if (record?.version !== manifest.version || record.port !== command.port) {
+  if (
+    record?.version !== manifest.version ||
+    record.port !== command.port ||
+    record.release !== name
+  ) {
     writeManaged(layout, {
       v: 1,
       mode,
       version: manifest.version,
+      release: name,
       port: command.port,
       installedAt: ports.now().toISOString(),
+      // What `start` last brought up, kept: it restarts until that is `release`.
+      ...(record?.started === undefined ? {} : { started: record.started }),
     });
     did(`recorded ${manifest.version} on port ${command.port}`);
   }
@@ -330,13 +375,60 @@ export function readManifest(release: string): ReleaseManifest {
   };
 }
 
-/** The release `current` names, or `null`. */
-export function currentVersion(layout: InstallLayout): string | null {
-  const target = linkTarget(layout.currentLink);
-  return target === null ? null : basename(target);
+/** Where systemd's reload is owed (`runInstall`'s units). */
+const RELOAD_PENDING = ".reload-pending";
+
+/**
+ * A release's directory name: its version and the immutable revision it was
+ * built from, or a digest of its files when its manifest names none (a
+ * build outside git says `unknown`). Two builds never share one.
+ */
+export function releaseName(release: string, manifest: ReleaseManifest): string {
+  const revision =
+    manifest.revision !== null &&
+    manifest.revision !== "unknown" &&
+    /^[0-9A-Za-z]{1,64}$/u.test(manifest.revision)
+      ? manifest.revision.slice(0, 12)
+      : `sha256-${treeDigest(release).slice(0, 12)}`;
+  return `${manifest.version}-${revision}`;
 }
 
-/** The installed releases, oldest name first. */
+/** SHA-256 over every path, link target and file's bytes below `root`, in order. */
+function treeDigest(root: string): string {
+  const hash = createHash("sha256");
+  const walk = (relative: string): void => {
+    const path = join(root, relative);
+    const stat = lstatSync(path);
+    hash.update(`${relative}\0${stat.mode & 0o777}\0`);
+    if (stat.isSymbolicLink()) hash.update(`link\0${readlinkSync(path)}\0`);
+    else if (stat.isDirectory()) {
+      for (const entry of readdirSync(path).toSorted()) walk(join(relative, entry));
+    } else hash.update(readFileSync(path));
+  };
+  walk(".");
+  return hash.digest("hex");
+}
+
+/** The release `current` names: its directory and version; `null` when there is none. */
+export function currentRelease(layout: InstallLayout): { name: string; version: string } | null {
+  const target = linkTarget(layout.currentLink);
+  if (target === null) return null;
+  const name = basename(target);
+  let version = name;
+  try {
+    version = readManifest(join(layout.releasesDir, name)).version;
+  } catch {
+    // A release that lost its manifest still names something; its directory says which.
+  }
+  return { name, version };
+}
+
+/** The version of the release `current` names, or `null`. */
+export function currentVersion(layout: InstallLayout): string | null {
+  return currentRelease(layout)?.version ?? null;
+}
+
+/** The installed release directories (`<version>-<revision>`), by name. */
 export function installedReleases(layout: InstallLayout): string[] {
   try {
     return readdirSync(layout.releasesDir)
@@ -345,6 +437,97 @@ export function installedReleases(layout: InstallLayout): string[] {
   } catch {
     return [];
   }
+}
+
+function readText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+const KEY_ASSIGNMENT = /(?:^|[\s"'])VOLLI_SECRET_KEY_FILE=([^\s"']*)/gu;
+
+/** Every `VOLLI_SECRET_KEY_FILE=` an `Environment=` value assigns, in order. */
+function keyAssignments(value: string): string[] {
+  return [...value.matchAll(KEY_ASSIGNMENT)].map((match) => match[1]!);
+}
+
+/**
+ * The secret keys the unit's files configure: the unit and every drop-in
+ * of ours and the person's, in the order systemd applies them. `doubt`
+ * names a setting no file can settle (an `EnvironmentFile=`, which can set
+ * the variable and outranks `Environment=`; a key drop-in naming none).
+ */
+function configuredKeys(layout: InstallLayout): { paths: string[]; doubt: string | null } {
+  const paths: string[] = [];
+  let doubt: string | null = null;
+  let dropIns: string[] = [];
+  try {
+    dropIns = readdirSync(layout.dropInDir)
+      .filter((name) => name.endsWith(".conf"))
+      .toSorted();
+  } catch {
+    // No drop-ins.
+  }
+  const files = [
+    join(layout.unitDir, SERVICE_UNIT),
+    ...dropIns.map((name) => join(layout.dropInDir, name)),
+  ];
+  for (const file of files) {
+    const text = readText(file);
+    if (text === null) continue;
+    const before = paths.length;
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      if (line.startsWith("#") || line.startsWith(";")) continue;
+      const [key, ...rest] = line.split("=");
+      const value = rest.join("=").trim();
+      if (key?.trim() === "Environment") paths.push(...keyAssignments(value));
+      if (key?.trim() === "EnvironmentFile" && value !== "") {
+        doubt ??= `${file} reads environment from ${value}, which may name a key`;
+      }
+    }
+    if (file === join(layout.dropInDir, SECRET_KEY_DROP_IN) && paths.length === before) {
+      doubt ??= `${file} names no VOLLI_SECRET_KEY_FILE`;
+    }
+  }
+  return { paths: paths.filter((path) => path !== ""), doubt };
+}
+
+/**
+ * What systemd itself has loaded for the unit, beyond the files above (a
+ * drop-in in another directory, a global `service.d`): why not to write a
+ * key setting, or `null` when it names no key but `known` or ours.
+ */
+function effectiveKeys(
+  run: RunTool,
+  layout: InstallLayout,
+  known: readonly string[],
+): string | null {
+  const shown = run(
+    "systemctl",
+    systemctlArgs(layout.mode, "show", SERVICE_UNIT, "-p", "Environment", "-p", "EnvironmentFiles"),
+  );
+  if (shown.code !== 0) {
+    // With no unit of ours yet, systemd has nothing loaded to say.
+    return existsSync(join(layout.unitDir, SERVICE_UNIT))
+      ? `systemd would not show ${SERVICE_UNIT}'s environment`
+      : null;
+  }
+  for (const line of shown.stdout.split("\n")) {
+    if (line.startsWith("EnvironmentFiles=") && line.slice("EnvironmentFiles=".length).trim()) {
+      return `${SERVICE_UNIT} reads environment from ${line.slice("EnvironmentFiles=".length).trim()}`;
+    }
+    if (line.startsWith("Environment=")) {
+      const other = keyAssignments(line.slice("Environment=".length)).find(
+        (path) => path !== "" && !known.includes(path) && path !== layout.keyFile,
+      );
+      if (other !== undefined) return `${SERVICE_UNIT} already names the key ${other}`;
+    }
+  }
+  return null;
 }
 
 function linkTarget(path: string): string | null {
@@ -366,8 +549,12 @@ function replaceSymlink(to: string, link: string): void {
 /** The command line the unit runs: `current`'s binary, this data directory, loopback `port`. */
 function execStart(layout: InstallLayout, port: number): string {
   const binary = join(layout.currentLink, "bin/volli-hostd");
-  const socket = layout.mode === "system" ? ` --socket ${layout.socketPath}` : "";
-  return `${binary} --data-dir ${layout.dataDir}${socket} --listen 127.0.0.1:${port}`;
+  // A system install's devices are root's (enrolled-devices.ts); a user one's are its data directory's.
+  const system =
+    layout.mode === "system"
+      ? ` --socket ${layout.socketPath} --devices ${layout.devicesFile}`
+      : "";
+  return `${binary} --data-dir ${layout.dataDir}${system} --listen 127.0.0.1:${port}`;
 }
 
 /**

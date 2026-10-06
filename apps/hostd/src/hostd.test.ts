@@ -43,8 +43,10 @@ import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
 import type { HostdLogger } from "./log";
 import { startHostd, type HostdOptions, type RunningHostd } from "./hostd";
+import { HOSTD_LISTENER_LIMITS } from "./host-protocol";
 import { LIVE_PROBES, readStatus, statusFilePath, type HostdState } from "./status";
 import { runEnroll } from "./enroll";
+import { dataDirDeviceStore, enrollDevice, rootDeviceStore } from "./enrolled-devices";
 
 /** Faults a test can switch on in the modules hostd composes. */
 const faults = vi.hoisted(() => ({
@@ -275,6 +277,15 @@ function logger() {
   };
 }
 
+/** A device's P-256 key pair, the public half as enrollment takes it. */
+function deviceKey() {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  return {
+    privateKey,
+    spki: bytesToBase64Url(publicKey.export({ format: "der", type: "spki" })),
+  };
+}
+
 async function boot(
   options: {
     dataDir?: string;
@@ -284,6 +295,7 @@ async function boot(
     /** Leaves the owner to hostd's own default, root. */
     rootOwnsOperators?: boolean;
     listen?: HostdOptions["listen"];
+    devicesFile?: string;
     hostProtocolVerifier?: HostdOptions["hostProtocolVerifier"];
   } = {},
   log = logger(),
@@ -301,6 +313,7 @@ async function boot(
     ...(options.rootOwnsOperators === true ? {} : { operatorsOwnerUid: process.getuid!() }),
     ...(options.drainTimeoutMs === undefined ? {} : { drainTimeoutMs: options.drainTimeoutMs }),
     ...(options.listen === undefined ? {} : { listen: options.listen }),
+    ...(options.devicesFile === undefined ? {} : { devicesFile: options.devicesFile }),
     ...(options.hostProtocolVerifier === undefined
       ? {}
       : { hostProtocolVerifier: options.hostProtocolVerifier }),
@@ -1134,11 +1147,12 @@ describe("the host protocol listener (VC-663)", () => {
       { kind: "enroll", mode: null, dataDir, publicKey: spki, name: "Test Mac" },
       {
         uid: () => process.getuid!(),
-        layouts: {} as never,
+        layouts: { system: { dataDir: join(root, "system-data") } } as never,
         probes: LIVE_PROBES,
         version: "9.9.9-test",
         now: () => new Date(),
         newId: randomUUID,
+        trustedOwnerUid: 0,
       },
     );
     expect(enrolled).toMatchObject({ ok: true, hostId: hostId.hostId, created: true });
@@ -1332,6 +1346,135 @@ describe("the host protocol listener (VC-663)", () => {
       ).toMatchObject({ reason: "operation-unavailable" });
     } finally {
       await close();
+    }
+  });
+
+  // S-B1: on a system install the listener admits root's devices only.
+  it("admits a system install's devices from root's store, never from the data directory", async () => {
+    const etc = join(root, "etc");
+    mkdirSync(etc, { mode: 0o755 });
+    chmodSync(etc, 0o755);
+    const devicesFile = join(etc, "volli-hostd-devices");
+    const log = logger();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK, devicesFile }, log);
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    const hostId = host.status().hostId!;
+    const mint = { now: () => new Date(), newId: randomUUID };
+    const signed = (privateKey: ReturnType<typeof deviceKey>["privateKey"], deviceId: string) => {
+      const iat = Math.floor(Date.now() / 1000);
+      const input = deviceCredentialSigningInput({
+        hostId,
+        deviceId,
+        workspaceId: WORKSPACE,
+        iat,
+        exp: iat + 60,
+        jti: randomUUID().replaceAll("-", ""),
+      });
+      return assembleDeviceCredential(
+        input,
+        sign("sha256", Buffer.from(input), { key: privateKey, dsaEncoding: "ieee-p1363" }),
+      );
+    };
+    // What an agent running as the service account could do: write the data directory.
+    const agent = deviceKey();
+    const planted = enrollDevice(
+      dataDirDeviceStore(join(root, "data")),
+      { publicKey: agent.spki, name: "Alice's Mac", via: "ssh" },
+      mint,
+    ).device;
+    const url = host.status().hostProtocol!.url;
+    const impostor = client(url, signed(agent.privateKey, planted.deviceId));
+    try {
+      expect(await expectHostError(impostor.trpc.protocol.welcome.query())).toMatchObject({
+        reason: "credential-invalid",
+      });
+    } finally {
+      await impostor.close();
+    }
+    // What root enrolled.
+    const person = deviceKey();
+    const enrolled = enrollDevice(
+      rootDeviceStore(devicesFile, process.getuid!()),
+      { publicKey: person.spki, name: "Alice's Mac", via: "ssh" },
+      mint,
+    ).device;
+    const admitted = client(url, signed(person.privateKey, enrolled.deviceId));
+    try {
+      expect(await admitted.trpc.protocol.welcome.query()).toMatchObject({
+        actor: { kind: "device", deviceId: enrolled.deviceId },
+      });
+    } finally {
+      await admitted.close();
+    }
+    // A store that turns writable by others admits no one, and says why.
+    chmodSync(devicesFile, 0o666);
+    const unsafe = client(url, signed(person.privateKey, enrolled.deviceId));
+    try {
+      expect(await expectHostError(unsafe.trpc.protocol.welcome.query())).toMatchObject({
+        reason: "credential-invalid",
+      });
+    } finally {
+      await unsafe.close();
+    }
+    expect(log.error).toHaveBeenCalledWith(
+      "host protocol: the enrolled-devices store admits no one",
+      expect.objectContaining({ problem: "untrusted" }),
+    );
+  });
+
+  it("refuses to boot on a devices file the service account could write", async () => {
+    const etc = join(root, "etc");
+    mkdirSync(etc, { mode: 0o755 });
+    chmodSync(etc, 0o755);
+    const devicesFile = join(etc, "volli-hostd-devices");
+    writeFileSync(devicesFile, '{"v":1,"devices":[]}\n', { mode: 0o666 });
+    chmodSync(devicesFile, 0o666);
+    const error = await refused({ env: CLOUD, listen: LOOPBACK, devicesFile });
+    expect(error.reason).toBe("devices");
+    expect(error.message).toMatch(/can be written by its group or other users/u);
+    // The flag off, nothing listens and the file is not judged: as before.
+    await boot({ dataDir: join(root, "flag-off"), listen: LOOPBACK, devicesFile });
+  });
+
+  // B9: while this verifier is hostd's, its own bounds are the budget.
+  it("composes the listener with hostd's tight limits", async () => {
+    const log = logger();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK }, log);
+    const { port } = host.status().hostProtocol!;
+    const sockets: ReturnType<typeof createConnection>[] = [];
+    const answers: { text: string }[] = [];
+    try {
+      for (let index = 0; index < HOSTD_LISTENER_LIMITS.maxConnections + 1; index += 1) {
+        const socket = createConnection({ host: "127.0.0.1", port });
+        const answer = { text: "" };
+        sockets.push(socket);
+        answers.push(answer);
+        socket.on("data", (chunk) => (answer.text += chunk.toString()));
+        socket.on("error", () => undefined);
+        await new Promise((resolve) => socket.once("connect", resolve));
+      }
+      // The defaults (128 connections, a burst of 64) would take a ninth.
+      await vi.waitFor(() => expect(answers.at(-1)!.text).toMatch(/^HTTP\/1\.1 503/u));
+      expect(answers.slice(0, -1).every((answer) => answer.text === "")).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith("host protocol: connection-refused", {
+        reason: expect.stringMatching(/^(connection-limit|handshake-rate)$/u),
+      });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+    }
+  });
+
+  // B9: a device admitted here acts as the person; never off the box until VC-575.
+  it("refuses to serve the enrolled-device verifier on any non-loopback address", async () => {
+    for (const address of ["0.0.0.0", "192.168.1.5", "localhost", "::"]) {
+      const error = await refused({
+        dataDir: join(root, `bind-${address.replaceAll(/[^a-z0-9]/gu, "_")}`),
+        env: CLOUD,
+        listen: { host: address, port: 0 },
+      });
+      expect(error.reason).toBe("host-protocol");
+      expect(error.message).toMatch(/loopback address only until VC-575; refusing/u);
     }
   });
 
