@@ -30,10 +30,15 @@
  *   page with an opener is closed before it runs. Its URL becomes a product
  *   tab under the opener's provenance and caps, as desktop's window-open
  *   handler does.
+ * - **Screencast** (`attachScreencast`) and the person's input
+ *   (`viewerInput`) are the optional members a viewer client drives; VC-571
+ *   carries them over the host protocol's binary channel and control plane.
  */
 import type {
+  BrowserScreencastMetadata,
   BrowserTabBounds,
   BrowserTabState,
+  BrowserViewerInput,
   RuntimeBrowserConsoleMessage,
 } from "@volli/shared";
 import { BrowserRefusal } from "@volli/agent-runtime";
@@ -53,6 +58,7 @@ import {
   type ChromiumSpawn,
 } from "./chromium-launch";
 import type { CdpEvent, CdpPipeConnection } from "./chromium-pipe";
+import { ScreencastAttachment } from "./screencast";
 import {
   BrowserTabRegistry,
   type BrowserTabChrome,
@@ -66,8 +72,12 @@ export const CHROMIUM_START_URL = "about:blank";
 export const CHROMIUM_LOAD_TIMEOUT_MS = 10_000;
 /** The grace an action gets to start a navigation before the wait gives up looking. */
 export const CHROMIUM_NAVIGATION_GRACE_MS = 50;
+/** Desktop's quiet window after the person touched a tab, before its camera reopens. */
+export const CHROMIUM_INTERACTION_QUIET_MS = 5_000;
 /** A transcript preview is optional; a stuck compositor must not wedge a tool. */
 export const CHROMIUM_PREVIEW_TIMEOUT_MS = 1_000;
+/** The highest device scale factor a viewer may ask for, or a browser be launched at. */
+export const CHROMIUM_MAX_SCREENCAST_SCALE = 3;
 /** Previews pending per tab before optional previews fail closed. */
 const PREVIEW_MAX_PENDING_CAPTURES = 2;
 const PREVIEW_JPEG_QUALITY = 80;
@@ -132,7 +142,7 @@ interface ChromiumEngine {
 interface ChromiumTarget {
   engine: ChromiumEngine;
   targetId: string;
-  /** The backend's own session: chrome facts, console, policy, pictures. */
+  /** The backend's own session: chrome facts, console, policy, pictures, screencast. */
   sessionId: string;
   /** The tab's own browser window, once looked up. */
   windowId?: number;
@@ -155,9 +165,15 @@ interface ChromiumTabEntry extends BrowserTabRecord {
   /** Main-frame document requests in flight, so a failure among them is the page's. */
   mainDocuments: Set<string>;
   bounds: BrowserTabBounds;
+  /** When a person last sent this tab input through a viewer; see `capturePicture`. */
+  lastInteractionAt: number | null;
   pictureCaptures: Map<number, Promise<string | null>>;
   /** Told whenever loading changes or the tab goes; the load wait listens here. */
   loadListeners: Set<() => void>;
+  /** Viewers' screencast attachments; see {@link ChromiumBrowserBackend.attachScreencast}. */
+  screencasts: Set<ScreencastAttachment>;
+  /** The device scale factor their frames are drawn at. */
+  screencastScale: number;
   /** URLs from `Page.windowOpen`, waiting for the popup target they announce. */
   popups: string[];
   closed: boolean;
@@ -168,6 +184,8 @@ export type ChromiumBrowserBackendPorts = BrowserTabRegistryPorts;
 
 /** How this host runs Chromium. Policy: every field is the host's to state. */
 export interface ChromiumBrowserBackendOptions extends ChromiumLaunchOptions {
+  /** JPEG quality of screencast frames, 1-100. */
+  screencastQuality: number;
   /** A test seam for the launch. Production passes none. */
   spawn?: ChromiumSpawn;
 }
@@ -245,6 +263,12 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     private readonly options: ChromiumBrowserBackendOptions,
   ) {
     super(ports);
+    const scale = options.deviceScaleFactor;
+    if (!Number.isFinite(scale) || scale < 1 || scale > CHROMIUM_MAX_SCREENCAST_SCALE) {
+      throw new RangeError(
+        `The browser's device scale factor is between 1 and ${CHROMIUM_MAX_SCREENCAST_SCALE}`,
+      );
+    }
   }
 
   // ---- the engine ----------------------------------------------------------
@@ -665,6 +689,9 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         });
         return;
       }
+      case "Page.screencastFrame":
+        this.#onFrame(entry, target, params);
+        return;
     }
   }
 
@@ -726,8 +753,14 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
    */
   protected applyWakePolicy(): void {}
 
-  /** Nothing is on a screen here: a headless host draws no tab anywhere a person sees. */
-  protected goOffScreen(): void {}
+  /**
+   * Nothing is on a screen here. What a person could see is a viewer's
+   * screencast, and a tab going headless ends those streams: a headless tab
+   * is drawn nowhere until the person shows it again (VC-238).
+   */
+  protected goOffScreen(entry: ChromiumTabEntry): void {
+    this.#endScreencasts(entry);
+  }
 
   open(input: BrowserTabCreateOptions): BrowserTabState {
     if (!isAllowedChromiumTarget(input.url)) {
@@ -751,8 +784,11 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       loadEpoch: 0,
       mainDocuments: new Set(),
       bounds: { ...BROWSER_DEFAULT_BOUNDS },
+      lastInteractionAt: null,
       pictureCaptures: new Map(),
       loadListeners: new Set(),
+      screencasts: new Set(),
+      screencastScale: 1,
       popups: [],
       closed: false,
     };
@@ -808,6 +844,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       this.#bySession.delete(entry.target.sessionId);
       this.#byTarget.delete(entry.target.targetId);
     }
+    this.#endScreencasts(entry);
     this.#notifyLoad(entry);
     if (this.tabs.get(tabId) === entry) this.forgetEntry(tabId, entry);
   }
@@ -878,6 +915,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     }
     entry.bounds = { ...bounds };
     this.#whenReady(entry, "resize", (target) => this.#applyViewport(target, entry.bounds));
+    if (entry.screencasts.size > 0) this.#restartScreencast(entry);
   }
 
   /**
@@ -997,14 +1035,14 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
 
   /**
    * A picture of the tab for the transcript card after an agent changed it —
-   * desktop's rules: bounded in time and in pending captures, and dropped
-   * when the page moved on while it was taken. (Desktop also declines while a
-   * person is using a shown tab; nobody can use one here until a viewer
-   * exists to send their input.)
+   * desktop's rules: never while a person is using the tab or within the
+   * quiet window after, bounded in time and in pending captures, and dropped
+   * when the page moved on while it was taken.
    */
   async capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null> {
     const entry = this.tabs.get(tabId);
     if (entry === undefined || signal?.aborted || entry.target === null) return null;
+    if (this.#isBeingUsed(entry)) return null;
     const target = entry.target;
     const generation = entry.state.generation;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1047,7 +1085,8 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         data === null ||
         signal?.aborted ||
         this.tabs.get(tabId) !== entry ||
-        entry.state.generation !== generation
+        entry.state.generation !== generation ||
+        this.#isBeingUsed(entry)
       ) {
         return null;
       }
@@ -1068,6 +1107,11 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     }
   }
 
+  #isBeingUsed(entry: ChromiumTabEntry): boolean {
+    const last = entry.lastInteractionAt;
+    return last !== null && this.now() - last < CHROMIUM_INTERACTION_QUIET_MS;
+  }
+
   closeAll(): void {
     for (const tabId of this.tabs.keys()) this.close(tabId);
   }
@@ -1081,5 +1125,171 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     if (engine === null) return;
     const live = await engine.catch(() => null);
     await live?.process.close();
+  }
+
+  // ---- the viewer: screencast and the person's input -----------------------
+
+  /**
+   * A frame source for one shown tab (`./screencast`). A headless tab
+   * refuses: only the person can reveal a Session's tab (VC-238), and every
+   * attachment ends when its tab goes headless or closes.
+   *
+   * One Chromium screencast per tab, shared by its attachments. Chromium's
+   * frames are acknowledged as they arrive, so it keeps drawing the newest
+   * page, and each attachment keeps only the newest frame its consumer has
+   * not taken (latest wins). Frames are drawn at the highest device scale
+   * factor any attachment asked for, up to the browser's own
+   * ({@link ChromiumLaunchOptions.deviceScaleFactor}); the metadata
+   * says which.
+   */
+  attachScreencast(tabId: string, options: { deviceScaleFactor: number }): ScreencastAttachment {
+    const entry = this.requireTab(tabId);
+    if (entry.state.presentation === "headless") {
+      throw new Error("A Headless Browser Tab has no view until the person shows it");
+    }
+    const scale = options.deviceScaleFactor;
+    if (!Number.isFinite(scale) || scale < 1 || scale > CHROMIUM_MAX_SCREENCAST_SCALE) {
+      throw new RangeError(
+        `A screencast's device scale factor is between 1 and ${CHROMIUM_MAX_SCREENCAST_SCALE}`,
+      );
+    }
+    const attachment = new ScreencastAttachment(this.#screencastMetadata(entry), scale, (gone) =>
+      this.#detachScreencast(entry, gone),
+    );
+    entry.screencasts.add(attachment);
+    this.#restartScreencast(entry);
+    return attachment;
+  }
+
+  #screencastMetadata(entry: ChromiumTabEntry): BrowserScreencastMetadata {
+    return {
+      encoding: "image/jpeg",
+      width: entry.bounds.width,
+      height: entry.bounds.height,
+      deviceScaleFactor: entry.screencastScale,
+    };
+  }
+
+  /**
+   * (Re)starts the tab's screencast at the size its attachments need: the
+   * viewport at the highest scale any of them asked for that the browser
+   * draws. Chromium scales a frame down to the bounds it is given, so a 1×
+   * viewer of a 2× browser costs no extra pixels on the wire. Stops it when
+   * none is left. Every attachment hears the shape its frames now have.
+   */
+  #restartScreencast(entry: ChromiumTabEntry): void {
+    if (entry.closed) return;
+    if (entry.screencasts.size === 0) {
+      entry.screencastScale = 1;
+      this.#whenReady(entry, "stop its screencast", (target) =>
+        target.engine.connection.send("Page.stopScreencast", {}, target.sessionId),
+      );
+      return;
+    }
+    let wanted = 1;
+    for (const attachment of entry.screencasts) {
+      wanted = Math.max(wanted, attachment.requestedScale);
+    }
+    entry.screencastScale = Math.min(wanted, this.options.deviceScaleFactor);
+    const metadata = this.#screencastMetadata(entry);
+    for (const attachment of entry.screencasts) attachment.setMetadata(metadata);
+    this.#whenReady(entry, "start its screencast", async (target) => {
+      const send = (method: string, params: object = {}): Promise<unknown> =>
+        target.engine.connection.send(method, params, target.sessionId);
+      await send("Page.stopScreencast");
+      await send("Page.startScreencast", {
+        format: "jpeg",
+        quality: this.options.screencastQuality,
+        maxWidth: Math.round(metadata.width * metadata.deviceScaleFactor),
+        maxHeight: Math.round(metadata.height * metadata.deviceScaleFactor),
+        everyNthFrame: 1,
+      });
+    });
+  }
+
+  #detachScreencast(entry: ChromiumTabEntry, attachment: ScreencastAttachment): void {
+    if (entry.screencasts.delete(attachment)) this.#restartScreencast(entry);
+  }
+
+  /** Ends every attachment from the host's side: the tab closed or went headless. */
+  #endScreencasts(entry: ChromiumTabEntry): void {
+    if (entry.screencasts.size === 0) return;
+    const ending = [...entry.screencasts];
+    entry.screencasts.clear();
+    for (const attachment of ending) attachment.end();
+    this.#restartScreencast(entry);
+  }
+
+  #onFrame(entry: ChromiumTabEntry, target: ChromiumTarget, params: Record<string, unknown>): void {
+    void target.engine.connection
+      .send("Page.screencastFrameAck", { sessionId: params["sessionId"] }, target.sessionId)
+      .catch(() => undefined);
+    const data = stringParam(params, "data");
+    if (data === undefined || entry.screencasts.size === 0) return;
+    const bytes = Buffer.from(data, "base64");
+    for (const attachment of entry.screencasts) attachment.offer(bytes);
+  }
+
+  /**
+   * A person's input from a viewer, applied to the tab as-is. It is the
+   * person's, so it takes no agent hold; it does close the tab's camera for
+   * the quiet window, as touching a shown tab does on desktop.
+   */
+  async viewerInput(tabId: string, input: BrowserViewerInput): Promise<void> {
+    const entry = this.requireTab(tabId);
+    if (entry.state.presentation === "headless") {
+      throw new Error("A Headless Browser Tab has no view until the person shows it");
+    }
+    entry.lastInteractionAt = this.now();
+    const target = await entry.ready;
+    const send = (method: string, params: object): Promise<unknown> =>
+      target.engine.connection.send(method, params, target.sessionId);
+    switch (input.kind) {
+      case "mouse":
+        await send("Input.dispatchMouseEvent", {
+          type:
+            input.type === "pressed"
+              ? "mousePressed"
+              : input.type === "released"
+                ? "mouseReleased"
+                : "mouseMoved",
+          x: input.x,
+          y: input.y,
+          button: input.button,
+          clickCount: input.clickCount,
+          modifiers: input.modifiers,
+        });
+        return;
+      case "wheel":
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: input.x,
+          y: input.y,
+          deltaX: input.deltaX,
+          deltaY: input.deltaY,
+          modifiers: input.modifiers,
+        });
+        return;
+      case "key":
+        await send("Input.dispatchKeyEvent", {
+          type: input.type === "up" ? "keyUp" : input.text === undefined ? "rawKeyDown" : "keyDown",
+          key: input.key,
+          code: input.code,
+          windowsVirtualKeyCode: input.keyCode,
+          modifiers: input.modifiers,
+          ...(input.text === undefined ? {} : { text: input.text, unmodifiedText: input.text }),
+        });
+        return;
+      case "text":
+        await send("Input.insertText", { text: input.text });
+        return;
+      case "composition":
+        await send("Input.imeSetComposition", {
+          text: input.text,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+        });
+        return;
+    }
   }
 }

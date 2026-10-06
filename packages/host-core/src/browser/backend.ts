@@ -30,10 +30,12 @@ import type {
   BrowserTabPresentation,
   BrowserTabState,
   BrowserTrace,
+  BrowserViewerInput,
 } from "@volli/shared";
 
 import type { AgentBrowserBackend } from "./agent-port";
 import type { CdpTransport } from "./cdp-controller";
+import type { BrowserScreencastAttachment } from "./screencast";
 
 /**
  * One Session's claim on a tab (VC-239), keyed by attachment as well as
@@ -248,4 +250,24 @@ export interface BrowserBackend extends AgentBrowserBackend {
 
   /** A Session's kept Browser Traces, oldest first; empty when nothing was recorded. */
   tracesOf(sessionId: string): BrowserTrace[];
+
+  // ---- optional capabilities a backend advertises (VC-619) ----------------
+  //
+  // The seam stays open: a capability one engine has and another does not is
+  // an optional member, present on the backends that offer it. Desktop draws
+  // its pages natively and has neither of these.
+
+  /**
+   * A frame source for one shown tab, for a client that draws the page
+   * itself (`./screencast`): JPEG frames, latest wins, metadata at attach.
+   * `deviceScaleFactor` is what the viewer's display wants (2 on Retina). A
+   * headless tab refuses; the attachment ends when the tab closes or goes
+   * headless.
+   */
+  attachScreencast?(
+    tabId: string,
+    options: { deviceScaleFactor: number },
+  ): BrowserScreencastAttachment;
+  /** A person's input in a client's view of one shown tab. A headless tab refuses. */
+  viewerInput?(tabId: string, input: BrowserViewerInput): Promise<void>;
 }

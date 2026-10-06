@@ -71,3 +71,58 @@ export interface BrowserTabBounds {
   width: number;
   height: number;
 }
+
+/**
+ * A screencast attachment's metadata (VC-619): what every frame of one
+ * attachment is, stated once at attach and again only when it changes. The
+ * frames themselves are image bytes and a sequence, nothing else
+ * (host-protocol.md, Binary framing: metadata never rides inside image bytes).
+ */
+export interface BrowserScreencastMetadata {
+  /** Image encoding of every frame. JPEG initially. */
+  encoding: "image/jpeg";
+  /** The page's viewport, in CSS pixels; a viewer's input is in these units. */
+  width: number;
+  height: number;
+  /**
+   * Device pixels per CSS pixel the frames are drawn at: 1, or 2 for a
+   * high-DPI viewer. A frame is `width × deviceScaleFactor` pixels wide.
+   */
+  deviceScaleFactor: number;
+}
+
+/**
+ * A person's input in a client's view of a Browser Tab (VC-619), in the page's
+ * CSS pixels. The host applies it to the tab's engine as-is; it is the
+ * person's input, so it never needs or takes the agent hold.
+ *
+ * `modifiers` is a bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.
+ */
+export type BrowserViewerInput =
+  | {
+      kind: "mouse";
+      type: "pressed" | "released" | "moved";
+      x: number;
+      y: number;
+      button: "none" | "left" | "middle" | "right";
+      clickCount: number;
+      modifiers: number;
+    }
+  | { kind: "wheel"; x: number; y: number; deltaX: number; deltaY: number; modifiers: number }
+  | {
+      kind: "key";
+      type: "down" | "up";
+      /** The DOM `key` value, e.g. `a`, `Enter`, `ArrowLeft`. */
+      key: string;
+      /** The DOM `code` value, e.g. `KeyA`. */
+      code: string;
+      /** The legacy virtual key code (`KeyboardEvent.keyCode`), which editing keys need. */
+      keyCode: number;
+      /** The text a key-down produces, when it produces any. */
+      text?: string;
+      modifiers: number;
+    }
+  /** Committed text: an IME's commit, or a paste the client read from its own clipboard. */
+  | { kind: "text"; text: string }
+  /** An IME's in-progress composition. */
+  | { kind: "composition"; text: string; selectionStart: number; selectionEnd: number };

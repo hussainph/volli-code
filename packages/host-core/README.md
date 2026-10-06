@@ -600,6 +600,12 @@ tab and keeps it until `dispose()`. Every option is the host's to state:
   container that cannot, and a launch without the sandbox logs a warning
   every time. CI runs sandboxed.
 
+- **`deviceScaleFactor`**: device pixels per CSS pixel every page is drawn
+  at (`--force-device-scale-factor`). 2 makes a high-DPI viewer's screencast
+  sharp, at four times the pixels for every tab and agent screenshots at 2×
+  (as a Retina desktop's are); 1 on a host no high-DPI viewer looks at.
+- **`screencastQuality`**: the JPEG quality of screencast frames.
+
 What the backend owns, beyond the registry's policy:
 
 - **Ids are ours.** `open` returns synchronously; Chromium's target is created
@@ -621,6 +627,25 @@ What the backend owns, beyond the registry's policy:
 - **Dialogs are dismissed** (alerts accepted, questions declined) and noted in
   the console: nobody can answer one on a host with no window, and an open
   dialog stops the page.
+- **A frame source for viewers** (`attachScreencast`, `browser/screencast.ts`),
+  by host-protocol.md § Binary framing; VC-571 carries it over the binary
+  channel, never the event bus or a tRPC subscription. Per-tab attach and
+  detach; JPEG, with encoding, viewport and device scale factor as attach
+  metadata (re-stated when they change); latest wins, at most one unsent frame
+  per attachment, stale frames dropped whole before they are numbered;
+  Chromium's frames acked on arrival; `next(signal)` cancels, and the tab
+  closing or going headless ends every attachment. A viewer asks for a scale
+  (2 on Retina) and gets the highest any attachment asked for, up to the
+  browser's own. The person's input arrives through `viewerInput` (pointer,
+  wheel, keys, committed text and IME composition) and closes the transcript
+  camera for desktop's quiet window. Both are optional `BrowserBackend`
+  members, refused for a headless tab: the seam stays open to capabilities
+  one engine has and another does not.
+- **The parity bench** (`chromium-parity.test.ts`) measures, at 1× and 2×,
+  input-to-frame latency (p50, p95) for a click and for typing and frames per
+  second while scrolling and animating, at the frame-source level on loopback.
+  It always prints `[volli] chromium parity`; `VOLLI_CHROMIUM_PARITY_ASSERT=1`
+  holds it to the bar (p95 ≤ 100 ms, ≥ 30 fps).
 - **No wake policy.** Each tab is its own window, never occluded, and the
   launch turns background throttling off.
 

@@ -1,7 +1,8 @@
 /**
  * The Chromium backend against a real Chrome for Testing (VC-619): the shared
  * browser tool suite, then what only this engine has — browser contexts per
- * scope, denied permissions, the page-navigation guard and dialogs. Skips without a browser unless
+ * scope, denied permissions, the page-navigation guard, dialogs, the
+ * screencast and the viewer's input. Skips without a browser unless
  * `VOLLI_REQUIRE_CHROMIUM=1` (CI's "Test (packages)" lane) makes that a failure.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,16 +20,19 @@ import {
   suitePorts,
 } from "./test-support/backend-suite";
 import { testChromium } from "./test-support/chromium";
+import { jpegSize } from "./test-support/jpeg";
 import { startBrowserFixture, type BrowserFixture } from "./test-support/fixture-server";
 
 const chromium = testChromium();
 const profileRoot = mkdtempSync(join(tmpdir(), "volli-chromium-test-"));
 
-function chromiumBackend(): ChromiumBrowserBackend {
+function chromiumBackend(deviceScaleFactor = 1): ChromiumBrowserBackend {
   return new ChromiumBrowserBackend(suitePorts(), {
     executablePath: chromium!.executablePath,
     profileRoot,
     noSandbox: chromium!.noSandbox,
+    deviceScaleFactor,
+    screencastQuality: 70,
   });
 }
 
@@ -41,6 +45,8 @@ describeBrowserBackendSuite(
           executablePath: chromium.executablePath,
           profileRoot,
           noSandbox: chromium.noSandbox,
+          deviceScaleFactor: 1,
+          screencastQuality: 70,
         });
         return { backend, dispose: () => backend.dispose() };
       },
@@ -55,7 +61,8 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
 
   beforeAll(async () => {
     fixture = await startBrowserFixture();
-    backend = chromiumBackend();
+    // Drawn at 2x, so one browser can serve a Retina viewer and a 1x one.
+    backend = chromiumBackend(2);
   });
 
   afterAll(async () => {
@@ -153,6 +160,62 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     expect(settled.title).toBe("Dialog dismissed");
     driver.dispose();
   });
+
+  it("serves a shown tab's frames at 1x and 2x, latest wins, and ends them when it goes headless", async () => {
+    const driver = port("viewer", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/latency") },
+      signal: signal(),
+    });
+    expect(() => backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 })).toThrow(/Headless/);
+    backend.setPresentation(nav.tabId, "preview");
+    expect(() => backend.attachScreencast(nav.tabId, { deviceScaleFactor: 4 })).toThrow(RangeError);
+
+    const one = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 });
+    expect(one.metadata()).toEqual({
+      encoding: "image/jpeg",
+      width: 1_280,
+      height: 720,
+      deviceScaleFactor: 1,
+    });
+    const first = await one.next(AbortSignal.timeout(5_000));
+    expect(first?.seq).toBe(1);
+    expect(jpegSize(first!.bytes)).toEqual({ width: 1_280, height: 720 });
+
+    // A Retina viewer: the page is drawn at 2x for every attachment, and both are told.
+    const scales: number[] = [];
+    one.onMetadata((metadata) => scales.push(metadata.deviceScaleFactor));
+    const two = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 2 });
+    expect(two.metadata().deviceScaleFactor).toBe(2);
+    expect(scales).toEqual([2]);
+    // The person's click reaches the page, and closes the camera for the quiet window.
+    for (const type of ["pressed", "released"] as const) {
+      await backend.viewerInput(nav.tabId, {
+        kind: "mouse",
+        type,
+        x: 50,
+        y: 50,
+        button: "left",
+        clickCount: 1,
+        modifiers: 0,
+      });
+    }
+    const sharp = await eventually(
+      async () => jpegSize((await two.next(AbortSignal.timeout(5_000)))!.bytes),
+      (size) => size?.width === 2_560,
+    );
+    expect(sharp).toEqual({ width: 2_560, height: 1_440 });
+    expect(await backend.capturePicture(nav.tabId)).toBeNull();
+
+    two.detach();
+    expect(scales).toEqual([2, 1]);
+    backend.setPresentation(nav.tabId, "headless");
+    await expect(one.next()).resolves.toBeNull();
+    await expect(backend.viewerInput(nav.tabId, { kind: "text", text: "x" })).rejects.toThrow(
+      /Headless/,
+    );
+    driver.dispose();
+  }, 30_000);
 
   it("forgets every tab when the browser exits, and launches again for the next", async () => {
     const lonely = chromiumBackend();

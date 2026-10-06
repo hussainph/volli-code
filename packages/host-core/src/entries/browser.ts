@@ -30,6 +30,7 @@ export {
 export { ChromiumLaunchError } from "../browser/chromium-launch";
 export { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 export { type BrowserPictureRecord, BrowserPictureStore } from "../browser/picture-store";
+export type { BrowserScreencastAttachment, BrowserScreencastFrame } from "../browser/screencast";
 export {
   BROWSER_CONSOLE_MAX_CHARS,
   BROWSER_TITLE_MAX_CHARS,
