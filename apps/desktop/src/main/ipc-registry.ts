@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { hostLogger, withTrace } from "@volli/host-core/log";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, logErrorSummary } from "@volli/shared";
 import type { IpcArgs, IpcResult, VolliInvokeContract } from "../ipc/contract";
 
 // The one guard→body→error envelope every DB-backed IPC surface registers
@@ -43,12 +43,13 @@ const ipcLog = hostLogger("ipc");
 
 /**
  * The envelope's failure, logged (VC-699) inside the call's trace: the
- * channel and the message. The renderer surfaces it; the log keeps it.
+ * channel and the error's summary (class name and code). Never its message:
+ * a handler's error can quote a file, a prompt or a path a person typed, and
+ * this door serves every channel. The renderer still gets the message.
  */
 function failed(channel: string, error: unknown): { ok: false; error: string } {
-  const message = errorMessage(error);
-  ipcLog.warn("ipc call failed", { operation: channel, error: message });
-  return { ok: false, error: message };
+  ipcLog.warn("ipc call failed", { operation: channel, error: logErrorSummary(error) });
+  return { ok: false, error: errorMessage(error) };
 }
 
 export function registerGuardedIpcHandlers<Cs extends keyof VolliInvokeContract>(

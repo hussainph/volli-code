@@ -340,7 +340,9 @@ credential are redacted.
 A line written while serving a host-protocol request carries the Client's
 trace (`traceId`, `spanId`) and the door (`door`, `connection`, `operation`),
 joined to the Session, turn and command it touched, so one operation can be
-followed from the desktop that started it:
+followed from the desktop that started it. Background work (an executor's
+listeners, a follow-up released later) joins a trace only through its
+command or turn id, and otherwise carries its ids and no trace:
 
 ```sh
 journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .component, .msg] | @tsv'

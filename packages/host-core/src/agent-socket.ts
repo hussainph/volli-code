@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import {
   AGENT_COMMANDS,
   errorMessage,
+  logErrorSummary,
   makeAgentError,
   type AgentCommand,
   type AgentRequest,
@@ -224,7 +225,8 @@ function handleConnection(
             writeResponse(socket, response, responseFlushed);
           })
           .catch((error: unknown) => {
-            socketLog.warn("agent socket request failed", { error });
+            // A generic door: the summary, never a message that may quote a request.
+            socketLog.warn("agent socket request failed", { error: logErrorSummary(error) });
             writeResponse(
               socket,
               {

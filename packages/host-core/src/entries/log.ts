@@ -13,12 +13,26 @@ export {
   mintSpanId,
   mintTraceId,
   withLogContext,
+  withRootLogContext,
   withTrace,
 } from "../log/context";
 export {
+  commandTrace,
+  MAX_REMEMBERED,
+  rememberCommandTrace,
+  rememberTurnTrace,
+  resetLogCorrelation,
+  turnTrace,
+} from "../log/correlation";
+export {
   createRotatingFileSink,
   LOG_FILE_POLICY,
+  type LogFileFailure,
+  type LogFileHandle,
   type LogFilePolicy,
+  type LogFileSystem,
+  NODE_LOG_FILE_SYSTEM,
+  reportToStderr,
   type RotatingFileSink,
   type RotatingFileSinkOptions,
 } from "../log/file-sink";
