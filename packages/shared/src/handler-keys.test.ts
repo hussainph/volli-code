@@ -63,7 +63,14 @@ describe("the host handler map's keys", () => {
   });
 
   it("type each router family by its own rows", () => {
-    expectTypeOf<HostHandlerKeyOf<(typeof BOARD_ENTRIES)[number]>>().toEqualTypeOf<"ticket.move">();
+    // The board family: the both-door move (VC-668), and its own router-only
+    // operations under `board.` (VC-565), none of which a socket verb binds.
+    expectTypeOf<
+      Exclude<HostHandlerKeyOf<(typeof BOARD_ENTRIES)[number]>, "ticket.move" | `board.${string}`>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<HostHandlerKeyOf<(typeof BOARD_ENTRIES)[number]>, SocketHandlerKey>
+    >().toEqualTypeOf<"ticket.move">();
     // The lab's diagnostics are the router's own, so no family projects them.
     expectTypeOf<
       Extract<"labDiagnostics.list" | "labDiagnostics.subscribe", HostHandlerKey>
