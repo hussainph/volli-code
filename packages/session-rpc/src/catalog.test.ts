@@ -8,6 +8,7 @@ import {
 import {
   createSessionProjectionCheckpoint,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  QUEUE_REVISION_CONFLICT,
   type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
@@ -380,6 +381,34 @@ describe("workspace scope, before any read", () => {
 });
 
 describe("the error envelope", () => {
+  it("maps stale queue mutations to a typed CONFLICT / queue-revision-conflict", async () => {
+    const { caller, runtime } = fixture(device);
+    class StaleQueue extends Error {
+      readonly [QUEUE_REVISION_CONFLICT] = true as const;
+    }
+    for (const kind of ["cancel", "edit"] as const) {
+      runtime.command.mockRejectedValueOnce(new StaleQueue("Queue revision changed"));
+      const input = {
+        commandId: kind,
+        sessionId: "session-1",
+        messageId: "m",
+        expectedRevision: 0,
+      };
+      const result =
+        kind === "cancel"
+          ? caller.session.cancelQueued(input)
+          : caller.session.editQueued({
+              ...input,
+              message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+            });
+      expect(hostErrorOf(await refusal(result))).toEqual({
+        code: "CONFLICT",
+        reason: "queue-revision-conflict",
+        message: "Queue revision changed",
+      });
+    }
+  });
+
   it("maps a command id reused for another intent to CONFLICT / command-conflict", async () => {
     const { caller, runtime } = fixture(device);
     runtime.command.mockRejectedValueOnce(

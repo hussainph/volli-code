@@ -1,5 +1,6 @@
 /** A resident stream projection and command client. The host owns pending
  * follow-ups and their release, even when no Client is connected. */
+import { isResnapshotRequired } from "@volli/host-protocol";
 import type {
   SessionStreamCompactionProgress,
   SessionStreamOverlay,
@@ -357,8 +358,25 @@ export function racingFlushScheduler(host: FlushHost): FlushScheduler {
 
 /* ----------------------------------------------------------------- the core */
 
+/**
+ * Who recovers a Session stream that ended (VC-670).
+ *
+ * - `"resume-once"`, the default: the in-process Electron IPC edge, where an
+ *   end is a producer's teardown race. A stream that had started resumes once
+ *   from its cursor; anything else surfaces. Flag off, this is all there is.
+ * - `"host-link"`: the WebSocket edge, behind a client host link
+ *   (`@volli/host-protocol/client-link`). The link already resumed every
+ *   transport drop from the last tracked id, after the next welcome
+ *   validated, so what reaches this client is the host's own answer. A
+ *   `subscription-resnapshot-required` reloads the snapshot and subscribes
+ *   from its cursor; anything else surfaces. This client retries nothing.
+ */
+export type ChatStreamRecovery = "resume-once" | "host-link";
+
 export interface ChatSessionTransport {
   rpc: ChatSessionRpc;
+  /** Absent means `"resume-once"`: the IPC edge's policy, unchanged. */
+  streamRecovery?: ChatStreamRecovery;
   scheduler: FlushScheduler;
   newCommandId(): string;
   /**
@@ -427,6 +445,9 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 
 export type ProductSessionResult = SessionStartResult;
 
+/** Resnapshot reloads a `"host-link"` stream may make in a row before nothing arrives; see `#silentReloads`. */
+const MAX_SILENT_RELOADS = 3;
+
 /** The tone a refusal of each weight is said in. */
 const TONE_OF: Readonly<Record<CommandRefusalSeverity, NotifyTone>> = {
   benign: "neutral",
@@ -437,6 +458,7 @@ export class ChatSessionClient {
   readonly sessionId: string;
 
   readonly #rpc: ChatSessionRpc;
+  readonly #streamRecovery: ChatStreamRecovery;
   readonly #store: ChatSessionStore;
   readonly #scheduler: FlushScheduler;
   readonly #newCommandId: () => string;
@@ -467,6 +489,12 @@ export class ChatSessionClient {
   #generation = 0;
   /** One reconnect per stream that actually started — see {@link #dropped}. */
   #reconnectable = false;
+  /**
+   * Resnapshot reloads in a row with no emission between them. A host that
+   * keeps refusing its own snapshot's cursor would otherwise reload forever,
+   * so past {@link MAX_SILENT_RELOADS} the stream surfaces instead.
+   */
+  #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
   // Repeated attach or stream failures should not repeat the same notification.
@@ -476,6 +504,7 @@ export class ChatSessionClient {
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
     this.#rpc = deps.rpc;
+    this.#streamRecovery = deps.streamRecovery ?? "resume-once";
     this.#store = deps.store;
     this.#scheduler = deps.scheduler;
     this.#newCommandId = deps.newCommandId;
@@ -953,6 +982,7 @@ export class ChatSessionClient {
             this.#streamAlive = true;
           },
           onData: (event) => {
+            this.#silentReloads = 0;
             this.#lastEventId = event.id;
             this.#receive(event.data);
           },
@@ -986,6 +1016,16 @@ export class ChatSessionClient {
     this.#subscription?.unsubscribe();
     this.#subscription = null;
     this.#streamAlive = false;
+    if (this.#streamRecovery === "host-link") {
+      // The link resumed every drop it could; this is the host's answer.
+      if (isResnapshotRequired(failure) && this.#silentReloads < MAX_SILENT_RELOADS) {
+        this.#silentReloads += 1;
+        void this.#open(null);
+      } else {
+        this.#lost(failure);
+      }
+      return;
+    }
     if (!this.#reconnectable) {
       this.#lost(failure);
       return;

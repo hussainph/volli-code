@@ -86,5 +86,10 @@ function readState(encoded: string): SessionFollowUpState {
       throw new Error(`Duplicate follow-up ledger ${field}`);
     }
   }
+  // Release is serialized per Session: recovery resumes the one in-flight claim.
+  // Two claims mean a bug wrote this row, so fail loudly instead of guessing.
+  if (state.entries.filter((entry) => entry.state === "releasing").length > 1) {
+    throw new Error("More than one releasing follow-up ledger entry");
+  }
   return state;
 }

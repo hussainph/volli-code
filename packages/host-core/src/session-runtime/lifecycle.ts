@@ -27,6 +27,16 @@ import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
 
+/**
+ * How long host readiness waits for the startup follow-up release sweep
+ * (VC-675). Releasing before Clients connect keeps a restart's queued message
+ * ahead of a fresh send, but the sweep attaches executors and waits for each
+ * turn to open: a hung executor must not hold the whole host unready. Past
+ * this bound the sweep keeps running in the background; close still waits
+ * for it before the database closes.
+ */
+export const FOLLOW_UP_RECOVERY_READY_WAIT_MS = 5_000;
+
 /** Expected host teardown, not a failed boot or a notice delivery error. */
 export class SessionRuntimeClosingError extends Error {
   override name = "SessionRuntimeClosingError";
@@ -89,6 +99,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   /** Synchronous host lifecycle hook; desktop installs its accepted-quit hold. */
   installQuitHold(close: () => Promise<void>): void;
   stopProducers(): void;
+  /** Tests only: {@link FOLLOW_UP_RECOVERY_READY_WAIT_MS}. */
+  followUpRecoveryWaitMs?: number;
 }): SessionRuntimeLifecycle<Services> {
   const { host, ports, runtime, rpc, observability, delegation } = options;
   const { database } = host;
@@ -149,10 +161,14 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   let boot: Promise<RecoveredSessionServices<Services>> | undefined;
   let drain: Promise<void> | undefined;
   let closing = false;
+  // The startup release sweep, which may outlive readiness (never rejects).
+  let followUpRecovery: Promise<void> | undefined;
+  const closed = Promise.withResolvers<false>();
 
   function close(): Promise<void> {
     if (drain !== undefined) return drain;
     closing = true;
+    closed.resolve(false);
     options.stopProducers();
     suspendClock?.close();
     ports.power.removeListener("resume", wake);
@@ -169,7 +185,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     });
     // A host may close the database only after both drain and an in-flight boot
     // sweep finish. Closing the runtime also unblocks its reconciliation path.
-    drain = Promise.all([shutdown, boot?.catch(() => undefined)]).then(() => undefined);
+    // A startup release that outlived readiness still writes the queue ledger.
+    drain = Promise.all([shutdown, boot?.catch(() => undefined), followUpRecovery]).then(
+      () => undefined,
+    );
     return drain;
   }
   options.installQuitHold(close);
@@ -222,9 +241,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     }
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
-    // Release/reconcile durable follow-ups before any Client or producer can write.
-    // Recovery schedules turns; readiness does not wait for a model turn to finish.
-    await runtime?.recoverFollowUps();
+    if (runtime !== null) await recoverFollowUps(runtime);
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     try {
@@ -262,6 +279,34 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     };
     issuedProofs.add(proof);
     return proof;
+  }
+  /**
+   * Release/reconcile durable follow-ups, preferably before any Client or
+   * producer can write. Recovery schedules turns and waits only for them to
+   * open, and only up to the bound: a hung executor attach leaves the sweep
+   * running in the background instead of holding readiness. Failure is
+   * reported, not fatal: every queued payload stays durable for the next pass.
+   */
+  async function recoverFollowUps(hosted: HostedSessionRuntime): Promise<void> {
+    const waitMs = options.followUpRecoveryWaitMs ?? FOLLOW_UP_RECOVERY_READY_WAIT_MS;
+    const sweep = hosted.recoverFollowUps().catch((error: unknown) => {
+      ports.log.error("[volli] failed to recover queued follow-ups:", errorMessage(error));
+    });
+    followUpRecovery = sweep;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), waitMs);
+    });
+    try {
+      const finished = await Promise.race([sweep.then(() => true), bound, closed.promise]);
+      if (!finished && !closing) {
+        ports.log.warn(
+          `[volli] queued follow-up recovery is still running after ${waitMs}ms; the host is ready and release continues in the background.`,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
   function ready(): Promise<RecoveredSessionServices<Services>> {
     if (closing)

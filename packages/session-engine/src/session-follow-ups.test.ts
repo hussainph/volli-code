@@ -10,6 +10,7 @@ import {
   isSessionStreamQueue,
   sessionFollowUpDeliveryCommandId,
   SessionRuntimeCommandConflictError,
+  NativeAttachmentError,
   type BindingHandle,
   type HarnessCommand,
   type NativeHarnessAdapter,
@@ -40,6 +41,9 @@ class Adapter implements NativeHarnessAdapter {
   unknown = false;
   crashAfterAcceptance = false;
   ambiguous = false;
+  unknownAfterTurn = false;
+  reconcileGate: Promise<void> | undefined;
+  reconciling = false;
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
@@ -74,6 +78,13 @@ class Adapter implements NativeHarnessAdapter {
             turnId: `turn:${command.commandId}`,
             occurredAt: 200,
           });
+        if (this.unknownAfterTurn)
+          return {
+            commandId: command.commandId,
+            status: "unknown",
+            detail: "No acknowledgement",
+            native: null,
+          };
         await this.dispatchGate;
         const receipt = {
           commandId: command.commandId,
@@ -85,11 +96,15 @@ class Adapter implements NativeHarnessAdapter {
         if (this.crashAfterAcceptance || this.ambiguous) throw new Error("executor transport lost");
         return receipt;
       },
-      reconcile: async () => ({
-        cursor: null,
-        observations: [],
-        receipts: this.crashAfterAcceptance ? [] : this.receipts,
-      }),
+      reconcile: async () => {
+        this.reconciling = true;
+        await this.reconcileGate;
+        return {
+          cursor: null,
+          observations: [],
+          receipts: this.crashAfterAcceptance ? [] : this.receipts,
+        };
+      },
       release: async () => undefined,
     };
   }
@@ -112,6 +127,7 @@ function fixture(
     adapter?: Adapter;
     locate?: () => void | Promise<void>;
     diagnostics?: () => void;
+    retryDelays?: readonly number[];
   } = {},
 ) {
   let sequence = 0;
@@ -145,6 +161,7 @@ function fixture(
         errors.push(error);
         options.diagnostics?.();
       },
+      ...(options.retryDelays === undefined ? {} : { followUpRetryDelaysMs: options.retryDelays }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -372,7 +389,7 @@ describe("host follow-up commands", () => {
     const f = fixture();
     const { runtime, sessionId, steer } = await queuedActive(f);
     f.adapter.unknown = true;
-    await expect(runtime.command(steer)).rejects.toThrow("ambiguous");
+    await expect(runtime.command(steer)).rejects.toThrow("may have been delivered");
     expect((await runtime.projection({ sessionId })).projection.queue?.[0].state).toBe("releasing");
     await runtime.recoverFollowUps();
     expect(f.adapter.commands).toHaveLength(2);
@@ -694,6 +711,8 @@ describe("host follow-up commands", () => {
   it("replays a crash after adapter acceptance using durable reconciliation evidence, never resending", async () => {
     const adapter = new Adapter();
     adapter.crashAfterAcceptance = true;
+    // No turn evidence either: only the reconciled receipt can settle it.
+    adapter.startTurns = false;
     const f = fixture({ adapter });
     let runtime = f.runtime();
     const sessionId = await create(runtime);
@@ -757,6 +776,7 @@ describe("host follow-up commands", () => {
   it("does not redispatch ambiguous acceptance; retains the payload with durable Attention", async () => {
     const adapter = new Adapter();
     adapter.ambiguous = true;
+    adapter.startTurns = false;
     const f = fixture({ adapter });
     let runtime = f.runtime();
     const sessionId = await create(runtime);
@@ -773,7 +793,12 @@ describe("host follow-up commands", () => {
     const projection = (await runtime.projection({ sessionId })).projection;
     expect(projection.queue?.[0]).toMatchObject({ id: "first", state: "releasing" });
     expect(projection.attention.active).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "adapter_unrecoverable" })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "adapter_unrecoverable",
+          detail: "This follow-up may have been delivered. Check the transcript before resending.",
+        }),
+      ]),
     );
   });
 
@@ -1074,7 +1099,7 @@ describe("host follow-up commands", () => {
     expect((await runtime.projection({ sessionId })).projection.queue?.[0].id).toBe("first");
   });
 
-  it("keeps ambiguous release immutable, and cancellation of terminal refusal is safe", async () => {
+  it("keeps an unproven release uneditable but cancellable, and cancellation of terminal refusal is safe", async () => {
     const f = fixture();
     f.adapter.unknown = true;
     const runtime = f.runtime();
@@ -1088,12 +1113,22 @@ describe("host follow-up commands", () => {
     expect(
       (
         await runtime.command({
+          commandId: "edit",
+          sessionId,
+          command: { kind: "message.edit", messageId: "first", message: message("first", "x") },
+        })
+      ).receipt,
+    ).toMatchObject({ status: "rejected", code: "message_releasing" });
+    expect(
+      (
+        await runtime.command({
           commandId: "cancel",
           sessionId,
           command: { kind: "message.cancel", messageId: "first" },
         })
-      ).receipt,
-    ).toMatchObject({ status: "rejected", code: "message_releasing" });
+      ).receipt?.status,
+    ).toBe("accepted");
+    expect((await runtime.projection({ sessionId })).projection.queue).toEqual([]);
     const g = fixture();
     g.adapter.refuse = true;
     const other = g.runtime();
@@ -1186,7 +1221,8 @@ describe("host follow-up commands", () => {
     });
     await runtime.recoverFollowUps();
     expect(f.errors.length).toBeGreaterThan(1);
-    expect((await runtime.projection({ sessionId })).projection.queue?.[0].state).toBe("releasing");
+    // Nothing was sent, so the row goes back to queued: editable and cancellable.
+    expect((await runtime.projection({ sessionId })).projection.queue?.[0].state).toBe("queued");
     const g = fixture();
     g.adapter.attachFailure = new Error("cannot attach");
     const other = g.runtime();
@@ -1286,5 +1322,710 @@ describe("host follow-up commands", () => {
     expect((await f.engine.getSession({ sessionId }))?.commands.map(({ id }) => id)).not.toContain(
       "queued",
     );
+  });
+});
+
+type Runtime = ReturnType<ReturnType<typeof fixture>["runtime"]>;
+const submits = (adapter: Adapter) =>
+  adapter.commands
+    .filter(({ kind }) => kind === "message.submit")
+    .map(({ commandId }) => commandId);
+const queueStates = async (runtime: Runtime, sessionId: string) =>
+  (await runtime.projection({ sessionId })).projection.queue?.map(
+    ({ id, state }) => `${id}:${state}`,
+  );
+const attentionDetails = async (runtime: Runtime, sessionId: string) =>
+  (await runtime.projection({ sessionId })).projection.attention.active.map(({ detail }) => detail);
+const queue = (runtime: Runtime, sessionId: string, id: string) =>
+  runtime.command({
+    commandId: id,
+    sessionId,
+    command: { kind: "message.submit", delivery: "queue", message: message(id) },
+  });
+const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
+
+/**
+ * VC-675 regressions for follow-ups that could get stuck with no exit (review
+ * probes P1–P6, glm N3/N5/N6). Every probe that used to only log is an
+ * assertion here.
+ */
+describe("host follow-ups never strand a row", () => {
+  const AMBIGUOUS =
+    "This follow-up may have been delivered. Check the transcript before resending.";
+  class GatedAdapter extends Adapter {
+    gate: Promise<void> | undefined;
+    override async attach(...args: Parameters<Adapter["attach"]>) {
+      const gate = this.gate;
+      this.gate = undefined;
+      await gate;
+      return super.attach(...args);
+    }
+  }
+
+  async function activeWithQueue(f: ReturnType<typeof fixture>, ids: readonly string[]) {
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    await runtime.command({
+      commandId: "active",
+      sessionId,
+      command: { kind: "message.submit", message: message("active") },
+    });
+    for (const id of ids) await queue(runtime, sessionId, id);
+    return { runtime, sessionId };
+  }
+
+  it("P1: clearing the Attention that held a queue wakes it, with no restart", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["q"]);
+    await f.adapter.emit({
+      kind: "attention",
+      state: "raised",
+      reason: "partial-turn",
+      message: "partial",
+    });
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active"]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["q:queued"]);
+    await f.adapter.emit({
+      kind: "attention",
+      state: "cleared",
+      reason: "partial-turn",
+      message: "Runtime recovered.",
+    });
+    await expect.poll(() => submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "q")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
+  });
+
+  it("wakes a queue held by a Stop when a new attachment lifts it", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["q"]);
+    await runtime.command({ commandId: "stop", sessionId, command: { kind: "session.stop" } });
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active"]);
+    await runtime.command({
+      commandId: "resume",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    await expect.poll(() => submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "q")]);
+    expect(f.adapter.attaches).toBe(2);
+  });
+
+  it("P6: a new chat's opening message waits for the Client's pending attach, then sends once", async () => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    const clientAttach = runtime.command({
+      commandId: "client-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await expect
+      .poll(async () => (await f.engine.getSession({ sessionId }))?.pendingExecutorStart?.id)
+      .toBe("client-attach");
+    await queue(runtime, sessionId, "kickoff");
+    await runtime.recoverFollowUps();
+    // Not claimed: no `releasing` row with nobody to send it, no Attention.
+    expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
+    expect(submits(adapter)).toEqual([]);
+    gate.resolve();
+    expect((await clientAttach).receipt?.status).toBe("accepted");
+    await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(adapter.attaches).toBe(1);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
+  });
+
+  it("P6: a drain attach refused by a racing Client start returns the row unsent, then delivers", async () => {
+    const adapter = new GatedAdapter();
+    const gate = Promise.withResolvers<void>();
+    let race: (() => Promise<void>) | null = null;
+    const f = fixture({
+      adapter,
+      locate: async () => {
+        const start = race;
+        race = null;
+        await start?.();
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    let clientAttach: Promise<unknown> | undefined;
+    // The drain read "no start pending", then the Client's start lands first.
+    race = async () => {
+      adapter.gate = gate.promise;
+      clientAttach = runtime.command({
+        commandId: "client-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      while (
+        (await f.engine.getSession({ sessionId }))?.pendingExecutorStart?.id !== "client-attach"
+      )
+        await tick();
+    };
+    await queue(runtime, sessionId, "kickoff");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
+    expect(submits(adapter)).toEqual([]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(String(f.errors[0])).toContain("executor_start_pending");
+    gate.resolve();
+    await clientAttach;
+    await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+  });
+
+  it("never claims behind a stale start, and returns a recovered claim to the queue", async () => {
+    const f = fixture();
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await f.engine.submit({
+      commandId: "stale-start",
+      sessionId,
+      intent: { kind: "executor.start", adapterId: "fake", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "test", detail: null }, venue: null },
+    });
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    await f.followUps.transaction(sessionId, (state) => {
+      state.entries[0].state = "releasing";
+    });
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(f.adapter.attaches).toBe(0);
+    // A claim with no recorded intent sent nothing: cancelling it is safe.
+    await f.followUps.transaction(sessionId, (state) => {
+      state.entries[0].state = "releasing";
+    });
+    expect(
+      (
+        await runtime.command({
+          commandId: "cancel",
+          sessionId,
+          command: { kind: "message.cancel", messageId: "first" },
+        })
+      ).receipt?.status,
+    ).toBe("accepted");
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
+  });
+
+  it("P2: a turn opened by an ambiguous delivery proves it; it settles and the FIFO continues", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["first", "second"]);
+    // The prompt ran (its turn opened), then the transport lost the reply.
+    f.adapter.ambiguous = true;
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    f.adapter.ambiguous = false;
+    expect(await queueStates(runtime, sessionId)).toEqual(["second:queued"]);
+    expect(
+      await f.followUps.transaction(sessionId, (state) => state.releases.first.receipt),
+    ).toMatchObject({ status: "accepted", id: `${deliveryId(sessionId, "first")}:turn-evidence` });
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    await f.adapter.complete(deliveryId(sessionId, "first"));
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual([
+      "active",
+      deliveryId(sessionId, "first"),
+      deliveryId(sessionId, "second"),
+    ]);
+  });
+
+  it("P2: a late turn from an ambiguous delivery settles it after a restart, never resending", async () => {
+    const f = fixture();
+    let { runtime } = await activeWithQueue(f, ["first", "second"]);
+    const sessionId = (await f.followUps.pendingSessionIds())[0];
+    f.adapter.ambiguous = true;
+    f.adapter.startTurns = false;
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing", "second:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([AMBIGUOUS]);
+    await runtime.close();
+    f.adapter.ambiguous = false;
+    f.adapter.startTurns = true;
+    runtime = f.runtime();
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "first")]);
+    // The executor did run it after all: its turn is the proof.
+    const first = deliveryId(sessionId, "first");
+    await f.adapter.emit({
+      kind: "turn",
+      state: "started",
+      turnId: `turn:${first}`,
+      occurredAt: 400,
+    });
+    await f.adapter.complete(first);
+    await expect
+      .poll(() => submits(f.adapter))
+      .toEqual(["active", first, deliveryId(sessionId, "second")]);
+    await expect.poll(() => attentionDetails(runtime, sessionId)).toEqual([]);
+  });
+
+  it("P2: an unproven release is cancellable, clears its Attention, and the FIFO continues", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["first", "second"]);
+    f.adapter.ambiguous = true;
+    f.adapter.startTurns = false;
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    // Reloading on the same evidence settles nothing and never resends.
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "first")]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing", "second:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([AMBIGUOUS]);
+    expect(
+      (
+        await runtime.command({
+          commandId: "edit-first",
+          sessionId,
+          command: { kind: "message.edit", messageId: "first", message: message("first", "x") },
+        })
+      ).receipt,
+    ).toMatchObject({ status: "rejected", code: "message_releasing" });
+    f.adapter.ambiguous = false;
+    f.adapter.startTurns = true;
+    const cancelled = await runtime.command({
+      commandId: "cancel-first",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "first" },
+    });
+    expect(cancelled.receipt?.status).toBe("accepted");
+    // The person's resend is theirs: the cancel hands back the payload.
+    expect(cancelled.command.intent).toEqual({ kind: "message.cancel", messageId: "first" });
+    await expect
+      .poll(() => submits(f.adapter))
+      .toEqual(["active", deliveryId(sessionId, "first"), deliveryId(sessionId, "second")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+  });
+
+  it.each(["accepted", "rejected"] as const)(
+    "lets a person withdraw an unproven claim while its outcome is still being reconciled (%s)",
+    async (outcome) => {
+      const f = fixture();
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      const first = deliveryId(sessionId, "first");
+      f.adapter.unknown = true;
+      await queue(runtime, sessionId, "first");
+      await runtime.recoverFollowUps();
+      expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing"]);
+      f.adapter.unknown = false;
+      const gate = Promise.withResolvers<void>();
+      f.adapter.reconcileGate = gate.promise;
+      f.adapter.receipts = [
+        outcome === "accepted"
+          ? { commandId: first, status: "accepted", acceptedAt: 400, native: null }
+          : { commandId: first, status: "rejected", code: "refused", detail: "no", native: null },
+      ];
+      const recovering = runtime.recoverFollowUps();
+      await expect.poll(() => f.adapter.reconciling).toBe(true);
+      expect(
+        (
+          await runtime.command({
+            commandId: "cancel",
+            sessionId,
+            command: { kind: "message.cancel", messageId: "first" },
+          })
+        ).receipt?.status,
+      ).toBe("accepted");
+      gate.resolve();
+      await recovering;
+      expect(await queueStates(runtime, sessionId)).toEqual([]);
+      expect(submits(f.adapter)).toEqual([first]);
+      expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    },
+  );
+
+  it("settles an unacknowledged dispatch whose turn opened, without Attention", async () => {
+    const f = fixture();
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    f.adapter.unknownAfterTurn = true;
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
+  });
+
+  it("refuses to cancel a release proven by its receipt, and settles it instead", async () => {
+    const storage = createInMemorySessionFollowUpLedger();
+    let crash = true;
+    const followUps: SessionFollowUpLedger = {
+      ...storage,
+      transaction: (id, work) =>
+        storage.transaction(id, (state) => {
+          const result = work(state);
+          if (crash && Object.hasOwn(state.releases, "first"))
+            throw new Error("crash before settling queue");
+          return result;
+        }),
+    };
+    const f = fixture({ followUps });
+    let runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    await runtime.close();
+    crash = false;
+    runtime = f.runtime();
+    expect(
+      (
+        await runtime.command({
+          commandId: "cancel",
+          sessionId,
+          command: { kind: "message.cancel", messageId: "first" },
+        })
+      ).receipt,
+    ).toMatchObject({
+      status: "rejected",
+      code: "message_releasing",
+      detail: "This message was already delivered",
+    });
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    expect(submits(f.adapter)).toEqual([deliveryId(sessionId, "first")]);
+  });
+
+  it("never attributes a turn another opener, another attachment, or a turn end could explain", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["first"]);
+    const first = deliveryId(sessionId, "first");
+    f.adapter.ambiguous = true;
+    f.adapter.startTurns = false;
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    f.adapter.ambiguous = false;
+    f.adapter.startTurns = true;
+    // Another message opens the next turn: it is that message's, not ours.
+    await runtime.command({
+      commandId: "other",
+      sessionId,
+      command: { kind: "message.submit", message: message("other") },
+    });
+    await f.adapter.complete("other");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing"]);
+
+    const g = fixture();
+    const second = await activeWithQueue(g, ["first"]);
+    g.adapter.ambiguous = true;
+    g.adapter.startTurns = false;
+    await g.adapter.complete("active");
+    await second.runtime.recoverFollowUps();
+    g.adapter.ambiguous = false;
+    const attachmentId = (await second.runtime.projection({ sessionId: second.sessionId }))
+      .projection.liveExecutor!.id;
+    await second.runtime.command({
+      commandId: "release",
+      sessionId: second.sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    await second.runtime.command({
+      commandId: "reattach",
+      sessionId: second.sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    // A turn on a different attachment cannot be the released one's.
+    await g.adapter.emit({
+      kind: "turn",
+      state: "started",
+      turnId: "spontaneous",
+      occurredAt: 500,
+    });
+    await second.runtime.recoverFollowUps();
+    expect(await queueStates(second.runtime, second.sessionId)).toEqual(["first:releasing"]);
+    expect(g.adapter.commands.filter(({ kind }) => kind === "message.submit")).toHaveLength(2);
+    expect(submits(f.adapter)).toEqual(["active", first, "other"]);
+  });
+
+  it("keeps an ambiguous queued steer retained when its turn ends without proof", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["queued"]);
+    f.adapter.ambiguous = true;
+    await expect(
+      runtime.command({
+        commandId: "steer",
+        sessionId,
+        command: { kind: "message.submit", delivery: "steer", message: message("queued") },
+      }),
+    ).rejects.toThrow("transport lost");
+    expect(await attentionDetails(runtime, sessionId)).toEqual([AMBIGUOUS]);
+    f.adapter.ambiguous = false;
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["queued:releasing"]);
+    expect(f.adapter.commands).toHaveLength(2);
+  });
+
+  it("P3: a restart after an accepted release attach re-attaches under a new attempt id and delivers", async () => {
+    let armed = false;
+    let crash = false;
+    let dead = false;
+    const storage = createInMemorySessionFollowUpLedger();
+    const followUps: SessionFollowUpLedger = {
+      ...storage,
+      transaction: (id, work) => {
+        if (dead) return Promise.reject(new Error("process is dead"));
+        if (crash) {
+          dead = true;
+          crash = false;
+          armed = false;
+          return Promise.reject(new Error("host crash after attach"));
+        }
+        return storage.transaction(id, work);
+      },
+    };
+    class CrashAdapter extends Adapter {
+      override async attach(...args: Parameters<Adapter["attach"]>) {
+        const handle = await super.attach(...args);
+        if (armed) crash = true;
+        return handle;
+      }
+    }
+    const adapter = new CrashAdapter();
+    const f = fixture({ followUps, adapter });
+    let runtime = f.runtime();
+    const sessionId = await create(runtime);
+    armed = true;
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    expect(submits(adapter)).toEqual([]);
+    const live = (await f.engine.getSession({ sessionId }))!.liveExecutor!;
+    await runtime.close();
+    dead = false;
+    runtime = f.runtime();
+    // The executor died with the host; the restarted host closes it.
+    await runtime.command({
+      commandId: "release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: live.id },
+    });
+    await runtime.recoverFollowUps();
+    const first = deliveryId(sessionId, "first");
+    expect(submits(adapter)).toEqual([first]);
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    expect(
+      (await f.engine.getSession({ sessionId }))!.commands
+        .map(({ id }) => id)
+        .filter((id) => id.startsWith(`${first}:attach`)),
+    ).toEqual([`${first}:attach:0`, `${first}:attach:1`]);
+    // The original attach, the restart's rehydration to release it, the retry.
+    expect(adapter.attaches).toBe(3);
+  });
+
+  it("retries a release that failed before its intent was recorded, then delivers once", async () => {
+    let failures = 0;
+    const f = fixture({
+      retryDelays: [100],
+      locate: () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error("location blip");
+        }
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    failures = 1;
+    // No other wake: only the backoff timer may bring it back.
+    await queue(runtime, sessionId, "first");
+    await expect
+      .poll(() => f.errors.map(String))
+      .toEqual([expect.stringContaining("location blip")]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message delivery failed: location blip",
+    ]);
+    await expect.poll(() => submits(f.adapter)).toEqual([deliveryId(sessionId, "first")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    await expect.poll(() => attentionDetails(runtime, sessionId)).toEqual([]);
+  });
+
+  it("spends a bounded retry budget, then waits visibly until the person acts", async () => {
+    let failing = false;
+    let attempts = 0;
+    const f = fixture({
+      retryDelays: [40, 40],
+      locate: () => {
+        if (!failing) return;
+        attempts += 1;
+        throw new Error("location down");
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    failing = true;
+    await queue(runtime, sessionId, "first");
+    // A second wake while a retry is pending does not stack another timer.
+    await runtime.recoverFollowUps();
+    await expect.poll(() => attempts).toBe(4);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(attempts).toBe(4);
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message delivery failed: location down",
+    ]);
+    failing = false;
+    await runtime.command({
+      commandId: "edit",
+      sessionId,
+      command: { kind: "message.edit", messageId: "first", message: message("first", "again") },
+    });
+    await expect.poll(() => submits(f.adapter)).toEqual([deliveryId(sessionId, "edit")]);
+    await runtime.close();
+  });
+
+  it("retries a transient executor attach failure without a Client or unrelated wake", async () => {
+    const f = fixture({ retryDelays: [100] });
+    f.adapter.attachFailure = new Error("executor offline briefly");
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "first");
+    await expect.poll(() => f.errors.length).toBe(1);
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    f.adapter.attachFailure = undefined;
+    await expect.poll(() => submits(f.adapter)).toEqual([deliveryId(sessionId, "first")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(f.adapter.attaches).toBe(2);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it("keeps an attach configuration Attention blocking automatic retries", async () => {
+    const f = fixture({ retryDelays: [10] });
+    f.adapter.attachFailure = new NativeAttachmentError(
+      "Choose a model",
+      "model_missing",
+      "configuration_invalid",
+    );
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    f.adapter.attachFailure = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(submits(f.adapter)).toEqual([]);
+    expect(f.adapter.attaches).toBe(1);
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toContain("Choose a model");
+    await runtime.close();
+  });
+
+  it("P4: concurrent cancels and release races keep FIFO and never deliver cancelled text", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["a", "b", "c"]);
+    const cancelC = (commandId: string) =>
+      runtime.command({
+        commandId,
+        sessionId,
+        command: { kind: "message.cancel", messageId: "c" },
+      });
+    const cancelled = await Promise.all([cancelC("client-a"), cancelC("client-b")]);
+    expect(cancelled.map(({ receipt }) => receipt?.status).toSorted()).toEqual([
+      "accepted",
+      "rejected",
+    ]);
+    const gate = Promise.withResolvers<void>();
+    f.adapter.dispatchGate = gate.promise;
+    await Promise.all([f.adapter.complete("active"), queue(runtime, sessionId, "d")]);
+    await expect.poll(() => submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "a")]);
+    for (const command of [
+      { kind: "message.cancel" as const, messageId: "a" },
+      { kind: "message.edit" as const, messageId: "a", message: message("a", "late edit") },
+    ])
+      expect(
+        (await runtime.command({ commandId: `race-${command.kind}`, sessionId, command })).receipt,
+      ).toMatchObject({ status: "rejected", code: "message_releasing" });
+    gate.resolve();
+    f.adapter.dispatchGate = undefined;
+    await runtime.recoverFollowUps();
+    for (const id of ["a", "b", "d"]) {
+      await f.adapter.complete(deliveryId(sessionId, id));
+      await runtime.recoverFollowUps();
+    }
+    expect(submits(f.adapter)).toEqual([
+      "active",
+      ...["a", "b", "d"].map((id) => deliveryId(sessionId, id)),
+    ]);
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    expect(
+      f.adapter.commands
+        .filter((command) => command.kind === "message.submit")
+        .map((command) => command.message.id),
+    ).toEqual(["active", "a", "b", "d"]);
+    await runtime.close();
+  });
+
+  it("P5: an interrupted turn releases its follow-up with no Client attached", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["q"]);
+    await f.adapter.emit({
+      kind: "turn",
+      state: "interrupted",
+      turnId: "turn:active",
+      occurredAt: 300,
+    });
+    await expect.poll(() => submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "q")]);
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it.each(["active", "first", "unknown"] as const)(
+    "matches explicit turn attribution to the delivery command (%s)",
+    async (commandId) => {
+      const f = fixture();
+      const { runtime, sessionId } = await activeWithQueue(f, ["first"]);
+      f.adapter.ambiguous = true;
+      f.adapter.startTurns = false;
+      await f.adapter.complete("active");
+      await runtime.recoverFollowUps();
+      const projection = (await f.engine.getSession({ sessionId }))!;
+      await f.engine.observe({
+        id: "late-other-turn",
+        sessionId,
+        occurredAt: 400,
+        provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+        ...(commandId === "unknown"
+          ? {}
+          : { commandId: commandId === "first" ? deliveryId(sessionId, "first") : "active" }),
+        kind: "turn.started",
+        attachmentId: projection.liveExecutor!.id,
+        turnId: "late-other-turn",
+      });
+      await runtime.recoverFollowUps();
+      expect(await queueStates(runtime, sessionId)).toEqual(
+        commandId === "first" ? [] : ["first:releasing"],
+      );
+      expect(submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "first")]);
+      await runtime.close();
+    },
+  );
+
+  it("refuses to guess between two releasing rows (corrupt ledger)", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["a", "b"]);
+    await f.followUps.transaction(sessionId, (state) => {
+      for (const entry of state.entries) entry.state = "releasing";
+    });
+    await f.adapter.complete("active");
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active"]);
+    expect(f.errors.map(String)).toContainEqual(expect.stringContaining("More than one"));
+    expect(await queueStates(runtime, sessionId)).toEqual(["a:releasing", "b:releasing"]);
   });
 });

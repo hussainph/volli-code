@@ -118,13 +118,26 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
         (error) => sink.fail(error),
       ),
     "session.command": (request) => runtime("command")(request),
-    "session.cancelQueued": ({ commandId, sessionId, messageId }) =>
-      runtime("command")({ commandId, sessionId, command: { kind: "message.cancel", messageId } }),
-    "session.editQueued": ({ commandId, sessionId, messageId, message }) =>
+    "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
       runtime("command")({
         commandId,
         sessionId,
-        command: { kind: "message.edit", messageId, message },
+        command: {
+          kind: "message.cancel",
+          messageId,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+        },
+      }),
+    "session.editQueued": ({ commandId, sessionId, messageId, message, expectedRevision }) =>
+      runtime("command")({
+        commandId,
+        sessionId,
+        command: {
+          kind: "message.edit",
+          messageId,
+          message,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+        },
       }),
     "session.cancelInteraction": (input) =>
       runtime("cancelInteraction")({ ...input, reason: "abandoned", origin: { kind: "user" } }),

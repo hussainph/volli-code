@@ -18,8 +18,8 @@ export interface SessionFollowUpCommand {
   route: null;
   intent:
     | { kind: "message.queue"; message: UIMessage }
-    | { kind: "message.edit"; messageId: string; message: UIMessage }
-    | { kind: "message.cancel"; messageId: string };
+    | { kind: "message.edit"; messageId: string; message: UIMessage; expectedRevision?: number }
+    | { kind: "message.cancel"; messageId: string; expectedRevision?: number };
 }
 
 export interface StoredSessionFollowUp extends SessionFollowUpItem {

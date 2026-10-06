@@ -22,6 +22,7 @@ import {
   type ChatSessionSlice,
   type ChatSessionProjection,
   type ChatStreamCursor,
+  type ChatStreamRecovery,
   type FlushHost,
   type FlushScheduler,
 } from "./client";
@@ -384,7 +385,10 @@ afterEach(() => {
 });
 
 /** One adopted Session, connected, with its stream ready to be driven. */
-async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
+async function adopted(
+  prepare: (rpc: FakeRpc) => void = () => undefined,
+  streamRecovery?: ChatStreamRecovery,
+) {
   const rpc = new FakeRpc();
   const scheduler = new ManualScheduler();
   prepare(rpc);
@@ -401,6 +405,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
   store.getState().seed(sessionId, "ready");
   const client = getOrCreateChatClient(sessionId, {
     rpc,
+    ...(streamRecovery === undefined ? {} : { streamRecovery }),
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
     createSession: async () => {
@@ -829,6 +834,90 @@ describe("stream folding", () => {
 });
 
 /* ------------------------------------------------------------------ dropped */
+
+/** What a client host link hands a subscriber whose cursor the host can no longer resume. */
+const RESNAPSHOT = Object.assign(new Error("That cursor is gone"), {
+  data: {
+    code: "PRECONDITION_FAILED",
+    hostError: {
+      code: "PRECONDITION_FAILED",
+      reason: "subscription-resnapshot-required",
+      message: "That cursor is gone",
+    },
+  },
+});
+
+describe("stream recovery behind a client host link", () => {
+  it("retries nothing itself: a stream the link ended surfaces at once", async () => {
+    const { rpc, stream, slice, notifications } = await adopted(undefined, "host-link");
+    const started = stream();
+    started.start();
+    started.send("7", frameOf(7, "turn.started"));
+
+    started.fail(new Error("subscription-source-failed"));
+    await settle();
+
+    expect(rpc.streams).toHaveLength(1);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: subscription-source-failed");
+    expect(notifications).toEqual(["Lost the Session stream: subscription-source-failed"]);
+  });
+
+  it("surfaces a clean completion rather than resuming it", async () => {
+    const { rpc, stream, slice } = await adopted(undefined, "host-link");
+    stream().start();
+    stream().complete();
+    await settle();
+
+    expect(rpc.streams).toHaveLength(1);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: the Session stream ended");
+  });
+
+  it("reloads the snapshot on a resnapshot and subscribes from its cursor", async () => {
+    const { rpc, sessionId, stream, slice, notifications } = await adopted((fake) => {
+      fake.snapshotThrough = 4;
+    }, "host-link");
+    const first = stream();
+    first.start();
+    first.send("5", frameOf(5, "turn.started"));
+    rpc.snapshotThrough = 900;
+
+    first.fail(RESNAPSHOT);
+    await settle();
+
+    expect(first.unsubscribed).toBe(true);
+    expect(rpc.streams).toHaveLength(2);
+    expect(rpc.streams[1]!.input).toEqual({ sessionId, afterSequence: 900 });
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it("stops reloading a host that refuses its own snapshot's cursor", async () => {
+    const { rpc, stream, slice } = await adopted(undefined, "host-link");
+    for (let reload = 0; reload < 3; reload++) {
+      stream().start();
+      stream().fail(RESNAPSHOT);
+      await settle();
+    }
+    expect(rpc.streams).toHaveLength(4);
+    stream().start();
+    stream().fail(RESNAPSHOT);
+    await settle();
+
+    expect(rpc.streams).toHaveLength(4);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: That cursor is gone");
+  });
+
+  it("counts reloads only while nothing arrives between them", async () => {
+    const { rpc, stream } = await adopted(undefined, "host-link");
+    for (let reload = 0; reload < 5; reload++) {
+      stream().start();
+      stream().send(`${reload + 1}`, frameOf(reload + 1, "turn.started"));
+      stream().fail(RESNAPSHOT);
+      await settle();
+    }
+    expect(rpc.streams).toHaveLength(6);
+  });
+});
 
 describe("reconnect", () => {
   it("resumes from the last cursor after a stream that had started drops", async () => {
