@@ -3,7 +3,7 @@ import { HOST_BASE_OPERATIONS, HOST_FEATURE_OPERATIONS } from "@volli/host-proto
 import { CATALOG_ENTRIES } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import type { SessionRouterFeatureBinding } from "./index";
+import type { HostRouterFeatureBinding } from "./host-router";
 
 const granted: readonly string[] = [
   ...HOST_BASE_OPERATIONS,
@@ -13,7 +13,7 @@ const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("
 
 describe("the v1 features against the catalog", () => {
   it("grant only procedures the router serves", () => {
-    expectTypeOf<SessionRouterFeatureBinding>().toEqualTypeOf<never>();
+    expectTypeOf<HostRouterFeatureBinding>().toEqualTypeOf<never>();
   });
 
   it("grant only entries the WebSocket projects", () => {
@@ -23,11 +23,11 @@ describe("the v1 features against the catalog", () => {
 
   // An entry on the WebSocket that no feature grants is refused there. Each
   // one is named, so leaving a new entry out of every feature is a decision.
-  // `ticket.move` (VC-668) is the board router's, which no listener serves
-  // yet; VC-565 gives it its board feature (VC-669).
-  it("leave out only the experiment switches and the board's move, for VC-572 and VC-565 to name", () => {
+  // The board's commands, `ticket.move` included, are `board.read` and
+  // `board.write`'s (VC-565).
+  it("leave out only the experiment switches, for VC-572 to name", () => {
     expect(
       projected.map((entry) => entry.key).filter((key) => !granted.includes(key)),
-    ).toStrictEqual(["ticket.move", "settings.experiments", "settings.setExperiment"]);
+    ).toStrictEqual(["settings.experiments", "settings.setExperiment"]);
   });
 });
