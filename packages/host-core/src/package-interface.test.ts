@@ -58,6 +58,7 @@ const TEST_SUPPORT = [
   "backup/test-fixture.ts",
   "secrets/test-support/**",
   "web/test-support/**",
+  "browser/test-support/**",
 ];
 /** Built once, by `createHostCore`; a second one is a second Session writer. */
 const SESSION_WRITER_CONSTRUCTORS = new Set([

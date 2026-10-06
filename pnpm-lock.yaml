@@ -600,6 +600,9 @@ importers:
       ai:
         specifier: ^7.0.83
         version: 7.0.84(zod@4.4.3)
+      playwright-core:
+        specifier: ^1.62.1
+        version: 1.62.1
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
