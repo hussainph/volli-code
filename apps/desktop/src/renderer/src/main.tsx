@@ -21,7 +21,7 @@ import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
-import { boot, refreshPlanningData } from "./lib/boot";
+import { boot, refreshPlanningData, startBoardProtocolIfEnabled } from "./lib/boot";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
@@ -86,6 +86,13 @@ async function main() {
       <App />
     </StrictMode>,
   );
+
+  // With the `cloud` flag on, the board moves onto the host protocol: the
+  // board router over this window's IPC bridge, its change feed, and the
+  // pending layer (VC-565). The board boot painted stays on screen until each
+  // Workspace's snapshot lands. With the flag off this reads the flag and
+  // does nothing else.
+  void startBoardProtocolIfEnabled();
 
   // Auto-title landings (VC-81). A retitle main performed itself has no
   // renderer behind it to move labels the way a rename does, and

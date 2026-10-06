@@ -18,11 +18,16 @@ function fixture(t, version = "1.2.3") {
     schemaVersion: 1,
     version,
     releaseTag: `v${version}`,
-    assets: ["x64", "arm64"].map((arch) => ({
-      platform: "linux",
+    assets: [
+      ["linux", "x64"],
+      ["linux", "arm64"],
+      ["darwin", "arm64"],
+      ["darwin", "x64"],
+    ].map(([platform, arch]) => ({
+      platform,
       arch,
-      name: `volli-hostd-${version}-linux-${arch}.tar.gz`,
-      sha256: createHash("sha256").update(`test fixture ${arch}`).digest("hex"),
+      name: `volli-hostd-${version}-${platform}-${arch}.tar.gz`,
+      sha256: createHash("sha256").update(`test fixture ${platform} ${arch}`).digest("hex"),
       size: 42,
     })),
   };
@@ -76,11 +81,20 @@ const mutations = {
   "missing arch": (manifest) => {
     manifest.assets.pop();
   },
+  "missing darwin target (the Linux-only pair)": (manifest) => {
+    manifest.assets = manifest.assets.filter((asset) => asset.platform === "linux");
+  },
+  "extra target": (manifest) => {
+    manifest.assets.push({ ...manifest.assets[0], platform: "win32" });
+  },
   "unavailable release input": (manifest) => {
     manifest.assets = [];
   },
   "duplicate arch": (manifest) => {
     manifest.assets[1] = manifest.assets[0];
+  },
+  "same arch on the other platform": (manifest) => {
+    manifest.assets[3] = { ...manifest.assets[0] };
   },
   "wrong filename": (manifest) => {
     manifest.assets[0].name = "../hostd.tar.gz";
@@ -88,8 +102,14 @@ const mutations = {
   "wrong platform": (manifest) => {
     manifest.assets[0].platform = "darwin";
   },
+  "darwin name on a linux entry": (manifest) => {
+    manifest.assets[0].name = manifest.assets[3].name;
+  },
   "invalid checksum": (manifest) => {
     manifest.assets[0].sha256 = "fabricated";
+  },
+  "invalid darwin checksum": (manifest) => {
+    manifest.assets[2].sha256 = "A".repeat(64);
   },
   "invalid size": (manifest) => {
     manifest.assets[0].size = -1;

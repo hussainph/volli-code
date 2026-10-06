@@ -69,6 +69,7 @@ import {
   type RunTool,
 } from "./management";
 import {
+  LAUNCHD_LABEL,
   MANAGED_DROP_IN,
   SECRET_KEY_DROP_IN,
   SERVICE_UNIT,
@@ -112,6 +113,13 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
   const did = (action: string): void => {
     actions.push(action);
   };
+  const launchd = layout.manager === "launchd";
+  if (mode === "system" && launchd) {
+    throw new ManagementError(
+      "system-unsupported",
+      "A Mac runs volli-hostd as your launchd agent: install --user (agents share your account).",
+    );
+  }
   if (mode === "system" && ports.uid() !== ROOT_UID) {
     throw new ManagementError("not-root", "install --system runs as root (sudo).", [], 77);
   }
@@ -225,7 +233,9 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
   const mustKnow = (doing: string): void => {
     // Before writing anything that could supersede a key configured where
     // the files do not show (another directory, an EnvironmentFile=).
-    const effective = configured.doubt ?? effectiveKeys(run, layout, configured.paths);
+    // launchd has no drop-ins: the agent's plist, ours, is the whole configuration.
+    const effective =
+      configured.doubt ?? (launchd ? null : effectiveKeys(run, layout, configured.paths));
     if (effective !== null) {
       throw new ManagementError(
         "secret-key-unclear",
@@ -250,6 +260,9 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
     keyFile = layout.keyFile;
     did(`made the secret key ${layout.keyFile}`);
   }
+  // A unit we rewrite whole (a user unit, a Mac's plist) keeps the key it
+  // already names, if that is someone else's: rewriting it away would orphan it.
+  const unitKey = keyFile ?? (mode === "user" ? (ownUnitKeys(layout).at(-1) ?? null) : null);
   // Ownership converges every run, without touching the bytes: an install
   // interrupted between making the key and handing it over is finished here.
   if (keyFile !== null && owner !== null) {
@@ -258,7 +271,8 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
 
   // The units. A change is marked pending before it is written and cleared
   // only once systemd reloaded: a retry after an interrupted reload, which
-  // finds every file already right, still reloads.
+  // finds every file already right, still reloads. launchd reads its plist
+  // at bootstrap, which `start` does: there a change is `start`'s to apply.
   const pendingFile = join(layout.root, RELOAD_PENDING);
   let unitsChanged = existsSync(pendingFile);
   const unitWrite = (path: string, content: string, label: string): void => {
@@ -269,57 +283,70 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
     did(`wrote ${label}`);
   };
   mkdirSync(layout.unitDir, { recursive: true });
-  const exec = execStart(layout, command.port);
-  if (mode === "system") {
-    for (const unit of [SERVICE_UNIT, SOCKET_UNIT]) {
-      unitWrite(
-        join(layout.unitDir, unit),
-        readFileSync(join(target, "share/systemd", unit), "utf8"),
-        unit,
-      );
-    }
-    mkdirSync(layout.dropInDir, { recursive: true, mode: 0o755 });
-    if (keyFile !== null && keyDropInFree) {
-      // Only reached when no key drop-in exists: one that does is never rewritten.
-      unitWrite(
-        keyDropIn,
-        `[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=${keyFile}\n`,
-        SECRET_KEY_DROP_IN,
-      );
-    }
-    const managed = [
-      "# Written by `volli-hostd install` (VC-700) and rewritten by every install:",
-      "# put your own settings in another drop-in beside it.",
-      "[Service]",
-      "Environment=VOLLI_EXPERIMENTAL=cloud",
-      "ExecStart=",
-      `ExecStart=${exec}`,
-      "",
-    ].join("\n");
-    unitWrite(join(layout.dropInDir, MANAGED_DROP_IN), managed, MANAGED_DROP_IN);
-  } else {
-    unitWrite(join(layout.unitDir, SERVICE_UNIT), userUnit(exec, keyFile), SERVICE_UNIT);
-  }
-  if (unitsChanged) {
-    must(run, "systemctl", systemctlArgs(mode, "daemon-reload"));
+  if (launchd) {
+    mkdirSync(dirname(layout.logFile!), { recursive: true });
+    unitWrite(
+      layout.agentPlist!,
+      launchdAgent(layout, command.port, unitKey),
+      basename(layout.agentPlist!),
+    );
     rmSync(pendingFile, { force: true });
-    did("reloaded systemd");
-  }
-  const units = mode === "system" ? [SOCKET_UNIT, SERVICE_UNIT] : [SERVICE_UNIT];
-  const enabled = run("systemctl", systemctlArgs(mode, "is-enabled", ...units));
-  if (
-    enabled.code !== 0 ||
-    enabled.stdout.split("\n").some((line) => line.trim() !== "enabled" && line.trim() !== "")
-  ) {
-    must(run, "systemctl", systemctlArgs(mode, "enable", ...units));
-    did("enabled the units");
+  } else {
+    const exec = execStart(layout, command.port);
+    if (mode === "system") {
+      for (const unit of [SERVICE_UNIT, SOCKET_UNIT]) {
+        unitWrite(
+          join(layout.unitDir, unit),
+          readFileSync(join(target, "share/systemd", unit), "utf8"),
+          unit,
+        );
+      }
+      mkdirSync(layout.dropInDir, { recursive: true, mode: 0o755 });
+      if (keyFile !== null && keyDropInFree) {
+        // Only reached when no key drop-in exists: one that does is never rewritten.
+        unitWrite(
+          keyDropIn,
+          `[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=${keyFile}\n`,
+          SECRET_KEY_DROP_IN,
+        );
+      }
+      const managed = [
+        "# Written by `volli-hostd install` (VC-700) and rewritten by every install:",
+        "# put your own settings in another drop-in beside it.",
+        "[Service]",
+        "Environment=VOLLI_EXPERIMENTAL=cloud",
+        "ExecStart=",
+        `ExecStart=${exec}`,
+        "",
+      ].join("\n");
+      unitWrite(join(layout.dropInDir, MANAGED_DROP_IN), managed, MANAGED_DROP_IN);
+    } else {
+      unitWrite(join(layout.unitDir, SERVICE_UNIT), userUnit(exec, unitKey), SERVICE_UNIT);
+    }
+    if (unitsChanged) {
+      must(run, "systemctl", systemctlArgs(mode, "daemon-reload"));
+      rmSync(pendingFile, { force: true });
+      did("reloaded systemd");
+    }
+    const units = mode === "system" ? [SOCKET_UNIT, SERVICE_UNIT] : [SERVICE_UNIT];
+    const enabled = run("systemctl", systemctlArgs(mode, "is-enabled", ...units));
+    if (
+      enabled.code !== 0 ||
+      enabled.stdout.split("\n").some((line) => line.trim() !== "enabled" && line.trim() !== "")
+    ) {
+      must(run, "systemctl", systemctlArgs(mode, "enable", ...units));
+      did("enabled the units");
+    }
   }
 
   const record = readManaged(layout);
+  // A unit that changed runs as it was until restarted: `start` restarts once.
+  const restartOwed = unitsChanged && record?.started !== undefined;
   if (
     record?.version !== manifest.version ||
     record.port !== command.port ||
-    record.release !== name
+    record.release !== name ||
+    restartOwed
   ) {
     writeManaged(layout, {
       v: 1,
@@ -329,7 +356,7 @@ export function runInstall(command: InstallCommand, ports: InstallPorts): HostdI
       port: command.port,
       installedAt: ports.now().toISOString(),
       // What `start` last brought up, kept: it restarts until that is `release`.
-      ...(record?.started === undefined ? {} : { started: record.started }),
+      ...(record?.started === undefined || restartOwed ? {} : { started: record.started }),
     });
     did(`recorded ${manifest.version} on port ${command.port}`);
   }
@@ -477,6 +504,7 @@ function keyAssignments(value: string): string[] {
  * the variable and outranks `Environment=`; a key drop-in naming none).
  */
 function configuredKeys(layout: InstallLayout): { paths: string[]; doubt: string | null } {
+  if (layout.agentPlist !== null) return { paths: ownUnitKeys(layout), doubt: null };
   const paths: string[] = [];
   let doubt: string | null = null;
   let dropIns: string[] = [];
@@ -510,6 +538,21 @@ function configuredKeys(layout: InstallLayout): { paths: string[]; doubt: string
     }
   }
   return { paths: paths.filter((path) => path !== ""), doubt };
+}
+
+/** The keys the unit file install writes whole names: a user unit's, or a Mac's plist's. */
+function ownUnitKeys(layout: InstallLayout): string[] {
+  if (layout.agentPlist !== null) {
+    const plist = readText(layout.agentPlist) ?? "";
+    const named = /<key>VOLLI_SECRET_KEY_FILE<\/key>\s*<string>([^<]*)<\/string>/u.exec(plist)?.[1];
+    return named === undefined || named === "" ? [] : [unescapeXml(named)];
+  }
+  const unit = readText(join(layout.unitDir, SERVICE_UNIT)) ?? "";
+  return unit
+    .split("\n")
+    .filter((line) => line.trim().startsWith("Environment="))
+    .flatMap((line) => keyAssignments(line.trim().slice("Environment=".length)))
+    .filter((path) => path !== "");
 }
 
 /**
@@ -598,6 +641,86 @@ function userUnit(exec: string, keyFile: string | null): string {
     "",
     "[Install]",
     "WantedBy=default.target",
+    "",
+  ].join("\n");
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function unescapeXml(text: string): string {
+  return text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&amp;", "&");
+}
+
+/**
+ * A Mac's launchd agent: the shipped template's settings (VC-562), with this
+ * install's paths. It runs as the person, and so does every agent on it.
+ * `KeepAlive` restarts after a crash, not after a clean stop; a refusal to
+ * boot (exit 78) retries every `ThrottleInterval`, which launchd cannot be
+ * told apart, and `start` reports from the log.
+ */
+function launchdAgent(layout: InstallLayout, port: number, keyFile: string | null): string {
+  const string = (value: string) => `<string>${escapeXml(value)}</string>`;
+  const environment: [string, string][] = [
+    ["VOLLI_HOSTD_LOG_LEVEL", "info"],
+    ["VOLLI_EXPERIMENTAL", "cloud"],
+    ...(keyFile === null ? [] : [["VOLLI_SECRET_KEY_FILE", keyFile] as [string, string]]),
+  ];
+  const program = [
+    join(layout.currentLink, "bin/volli-hostd"),
+    "--data-dir",
+    layout.dataDir,
+    "--listen",
+    `127.0.0.1:${port}`,
+  ];
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    "<!-- Written by `volli-hostd install --user` (VC-700) and rewritten by every install. -->",
+    '<plist version="1.0">',
+    "<dict>",
+    `  <key>Label</key>`,
+    `  ${string(LAUNCHD_LABEL)}`,
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    ...program.map((argument) => `    ${string(argument)}`),
+    "  </array>",
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    ...environment.flatMap(([key, value]) => [`    <key>${key}</key>`, `    ${string(value)}`]),
+    "  </dict>",
+    "  <key>Umask</key>",
+    "  <integer>63</integer>",
+    // An agent of the per-user Background session, which `start` bootstraps
+    // over SSH (user/<uid>): never loaded a second time into a GUI login.
+    "  <key>LimitLoadToSessionType</key>",
+    `  ${string("Background")}`,
+    "  <key>RunAtLoad</key>",
+    "  <true/>",
+    "  <key>KeepAlive</key>",
+    "  <dict>",
+    "    <key>SuccessfulExit</key>",
+    "    <false/>",
+    "  </dict>",
+    "  <key>ThrottleInterval</key>",
+    "  <integer>10</integer>",
+    "  <key>ExitTimeOut</key>",
+    "  <integer>45</integer>",
+    "  <key>StandardOutPath</key>",
+    `  ${string(layout.logFile!)}`,
+    "  <key>StandardErrorPath</key>",
+    `  ${string(layout.logFile!)}`,
+    "</dict>",
+    "</plist>",
     "",
   ].join("\n");
 }

@@ -4,10 +4,11 @@ name: Release
 # stapled build published to GitHub Releases, where the in-app updater (VC-24,
 # electron-updater) picks it up.
 #
-# Dispatch defaults to a SAFE DRY RUN: selected ref, hostd packaging on both
-# architectures and a desktop build with the generated pin, workflow artifacts
-# only. To release, the owner must explicitly set dry_run=false. Dry runs never
-# enter prepare or the macOS signing/publishing job.
+# Dispatch defaults to a SAFE DRY RUN: selected ref, hostd packaging for all
+# four targets (linux and darwin, x64 and arm64) and a desktop build with the
+# generated pin, workflow artifacts only. To release, the owner must
+# explicitly set dry_run=false. Dry runs never enter prepare or the macOS
+# signing/publishing job.
 #
 # There are two publishing doors into this workflow:
 #
@@ -245,7 +246,7 @@ jobs:
           git push origin HEAD:main
           git push origin "$TAG"
 
-  # Resolve once, so both architectures and desktop use exactly the same ref.
+  # Resolve once, so every hostd target and desktop use exactly the same ref.
   # Dry runs always use the selected branch; they never enter prepare/release.
   hostd-ref:
     name: Resolve hostd release ref
@@ -332,10 +333,114 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # macOS hostd (VC-700): no container image exists for macOS, so each
+  # architecture builds natively on its own runner (macos-15 is Apple
+  # silicon, macos-15-intel is the x64 label), under nodejs.org's Node at
+  # exactly .nvmrc, with the same host-only install, integration test,
+  # packager and boot probe as the Linux image runs.
+  hostd-darwin:
+    name: Package hostd (darwin-${{ matrix.arch }})
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Corepack fetches the pinned pnpm below; never stop to ask first.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Guard release version
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::root package.json is $version but apps/desktop/package.json is $pkg — bump both together."
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$RELEASE_REF" != "v$pkg" ]; then
+            echo "::error::Tag $RELEASE_REF does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+      # The exact host pin, as ci.yml's host lanes use, not the engines range:
+      # the packager copies this Node into the archive and refuses any other.
+      # No dependency cache: a release build installs from the lockfile alone.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          run-install: false
+      # The packager and the integration test call `pnpm` itself, which
+      # setup-vp does not put on PATH. Enable it the way the Linux host image
+      # does (corepack, at package.json's packageManager), from the corepack
+      # shipped with this exact Node.
+      - name: Enable pinned pnpm
+        run: |
+          set -euo pipefail
+          node_bin="$(dirname "$(node -p process.execPath)")"
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+          test "$(pnpm --version)" = "$expected"
+      - name: Check runner architecture
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(node -p process.platform)" = darwin
+          test "$(node -p process.arch)" = "$ARCH"
+          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+      # The host-only install docs/development/host-linux.md describes (the
+      # same line as apps/hostd/scripts/ci-build-artifact.sh): root tooling,
+      # every package and hostd, never desktop (no Electron rebuild).
+      - name: Host-only install
+        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
+      # VC-622's real hostd/Pi/SQLite/socket run, as the Linux image runs it
+      # before packaging, so a darwin-only runtime fault fails here.
+      - name: Hostd integration test
+        run: >-
+          pnpm --filter @volli/hostd exec vp test run src/session-runtime.integration.test.ts
+          --maxWorkers="$(sysctl -n hw.ncpu)"
+      - name: Package and probe hostd
+        run: |
+          set -euo pipefail
+          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
+          bash apps/hostd/scripts/ci-boot-artifact.sh "$RUNNER_TEMP/hostd"
+      - name: Upload architecture assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-darwin-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
   hostd-assets:
     name: Verify hostd checksums and generate desktop pin
-    needs: [hostd-ref, hostd]
-    if: always() && !cancelled() && needs.hostd.result == 'success'
+    needs: [hostd-ref, hostd, hostd-darwin]
+    if: >-
+      always() && !cancelled() &&
+      needs.hostd.result == 'success' && needs.hostd-darwin.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -353,10 +458,18 @@ jobs:
         with:
           node-version-file: package.json
           run-install: false
-      - name: Download architecture assets
+      # Two explicit patterns rather than hostd-*, which would also match
+      # hostd-release-assets on a re-run.
+      - name: Download Linux architecture assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: hostd-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Download macOS architecture assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hostd-darwin-*
           merge-multiple: true
           path: ${{ runner.temp }}/hostd-assets
       - name: Generate verified manifest and SHA256SUMS
@@ -366,8 +479,13 @@ jobs:
           sha256sum -c SHA256SUMS
           cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
           cat hostd-release-manifest.json >> "$GITHUB_STEP_SUMMARY"
-      # Developer ID signs the Mac app, not Linux binaries. Sign provenance
-      # for Linux assets/checksums/pin with GitHub OIDC (no new private key).
+      # Developer ID signs and notarizes the Mac app only. No hostd tarball
+      # is Developer ID-signed or notarized, the darwin ones included: the
+      # desktop uploads them to the host over SSH, so they never carry a
+      # quarantine attribute and Gatekeeper never assesses them. Their
+      # integrity root, like Linux's, is the desktop's signed pin plus this
+      # provenance, signed for all four tarballs, SHA256SUMS and the pin with
+      # GitHub OIDC (no new private key).
       - name: Sign hostd provenance
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         id: provenance
@@ -581,8 +699,10 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+          # 4 tarballs (linux and darwin, each x64 and arm64), their 4
+          # sidecars, SHA256SUMS, the manifest and the provenance bundle.
           hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
-          [ "${#hostdFiles[@]}" -eq 7 ] || { echo "::error::hostd asset set incomplete"; exit 1; }
+          [ "${#hostdFiles[@]}" -eq 11 ] || { echo "::error::hostd asset set incomplete: expected 11 files, found ${#hostdFiles[@]}"; exit 1; }
           for f in "${hostdFiles[@]}"; do
             [ -s "$f" ] || { echo "::error::hostd release asset missing or empty: $f"; exit 1; }
           done

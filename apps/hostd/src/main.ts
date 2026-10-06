@@ -129,7 +129,7 @@ async function manage(
     { kind: "install" | "start" | "enroll" | "devices" | "status-json" }
   >,
 ): Promise<number> {
-  const where = { home: userInfo().homedir, env: process.env };
+  const where = { home: userInfo().homedir, env: process.env, platform: process.platform };
   const layouts = { system: installLayout("system", where), user: installLayout("user", where) };
   switch (command.kind) {
     case "install":
@@ -181,6 +181,7 @@ async function manage(
         run: LIVE_RUN_TOOL,
         probes: LIVE_PROBES,
         login,
+        uid,
         version: HOSTD_VERSION,
         trustedOwnerUid: ROOT_UID,
       });
