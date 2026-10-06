@@ -1,4 +1,5 @@
 import { clientEventSink } from "./client-event-sink";
+import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
 import { withTransaction } from "@volli/host-core/db/transaction-gate";
 import { statSync } from "node:fs";
@@ -679,6 +680,7 @@ export function registerDataIpcHandlers(
           // Never the schema floor (VC-602): localStorage never held it, and a
           // renderer-supplied value could lock builds out or let one in.
           if (key === MIN_READER_VERSION_KEY) continue;
+          assertRendererAppStateKey(key);
           setAppState(db, key, value, now);
         }
       });
@@ -1336,6 +1338,7 @@ export function registerDataIpcHandlers(
       if (key === MIN_READER_VERSION_KEY) {
         return { ok: false, error: "This app state key is owned by the database." };
       }
+      assertRendererAppStateKey(key);
       setAppState(db, key, value, Date.now());
       return { ok: true };
     },

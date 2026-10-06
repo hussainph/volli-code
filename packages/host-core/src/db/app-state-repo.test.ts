@@ -22,10 +22,10 @@ describe("app_state kv", () => {
 
   it("removes a key so it stops appearing in the bootstrap payload", () => {
     ctx = openTestDb();
-    setAppState(ctx.db, "volli:theme", "{}", 1000);
+    setAppState(ctx.db, "volli:ui", "{}", 1000);
     setAppState(ctx.db, "appearance", "dark", 1000);
 
-    deleteAppState(ctx.db, "volli:theme");
+    deleteAppState(ctx.db, "volli:ui");
 
     // Gone, not emptied: an empty value is a payload every reader still has to
     // parse and reject, where a deleted key simply is not there.
@@ -36,7 +36,7 @@ describe("app_state kv", () => {
     ctx = openTestDb();
 
     expect(() => {
-      deleteAppState(ctx.db, "never-written");
+      deleteAppState(ctx.db, "volli:projects-ui");
     }).not.toThrow();
     expect(getAllAppState(ctx.db)).toEqual({});
   });

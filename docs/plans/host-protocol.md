@@ -56,7 +56,7 @@ Context carries the authorized workspace; inputs cannot override it. Every ticke
 
 Desktop has three verb vocabularies:
 
-- about 245 per-channel `volli:` IPC channels (`apps/desktop/src/ipc/contract.ts`);
+- per-channel `volli:` IPC channels (see `apps/desktop/src/ipc/placement.ts`);
 - the Session tRPC router;
 - the agent verb table (`shared/src/verb-registry.ts`, `host-core/src/agent-dispatch/table.ts`).
 
@@ -186,7 +186,7 @@ Classify by who owns the effect: durable workspace state or a worker-owned resou
 | Pick | Native file/folder chooser on this client | Upload chosen bytes via authorized blobs; remote path selection/listing uses host resource ids |
 | Reveal | Finder/open external app on this client, only for an actual local locator | Resolve resource metadata/download; remote paths never sent blindly to Finder |
 
-Files/search, worktrees, terminals, browser control/screencasts, MCP, model/secrets policy, automations, receipts and subscriptions follow the resource-owning host/worker, not the viewing desktop. VC-574 inventories every channel/app_state key; this rule is the classification test, not that inventory.
+Files/search, worktrees, terminals, browser control/screencasts, MCP, model/secrets policy, automations, receipts and subscriptions follow the resource-owning host/worker, not the viewing desktop. VC-574's typed inventories are `apps/desktop/src/ipc/placement.ts` (channels/events, including the cursor overlay) and `packages/shared/src/app-state-keys.ts` (exact keys, prefixes and retired keys); this rule is the classification test, not a duplicate inventory.
 
 ### The Client is a connection (F2)
 
