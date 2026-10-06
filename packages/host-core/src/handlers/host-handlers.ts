@@ -30,6 +30,7 @@
 import type Database from "better-sqlite3";
 import type {
   SessionClientCommand,
+  SessionHistoryPage,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -131,6 +132,11 @@ export interface HostHandlerSignatures {
   readonly "modelAccess.pickerView": HostHandler<void, ModelPickerView>;
   readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
   readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
+  /** One page of older transcript, strictly below `before` (VC-315). The engine owns the bound. */
+  readonly "session.history": HostHandler<
+    { sessionId: string; before: number },
+    SessionHistoryPage
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -404,6 +410,7 @@ function hostHandlerEntries(
     "modelAccess.pickerView": () => readModelPickerView(preferences()),
     "modelAccess.setPickerView": (view) => writeModelPickerView(preferences(), view, now()),
     "session.snapshot": (input) => runtime().snapshot(input),
+    "session.history": (input) => runtime().history(input),
     "session.projection": (input) => runtime().projection(input),
     "session.subscribe": (input, _call, sink) =>
       runtime().subscribe(

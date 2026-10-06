@@ -173,6 +173,7 @@ describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {
       snapshot: vi.fn(async () => "snapshot"),
+      history: vi.fn(async () => "history"),
       projection: vi.fn(async () => "projection"),
       subscribe: vi.fn(async (_input, listener, onFailure) => {
         await listener("emission");
@@ -185,6 +186,9 @@ describe("Session commands", () => {
     } as unknown as SessionRuntime;
     const map = handlers({ runtime });
     await expect(map["session.snapshot"]({ sessionId: "s" }, USER)).resolves.toBe("snapshot");
+    await expect(map["session.history"]({ sessionId: "s", before: 2 }, USER)).resolves.toBe(
+      "history",
+    );
     await expect(map["session.projection"]({ sessionId: "s" }, USER)).resolves.toBe("projection");
     const emit = vi.fn();
     const fail = vi.fn();

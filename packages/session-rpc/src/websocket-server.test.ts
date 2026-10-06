@@ -102,8 +102,16 @@ function ledger(options: { ignoresCancel?: boolean } = {}) {
   const runtime: SessionRuntime = {
     snapshot: async () => {
       reads.push("snapshot");
-      return { projection, throughSequence: frames.length, frames: [...frames], transcript: [] };
+      return {
+        projection,
+        throughSequence: frames.length,
+        frames: [...frames],
+        before: null,
+        transcript: [],
+        latestReply: null,
+      };
     },
+    history: async () => ({ frames: [], before: null }),
     projection: async () => {
       reads.push("projection");
       return { projection, throughSequence: frames.length };
@@ -621,6 +629,34 @@ describe("resumable subscriptions", () => {
     expect(isResnapshotRequired(refusal)).toBe(true);
     expect(stream.frames).toHaveLength(0);
     expect(listeners.size).toBe(0);
+  });
+
+  // The ordering a Client's quiet-resnapshot guard is built on (VC-315 review,
+  // B4): tRPC's WebSocket adapter says `started` once the subscription's
+  // iterator exists, and the replay that refuses runs in its first `next()`.
+  // `started` is therefore no proof that a resume was admitted; only an
+  // emission is (`ChatSessionClient`'s `#silentReloads`).
+  it("says started before a replay refusal, so started proves nothing about the replay", async () => {
+    const { listener, append } = await serve();
+    await append(17, 1024 * 1024);
+    const { client } = connect(listener.url);
+    const order: string[] = [];
+    const stream = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe(
+        { sessionId: SESSION },
+        {
+          ...handlers,
+          onStarted: () => (order.push("started"), handlers.onStarted()),
+          onData: (data) => (order.push("data"), handlers.onData(data)),
+          onError: (error) => (order.push("error"), handlers.onError(error)),
+        },
+      ),
+    );
+    expect(await stream.ended).toMatchObject({
+      kind: "error",
+      error: { code: "PRECONDITION_FAILED", reason: "subscription-resnapshot-required" },
+    });
+    expect(order).toStrictEqual(["started", "error"]);
   });
 
   it("terminates a peer that stops reading instead of buffering for it", async () => {

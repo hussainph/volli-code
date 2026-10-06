@@ -18,7 +18,11 @@ import type {
   TranscriptDelta,
 } from "@volli/session-engine";
 import { scrubSessionEventPayload } from "@volli/shared";
-import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
+import type {
+  SessionEvent,
+  RendererSessionInteraction,
+  SessionPresentationProjection,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -26,9 +30,12 @@ import { projectTranscriptMessages } from "./message-projection";
 
 import {
   appendFrames,
+  currentTurnReply,
   EMPTY_TRANSCRIPT,
   mergeTranscriptMessages,
   movesProjection,
+  prependTranscriptHistory,
+  seedTranscriptWindow,
   type ChatSessionFrame,
 } from "./transcript";
 
@@ -636,5 +643,303 @@ describe("a kind this build does not know", () => {
     const caughtUp = appendFrames(state, [turn(6, "turn.started")]);
     expect(caughtUp.turnActive).toBe(true);
     expect(caughtUp.throughSequence).toBe(6);
+  });
+});
+
+function windowInteraction(id: string): RendererSessionInteraction {
+  return {
+    id,
+    attachmentId: "attachment-1",
+    kind: "permission",
+    title: "Run a command",
+    detail: null,
+    options: [],
+    multiple: false,
+    native: { id: null, detail: null },
+  };
+}
+
+function windowProjection(
+  turnActive: boolean,
+  interactions: SessionPresentationProjection["interactions"] = { active: [], resolved: [] },
+): SessionPresentationProjection {
+  return {
+    session: {
+      id: "session-1",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      createdAt: 1,
+    },
+    status: "open",
+    signal: null,
+    modelSelection: null,
+    modelTier: null,
+    turnActive,
+    lastActivityAt: 1,
+    bornTicketless: true,
+    attention: { active: [], primary: null },
+    interactions,
+    liveExecutor: { id: "attachment-1" },
+    scheduledResume: null,
+  };
+}
+
+describe("a bounded transcript window (VC-315)", () => {
+  const resources = frame(1, {
+    kind: "session.input.recorded",
+    input: {
+      kind: "prompt-resources",
+      resources: [{ name: "svg-logo-designer", text: "# Logos" }],
+    },
+  });
+
+  /** A whole history: resources, a turn with two messages, a compaction, a later reply. */
+  function history(): ChatSessionFrame[] {
+    return [
+      resources,
+      turn(2, "turn.started"),
+      transcriptFrame(3, message("m1", "first")),
+      transcriptFrame(4, message("m2", "second")),
+      compacted(5),
+      transcriptFrame(6, message("m1", "first, revised")),
+      transcriptFrame(7, message("m3", "third")),
+    ];
+  }
+
+  it("folds a window that starts at the first event exactly as the whole log", () => {
+    const whole = history();
+
+    const seeded = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      { frames: whole, before: null },
+      windowProjection(false, { active: [windowInteraction("ignored")], resolved: [] }),
+    );
+
+    expect(seeded).toEqual(appendFrames(EMPTY_TRANSCRIPT, whole));
+    expect(seeded.before).toBeNull();
+  });
+
+  it("reads the open turn and the answered interactions off the projection when the window starts late", () => {
+    const seeded = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      { frames: history().slice(4), before: 5 },
+      windowProjection(true, {
+        active: [windowInteraction("asked")],
+        resolved: [
+          {
+            interaction: windowInteraction("answered"),
+            resolution: { optionIds: ["allow"], response: null },
+            resolvedAt: 1,
+          },
+        ],
+      }),
+    );
+
+    expect(seeded.before).toBe(5);
+    expect(seeded.turnActive).toBe(true);
+    expect([...seeded.openedInteractions.keys()].toSorted()).toEqual(["answered", "asked"]);
+    expect(seeded.messages.map(({ id }) => id)).toEqual(["m1", "m3"]);
+    // Nothing of the missing prefix is guessed at.
+    expect(seeded.promptResources).toEqual([]);
+    expect(seeded.compactions.map(({ afterMessageId }) => afterMessageId)).toEqual([null]);
+  });
+
+  it("appends a window that carries on from what is held, keeping the history above it", () => {
+    const held = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      { frames: history().slice(2, 5), before: 3 },
+      windowProjection(true),
+    );
+
+    const reopened = seedTranscriptWindow(
+      held,
+      { frames: history().slice(3), before: 4 },
+      windowProjection(false),
+    );
+
+    expect(reopened.before).toBe(3);
+    expect(reopened.throughSequence).toBe(7);
+    expect(reopened.frames.map(({ sequence }) => sequence)).toEqual([3, 4, 5, 6, 7]);
+    expect(
+      seedTranscriptWindow(
+        reopened,
+        { frames: history().slice(5), before: 6 },
+        windowProjection(false),
+      ),
+    ).toBe(reopened);
+    expect(
+      seedTranscriptWindow(reopened, { frames: [], before: null }, windowProjection(false)),
+    ).toBe(reopened);
+  });
+
+  it("restarts from a window past a gap, counting turns on from where it was", () => {
+    const held = appendFrames(EMPTY_TRANSCRIPT, history().slice(0, 4));
+    const later = [turn(20, "turn.completed"), transcriptFrame(21, message("m9", "after"))];
+
+    const restarted = seedTranscriptWindow(
+      held,
+      { frames: later, before: 20 },
+      windowProjection(false),
+    );
+
+    expect(restarted.frames.map(({ sequence }) => sequence)).toEqual([20, 21]);
+    expect(restarted.messages.map(({ id }) => id)).toEqual(["m9"]);
+    expect(restarted.turnEpoch).toBe(held.turnEpoch + 1);
+    expect(restarted.turnActive).toBe(false);
+    expect(restarted.before).toBe(20);
+  });
+
+  it("puts an older page above the transcript as if it had been there all along", () => {
+    const whole = history();
+    const tail = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      { frames: whole.slice(4), before: 5 },
+      windowProjection(true, { active: [windowInteraction("asked")], resolved: [] }),
+    );
+    const live = appendFrames(
+      tail,
+      [],
+      [
+        {
+          kind: "overlay",
+          sessionId: "session-1",
+          throughSequence: 7,
+          messageId: "m4",
+          delta: baseline("m4", "typing"),
+        },
+      ],
+      [compactionProgress(7, "started")],
+    );
+
+    const middle = prependTranscriptHistory(live, 5, { frames: whole.slice(2, 4), before: 3 });
+    const full = prependTranscriptHistory(middle, 3, {
+      // A page may reach past its cursor on a racing host; only what is older counts.
+      frames: [...whole.slice(0, 2), whole[2]!],
+      before: null,
+    });
+
+    const reference = appendFrames(EMPTY_TRANSCRIPT, whole);
+    expect(middle.before).toBe(3);
+    expect(full.before).toBeNull();
+    expect(full.frames).toEqual(reference.frames);
+    expect(full.durableMessages).toEqual(reference.durableMessages);
+    expect(full.compactions).toEqual(reference.compactions);
+    expect(full.promptResources).toEqual(["svg-logo-designer"]);
+    // The live half is the newest moment's, untouched by the past.
+    expect(full.turnActive).toBe(true);
+    expect(full.turnEpoch).toBe(live.turnEpoch);
+    expect(full.overlay).toBe(live.overlay);
+    expect(full.liveCompaction).toBe(live.liveCompaction);
+    expect(full.messages.map(({ id }) => id)).toEqual(["m1", "m2", "m3", "m4"]);
+    expect(full.openedInteractions.has("asked")).toBe(true);
+    expect(full.throughSequence).toBe(7);
+  });
+
+  it("ignores a page for a cursor the transcript no longer holds, and records an empty one", () => {
+    const tail = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      { frames: history().slice(4), before: 5 },
+      windowProjection(false),
+    );
+
+    expect(prependTranscriptHistory(tail, 4, { frames: history(), before: null })).toBe(tail);
+    expect(prependTranscriptHistory(tail, 5, { frames: [], before: 2 })).toEqual({
+      ...tail,
+      before: 2,
+    });
+  });
+});
+
+/**
+ * `/copy`'s answer on a bounded transcript (VC-315; the verification review's
+ * B2 probe, kept): a current turn whose reply sits above 256 tool-only
+ * messages still has one.
+ */
+describe("the current turn's reply", () => {
+  const reply: UIMessage = message("reply", "Current-turn reply");
+  const tools: UIMessage[] = Array.from({ length: 256 }, (_, index) => ({
+    id: `tool-${index}`,
+    role: "assistant",
+    parts: [
+      {
+        type: "dynamic-tool",
+        toolName: "read",
+        toolCallId: `call-${index}`,
+        state: "output-available",
+        input: {},
+        output: "result",
+      },
+    ],
+  }));
+  const user: UIMessage = { id: "ask", role: "user", parts: [{ type: "text", text: "Go" }] };
+  const hostReply = { sequence: 3, text: "Current-turn reply" };
+
+  it("is found in the messages held, past tool-only, blank and system ones", () => {
+    const blank = message("blank", "  ");
+    const system: UIMessage = {
+      id: "note",
+      role: "system",
+      parts: [{ type: "text", text: "Note" }],
+    };
+    expect(
+      currentTurnReply({
+        messages: [user, reply, ...tools, blank, system],
+        before: 9,
+        latestReply: null,
+      }),
+    ).toBe("Current-turn reply");
+  });
+
+  it("is the host's baseline when the messages run out above a turn that has said nothing since", () => {
+    expect(currentTurnReply({ messages: tools, before: 9, latestReply: hostReply })).toBe(
+      "Current-turn reply",
+    );
+    // A host that predates the baseline: nothing to offer rather than a guess.
+    expect(currentTurnReply({ messages: tools, before: 9, latestReply: null })).toBeNull();
+  });
+
+  it("is nothing once a user message starts a new turn, whatever the baseline says", () => {
+    expect(
+      currentTurnReply({ messages: [...tools, user], before: 9, latestReply: hostReply }),
+    ).toBeNull();
+    expect(
+      currentTurnReply({ messages: [user, ...tools], before: 9, latestReply: hostReply }),
+    ).toBeNull();
+  });
+
+  it("is nothing when the held messages start at the Session's first event", () => {
+    expect(currentTurnReply({ messages: tools, before: null, latestReply: hostReply })).toBeNull();
+  });
+
+  it("rides a snapshot's window, survives a page and a stream batch, and is replaced by the next snapshot", () => {
+    const projection = { turnActive: true, interactions: { active: [], resolved: [] } };
+    const seeded = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      {
+        frames: [transcriptFrame(5, message("later", " "))],
+        before: 5,
+        latestReply: hostReply,
+      },
+      projection as unknown as SessionPresentationProjection,
+    );
+    expect(seeded.latestReply).toEqual(hostReply);
+    const streamed = appendFrames(seeded, [transcriptFrame(6, message("more", " "))]);
+    expect(streamed.latestReply).toEqual(hostReply);
+    const paged = prependTranscriptHistory(streamed, 5, {
+      frames: [transcriptFrame(4, message("older", " "))],
+      before: 4,
+    });
+    expect(paged.latestReply).toEqual(hostReply);
+    const next = { sequence: 7, text: "Newer" };
+    const reopened = seedTranscriptWindow(
+      paged,
+      { frames: [transcriptFrame(7, message("newer", "Newer"))], before: 7, latestReply: next },
+      projection as unknown as SessionPresentationProjection,
+    );
+    expect(reopened.latestReply).toEqual(next);
+    expect(reopened.before).toBe(4);
   });
 });

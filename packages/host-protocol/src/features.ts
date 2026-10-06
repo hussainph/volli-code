@@ -30,6 +30,13 @@ export const HOST_FEATURE_OPERATIONS = {
   "sessions.queue": ["session.cancelQueued", "session.editQueued", "session.subscribeQueue"],
   /** Following one Session's stream, resuming after a cursor (VC-663). */
   "sessions.subscribe": ["session.subscribe"],
+  /**
+   * Paging a Session's transcript above its snapshot's window (VC-315). A
+   * snapshot is a bounded window, so a Client that cannot page reads only
+   * the newest part of a Session: one granted this knows the history above
+   * it is there to read. Its own name because `sessions` is frozen (VC-669).
+   */
+  "sessions.history": ["session.history"],
   /** The socket's Session reads, scoped to the connection's Workspace (VC-663, D4). */
   "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
   /**

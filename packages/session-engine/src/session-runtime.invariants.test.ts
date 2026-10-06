@@ -7,6 +7,7 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
+  SESSION_HISTORY_WINDOW,
   type BindingHandle,
   type NativeHarnessAdapter,
   type ObservationSink,
@@ -899,8 +900,12 @@ describe("SessionRuntime durable boundary invariants", () => {
       });
     }
 
+    // Past one engine page the projection still folds every event, while the
+    // snapshot beside it carries only its bounded tail (VC-315).
     const snapshot = await runtime.snapshot({ sessionId: created.sessionId });
-    expect(snapshot.frames.length).toBeGreaterThan(500);
+    expect(snapshot.throughSequence).toBeGreaterThan(500);
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)?.sequence).toBe(snapshot.throughSequence);
     await expect(
       runtime.command({
         commandId: "paged-interrupt",
