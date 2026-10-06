@@ -5,6 +5,7 @@ import { encodeHostHello, readHostHello, type HostHello } from "../handshake";
 import {
   describeContract,
   expectHostError,
+  ipcContractLink,
   recordSubscription,
   webSocketContractLink,
   type ContractLink,
@@ -59,17 +60,25 @@ const links: ContractLink<ToyHost, ToyRouter>[] = [
     }),
     connectionParams: encodeHostHello(hello),
   }),
+  // In-process IPC has no handshake: the composition root states who calls.
+  ipcContractLink({
+    router: toyRouter,
+    createContext: (host) => ({ ...host, hello }),
+  }),
 ];
 
 describeContract("the contract harness", links, ({ connect, link }) => {
   it("names the link it runs over", () => {
-    expect(link).toBe("websocket");
+    expect(["websocket", "ipc"]).toContain(link);
   });
 
-  it("serves queries from the host fixture, as JSON", async () => {
+  it("serves queries from the host fixture, as each wire carries them", async () => {
     const client = await connect({ greeting: "Hello" });
-    // `absent` is gone: the wire is JSON text, and that is what the harness is for.
-    expect(await client.greet.query({ name: "Ada" })).toStrictEqual({ text: "Hello, Ada" });
+    // `absent` is gone over JSON text and kept by structured clone: the reason
+    // every router seam proves its payloads JSON-safe.
+    expect(await client.greet.query({ name: "Ada" })).toStrictEqual(
+      link === "websocket" ? { text: "Hello, Ada" } : { text: "Hello, Ada", absent: undefined },
+    );
   });
 
   it("hands the context the hello the client sent before its first operation", async () => {

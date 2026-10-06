@@ -1,8 +1,4 @@
-import type {
-  RendererSessionCommandRequest,
-  RendererSessionCommandResult,
-} from "@volli/session-rpc";
-import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { sessionRpcClient, type SessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /** The stop door the island mount can replace for a non-Electron client. */
 export interface IslandAgentsApi {
@@ -15,7 +11,10 @@ export interface IslandAgentsApi {
   >;
 }
 
-type CommandDoor = (input: RendererSessionCommandRequest) => Promise<RendererSessionCommandResult>;
+/** `session.command` as the router types it: its input and its answer. */
+type CommandDoor = (
+  input: Parameters<SessionRpcClient["session"]["command"]["mutate"]>[0],
+) => ReturnType<SessionRpcClient["session"]["command"]["mutate"]>;
 
 /** UI compatibility shape over the shared host protocol, not a preload verb. */
 export function islandAgentsApi(command: CommandDoor, newCommandId: () => string): IslandAgentsApi {

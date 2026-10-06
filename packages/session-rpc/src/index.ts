@@ -132,6 +132,15 @@ export {
   type BoardTicketMoveInput,
 } from "./board-router";
 export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
+export {
+  DESKTOP_IPC_EXPOSURE,
+  DESKTOP_IPC_PATHS,
+  type DesktopIpcExposure,
+  type DesktopIpcPath,
+  type DesktopIpcRouter,
+  type DesktopIpcRouterPath,
+  type DesktopIpcRouters,
+} from "./desktop-ipc";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
