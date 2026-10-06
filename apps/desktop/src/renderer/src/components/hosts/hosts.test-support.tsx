@@ -17,6 +17,7 @@ import {
 } from "@renderer/stores/host-connection";
 import {
   createFakeHostSource,
+  hostSnapshot,
   remoteHost,
   type FakeHostSource,
 } from "@renderer/stores/host-sources";
@@ -80,20 +81,25 @@ export function hostWorld({
     ],
     selectedProjectId: selected,
   });
-  const local = createFakeHostSource({
-    hosts: [THIS_MAC_HOST],
-    projects: { local: THIS_MAC_HOST_ID, remote: THIS_MAC_HOST_ID, spare: THIS_MAC_HOST_ID },
-  });
-  const remote = createFakeHostSource({
-    hosts: [
-      remoteHost(HETZNER_ID, "hetzner-1", hetzner),
-      remoteHost(MINI_ID, "mac-mini", {
-        os: "macos",
-        link: { status: "offline", since: 0, retryAt: null },
-      }),
-    ],
-    projects: { remote: HETZNER_ID, spare: MINI_ID },
-  });
+  const local = createFakeHostSource(
+    hostSnapshot([THIS_MAC_HOST], {
+      local: THIS_MAC_HOST_ID,
+      remote: THIS_MAC_HOST_ID,
+      spare: THIS_MAC_HOST_ID,
+    }),
+  );
+  const remote = createFakeHostSource(
+    hostSnapshot(
+      [
+        remoteHost(HETZNER_ID, "hetzner-1", hetzner),
+        remoteHost(MINI_ID, "mac-mini", {
+          os: "macos",
+          link: { status: "offline", since: 0, retryAt: null },
+        }),
+      ],
+      { remote: HETZNER_ID, spare: MINI_ID },
+    ),
+  );
   const detachLocal = useHostConnectionStore.getState().attach(local);
   const detachRemote = useHostConnectionStore.getState().attach(remote);
 

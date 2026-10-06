@@ -35,6 +35,10 @@ export function ExperimentalSettings() {
     setState({ status: "loading" });
     try {
       const snapshot = await sessionRpcClient().settings.experiments.query();
+      // The host's answer heals the app-wide projection too: a boot read that
+      // failed (and stays failed) or an environment-locked flag this page
+      // cannot save still reaches every flagged surface once it is seen here.
+      useExperimentsStore.getState().receive(snapshot);
       if (!reads.isCurrent(token)) return;
       setState({ status: "loaded", snapshot });
     } catch (error) {

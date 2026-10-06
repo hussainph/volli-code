@@ -58,9 +58,19 @@ import {
   runHostAction,
   useCloudEnabled,
   useCurrentHost,
+  useCurrentProjectId,
   useHostRecoveryToasts,
   useNow,
+  useProjectHostView,
 } from "./use-hosts";
+
+/** What the tile's badge says to a screen reader: the chip's name carries it. */
+const BADGE_WORDS = {
+  none: "",
+  offline: ", offline",
+  fail: ", can’t serve",
+  attention: ", needs attention",
+} as const;
 
 export function HostChip() {
   const cloud = useCloudEnabled();
@@ -71,7 +81,10 @@ export function HostChip() {
 
 function EnabledHostChip() {
   const [open, setOpen] = React.useState(false);
+  // The tile draws the HOST (its projects' worst link); the detail under the
+  // current host in the switcher speaks for the project in front.
   const host = useCurrentHost();
+  const view = useProjectHostView(useCurrentProjectId());
   const pulsing = hostPulsing(host);
   const offline = host.link.status === "offline";
   return (
@@ -80,7 +93,7 @@ function EnabledHostChip() {
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-label={`Host: ${host.name}`}
+            aria-label={`Host: ${host.name}${BADGE_WORDS[hostBadge(host) ?? "none"]}`}
             data-slot="host-chip"
             className="app-region-no-drag ml-1 flex h-7 translate-y-px items-center gap-2 rounded-full pr-2 pl-0.5 text-ui text-foreground transition-colors hover:bg-accent/60 data-[state=open]:bg-accent"
           >
@@ -97,8 +110,8 @@ function EnabledHostChip() {
             <CaretDownIcon aria-hidden className="size-3 text-muted-foreground" />
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-80">
-          <HostSwitcher current={host} onDone={() => setOpen(false)} />
+        <PopoverContent align="start" aria-label="Switch host" className="w-80">
+          <HostSwitcher current={host} view={view} onDone={() => setOpen(false)} />
         </PopoverContent>
       </Popover>
     </MotionConfig>
@@ -106,10 +119,20 @@ function EnabledHostChip() {
 }
 
 /** The switcher's body: every host, then the two ways to more of them. */
-export function HostSwitcher({ current, onDone }: { current: HostRecord; onDone: () => void }) {
+export function HostSwitcher({
+  current,
+  view = current,
+  onDone,
+}: {
+  /** The current project's host, with the host's aggregate link. */
+  current: HostRecord;
+  /** The same host as the current project sees it (its own link): the detail row's. */
+  view?: HostRecord;
+  onDone: () => void;
+}) {
   const hosts = useHostConnectionStore((state) => state.hosts);
-  const projectHosts = useHostConnectionStore((state) => state.projectHosts);
-  const counts = projectCounts({ hosts, projectHosts });
+  const claims = useHostConnectionStore((state) => state.projects);
+  const counts = projectCounts({ hosts, projects: claims });
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
   const list = hosts.some((host) => host.id === current.id) ? hosts : [current, ...hosts];
@@ -123,7 +146,7 @@ export function HostSwitcher({ current, onDone }: { current: HostRecord; onDone:
             <div key={host.id} className="rounded-row bg-accent/50">
               <SwitcherRow host={host} meta={meta} current />
               <AutoHeight>
-                <HostDetailRow host={host} />
+                <HostDetailRow host={view} />
               </AutoHeight>
             </div>
           );
@@ -138,7 +161,7 @@ export function HostSwitcher({ current, onDone }: { current: HostRecord; onDone:
               const target = useProjectsStore
                 .getState()
                 .projects.find(
-                  (project) => (projectHosts[project.id] ?? THIS_MAC_HOST_ID) === host.id,
+                  (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
                 );
               if (target !== undefined) useProjectsStore.getState().select(target.id);
               onDone();
@@ -274,7 +297,7 @@ function DetailBody({
               {detail.progress < 1 ? `Updating to ${detail.targetVersion}` : "Restarting"}
             </SwapText>
           </div>
-          <ProgressLine value={detail.progress} />
+          <ProgressLine value={detail.progress} label={`Updating ${host.name}`} />
         </div>
       );
     case "update-scheduled":

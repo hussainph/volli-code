@@ -12,6 +12,7 @@
  *
  * Renders nothing with the `cloud` flag off.
  */
+import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
@@ -23,7 +24,14 @@ import type { HostRecord } from "@renderer/stores/host-connection";
 
 import { EASE_OUT, SwapText } from "./host-parts";
 import { hostSurface, type HostSurface, type HostSurfaceTone } from "./host-surface-model";
-import { runHostAction, useCloudEnabled, useCurrentHost, useGrace, useNow } from "./use-hosts";
+import {
+  runHostAction,
+  useCloudEnabled,
+  useCurrentProjectId,
+  useGrace,
+  useNow,
+  useProjectHostView,
+} from "./use-hosts";
 
 const TONE: Record<HostSurfaceTone, string> = {
   quiet: "text-muted-foreground",
@@ -44,14 +52,20 @@ export function HostIsland() {
 }
 
 function EnabledHostIsland() {
-  const host = useCurrentHost();
+  // The current PROJECT's link, not the host's aggregate: a fence on another
+  // project of the same box never takes this board's controls away.
+  const host = useProjectHostView(useCurrentProjectId());
   const now = useNow(host.link.status === "offline");
   const shown = useGrace(hostSurface(host, now));
+  const lane = React.useRef<HTMLDivElement>(null);
+  const bottom = useComposerClearance(lane, shown !== null);
   return (
     <MotionConfig reducedMotion="user">
       <div
+        ref={lane}
         data-slot="host-island"
-        className="pointer-events-none absolute inset-x-0 bottom-22 z-40 flex justify-center"
+        className="pointer-events-none absolute inset-x-0 z-40 flex justify-center"
+        style={{ bottom }}
       >
         <AnimatePresence>
           {shown ? (
@@ -72,6 +86,61 @@ function EnabledHostIsland() {
       </div>
     </MotionConfig>
   );
+}
+
+/** The lab's resting place: 88px above the content card's foot. */
+export const ISLAND_BOTTOM_PX = 88;
+/** Air between the Island and a composer it rises above. */
+const ISLAND_COMPOSER_GAP_PX = 12;
+/** Half the widest capsule, so a composer under either end of it counts. */
+const ISLAND_HALF_WIDTH_PX = 240;
+
+/**
+ * Where the Island floats (px above the card's foot): the lab's 88px, or —
+ * on a chat page — just above the composer, so it never covers the input. A
+ * composer counts when it sits under the Island's lane inside the same card;
+ * re-measured while the Island shows, as composers grow and panes resize.
+ */
+export function islandBottom(card: DOMRect, docks: readonly DOMRect[]): number {
+  const center = card.left + card.width / 2;
+  let bottom = ISLAND_BOTTOM_PX;
+  for (const dock of docks) {
+    if (dock.width === 0 || dock.height === 0) continue;
+    if (dock.right < center - ISLAND_HALF_WIDTH_PX || dock.left > center + ISLAND_HALF_WIDTH_PX) {
+      continue;
+    }
+    if (dock.top < card.top || dock.bottom > card.bottom + 1) continue;
+    bottom = Math.max(bottom, card.bottom - dock.top + ISLAND_COMPOSER_GAP_PX);
+  }
+  return bottom;
+}
+
+function useComposerClearance(
+  lane: React.RefObject<HTMLDivElement | null>,
+  active: boolean,
+): number {
+  const [bottom, setBottom] = React.useState(ISLAND_BOTTOM_PX);
+  React.useEffect(() => {
+    if (!active) return;
+    const measure = () => {
+      const card = lane.current?.parentElement;
+      if (!card) return;
+      const docks = [...card.querySelectorAll<HTMLElement>('[data-slot="chat-composer-dock"]')].map(
+        (dock) => dock.getBoundingClientRect(),
+      );
+      setBottom(islandBottom(card.getBoundingClientRect(), docks));
+    };
+    measure();
+    // A composer grows as it is typed into and panes split and resize; a slow
+    // poll while the Island shows is cheaper than observing every dock.
+    const id = window.setInterval(measure, 500);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("resize", measure);
+    };
+  }, [active, lane]);
+  return bottom;
 }
 
 function SurfaceBody({ host, surface }: { host: HostRecord; surface: HostSurface }) {

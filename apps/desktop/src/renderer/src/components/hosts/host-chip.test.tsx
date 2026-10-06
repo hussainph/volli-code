@@ -130,7 +130,10 @@ describe("host chip", () => {
   it("cannot open a host that serves no project", async () => {
     world = hostWorld();
     act(() =>
-      world?.remote.set({ ...world.remote.getSnapshot(), projects: { remote: HETZNER_ID } }),
+      world?.remote.set({
+        ...world.remote.getSnapshot(),
+        projects: { remote: world.remote.getSnapshot().projects.remote! },
+      }),
     );
     await world.render(<HostChip />);
     const list = await openSwitcher();
@@ -138,7 +141,8 @@ describe("host chip", () => {
       row.textContent?.includes("mac-mini"),
     );
     expect(mini?.disabled).toBe(true);
-    expect(mini?.textContent).toContain("Offline");
+    // A host serving no project has no link to judge (links are per project).
+    expect(mini?.textContent).toContain("0 projects");
   });
 
   it("sends Add a host… and Manage hosts… to VC-700's entry points, or says they are not here yet", async () => {
@@ -273,6 +277,70 @@ describe("host chip", () => {
     // mac-mini is not current, and its recovery is announced all the same.
     act(() => world?.remote.setHost(MINI_ID, { link: { status: "open" } }));
     expect(toast.success).toHaveBeenLastCalledWith("Back on mac-mini", undefined);
+  });
+});
+
+describe("host chip, accessibility and per-project links", () => {
+  it("names the chip's state, the switcher dialog and the update's progress bar", async () => {
+    world = hostWorld({ hetzner: { link: { status: "offline", since: 0, retryAt: null } } });
+    await world.render(<HostChip />);
+    expect(chip().getAttribute("aria-label")).toBe("Host: hetzner-1, offline");
+    world.setHetzner({ link: { status: "incompatible", reason: "refused" } });
+    expect(chip().getAttribute("aria-label")).toBe("Host: hetzner-1, can’t serve");
+    world.setHetzner({
+      link: { status: "version-skewed", availableVersion: "0.3.0" },
+      update: { status: "running", progress: 0.5, targetVersion: "0.3.0" },
+    });
+    expect(chip().getAttribute("aria-label")).toBe("Host: hetzner-1, needs attention");
+
+    const list = await openSwitcher();
+    expect(list.getAttribute("role")).toBe("dialog");
+    expect(list.getAttribute("aria-label")).toBe("Switch host");
+    expect(list.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe(
+      "Updating hetzner-1",
+    );
+  });
+
+  it("moves focus into the switcher on open, and Escape hands it back to the chip", async () => {
+    world = hostWorld();
+    await world.render(<HostChip />);
+    chip().focus();
+    await act(async () => chip().click());
+    expect(switcher().contains(document.activeElement)).toBe(true);
+    expect(document.activeElement?.textContent).toContain("This Mac");
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
+    expect(document.activeElement).toBe(chip());
+  });
+
+  it("draws the host's worst link on the tile, and the current project's own under it", async () => {
+    world = hostWorld();
+    // `spare` joins `remote` on hetzner-1 and is fenced; `remote` (current) serves.
+    act(() => {
+      const snapshot = world!.remote.getSnapshot();
+      world!.remote.set({
+        ...snapshot,
+        projects: {
+          ...snapshot.projects,
+          spare: { hostId: HETZNER_ID, link: { status: "incompatible", reason: "fenced" } },
+        },
+      });
+    });
+    await world.render(<HostChip />);
+    expect(chip().querySelector('[data-slot="host-glyph"]')?.getAttribute("data-badge")).toBe(
+      "fail",
+    );
+    const list = await openSwitcher();
+    // The current project serves, so its detail line has nothing to say.
+    expect(list.textContent).not.toContain("No longer serves this project");
+
+    act(() => useProjectsStore.setState({ selectedProjectId: "spare" }));
+    expect(switcher().textContent).toContain("No longer serves this project");
   });
 });
 

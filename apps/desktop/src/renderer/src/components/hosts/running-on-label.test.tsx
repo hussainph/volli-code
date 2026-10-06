@@ -33,8 +33,10 @@ describe("Running on label", () => {
   it("names a remote host, its dot the host's state", async () => {
     world = hostWorld();
     await world.render(<RunningOnLabel projectId="remote" className="mt-2" />);
-    expect(label()?.getAttribute("aria-label")).toBe("Running on hetzner-1");
-    expect(label()?.textContent).toBe("hetzner-1");
+    // Read whole ("Running on hetzner-1"); the words on screen are the name.
+    expect(label()?.textContent).toBe("Running on hetzner-1");
+    expect(label()?.querySelector(".sr-only")?.textContent).toBe("Running on ");
+    expect(label()?.getAttribute("title")).toBe("Running on hetzner-1");
     expect(label()?.className).toContain("mt-2");
     const dot = () =>
       label()?.querySelector('[data-slot="status-dot"]')?.getAttribute("data-state");

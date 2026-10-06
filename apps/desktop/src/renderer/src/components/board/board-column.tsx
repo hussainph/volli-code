@@ -26,7 +26,7 @@ import {
 import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
-import { useHostReadOnly } from "@renderer/components/hosts/use-hosts";
+import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -323,8 +323,6 @@ export const BoardColumn = React.memo(function BoardColumn({
   // Each card still gets its own word as a plain string, so `TicketCard`'s memo
   // keeps holding for every card whose word did not change.
   const sessionActivity = useBoardSessionActivityMap();
-  // The project's host cannot serve (VC-576): the composer stands down.
-  const readOnly = useHostReadOnly(projectId);
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
@@ -536,7 +534,8 @@ export const BoardColumn = React.memo(function BoardColumn({
       ) : (
         <Button
           variant="ghost"
-          disabled={readOnly}
+          // The project's host cannot serve (VC-576): the composer stands down.
+          {...readOnlyControl(composer.canWrite)}
           onClick={composer.openComposer}
           className="mx-2 mb-2 justify-start gap-1 text-ui text-muted-foreground"
         >

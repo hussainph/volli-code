@@ -146,6 +146,7 @@ import {
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -470,6 +471,9 @@ export function ChatPlane({
     // a second message cannot overtake the files the first one is holding open
     // (CLAUDE.md — never swallow a gesture; refuse it visibly instead).
     !holdingFirstImport;
+  // The project's host cannot serve (VC-576): the box stands down like any
+  // other write, the draft kept in it.
+  const canWrite = useCanWrite(projectId);
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
@@ -1327,11 +1331,14 @@ export function ChatPlane({
    */
   const submitComposer = React.useCallback(
     (text: string, intent: ComposerIntent) => {
+      // Read-only (VC-576): the box is already inert; a press that raced the
+      // host going away keeps its draft and says why.
+      if (!guardWrite(projectId)) return;
       const press = composerPress(text);
       if (press.kind === "verb") verbPress(press);
       else send(text, intent);
     },
-    [send, verbPress],
+    [projectId, send, verbPress],
   );
 
   /**
@@ -1501,6 +1508,11 @@ export function ChatPlane({
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
+      {/* Where this Session's work runs, when that is not This Mac (VC-576):
+          the Session's header corner, as the lab's VenueChip sits — the plane
+          has no header band of its own, so it floats there. Nothing with the
+          `cloud` flag off, and nothing for This Mac. */}
+      <RunningOnLabel projectId={projectId} className="absolute top-3 right-4 z-10 bg-background" />
       <BrowserCardHostContext.Provider value={tracedCardHost}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
@@ -1604,9 +1616,6 @@ export function ChatPlane({
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
-          {/* Where this Session's work runs, when that is not This Mac
-              (VC-576). Nothing with the `cloud` flag off. */}
-          <RunningOnLabel projectId={projectId} className="pointer-events-auto mb-2 ml-auto" />
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
           {/* The Activity Island (VC-268): what this Session holds beyond the
               chat stream — its Browser Tabs, its plan, its background shells
@@ -1665,7 +1674,7 @@ export function ChatPlane({
               onSelectionChange={changeModel}
               modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
               working={working}
-              ready={composable}
+              ready={composable && canWrite}
               contextUsage={contextUsage}
               queued={strip}
               onQueuedChange={onQueuedChange}

@@ -90,6 +90,7 @@ import {
   labelPickerOptions,
   newLabelFromQuery,
 } from "@renderer/components/ticket/label-picker-model";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
 import {
   RAIL_CONTROL,
@@ -166,17 +167,21 @@ function ValueTrigger({
   label,
   field,
   value,
+  canWrite,
   children,
 }: {
   label: string;
   field: string;
   value: string;
+  /** Read-only (VC-576): the value still reads; the menu does not open. */
+  canWrite: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <DropdownMenuTrigger asChild>
       <Button
         variant="outline"
+        disabled={!canWrite}
         className={cn(RAIL_CONTROL, "max-w-full justify-start gap-1.5 pr-2 pl-2.5 font-normal")}
         // The field is in the accessible name because nothing beside the
         // control says it any more: "Doing" alone names no field.
@@ -443,6 +448,7 @@ function LabelRun({
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   const statusLabel = TICKET_STATUS_LABELS[ticket.status];
   const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
+  const canWrite = useCanWrite(projectId);
   return (
     <section
       aria-label="Properties"
@@ -456,11 +462,17 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           glyph={<CircleIcon className="size-4" />}
           control={
             <DropdownMenu>
-              <ValueTrigger label={statusLabel} field="Status" value={ticket.status} />
+              <ValueTrigger
+                label={statusLabel}
+                field="Status"
+                value={ticket.status}
+                canWrite={canWrite}
+              />
               <DropdownMenuContent align="start">
                 <DropdownMenuRadioGroup
                   value={ticket.status}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    if (!guardWrite(projectId)) return;
                     // The board's own move, so the column change keeps every
                     // side effect it has anywhere else — including whichever
                     // Automation the new column arms.
@@ -471,8 +483,8 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
                         ticket.id,
                         value as TicketStatus,
                         Number.MAX_SAFE_INTEGER,
-                      )
-                  }
+                      );
+                  }}
                 >
                   {TICKET_STATUSES.map((status) => (
                     <DropdownMenuRadioItem key={status} value={status}>
@@ -489,15 +501,21 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           glyph={<PriorityIndicator priority={ticket.priority} />}
           control={
             <DropdownMenu>
-              <ValueTrigger label={priorityLabel} field="Priority" value={ticket.priority} />
+              <ValueTrigger
+                label={priorityLabel}
+                field="Priority"
+                value={ticket.priority}
+                canWrite={canWrite}
+              />
               <DropdownMenuContent align="start">
                 <DropdownMenuRadioGroup
                   value={ticket.priority}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    if (!guardWrite(projectId)) return;
                     void useBoardStore
                       .getState()
-                      .setTicketPriority(projectId, ticket.id, value as TicketPriority)
-                  }
+                      .setTicketPriority(projectId, ticket.id, value as TicketPriority);
+                  }}
                 >
                   {TICKET_PRIORITIES.map((priority) => (
                     <DropdownMenuRadioItem key={priority} value={priority}>
@@ -518,7 +536,10 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
             <LabelRun
               projectId={projectId}
               labels={ticket.labels}
-              onChange={(next) => void useBoardStore.getState().setLabels(ticket.id, next)}
+              onChange={(next) => {
+                if (!guardWrite(projectId)) return;
+                void useBoardStore.getState().setLabels(ticket.id, next);
+              }}
             />
           }
         />

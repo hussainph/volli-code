@@ -1,16 +1,22 @@
 /**
  * The hooks every host surface reads through (VC-576). Each answers "nothing
- * to show" while the `cloud` flag is off, so a surface gated here cannot draw
- * for a person without the flag.
+ * to show" — and "writable" — while the `cloud` flag is off, and WITHOUT
+ * touching the host-connection store: with the flag off no surface subscribes
+ * to it, so a host change cannot re-render or commit anything (the flag-off
+ * app pays nothing).
  */
 import * as React from "react";
 import { toast } from "sonner";
 
 import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 import {
+  canWriteProject,
   hostOfProject,
   isBlocking,
+  OPEN_LINK,
+  projectLinkOf,
   useHostConnectionStore,
+  type HostConnectionState,
   type HostRecord,
 } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -18,6 +24,7 @@ import { useUiStore } from "@renderer/stores/ui";
 
 import {
   HOST_RECONNECT_GRACE_MS,
+  hostSurface,
   hostTransitionToast,
   type HostSurface,
   type HostSurfaceAction,
@@ -28,35 +35,128 @@ export function useCloudEnabled(): boolean {
   return useExperimentsStore((state) => isExperimentOn(state.snapshot, "cloud"));
 }
 
-/** The host a project runs on (This Mac for `null`, or for a project nobody claims). */
+function cloudOn(): boolean {
+  return isExperimentOn(useExperimentsStore.getState().snapshot, "cloud");
+}
+
+const NO_SUBSCRIPTION = () => () => {};
+
+/**
+ * Reads the host-connection store only while `cloud` is on. Off, it holds no
+ * subscription and answers `off`, so nothing the store does reaches this
+ * component. `select` must answer a value the store already holds (or a
+ * primitive): it is compared by identity.
+ */
+function useHostRead<T>(cloud: boolean, select: (state: HostConnectionState) => T, off: T): T {
+  const subscribe = cloud ? useHostConnectionStore.subscribe : NO_SUBSCRIPTION;
+  const read = () => (cloud ? select(useHostConnectionStore.getState()) : off);
+  return React.useSyncExternalStore(subscribe, read, read);
+}
+
+/**
+ * The host a project runs on (This Mac for `null`, or for a project nobody
+ * claims), with the host's aggregate link — what the chip draws. For a
+ * surface already behind the flag.
+ */
 export function useProjectHost(projectId: string | null): HostRecord {
   return useHostConnectionStore((state) => hostOfProject(state, projectId));
 }
 
-/** The host of the project in front of the person. */
+/**
+ * The project's host as THAT project sees it: the record with the project's
+ * own link in place of the aggregate. The Island, the "Running on" dot and the
+ * switcher's detail read this, so a fence on another project of the same box
+ * never speaks for this one. For a surface already behind the flag.
+ */
+export function useProjectHostView(projectId: string | null): HostRecord {
+  const host = useProjectHost(projectId);
+  const link = useHostConnectionStore((state) => projectLinkOf(state, projectId));
+  return React.useMemo(() => (host.link === link ? host : { ...host, link }), [host, link]);
+}
+
+/** The project in front of the person. */
+export function useCurrentProjectId(): string | null {
+  return useProjectsStore((state) => state.selectedProjectId);
+}
+
+/** The host of the project in front of the person, with its aggregate link (the chip's). */
 export function useCurrentHost(): HostRecord {
-  const projectId = useProjectsStore((state) => state.selectedProjectId);
-  return useProjectHost(projectId);
+  return useProjectHost(useCurrentProjectId());
 }
 
 /**
- * Whether a project's host cannot serve, so its create and write controls
- * stand down. Always `false` with the flag off.
+ * THE read-only gate. Whether a project's create and write controls work:
+ * `false` while its own link cannot serve (offline, or a host that cannot
+ * serve this app). Every write affordance reads this one hook, and every
+ * submission re-checks {@link guardWrite}. Always `true` with the flag off,
+ * with no host-store subscription.
  */
-export function useHostReadOnly(projectId: string | null): boolean {
+export function useCanWrite(projectId: string | null): boolean {
   const cloud = useCloudEnabled();
-  const blocking = useHostConnectionStore((state) =>
-    isBlocking(hostOfProject(state, projectId).link),
-  );
-  return cloud && blocking;
+  return useHostRead(cloud, (state) => canWriteProject(state, projectId), true);
 }
 
-/** {@link useHostReadOnly}, read once outside React (a keyboard shortcut's handler). */
-export function isHostReadOnly(projectId: string | null): boolean {
-  return (
-    isExperimentOn(useExperimentsStore.getState().snapshot, "cloud") &&
-    isBlocking(hostOfProject(useHostConnectionStore.getState(), projectId).link)
+/** {@link useCanWrite}, read once outside React (a handler, a shortcut). */
+export function canWriteNow(projectId: string | null): boolean {
+  return !cloudOn() || canWriteProject(useHostConnectionStore.getState(), projectId);
+}
+
+/**
+ * Why a project cannot be written to, in the Island's words ("Can't reach
+ * hetzner-1 · Read-only"), or `null` when it can.
+ */
+export function readOnlyReason(projectId: string | null, now = Date.now()): string | null {
+  if (canWriteNow(projectId)) return null;
+  const state = useHostConnectionStore.getState();
+  const host = hostOfProject(state, projectId);
+  const view = { ...host, link: projectLinkOf(state, projectId) };
+  // A blocking link always has words (offline or incompatible).
+  return hostSurface(view, now)!.line;
+}
+
+/**
+ * {@link readOnlyReason} for a form already open while its project goes
+ * read-only, so it can say why it will not submit. `null` while it can write,
+ * and always with the flag off (no host-store subscription then).
+ */
+export function useReadOnlyReason(projectId: string | null): string | null {
+  const cloud = useCloudEnabled();
+  // Keyed on the link object, so the words follow a change of state.
+  const link = useHostRead(cloud, (state) => projectLinkOf(state, projectId), OPEN_LINK);
+  return React.useMemo(
+    () => (isBlocking(link) ? readOnlyReason(projectId) : null),
+    [link, projectId],
   );
+}
+
+/**
+ * The submission guard behind every disabled control: `true` when the write
+ * may go. When it may not, says why (a toast with the read-only reason) and
+ * answers `false`; the caller keeps whatever the person wrote. The link's own
+ * `host-unreachable` refusal stays the backstop behind this.
+ */
+export function guardWrite(projectId: string | null): boolean {
+  const reason = readOnlyReason(projectId);
+  if (reason === null) return true;
+  toast(reason, { id: "host-read-only" });
+  return false;
+}
+
+/**
+ * The mark a write control wears while it stands down: `data-host-read-only`,
+ * greyed and desaturated as in the lab (globals.css). Nothing at all while it
+ * can write, so the flag-off DOM is unchanged.
+ */
+export function readOnlyMark(canWrite: boolean): { "data-host-read-only"?: "" } {
+  return canWrite ? {} : { "data-host-read-only": "" };
+}
+
+/** {@link readOnlyMark} plus `disabled`, for a control that is itself a button. */
+export function readOnlyControl(canWrite: boolean): {
+  disabled?: true;
+  "data-host-read-only"?: "";
+} {
+  return canWrite ? {} : { disabled: true, "data-host-read-only": "" };
 }
 
 /** The current time, ticking every `intervalMs` while `active`. */

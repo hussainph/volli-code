@@ -22,6 +22,7 @@ import {
 } from "@renderer/stores/host-connection";
 import {
   createFakeHostSource,
+  hostSnapshot,
   remoteHost,
   type FakeHostCall,
   type FakeHostSource,
@@ -162,29 +163,28 @@ export default function HostConnectionScratch() {
       }
     };
     return createFakeHostSource(
-      {
-        hosts: [
+      hostSnapshot(
+        [
           remoteHost(HETZNER, "hetzner-1", hetzner("offline", Date.now())),
           remoteHost(MINI, "mac-mini", {
             os: "macos",
             link: { status: "offline", since: Date.now() - 2 * 3_600_000, retryAt: null },
           }),
         ],
-        projects: { "prj-voltaic": HETZNER, "prj-harbor": MINI },
-      },
+        { "prj-voltaic": HETZNER, "prj-harbor": MINI },
+      ),
       onCall,
     );
   }, []);
 
   React.useEffect(() => {
-    const local = createFakeHostSource({
-      hosts: [THIS_MAC_HOST],
-      projects: {
+    const local = createFakeHostSource(
+      hostSnapshot([THIS_MAC_HOST], {
         "prj-voltaic": THIS_MAC_HOST_ID,
         "prj-atlas": THIS_MAC_HOST_ID,
         "prj-harbor": THIS_MAC_HOST_ID,
-      },
-    });
+      }),
+    );
     const detachLocal = useHostConnectionStore.getState().attach(local);
     const detachRemote = useHostConnectionStore.getState().attach(source);
     const pending = timers.current;
@@ -229,7 +229,7 @@ export default function HostConnectionScratch() {
           Retry comes back
         </label>
         <span className="flex items-center gap-2 normal-case">
-          Label: <RunningOnLabel projectId="prj-voltaic" />
+          Label: <RunningOnLabel projectId="prj-voltaic" className="font-sans" />
         </span>
       </div>
     </div>

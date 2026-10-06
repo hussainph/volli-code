@@ -162,10 +162,11 @@ export function AutoHeight({ children }: { children: React.ReactNode }) {
 
 /* ── Progress ──────────────────────────────────────────────────────────── */
 
-export function ProgressLine({ value }: { value: number }) {
+export function ProgressLine({ value, label }: { value: number; label: string }) {
   return (
     <div
       role="progressbar"
+      aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(Math.max(0, Math.min(1, value)) * 100)}

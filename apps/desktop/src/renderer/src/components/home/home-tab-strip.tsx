@@ -193,6 +193,7 @@ export function HomeTabStrip({
               back into the window rather than off its edge. */}
           <div className="flex items-center gap-1">
             <NewSessionControl
+              projectId={list.projectId}
               disabled={creating}
               placement="strip"
               align="end"

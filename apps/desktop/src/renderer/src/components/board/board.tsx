@@ -15,7 +15,10 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
+  type SensorDescriptor,
+  type SensorOptions,
 } from "@dnd-kit/core";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
@@ -394,6 +397,9 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
+/** No sensor: what a read-only board's `DndContext` gets, so nothing can be dragged. */
+const NO_SENSORS: SensorDescriptor<SensorOptions>[] = [];
+
 export const Board = React.memo(function Board({
   projectId,
   ticketPrefix,
@@ -682,6 +688,9 @@ export const Board = React.memo(function Board({
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+  // Read-only (VC-576): a move is a write, so no drag can start while the
+  // project's host cannot serve. Cards still open and select.
+  const canWrite = useCanWrite(projectId);
 
   const tickets = drag?.preview ?? storeTickets;
   // The other reads need no `drag?.` fallback of their own: during a gesture
@@ -1005,6 +1014,9 @@ export const Board = React.memo(function Board({
     frozen.current = null;
     setDrag(null);
     if (drop === null) return;
+    // A drag that began before the host went away lands nowhere; the card
+    // goes back and the reason shows.
+    if (!guardWrite(projectId)) return;
 
     if (completed.ticketIds.length === 1) {
       void useBoardStore
@@ -1085,7 +1097,7 @@ export const Board = React.memo(function Board({
             list view has full drag parity with the board; only the layout and the
             drag overlay's shape differ. Escape-clears-selection (above) is shared. */}
           <DndContext
-            sensors={sensors}
+            sensors={canWrite ? sensors : NO_SENSORS}
             collisionDetection={boardCollision}
             // Stated rather than inherited — see `BOARD_MEASURING`.
             measuring={BOARD_MEASURING}
@@ -1140,7 +1152,9 @@ export const Board = React.memo(function Board({
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >
-                {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+                {boardBare ? (
+                  <BoardEmpty projectId={projectId} className="min-h-0 flex-1 self-stretch" />
+                ) : null}
                 {shown.map((status) => (
                   <BoardColumn
                     key={status}
