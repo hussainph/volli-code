@@ -1,4 +1,4 @@
-import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/host-protocol";
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,

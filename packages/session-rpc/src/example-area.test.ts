@@ -37,27 +37,25 @@ function network(actor: HostActor): RouterCaller {
 }
 
 const person = network({ kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE });
-const owner = network({ kind: "session", sessionId: "owner", workspaceId: WORKSPACE });
+const coordinator = network({ kind: "session", sessionId: "coordinator", workspaceId: WORKSPACE });
+const pair = network({ kind: "session", sessionId: "pair", workspaceId: WORKSPACE });
 const foreign = network({ kind: "session", sessionId: "stranger", workspaceId: WORKSPACE });
+
+const ticket = (id: string, workspaceId: string, sessions: string[]) => ({
+  id,
+  workspaceId,
+  sessions,
+  parentId: null,
+  afterId: null,
+});
 
 function ledger() {
   return new ExampleTicketLedger([
-    { id: "mine", workspaceId: WORKSPACE, ownerSessionId: "owner", parentId: null, afterId: null },
-    {
-      id: "mine-2",
-      workspaceId: WORKSPACE,
-      ownerSessionId: "owner",
-      parentId: null,
-      afterId: null,
-    },
-    { id: "theirs", workspaceId: WORKSPACE, ownerSessionId: null, parentId: null, afterId: null },
-    {
-      id: "elsewhere",
-      workspaceId: OTHER_WORKSPACE,
-      ownerSessionId: "owner",
-      parentId: null,
-      afterId: null,
-    },
+    // Several Sessions may coordinate on one ticket; none is "the owner".
+    ticket("mine", WORKSPACE, ["coordinator", "pair"]),
+    ticket("mine-2", WORKSPACE, ["coordinator"]),
+    ticket("theirs", WORKSPACE, ["someone-else"]),
+    ticket("elsewhere", OTHER_WORKSPACE, ["coordinator"]),
   ]);
 }
 
@@ -96,24 +94,27 @@ describe("ticket.create: a session-own command-id write", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("admits the Session that owns the resource", async () => {
-    const { client, tickets } = connect(owner);
+  it("admits a Session the area's policy lets act on the subject, of several", async () => {
+    const { client, tickets } = connect(coordinator);
     const receipt = await client.ticket.create(input);
     expect(tickets.tickets.get(receipt.ticketId)).toMatchObject({ parentId: "mine" });
+    await expect(
+      connect(pair).client.ticket.create({ ...input, commandId: OTHER_COMMAND }),
+    ).resolves.toMatchObject({ status: "completed" });
   });
 
-  it("refuses a Session the resource is not owned by, before the handler", async () => {
+  it("refuses a Session the area's policy does not let act, before the handler", async () => {
     const { client, create } = connect(foreign);
     expect(await refusal(client.ticket.create(input))).toEqual({
       code: "FORBIDDEN",
-      message: "ticket.create is open to a Session only on what it owns.",
+      message: "ticket.create is open to a Session only on what its policy lets it act on.",
       reason: "verb-refused",
     });
     expect(create).not.toHaveBeenCalled();
   });
 
   it("answers a parent in another Workspace exactly as an absent one", async () => {
-    const { client, create } = connect(owner);
+    const { client, create } = connect(coordinator);
     const crossed = await refusal(client.ticket.create({ ...input, parentTicketId: "elsewhere" }));
     expect(crossed).toEqual(NOT_FOUND);
     expect(await refusal(client.ticket.create({ ...input, parentTicketId: "nope" }))).toEqual(
@@ -123,7 +124,7 @@ describe("ticket.create: a session-own command-id write", () => {
   });
 
   it("replays the same intent and refuses another under the same command id", async () => {
-    const { client, tickets } = connect(owner);
+    const { client, tickets } = connect(coordinator);
     const first = await client.ticket.create(input);
     expect(await client.ticket.create(input)).toEqual(first);
     expect(tickets.tickets.size).toBe(5);
@@ -137,19 +138,19 @@ describe("ticket.create: a session-own command-id write", () => {
   it("lets the desktop's own window through with no port read at all", async () => {
     const tickets = ledger();
     const workspaceOf = vi.spyOn(tickets, "workspaceOf");
-    const ownerOf = vi.spyOn(tickets, "ownerOf");
+    const sessionMayAct = vi.spyOn(tickets, "sessionMayAct");
     const { client } = connect(LOCAL_DESKTOP_CALLER, tickets);
     await client.ticket.create({ ...input, parentTicketId: "elsewhere" });
     expect(workspaceOf).not.toHaveBeenCalled();
-    expect(ownerOf).not.toHaveBeenCalled();
+    expect(sessionMayAct).not.toHaveBeenCalled();
   });
 });
 
 describe("ticket.move: two resources", () => {
   const input = { commandId: COMMAND, ticketId: "mine", afterTicketId: "mine-2" };
 
-  it("admits the owning Session when both are its own, and the person on any", async () => {
-    await expect(connect(owner).client.ticket.move(input)).resolves.toMatchObject({
+  it("admits a coordinating Session on both, and the person on any", async () => {
+    await expect(connect(coordinator).client.ticket.move(input)).resolves.toMatchObject({
       ticketId: "mine",
     });
     await expect(
@@ -158,7 +159,7 @@ describe("ticket.move: two resources", () => {
   });
 
   it("refuses a second resource in another Workspace exactly as an absent one", async () => {
-    for (const caller of [person, owner]) {
+    for (const caller of [person, coordinator]) {
       const { client, move } = connect(caller);
       const crossed = await refusal(client.ticket.move({ ...input, afterTicketId: "elsewhere" }));
       expect(crossed).toEqual(NOT_FOUND);
@@ -169,17 +170,34 @@ describe("ticket.move: two resources", () => {
     }
   });
 
-  it("refuses a Session that owns one resource but not the other", async () => {
-    const { client, move } = connect(owner);
-    expect(await refusal(client.ticket.move({ ...input, afterTicketId: "theirs" }))).toMatchObject({
-      code: "FORBIDDEN",
-      reason: "verb-refused",
+  // VC-564 A2 re-review B1': the ticket a move lands after is a reference.
+  it("admits a Session to land after a ticket only someone else works on", async () => {
+    const { client, move } = connect(coordinator);
+    await expect(client.ticket.move({ ...input, afterTicketId: "theirs" })).resolves.toMatchObject({
+      ticketId: "mine",
     });
+    expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses a referenced ticket in another Workspace exactly as an absent one", async () => {
+    // The Session coordinates on `elsewhere`, but a reference is Workspace-checked all the same.
+    const { client, move } = connect(coordinator);
+    expect(await refusal(client.ticket.move({ ...input, afterTicketId: "elsewhere" }))).toEqual(
+      NOT_FOUND,
+    );
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Session whose policy does not cover the subject, whatever the reference", async () => {
+    const { client, move } = connect(coordinator);
+    expect(
+      await refusal(client.ticket.move({ ...input, ticketId: "theirs", afterTicketId: "mine" })),
+    ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
     expect(move).not.toHaveBeenCalled();
   });
 
   it("replays and conflicts by command id, like every command-id entry", async () => {
-    const { client } = connect(owner);
+    const { client } = connect(coordinator);
     const first = await client.ticket.move(input);
     expect(await client.ticket.move(input)).toEqual(first);
     expect(
@@ -223,7 +241,12 @@ describe("the area's builder family", () => {
       WORKSPACE,
     );
     expect(await context.resourceWorkspace?.({ kind: "terminal", id: "mine" })).toBeNull();
-    expect(await context.resourceOwner?.({ kind: "terminal", id: "mine" })).toBeNull();
+    expect(await context.sessionMayAct?.({ kind: "terminal", id: "mine" }, "coordinator")).toBe(
+      false,
+    );
+    expect(
+      await context.sessionMayAct?.({ kind: TICKET_RESOURCE, id: "nope" }, "coordinator"),
+    ).toBe(false);
   });
 
   it("refuses at construction a withholding entry whose input has no command.kind", () => {
@@ -288,7 +311,7 @@ describe("the area's builder family", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a Session as owning nothing when the context has no owner port", async () => {
+  it("admits no Session without a predicate, or with no subject to judge (fail closed)", async () => {
     const entry = area({ actor: "session-own", scope: "workspace", idempotency: "natural" });
     const { workspaceProcedure, catalogRouter } = createCatalogBuilders<
       CatalogCallerContext,
@@ -299,17 +322,30 @@ describe("the area's builder family", () => {
     const handler = vi.fn(() => "done");
     const router = catalogRouter({
       area: {
-        write: workspaceProcedure("area.write", z.object({}), () => ({
-          kind: PROJECT_RESOURCE,
-          id: WORKSPACE,
-        }))
+        write: workspaceProcedure(
+          "area.write",
+          z.object({ relation: z.enum(["subject", "reference"]) }),
+          ({ relation }) => ({ kind: PROJECT_RESOURCE, id: WORKSPACE, relation }),
+        )
           .output(z.string())
           .mutation(handler),
       },
     });
-    const caller = router.createCaller({ caller: owner, diagnostics: new RpcDiagnosticLog() });
-    expect(await refusal(caller.area.write({}))).toMatchObject({ reason: "verb-refused" });
+    const diagnostics = new RpcDiagnosticLog();
+    const unjudged = router.createCaller({ caller: coordinator, diagnostics });
+    const permissive = router.createCaller({
+      caller: coordinator,
+      diagnostics,
+      sessionMayAct: () => true,
+    });
+    for (const call of [
+      unjudged.area.write({ relation: "subject" }),
+      permissive.area.write({ relation: "reference" }),
+    ]) {
+      expect(await refusal(call)).toMatchObject({ reason: "verb-refused" });
+    }
     expect(handler).not.toHaveBeenCalled();
+    await expect(permissive.area.write({ relation: "subject" })).resolves.toBe("done");
   });
 
   it("accepts only its own family's procedures, and names its legacy outputs from its catalog", () => {

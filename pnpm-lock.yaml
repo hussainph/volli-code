@@ -637,9 +637,6 @@ importers:
 
   packages/session-engine:
     dependencies:
-      '@volli/host-protocol':
-        specifier: workspace:*
-        version: link:../host-protocol
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared

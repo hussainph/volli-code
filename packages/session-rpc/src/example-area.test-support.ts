@@ -7,22 +7,23 @@
  * It models two board commands the way an area ticket would:
  *
  * - `ticket.create`: a workspace-scoped, `command-id` write whose router actor
- *   is `session-own` (the person, or a Session filing a sub-ticket under a
- *   ticket it owns), with an output schema;
- * - `ticket.move`: the same, naming TWO resources (the ticket and the ticket
- *   it lands after), each authorized and each owned.
+ *   is `session-own` (the person, or a Session the area's policy lets act on
+ *   the parent it files under), with an output schema;
+ * - `ticket.move`: the same, naming TWO resources: the ticket it moves (the
+ *   subject, judged by policy) and the ticket it lands after (a reference,
+ *   Workspace-checked but needing no authority).
  *
  * In production the entries are Verb Registry rows, the router lives in
  * `packages/session-rpc/src/<area>-router.ts`, and the ledger is a host-core
  * function the composition root wires into the context ports.
  */
+import type { SessionId, WorkspaceId } from "@volli/host-protocol";
 import {
   COMMAND_INTENT_CONFLICT,
+  type CatalogKeyOf,
   type CommandIntentConflict,
-  type SessionId,
-  type WorkspaceId,
-} from "@volli/host-protocol";
-import type { CatalogKeyOf, VerbEntry } from "@volli/shared";
+  type VerbEntry,
+} from "@volli/shared";
 import { z } from "zod";
 
 import {
@@ -30,6 +31,7 @@ import {
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
+  type ResourceRelation,
   type WorkspaceResource,
 } from "./catalog";
 
@@ -47,7 +49,7 @@ export const EXAMPLE_AREA_ENTRIES = [
     group: "Write",
     summary: "File a ticket under a parent ticket.",
     options: [],
-    // What a router judges: the person, or a Session on what it owns.
+    // What a router judges: the person, or a Session the area's policy lets act.
     catalog: { actor: "session-own", scope: "workspace", idempotency: "command-id" },
   },
   {
@@ -70,16 +72,19 @@ export type ExampleAreaEntry = (typeof EXAMPLE_AREA_ENTRIES)[number];
 /** The area's own resource kind: no edit to `@volli/session-rpc` names it. */
 export const TICKET_RESOURCE = "ticket";
 
-function ticketResource(id: string): WorkspaceResource {
-  return { kind: TICKET_RESOURCE, id };
+/** A ticket the command names; a subject unless it says otherwise. */
+function ticketResource(id: string, relation?: ResourceRelation): WorkspaceResource {
+  return relation === undefined
+    ? { kind: TICKET_RESOURCE, id }
+    : { kind: TICKET_RESOURCE, id, relation };
 }
 
 /** One ticket, as the example ledger keeps it. */
 export interface ExampleTicket {
   readonly id: string;
   readonly workspaceId: WorkspaceId;
-  /** The Session working it, or null for one only the person holds. */
-  readonly ownerSessionId: SessionId | null;
+  /** The Sessions coordinating on it: several may, and none is "the owner". */
+  readonly sessions: readonly SessionId[];
   readonly parentId: string | null;
   readonly afterId: string | null;
 }
@@ -115,8 +120,12 @@ export class ExampleTicketLedger {
     return this.tickets.get(id)?.workspaceId ?? null;
   }
 
-  ownerOf(id: string): SessionId | null {
-    return this.tickets.get(id)?.ownerSessionId ?? null;
+  /**
+   * The area's own coordination rule, standing in for production's ticket
+   * policy: a Session may act on a ticket it is coordinating on.
+   */
+  sessionMayAct(id: string, sessionId: SessionId): boolean {
+    return this.tickets.get(id)?.sessions.includes(sessionId) ?? false;
   }
 
   create(input: { commandId: string; parentTicketId: string; title: string }): ExampleReceipt {
@@ -182,9 +191,13 @@ export function createExampleAreaRouter() {
       move: workspaceProcedure(
         "ticket.move",
         z.object({ commandId, ticketId, afterTicketId: ticketId }),
-        // Two resources: each must be in the caller's Workspace (and, for a
-        // Session, its own), or the call never reaches the ledger.
-        (input) => [ticketResource(input.ticketId), ticketResource(input.afterTicketId)],
+        // Two resources, both Workspace-checked. The moved ticket is the
+        // subject, judged by the area's policy for a Session; the one it lands
+        // after is only a reference, so a Session needs no authority over it.
+        (input) => [
+          ticketResource(input.ticketId),
+          ticketResource(input.afterTicketId, "reference"),
+        ],
       )
         .output(receiptSchema)
         .mutation(({ ctx, input }) => ctx.tickets.move(input)),
@@ -217,7 +230,8 @@ export function exampleAreaContext(
     diagnostics,
     resourceWorkspace: (resource) =>
       resource.kind === TICKET_RESOURCE ? tickets.workspaceOf(resource.id) : null,
-    resourceOwner: (resource) =>
-      resource.kind === TICKET_RESOURCE ? tickets.ownerOf(resource.id) : null,
+    // From the area's existing policy, never a single owner field.
+    sessionMayAct: (resource, sessionId) =>
+      resource.kind === TICKET_RESOURCE && tickets.sessionMayAct(resource.id, sessionId),
   };
 }

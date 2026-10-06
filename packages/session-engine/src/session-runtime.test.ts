@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { isCommandIntentConflict } from "@volli/host-protocol";
+import { isCommandIntentConflict } from "@volli/shared";
 import type {
   ObservabilityEvent,
   ObservabilitySink,

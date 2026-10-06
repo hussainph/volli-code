@@ -364,10 +364,14 @@ export const VERB_IDEMPOTENCIES = [
  * - `any`: every admitted actor, Sessions included, on any resource in the
  *   caller's Workspace;
  * - `user`: the person only (a paired device, the desktop's own window);
- * - `session-own`: the person, or a Session acting only on resources it owns.
- *   The router asks the context's `resourceOwner` port about EVERY resource
- *   the call names, after the Workspace check; any one not that Session's is
- *   `FORBIDDEN` / `verb-refused`. Workspace-scoped entries only.
+ * - `session-own`: the person, or a Session the area's own policy lets act on
+ *   every SUBJECT the call names. After the Workspace check (which every named
+ *   resource gets, subjects and references alike), the router asks the
+ *   context's `sessionMayAct` predicate about each subject; any `false`, no
+ *   subject at all, or no predicate is `FORBIDDEN` / `verb-refused`. The area
+ *   implements the predicate from its real policy (ticket coordination rules,
+ *   per-project authority), never a single owner field. Workspace-scoped
+ *   entries only.
  */
 export type CatalogActor = "any" | "user" | "session-own";
 export const CATALOG_ACTORS = [
@@ -3651,7 +3655,7 @@ export type HostApiCatalogCoverage = AssertNever<Exclude<HostApiKey, CatalogKey>
  *   socket reads, which no router consults, and a `role` verb is tool-only. A
  *   socket verb whose agent actor is `session` declares its router actor in
  *   `catalog.actor` instead;
- * - `session-own` on a host entry, which names no resource a Session could own;
+ * - `session-own` on a host entry, which names no subject a Session could act on;
  * - `refusedIntents` on anything but a workspace `command-id` entry, the one
  *   shape whose router judges intents with the parsed input.
  */
@@ -3671,7 +3675,7 @@ export function catalogEntriesFrom(entries: readonly VerbEntry[]): readonly Cata
       );
     }
     if (routerActor === "session-own" && entry.catalog.scope !== "workspace") {
-      throw new Error(`Catalog entry ${entry.key} is session-own but names no resource to own`);
+      throw new Error(`Catalog entry ${entry.key} is session-own but names no subject to act on`);
     }
     if (
       entry.catalog.refusedIntents !== undefined &&

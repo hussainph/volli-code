@@ -40,7 +40,7 @@ describe("the one actor mapping (VC-564)", () => {
   });
 
   // VC-564 A2: a router's own requirements, `session-own` among them.
-  it("admits the person to every router actor, and a Session only to its own resources", () => {
+  it("admits the person to every router actor, and a Session only per subject", () => {
     const matrix = Object.fromEntries(
       CATALOG_ACTORS.map((requirement) => [
         requirement,
@@ -52,7 +52,7 @@ describe("the one actor mapping (VC-564)", () => {
     expect(matrix).toEqual({
       any: { user: "admitted", session: "admitted", unauthenticated: "admitted" },
       user: { user: "admitted", session: "refused", unauthenticated: "refused" },
-      "session-own": { user: "admitted", session: "if-owner", unauthenticated: "refused" },
+      "session-own": { user: "admitted", session: "per-subject", unauthenticated: "refused" },
     });
   });
 });

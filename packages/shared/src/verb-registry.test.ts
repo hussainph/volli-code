@@ -1379,7 +1379,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
       catalogEntriesFrom([
         { ...base, catalog: { actor: "session-own", scope: "host", idempotency: "natural" } },
       ]),
-    ).toThrow("Catalog entry area.verb is session-own but names no resource to own");
+    ).toThrow("Catalog entry area.verb is session-own but names no subject to act on");
     for (const catalog of [
       { scope: "workspace", idempotency: "natural", refusedIntents: ["x"] },
       { scope: "host", idempotency: "command-id", refusedIntents: ["x"] },

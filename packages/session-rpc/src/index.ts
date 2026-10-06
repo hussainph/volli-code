@@ -73,6 +73,7 @@ export {
   type ProcedurePaths,
   type RouterCaller,
   type WorkspaceResource,
+  type ResourceRelation,
   type WorkspaceResources,
 } from "./catalog";
 export { SESSION_RESOURCE } from "./session-catalog";

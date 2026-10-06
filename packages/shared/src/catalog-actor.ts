@@ -70,17 +70,17 @@ export function actorRequirementAdmits(requirement: VerbActor, actor: AuthorityA
 
 /**
  * How a router admits a policy actor to an entry whose router actor is
- * `requirement`: outright, only to resources the Session owns (`if-owner`,
- * answered after the Workspace check by the context's `resourceOwner` port),
- * or not at all.
+ * `requirement`: outright, only where the area's policy lets the Session act
+ * on each subject the call names (`per-subject`, answered after the Workspace
+ * check by the context's `sessionMayAct` predicate), or not at all.
  */
-export type CatalogAdmission = "admitted" | "if-owner" | "refused";
+export type CatalogAdmission = "admitted" | "per-subject" | "refused";
 
 export function catalogActorAdmits(
   requirement: CatalogActor,
   actor: AuthorityActorKind,
 ): CatalogAdmission {
-  if (requirement === "session-own" && actor === "session") return "if-owner";
+  if (requirement === "session-own" && actor === "session") return "per-subject";
   const judged = requirement === "session-own" ? "user" : requirement;
   return actorRequirementAdmits(judged, actor) ? "admitted" : "refused";
 }

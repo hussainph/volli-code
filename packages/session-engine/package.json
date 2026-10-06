@@ -16,7 +16,6 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@volli/host-protocol": "workspace:*",
     "@volli/shared": "workspace:*"
   },
   "devDependencies": {

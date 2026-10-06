@@ -14,7 +14,8 @@
  * - every call is then judged by the entry, at dispatch: the caller's grant is
  *   still current, its actor is admitted, any withheld intent is refused, and
  *   every workspace resource the call names is authorized (and, for a
- *   `session-own` entry called by a Session, owned) before the handler runs;
+ *   `session-own` entry called by a Session, every subject is one the area's
+ *   policy lets it act on) before the handler runs;
  * - `catalogRouter` refuses, at construction, a procedure whose middleware
  *   chain does not begin with the exact chain one of ITS builders minted for
  *   the entry at its path (private provenance, never metadata a caller can
@@ -35,7 +36,6 @@ import {
 } from "@trpc/server";
 import {
   HOST_ERROR_REASON_CODES,
-  isCommandIntentConflict,
   isHostActor,
   isHostErrorCode,
   isLocalDeviceActor,
@@ -56,6 +56,7 @@ import {
   catalogEntriesFrom,
   catalogLookup,
   HOST_ACTOR_POLICY,
+  isCommandIntentConflict,
   isolatePerformanceObserver,
   readOptionalPerformanceClock,
   type CatalogEntry,
@@ -110,16 +111,26 @@ export const LOCAL_DESKTOP_CALLER: RouterCaller = Object.freeze({ actor: LOCAL_D
  * One resource a workspace-scoped call names: an area's noun and its id.
  *
  * `kind` is open, so an area adds its own (`ticket`, `terminal`, …) without
- * editing a closed union here; its router context's `resourceWorkspace` and
- * `resourceOwner` ports answer for the kinds that area names. A Workspace is a
- * project (HI § Workspace), so `project` is answered here: a project id is its
- * own Workspace. A kind no port answers resolves to no Workspace, which is
- * refused exactly as a foreign or absent resource is.
+ * editing a closed union here; its router context's `resourceWorkspace` port
+ * and `sessionMayAct` predicate answer for the kinds that area names. A
+ * Workspace is a project (HI § Workspace), so `project` is answered here: a
+ * project id is its own Workspace. A kind no port answers resolves to no
+ * Workspace, which is refused exactly as a foreign or absent resource is.
  */
 export interface WorkspaceResource {
   readonly kind: string;
   readonly id: string;
+  /**
+   * What the command does to it. A `subject` (the default) is what it acts
+   * on, judged by `sessionMayAct` for a Session on a `session-own` entry. A
+   * `reference` is only pointed at (the ticket a move lands after): it gets
+   * the same Workspace check, but no Session needs authority over it.
+   */
+  readonly relation?: ResourceRelation;
 }
+
+/** A named resource is acted on, or only pointed at. */
+export type ResourceRelation = "subject" | "reference";
 
 /** The kind this module answers itself: a project is its own Workspace. */
 export const PROJECT_RESOURCE = "project";
@@ -155,11 +166,13 @@ export interface CatalogCallerContext {
     resource: WorkspaceResource,
   ) => WorkspaceId | null | Promise<WorkspaceId | null>;
   /**
-   * The Session that owns a named resource, or null: the one question a
-   * `session-own` entry asks, after the Workspace check, when a Session calls
-   * it. Absent, a Session owns nothing.
+   * Whether the area's policy lets this Session act on a subject resource:
+   * the one question a `session-own` entry asks, after the Workspace check,
+   * when a Session calls it. The area implements it from its real policy
+   * (ticket coordination rules, per-project authority), never a single owner
+   * field: several Sessions may work one ticket. Absent, no Session may act.
    */
-  resourceOwner?: (resource: WorkspaceResource) => SessionId | null | Promise<SessionId | null>;
+  sessionMayAct?: (resource: WorkspaceResource, sessionId: SessionId) => boolean | Promise<boolean>;
   diagnostics: CatalogDiagnostics;
   transport?: "electron-ipc" | "unknown";
   performanceObserver?: RpcProcedurePerformanceObserver;
@@ -241,9 +254,11 @@ function namedResources(named: WorkspaceResources): readonly WorkspaceResource[]
  * Authorizes every resource a call names, before its handler reads anything:
  * each must resolve to the caller's Workspace, or the call is `NOT_FOUND` /
  * `workspace-unknown`, the one answer for foreign, absent and unanswerable
- * alike. Then, for a Session calling a `session-own` entry, each must be that
- * Session's own, or the call is `FORBIDDEN` / `verb-refused`: the resource is
- * in its Workspace, so saying so reveals nothing.
+ * alike, subjects and references both. Then, for a Session calling a
+ * `session-own` entry, the area's `sessionMayAct` must answer `true` for every
+ * subject, or the call is `FORBIDDEN` / `verb-refused`; with no subject or no
+ * predicate it is refused too (fail closed). Each resource is already known
+ * to be in the Session's Workspace, so saying so reveals nothing.
  */
 async function authorizeWorkspace(
   ctx: CatalogCallerContext,
@@ -266,14 +281,18 @@ async function authorizeWorkspace(
     }
   }
   if (actor.kind !== "session" || catalogActorOf(entry) !== "session-own") return;
-  for (const resource of resources) {
-    const owner = ctx.resourceOwner === undefined ? null : await ctx.resourceOwner(resource);
-    if (owner !== actor.sessionId) {
-      throw new HostProcedureError(
-        "verb-refused",
-        `${entry.key} is open to a Session only on what it owns.`,
-      );
-    }
+  const subjects = resources.filter((resource) => (resource.relation ?? "subject") === "subject");
+  const mayAct = ctx.sessionMayAct;
+  let admitted = mayAct !== undefined && subjects.length > 0;
+  for (const subject of subjects) {
+    if (!admitted) break;
+    admitted = (await mayAct!(subject, actor.sessionId)) === true;
+  }
+  if (!admitted) {
+    throw new HostProcedureError(
+      "verb-refused",
+      `${entry.key} is open to a Session only on what its policy lets it act on.`,
+    );
   }
 }
 
@@ -460,7 +479,7 @@ export function createCatalogBuilders<
       const policyActor = HOST_ACTOR_POLICY[actor.kind];
       const admitted =
         policyActor !== null &&
-        // `if-owner` is admitted here and judged per resource after the
+        // `per-subject` is admitted here and judged per subject after the
         // Workspace check, in `authorizeWorkspace`.
         catalogActorAdmits(requirement, policyActor) !== "refused" &&
         // The desktop's own window reaches every declared entry; a network

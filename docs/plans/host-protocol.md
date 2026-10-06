@@ -76,7 +76,7 @@ Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newl
 - its actor policy, per door. `actor` is what the agent doors (socket, tools, CLI) judge, unchanged. A router judges `catalog.actor`, defaulting to `actor` (`catalogActorOf`), and it must be a `CatalogActor`:
   - `user`: the person (a paired device, the desktop's own window, a VC-623 operator);
   - `any`: Sessions too, on any resource in their Workspace;
-  - `session-own`: the person, or a Session acting only on resources it owns. The router asks the context's `resourceOwner` port about every resource the call names, after the Workspace check. Workspace entries only.
+  - `session-own`: the person, or a Session the area's own policy lets act on every **subject** the call names. After the Workspace check, the router asks the context's `sessionMayAct(resource, sessionId)` predicate about each subject. No predicate, or no subject at all, admits no Session (fail closed). Workspace entries only.
 
   `session` (per-project policy) and `role` (a frozen Role bundle) are agent-door policies no router consults, so they are refused at load as a router actor. A socket verb whose `actor` is `session` declares its router policy in `catalog.actor` instead. Human and agent policy may differ for one command, and that one entry serves both doors. Tiers stay derived from access modes and the agent `actor`, never stored (VC-92);
 - its `catalog` declaration (`VerbCatalogDeclaration`):
@@ -85,7 +85,7 @@ Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newl
   - `actor` (optional): the router's actor policy, above;
   - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own. Its input must be a `{ command: { kind } }` envelope: `workspaceProcedure` demands one at the type (`CatalogKeyRefusingIntents`) and refuses another at construction;
 - its access modes: `hostApi` is the WebSocket projection; an entry with a `catalog` and no access mode is policed but served by no network door (the lab's `labDiagnostics.*`);
-- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in `LEGACY_UNVALIDATED_OUTPUTS` (`catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
+- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in the Session family's `legacyUnvalidatedOutputs` (`session-catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
 - exactly one handler: the procedure's resolver, or the socket binding.
 
 **A worked example**, the entry behind `settings.setExperiment`, with both validators:
@@ -130,13 +130,15 @@ snapshot: workspaceProcedure(
 3. the input parses (`BAD_REQUEST`);
 4. a withheld intent is refused (`FORBIDDEN` / `verb-refused`);
 5. **every** resource the call names is resolved and must be in the caller's Workspace. A `project` is its own Workspace; any other kind goes through the context's `resourceWorkspace` port. Foreign, absent, an unanswered kind and a call naming nothing all answer the same `NOT_FOUND` / `workspace-unknown`, with the same message;
-6. for a Session on a `session-own` entry, every named resource must be owned by that Session (the context's `resourceOwner` port; absent, a Session owns nothing); else `FORBIDDEN` / `verb-refused`. The resources are already known to be in its Workspace, so this reveals nothing.
+6. for a Session on a `session-own` entry, the context's `sessionMayAct` must answer `true` for every **subject** resource (references are not judged), with at least one subject and a predicate present; else `FORBIDDEN` / `verb-refused`. The resources are already known to be in its Workspace, so this reveals nothing.
 
 The desktop's own window owns every Workspace, so it skips steps 5 and 6 and reads nothing new.
 
-After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@volli/host-protocol`) becomes `CONFLICT` / `command-conflict`. The router recognizes the brand, never a ledger's own classes. The Session engine's and runtime's command-id conflicts carry it; an area's intent ledger brands the error it throws when a command id is reused with a different intent, and only that one.
+After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@volli/shared`, where every ledger can reach it without depending on a protocol package) becomes `CONFLICT` / `command-conflict`. The router recognizes the brand, never a ledger's own classes. The Session engine's and runtime's command-id conflicts carry it; an area's intent ledger brands the error it throws when a command id is reused with a different intent, and only that one.
 
-**Resources, open per area.** A resolver returns every resource the input names: `readonly WorkspaceResource[] | WorkspaceResource | null`, where `WorkspaceResource` is `{ kind, id }` and `kind` is an open string. An area adds its own kind (`ticket`, `terminal`, …) by naming it in its resolver and answering it in its context's `resourceWorkspace` and `resourceOwner` ports; nothing in `@volli/session-rpc` changes. "Absent ≡ cross-Workspace" holds by construction: the only path to the handler is every resource resolving to exactly the caller's Workspace id. Anything else (null, a foreign id, a kind no port answers, no port at all) takes the one refusal.
+**Resources, open per area.** A resolver returns every resource the input names: `readonly WorkspaceResource[] | WorkspaceResource | null`, where `WorkspaceResource` is `{ kind, id, relation? }` and `kind` is an open string. An area adds its own kind (`ticket`, `terminal`, …) by naming it in its resolver and answering it in its context's `resourceWorkspace` port and `sessionMayAct` predicate; nothing in `@volli/session-rpc` changes. `relation` is `subject` (the default: what the command acts on) or `reference` (only pointed at, like the ticket a move lands after). **Every** named resource gets the Workspace check; only subjects are judged by `sessionMayAct`. Never drop a reference from the resolver to avoid the policy check, since that also drops its Workspace check: mark it `reference`.
+
+**Session authority is the area's policy, never an owner field.** Several Sessions may work one ticket, and coordination authority is per-project policy. Implement `sessionMayAct` from the area's existing policy (for example, ticket coordination rules), never from a single owner field. Name the noun the command acts on as the subject, not its project: a `project` resource is a Workspace, so it never makes a sensible `session-own` subject. "Absent ≡ cross-Workspace" holds by construction: the only path to the handler is every resource resolving to exactly the caller's Workspace id. Anything else (null, a foreign id, a kind no port answers, no port at all) takes the one refusal.
 
 **Subscriptions dispatch once.** Grants are checked at every dispatch, but a subscription dispatches once: the checks run when it opens, not per event. Closing streams when a credential is revoked, or re-checking per resume, belongs to VC-663's listener, which owns connection lifetime.
 
@@ -152,7 +154,7 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
 **Where area routers live.**
 
 - **Builders.** `@volli/session-rpc` exports `createCatalogBuilders<Ctx extends CatalogCallerContext, Entry = Verb Registry>()`. Each area router calls it once with its own context type, and gets its own `hostProcedure`, `workspaceProcedure` and `catalogRouter`. The Session router's family is `session-catalog.ts`.
-- **Routers.** An area router lives at `packages/session-rpc/src/<area>-router.ts`, for example `board-router.ts` for VC-565. Its context is `CatalogCallerContext` (caller, `resourceWorkspace`, `resourceOwner`, diagnostics) plus the area's ports.
+- **Routers.** An area router lives at `packages/session-rpc/src/<area>-router.ts`, for example `board-router.ts` for VC-565. Its context is `CatalogCallerContext` (caller, `resourceWorkspace`, `sessionMayAct`, diagnostics) plus the area's ports.
 - **Composition.** The router that composes every area router, and the one binding assertion over the union of their paths, live in `packages/session-rpc/src/host-router.ts`, which VC-565 creates when the second router lands. Both doors mount that one router: desktop IPC through VC-608's bridge, and hostd's WebSocket.
 - **Layering (D2).** host-core takes no `@trpc/server`. A router handler never holds domain logic; it calls a context port. The app composition roots (`apps/desktop/src/main`, `apps/hostd`) wire each port to the host-core function the socket verb's `AGENT_VERB_TABLE` binding already calls. That's how "both doors reach the same host-core function" holds, with session-rpc depending on host-core's contract only through the ports it declares. Don't copy handler bodies into session-rpc, and don't add a fourth style.
 
@@ -168,22 +170,36 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
      handler: { site: "main", id: "ticket.create" },
      // ...listed, group, summary, options as for any verb
      catalog: {
-       actor: "session-own",                  // what a router judges: the person, or a Session on what it owns
+       actor: "session-own",                  // what a router judges: the person, or a Session its policy lets act
        scope: "workspace",
        idempotency: "command-id",
      },
    }
    ```
 
-   `catalogEntriesFrom` refuses a router actor it can't judge and `session-own` on a host entry. Add the entry's rows to `verb-registry.test.ts`'s tier and catalog tables.
-2. **Name its resources and ports.** Choose the area's resource kinds (`TICKET_RESOURCE = "ticket"`). Its context extends `CatalogCallerContext` with the area's ports (`ExampleAreaContext.tickets`) and answers `resourceWorkspace` and `resourceOwner` for its kinds (`exampleAreaContext`). The composition root wires these to host-core.
+   `catalogEntriesFrom` refuses a router actor it can't judge and `session-own` on a host entry. Keep the area's rows in one typed array beside the registry, spread into `VERB_REGISTRY`, so the family can be typed by exactly its own entries:
+
+   ```ts
+   // packages/shared/src/verb-registry.ts
+   export const BOARD_ENTRIES = [/* ticket.create, ticket.move, ... */] as const satisfies readonly VerbEntry[];
+   export const VERB_REGISTRY = [/* ... */, ...BOARD_ENTRIES, /* ... */] as const satisfies readonly VerbEntry[];
+
+   // packages/session-rpc/src/board-router.ts
+   createCatalogBuilders<BoardRouterContext, (typeof BOARD_ENTRIES)[number]>({ entries: BOARD_ENTRIES });
+   ```
+
+   A family that passes neither type nor entries is typed across the whole registry and could build another area's key. Add the entry's rows to `verb-registry.test.ts`'s tier and catalog tables.
+2. **Name its resources and ports.** Choose the area's resource kinds (`TICKET_RESOURCE = "ticket"`). Its context extends `CatalogCallerContext` with the area's ports (`ExampleAreaContext.tickets`) and answers `resourceWorkspace` and `sessionMayAct` for its kinds only, `null`/`false` for any other (`exampleAreaContext`). `sessionMayAct` comes from the area's existing policy: the example's ledger lets every Session coordinating on a ticket act on it. The composition root wires these to host-core.
 3. **Build the procedure** from the area's own family, `createCatalogBuilders<ExampleAreaContext, ExampleAreaEntry>()`, inside its `catalogRouter`. Give it both zod validators, and a resolver that names **every** resource the input addresses:
 
    ```ts
    move: workspaceProcedure(
      "ticket.move",
      z.object({ commandId, ticketId, afterTicketId: ticketId }),      // input validator
-     (input) => [ticketResource(input.ticketId), ticketResource(input.afterTicketId)],
+     (input) => [
+       ticketResource(input.ticketId),                    // the subject: judged by sessionMayAct
+       ticketResource(input.afterTicketId, "reference"),  // a reference: Workspace-checked only
+     ],
    )
      .output(receiptSchema)                                           // output validator, required
      .mutation(({ ctx, input }) => ctx.tickets.move(input)),          // the one handler: a port
@@ -192,7 +208,7 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
    A new query or mutation with no `.output()` is refused at construction.
 4. **Brand the intent conflict.** A `command-id` entry's handler reaches an intent ledger. That ledger throws an error implementing `CommandIntentConflict` (`ExampleIntentConflictError`) when a command id is reused with a different intent, and answers the same receipt for the same intent.
 5. **Assert the binding.** `CatalogMismatch<ProcedurePaths<router>, keys>` must be `never` (`ExampleAreaCatalogBinding`; in production, the composition root's union assertion). `pnpm typecheck` names a key missing on either side. A socket verb keeps its `AGENT_VERB_TABLE` binding, and both doors reach the same host-core function (see Layering).
-6. **Write its cases.** The example proves, through the real builders: the person is admitted; the owning Session is admitted; a foreign Session is `FORBIDDEN`/`verb-refused` before the handler; a cross-Workspace second resource is `NOT_FOUND`/`workspace-unknown`, exactly as an absent one; same id with the same intent replays; and another intent is `CONFLICT`/`command-conflict`. An area writes these once in its `describeContract`, so they run on every link.
+6. **Write its cases.** The example proves, through the real builders: the person is admitted; any Session the policy lets act on the subject is admitted (two Sessions on one ticket); a Session it doesn't is `FORBIDDEN`/`verb-refused` before the handler; a Session may land after a ticket only someone else works on (a reference); a cross-Workspace reference is still `NOT_FOUND`/`workspace-unknown`, exactly as an absent one; same id with the same intent replays; and another intent is `CONFLICT`/`command-conflict`. An area writes these once in its `describeContract`, so they run on every link.
 7. **Delete the area's old per-channel IPC** in the same PR (below).
 
 When a socket verb gains a `command-id` entry, the socket door mints a `commandId` per request; that mechanism lands with VC-565, the first ticket with such an entry.
