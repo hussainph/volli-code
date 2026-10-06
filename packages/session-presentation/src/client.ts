@@ -266,6 +266,10 @@ export interface ChatSessionRpc {
     subscribe: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
     };
+    /** Network bindings supply this after negotiating sessions.queue. IPC keeps its private stream. */
+    subscribeQueue?: {
+      subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
+    };
     // Deliberately `unknown`-shaped past the session id: every reader of a
     // command result goes through `wire.ts`, which reads it structurally
     // because this crosses the RPC edge as JSON. A declared field here would
@@ -984,7 +988,11 @@ export class ChatSessionClient {
         this.#writes().setProjection(this.sessionId, snapshot.projection);
         afterSequence = snapshot.throughSequence;
       }
-      this.#subscription = this.#rpc.session.subscribe.subscribe(
+      const source =
+        this.#streamRecovery === "host-link"
+          ? (this.#rpc.session.subscribeQueue ?? this.#rpc.session.subscribe)
+          : this.#rpc.session.subscribe;
+      this.#subscription = source.subscribe(
         // The cursor rides alongside the sequence rather than instead of it: the
         // router resumes from whichever is further on, and an overlay id — which
         // is a durable sequence, not a suffixed one — is safe to hand back.

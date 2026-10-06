@@ -107,6 +107,7 @@ The `sessions.queue` feature adds two catalog entries without widening the froze
 
 - `session.cancelQueued({commandId, sessionId, messageId, expectedRevision?})` withdraws pending intent.
 - `session.editQueued({commandId, sessionId, messageId, message, expectedRevision?})` replaces its payload, retaining the user message's identity.
+- `session.subscribeQueue({sessionId, afterSequence?, lastEventId?})` follows the bounded, resumable Session stream plus queue updates. Network bindings negotiate `sessions.queue` and supply this path to the host-link Session client. The old `session.subscribe` retains its frozen network output union; private desktop IPC continues to carry queue updates on its existing path. Network snapshot/projection reads include queue fields only when this feature was granted.
 
 When given, `expectedRevision` must match the queue revision atomically; otherwise the command changes nothing and returns `CONFLICT` / `queue-revision-conflict`. An already-accepted command replays its original answer before this check. A Client restoring a row to its composer supplies the revision associated with the displayed payload, before any asynchronous durability wait.
 

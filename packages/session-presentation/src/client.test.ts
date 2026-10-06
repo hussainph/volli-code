@@ -860,6 +860,39 @@ const RESNAPSHOT = Object.assign(new Error("That cursor is gone"), {
 });
 
 describe("stream recovery behind a client host link", () => {
+  it.each(["host-link", "resume-once"] as const)(
+    "uses the negotiated queue-aware path only for network recovery (%s)",
+    async (recovery) => {
+      let queueSubscriptions = 0;
+      const { stream, slice, sessionId } = await adopted((rpc) => {
+        const legacy = rpc.session.subscribe;
+        rpc.session.subscribeQueue = {
+          subscribe: (input, handlers) => {
+            queueSubscriptions += 1;
+            return legacy.subscribe(input, handlers);
+          },
+        };
+      }, recovery);
+      expect(queueSubscriptions).toBe(recovery === "host-link" ? 1 : 0);
+      stream().send("0", {
+        kind: "queue",
+        sessionId,
+        throughSequence: 0,
+        revision: 7,
+        queue: [
+          {
+            id: "q",
+            commandId: "queued",
+            state: "releasing",
+            message: { id: "q", role: "user", parts: [{ type: "text", text: "later" }] },
+          },
+        ],
+      });
+      expect(slice()!.queueRevision).toBe(7);
+      expect(slice()!.queue).toMatchObject([{ id: "q", text: "later", queueState: "releasing" }]);
+    },
+  );
+
   it("retries nothing itself: a stream the link ended surfaces at once", async () => {
     const { rpc, stream, slice, notifications } = await adopted(undefined, "host-link");
     const started = stream();
