@@ -100,6 +100,12 @@ export interface SessionView {
   reasoningDrops: readonly TranscriptReasoningDrop[];
   /** The summary currently being generated, absent once its durable result lands. */
   liveCompaction: LiveTranscriptCompaction | null;
+  /**
+   * The cursor for history the host holds above the transcript, or `null` once
+   * the transcript reaches the Session's first event (VC-315): a Session opens
+   * on its newest window and pages back as the reader scrolls.
+   */
+  historyBefore: number | null;
 }
 
 export interface SessionController {
@@ -135,6 +141,8 @@ export interface SessionController {
     resumeAt: number;
   }): Promise<boolean>;
   cancelScheduledResume(scheduleId: string): Promise<boolean>;
+  /** Reads the next window of history above the transcript — see {@link ChatSessionClient.loadOlder}. */
+  loadOlder(): Promise<boolean>;
   close(): void;
 }
 
@@ -194,6 +202,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
   );
+  const historyBefore = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.before ?? null,
+  );
 
   const session = React.useMemo<SessionView>(
     () => ({
@@ -210,11 +222,13 @@ export function useSessionController(
       compactions,
       reasoningDrops,
       liveCompaction,
+      historyBefore,
     }),
     [
       compactions,
       deliverable,
       durableMessages,
+      historyBefore,
       liveCompaction,
       messages,
       openedInteractions,
@@ -266,6 +280,7 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     scheduleResume: (input) => getChatClient(sessionId)?.scheduleResume(input) ?? refused,
     cancelScheduledResume: (scheduleId) =>
       getChatClient(sessionId)?.cancelScheduledResume(scheduleId) ?? refused,
+    loadOlder: () => getChatClient(sessionId)?.loadOlder() ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

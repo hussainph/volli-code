@@ -27,6 +27,7 @@ import {
   SessionRuntimeConflictError,
   SessionEngineCommandConflictError,
   SessionRuntimeNotFoundError,
+  SESSION_HISTORY_WINDOW,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
   type HarnessCommand,
@@ -1411,44 +1412,36 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   it("stops a snapshot's artifact pool after a mid-pool read rejects", async () => {
-    // VC-383: Feed the pool only transcript events, so every first-window
-    // cursor index is a read. The successful peers wait until the failure is
-    // visible; an old worker would then keep consuming later indices, while a
-    // stopped pool has only this first window in its attempt log.
+    // VC-383: Feed the pool only transcript events, so every claimed cursor
+    // index is a read. The read issued halfway through the first pool fails;
+    // its peers wait until that failure is visible. An old worker would then
+    // keep consuming later indices, while a stopped pool has only its first
+    // window in its attempt log. Which indices the first window covers is the
+    // window's business (VC-315 reads newest first), so the failure is chosen
+    // by issue order rather than by position.
     const memory = createInMemoryTranscriptArtifactStore();
     const artifactCount = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 1;
-    const failedArtifact = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
+    const failedRead = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
     const failure = new Error("transcript artifact cannot be verified");
-    const artifactIndexes = new Map<string, number>();
-    const reads: number[] = [];
-    const failedRead = new Gate();
+    let reads = 0;
+    let settledPeers = 0;
     const releasePeers = new Gate();
     const firstWindowSettled = new Gate();
-    let settledPeers = 0;
     const artifacts: TranscriptArtifactStore = {
-      write: async (record) => {
-        const reference = await memory.write(record);
-        artifactIndexes.set(reference.id, artifactIndexes.size);
-        return reference;
-      },
+      write: (record) => memory.write(record),
       read: async (reference) => {
-        const index = artifactIndexes.get(reference.id)!;
-        reads.push(index);
-        if (index === failedArtifact) {
-          failedRead.resolve();
-          throw failure;
-        }
-        if (index < SNAPSHOT_ARTIFACT_READ_CONCURRENCY) {
-          await releasePeers.promise;
-          settledPeers += 1;
-          if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
-            firstWindowSettled.resolve();
-          }
+        const issued = reads;
+        reads += 1;
+        if (issued === failedRead) throw failure;
+        await releasePeers.promise;
+        settledPeers += 1;
+        if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
+          firstWindowSettled.resolve();
         }
         return memory.read(reference);
       },
     };
-    const seeded = composition({ artifacts });
+    const seeded = composition({ artifacts: memory });
     const sessionId = await createAndAttach(seeded.runtime);
     for (let index = 0; index < artifactCount; index += 1) {
       await seeded.adapter.emit({
@@ -1478,15 +1471,13 @@ describe("SessionRuntime native adapter contract", () => {
     }).runtime;
 
     const snapshot = runtime.snapshot({ sessionId });
-    await failedRead.promise;
     await expect(snapshot).rejects.toBe(failure);
     releasePeers.resolve();
     await firstWindowSettled.promise;
     await settleMicrotasks();
 
-    expect(reads).toHaveLength(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
-    expect(reads).toContain(failedArtifact);
-    expect(reads.length).toBeLessThan(transcriptEvents.length);
+    expect(reads).toBe(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(reads).toBeLessThan(transcriptEvents.length);
   });
 
   it("reads every artifact when a snapshot has fewer events than its window", async () => {
@@ -6033,4 +6024,153 @@ it("replays a stop if its failed release was subsequently closed by another acto
   expect(adapter.releases).toBe(1);
   adapter.releaseFailure = null;
   await runtime.close();
+});
+
+const historyFrameBytes = (frame: SessionStreamFrame) =>
+  new TextEncoder().encode(JSON.stringify(frame)).length;
+
+/** Every page from `before` back to the first event, oldest page first. */
+async function pageBackThrough(
+  runtime: SessionRuntime,
+  sessionId: string,
+  before: number | null,
+): Promise<SessionStreamFrame[][]> {
+  const pages: SessionStreamFrame[][] = [];
+  for (let cursor = before; cursor !== null;) {
+    const page = await runtime.history({ sessionId, before: cursor });
+    pages.unshift([...page.frames]);
+    expect(page.before === null || page.before <= cursor).toBe(true);
+    cursor = page.before;
+  }
+  return pages;
+}
+
+function historyReply(index: number, chars: number): RuntimeObservation {
+  return {
+    kind: "message-settled",
+    turnId: `turn-${index}`,
+    occurredAt: 600 + index,
+    message: { entryId: `reply-${index}`, role: "assistant", text: "x".repeat(chars) },
+  };
+}
+
+describe("SessionRuntime bounded history window (VC-315)", () => {
+  it("snapshots only the newest events, and pages back through every one exactly once", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    for (let index = 0; index < SESSION_HISTORY_WINDOW.events + 40; index += 1) {
+      await adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)!.sequence).toBe(snapshot.throughSequence);
+    expect(snapshot.before).toBe(snapshot.frames[0]!.sequence);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const sequences = [...older.flat(), ...snapshot.frames].map(({ sequence }) => sequence);
+    expect(sequences).toEqual(Array.from({ length: snapshot.throughSequence }, (_, i) => i + 1));
+  });
+
+  it("ends a window at its byte bound, reading no artifact the window does not return", async () => {
+    const memory = createInMemoryTranscriptArtifactStore();
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    const replies = 80;
+    for (let index = 0; index < replies; index += 1)
+      await adapter.emit(historyReply(index, 40_000));
+    reads = 0;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    const bytes = snapshot.frames.reduce((sum, frame) => sum + historyFrameBytes(frame), 0);
+    expect(bytes).toBeLessThanOrEqual(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.frames.length).toBeLessThan(SESSION_HISTORY_WINDOW.events);
+    // The frame just older than the window is the one that did not fit.
+    const [refused] = (await runtime.history({ sessionId, before: snapshot.before! })).frames.slice(
+      -1,
+    );
+    expect(bytes + historyFrameBytes(refused!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    // Lazy: what the snapshot read is bounded by its window, not by the history.
+    expect(snapshot.transcript.length).toBeLessThan(replies);
+    reads = 0;
+    await runtime.snapshot({ sessionId });
+    expect(reads).toBeLessThan(snapshot.transcript.length + 32);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const replayed = [...older.flat(), ...snapshot.frames].filter(
+      ({ event }) => event.payload.kind === "transcript.referenced",
+    );
+    expect(replayed).toHaveLength(replies);
+  });
+
+  it("returns one frame larger than the byte bound alone, rather than never advancing", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(historyReply(0, 1_000));
+    await adapter.emit(historyReply(1, SESSION_HISTORY_WINDOW.bytes + 1_000));
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(1);
+    expect(historyFrameBytes(snapshot.frames[0]!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.before).toBe(snapshot.throughSequence);
+    const older = await runtime.history({ sessionId, before: snapshot.before! });
+    expect(older.before).toBeNull();
+    expect(older.frames.at(-1)!.sequence).toBe(snapshot.throughSequence - 1);
+  });
+
+  it("reads a sparse ledger without repeating a frame", async () => {
+    // A ledger that skipped a retired kind has holes in its sequences, and a
+    // double that ignores the range read entirely answers with every event.
+    const seeded = composition();
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < 70; index += 1) {
+      await seeded.adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+    const sparse = (await seeded.engine.listEvents({ sessionId })).filter(
+      ({ sequence }) => sequence % 3 !== 0,
+    );
+    const runtime = composition({
+      engine: { ...seeded.engine, listEvents: async () => sparse },
+      adapter: new FakeAdapter(),
+    }).runtime;
+
+    const page = await runtime.history({ sessionId, before: sparse.at(-1)!.sequence + 1 });
+
+    expect(page.before).toBeNull();
+    expect(page.frames.map(({ sequence }) => sequence)).toEqual(
+      sparse.map(({ sequence }) => sequence),
+    );
+  });
+
+  it("refuses a malformed cursor, an unknown Session and a closed runtime", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await expect(runtime.history({ sessionId, before: 1 })).resolves.toEqual({
+      frames: [],
+      before: null,
+    });
+    await expect(runtime.history({ sessionId, before: 0 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId, before: 1.5 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId: "missing", before: 2 })).rejects.toBeInstanceOf(
+      SessionRuntimeNotFoundError,
+    );
+    await runtime.close();
+    await expect(runtime.history({ sessionId, before: 2 })).rejects.toThrow(
+      "Session runtime is closed",
+    );
+  });
 });

@@ -149,6 +149,7 @@ import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
   rememberTranscriptView,
+  TRANSCRIPT_PAGE_ROWS,
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
@@ -1493,13 +1494,13 @@ export function ChatPlane({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
               <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                {messages.length === 0 && historyPending ? (
+                {messages.length === 0 && session.historyBefore === null && historyPending ? (
                   // History is on its way (VC-383). A null projection with no
                   // Draft behind it means the snapshot has not landed, and the
                   // empty state below would say "nothing was ever said here"
                   // about a Session that may hold a thousand turns.
                   <TranscriptSkeleton />
-                ) : messages.length === 0 ? (
+                ) : messages.length === 0 && session.historyBefore === null ? (
                   // Where this Session runs, drawn (VC-55). It replaces the bare
                   // mark that stood here — see `empty/chat-empty-state.tsx` for why
                   // that reversal is deliberate. What blocks TYPING still sits on
@@ -1513,6 +1514,8 @@ export function ChatPlane({
                     rows={rows}
                     context={turnContext}
                     liveTurn={liveTurn}
+                    historyBefore={session.historyBefore}
+                    onLoadOlder={controller.loadOlder}
                     {...(onOpenSession === undefined ? {} : { onOpenSession })}
                   >
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
@@ -1981,12 +1984,22 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * day of reading history does not leave a thousand rows mounted behind a reader
  * who is watching the live tail. The drop happens while the reader is pinned to
  * the bottom, where removing rows far above the viewport moves nothing.
+ *
+ * AND THE HOST PAGES TOO (VC-315). A Session opens on the host's newest window
+ * of history, not the whole log, so the rows held here can run out before the
+ * Session does. `historyBefore` says the host has more: the same affordance
+ * then reads the next window, with the window pinned to the row at its top so
+ * the page lands above it unmounted, and reveals it once it arrives — the
+ * reader's place kept exactly as for rows that were already here. A reveal that
+ * leaves less than a page above it reads the next window ahead of the reader.
  */
 function ChatTranscript({
   sessionId,
   rows,
   context,
   liveTurn,
+  historyBefore,
+  onLoadOlder,
   onOpenSession,
   children,
 }: {
@@ -1995,6 +2008,10 @@ function ChatTranscript({
   context: TurnContext;
   /** The turn the harness is still writing into, by identity, or `null`. */
   liveTurn: readonly UIMessage[] | null;
+  /** The host's cursor for history above these rows, or `null` when they reach the start. */
+  historyBefore: number | null;
+  /** Reads the next window of history above the rows. */
+  onLoadOlder(): Promise<boolean>;
   onOpenSession?(sessionId: string): void;
   /** The live tail's own marks — compaction progress, the working mark. */
   children?: React.ReactNode;
@@ -2010,7 +2027,7 @@ function ChatTranscript({
   // the tail, and the tail needs no search. A retired anchor (a compaction can
   // take its row) answers -1, which `transcriptWindow` reads as the tail.
   const anchor = React.useMemo(
-    () => (anchorKey === null ? -1 : rows.findIndex((row) => transcriptRowKey(row) === anchorKey)),
+    () => (anchorKey === null ? -1 : transcriptRowIndex(rows, anchorKey)),
     [anchorKey, rows],
   );
   const shown = transcriptWindow(rows.length, anchor);
@@ -2043,8 +2060,25 @@ function ChatTranscript({
     [control, sessionId],
   );
 
+  const hostHasOlder = historyBefore !== null;
+  // A host page asked for by a reveal, to be revealed in its turn once it lands.
+  const pendingPage = React.useRef(false);
+  const topRow = React.useRef<string | null>(null);
+
   const reveal = React.useCallback(() => {
-    if (earlierKey === null) return;
+    if (earlierKey === null) {
+      if (!hostHasOlder) return;
+      // Pinned first, so the page lands above the window instead of in it.
+      const top = topRow.current;
+      if (anchorKey === null && top !== null) {
+        record(top);
+        setAnchorKey(top);
+      }
+      pendingPage.current = true;
+      void onLoadOlder();
+      return;
+    }
+    if (hostHasOlder && shown.earlierStart < TRANSCRIPT_PAGE_ROWS) void onLoadOlder();
     const scroller = control.scroller();
     before.current =
       scroller === null ? null : { height: scroller.scrollHeight, top: scroller.scrollTop };
@@ -2053,7 +2087,7 @@ function ChatTranscript({
     control.stopFollowing();
     record(earlierKey);
     setAnchorKey(earlierKey);
-  }, [control, earlierKey, record]);
+  }, [anchorKey, control, earlierKey, hostHasOlder, onLoadOlder, record, shown.earlierStart]);
 
   React.useLayoutEffect(() => {
     const previous = before.current;
@@ -2075,8 +2109,33 @@ function ChatTranscript({
     revealRef.current = reveal;
   }, [reveal]);
 
+  // The host page a reveal asked for: shown once there are rows above the
+  // window, asked for again if it held nothing to draw, dropped once the host
+  // has nothing more.
+  React.useLayoutEffect(() => {
+    if (!pendingPage.current) return;
+    if (earlierKey !== null) {
+      pendingPage.current = false;
+      revealRef.current();
+      return;
+    }
+    if (historyBefore === null) {
+      pendingPage.current = false;
+      return;
+    }
+    void onLoadOlder();
+  }, [earlierKey, historyBefore, onLoadOlder]);
+
+  // A window with nothing to draw — the tail was all tool traffic and turn
+  // marks — is not a transcript yet: read back until there is a row or no
+  // more history.
+  const empty = rows.length === 0;
+  React.useEffect(() => {
+    if (empty && historyBefore !== null) void onLoadOlder();
+  }, [empty, historyBefore, onLoadOlder]);
+
   const sentinel = React.useRef<HTMLDivElement>(null);
-  const hasEarlier = shown.earlier > 0;
+  const hasEarlier = shown.earlier > 0 || hostHasOlder;
   // THE SENTINEL IS ARMED BY A READER, NOT BY A MOUNT, and that is not a nicety.
   // A plane mounts with its scroller at the top and is moved to the bottom a
   // frame later by the library's first resize — so for that one frame the
@@ -2109,7 +2168,6 @@ function ChatTranscript({
   // leaves the bottom, so pressing "Show earlier" while already pinned (a
   // transcript shorter than its viewport) is never undone by the press itself.
   const anchorRef = React.useRef(anchorKey);
-  const topRow = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     anchorRef.current = anchorKey;
     const first = mounted[0];
@@ -2217,6 +2275,20 @@ function ChatTranscript({
       ))}
       {children}
     </ContentColumn>
+  );
+}
+
+/**
+ * Where the row keyed `key` is now. A host page can complete a turn that the
+ * window began partway through (VC-315), and that turn's key is its first
+ * message, which the page just changed: the row the reader was anchored on is
+ * then the one that now holds that message, not nowhere.
+ */
+function transcriptRowIndex(rows: readonly TranscriptRow[], key: string): number {
+  const exact = rows.findIndex((row) => transcriptRowKey(row) === key);
+  if (exact >= 0) return exact;
+  return rows.findIndex(
+    (row) => row.kind === "turn" && row.messages.some((message) => message.id === key),
   );
 }
 

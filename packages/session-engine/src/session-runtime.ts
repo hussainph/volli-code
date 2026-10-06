@@ -424,19 +424,62 @@ export function isSessionStreamFrame(
 /**
  * A Session's durable state on its own.
  *
- * The frames beside it in {@link SessionRuntimeSnapshot} are a transcript
- * replay: one per event since the Session began, each transcript event costing
- * an artifact read. A surface that is already subscribed to the stream has
- * every one of those frames and needs only this, so it is a separate answer
- * rather than a field a caller is trusted to ignore.
+ * The frames beside it in {@link SessionRuntimeSnapshot} are the newest window
+ * of the transcript, each transcript event costing an artifact read. A surface
+ * that is already subscribed to the stream has those frames and needs only
+ * this, so it is a separate answer rather than a field a caller is trusted to
+ * ignore.
  */
 export interface SessionRuntimeProjectionSnapshot {
   projection: SessionProjection;
   throughSequence: number;
 }
 
-export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot {
+/**
+ * How much transcript one answer may carry (VC-315): a snapshot's tail, or one
+ * page of older history.
+ *
+ * A window ends at whichever bound it meets first, counting frames from the
+ * newest backwards. Bytes are the UTF-8 JSON of the window's frames as one
+ * array, transcript artifacts inlined, which is what crosses the wire; they are
+ * the bound that matters: a frame's size runs from a few hundred bytes to tens
+ * of kilobytes, so a count alone cannot bound a payload. The count stops a run of
+ * tiny frames from making a page arbitrarily long to fold.
+ *
+ * One frame larger than the byte bound is still returned, alone: a window that
+ * could not hold the frame in front of it would never advance, and dropping
+ * the frame would be the silent gap the stream contract forbids.
+ *
+ * Sized against a real profile: a median frame is about 1.1 KB and the 99th
+ * percentile about 30 KB, so 512 KiB is the last few turns of a busy Session,
+ * more than a screen, and opening a Session costs the same at any age. Exported
+ * as the observable limit it is, not a caller option: the engine enforces it,
+ * so no door can ask for the whole log again.
+ */
+export const SESSION_HISTORY_WINDOW = { events: 256, bytes: 512 * 1024 } as const;
+
+/**
+ * One window of a Session's transcript, oldest frame first.
+ *
+ * `before` is the cursor for the window older than this one — pass it to
+ * {@link SessionRuntime.history} — and `null` once the window reaches the
+ * Session's first event. It is an event sequence: the next page holds frames
+ * strictly below it.
+ */
+export interface SessionHistoryPage {
   frames: readonly SessionStreamFrame[];
+  before: number | null;
+}
+
+/**
+ * The projection checkpoint plus the newest {@link SESSION_HISTORY_WINDOW} of
+ * frames, ending at `throughSequence`. Older transcript is paged with
+ * {@link SessionRuntime.history}; resuming the stream after `throughSequence`
+ * is `subscribe`'s job.
+ */
+export interface SessionRuntimeSnapshot
+  extends SessionRuntimeProjectionSnapshot, SessionHistoryPage {
+  /** The window's own transcript artifacts, in frame order. */
   transcript: readonly SessionTranscriptArtifact[];
 }
 
@@ -457,6 +500,8 @@ export interface SessionMessageDeliveryFailure {
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
+  /** The window of transcript strictly before `before`, bounded like a snapshot's tail. */
+  history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage>;
   /** Durable Session state without the transcript replay a fresh surface needs. */
   projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot>;
   subscribe(
@@ -715,30 +760,40 @@ class BufferedObservationSink implements ObservationSink {
 /**
  * One Session's folded history and the resumable state behind it.
  *
- * A cold cache hit retains only the tail after its durable checkpoint. The
- * legacy full-snapshot route re-reads prefix events when it needs frames; a
- * projection read never materializes them merely to recover current state.
+ * A cold cache hit retains only the tail after its durable checkpoint. Frames
+ * are never read from here: a snapshot reads its bounded window from the
+ * ledger, and a projection read never materializes prefix events merely to
+ * recover current state.
  */
 interface ProjectedHistory {
   projection: SessionProjection;
-  /** Tail consumed in this runtime; the whole log only when `completeEvents` is true. */
+  /** Tail consumed in this runtime; the whole log only when no checkpoint seeded it. */
   events: readonly SessionEvent[];
   throughSequence: number;
   checkpoint: SessionProjectionCheckpoint;
-  completeEvents: boolean;
 }
 
 const EVENT_PAGE_SIZE = 500;
 /**
+ * How many events a history window asks the ledger for at a time, newest
+ * first. Twice the artifact pool, so one chunk keeps the pool full; and small,
+ * because the byte bound is only known after a chunk's artifacts are read, so
+ * a chunk is also the most a window can read and then not use.
+ */
+const HISTORY_READ_CHUNK = 32;
+const utf8 = new TextEncoder();
+/**
  * How many transcript artifacts a snapshot reads at once (VC-383).
  *
- * A snapshot materializes one frame per event, and a frame with a transcript
- * reference is one artifact read — an lstat, a file read, a gunzip and a
- * digest, on disk. Awaited one at a time, a Session with a thousand turns paid
- * a thousand serial round trips to the filesystem before its chat could paint
- * a single message; the disk was idle for most of that wall time. A bounded
- * window keeps the reads overlapped without turning a chat open into a burst
- * of every file at once on a machine that is already running a dozen agents.
+ * A snapshot materializes one frame per event in its window, and a frame with
+ * a transcript reference is one artifact read — an lstat, a file read, a
+ * gunzip and a digest, on disk. Awaited one at a time, a Session with a
+ * thousand turns paid a thousand serial round trips to the filesystem before
+ * its chat could paint a single message; the disk was idle for most of that
+ * wall time. VC-315 bounds how many frames a snapshot reads at all
+ * ({@link SESSION_HISTORY_WINDOW}); this pool still keeps the reads inside one
+ * window overlapped without turning a chat open into a burst of files on a
+ * machine that is already running a dozen agents.
  * Order is preserved: the frame list is positional, so the window only
  * changes WHEN each artifact is read, never where it lands.
  *
@@ -2209,24 +2264,30 @@ class DefaultSessionRuntime implements SessionRuntime {
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
-    // A persisted projection intentionally retains no prefix event rows. The
-    // legacy full snapshot still promises every frame, so only that procedure
-    // pays the full-log read; projection-first opens and routine state reads do
-    // not. A future paginated snapshot can remove this compatibility cost.
-    const events = history.completeEvents
-      ? history.events
-      : await this.#listEventsPaged({ sessionId: input.sessionId });
-    const frames = await this.#frames(events);
+    // The checkpoint plus a tail, never the log (VC-315): the window ends at
+    // the projection's own cursor, so the frames and the state beside them
+    // describe one moment, and a subscriber resumes strictly after it.
+    const page = await this.#window(input.sessionId, history.throughSequence + 1);
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const frame of frames) {
+    for (const frame of page.frames) {
       if (frame.transcript) transcript.push(frame.transcript);
     }
     return {
       projection: history.projection,
       throughSequence: history.throughSequence,
-      frames,
+      frames: page.frames,
+      before: page.before,
       transcript,
     };
+  }
+
+  async history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage> {
+    this.#assertOpen();
+    if (!Number.isInteger(input.before) || input.before < 1) {
+      throw new Error("Session history cursor must be a positive integer");
+    }
+    await this.#requireSession(input.sessionId);
+    return this.#window(input.sessionId, input.before);
   }
 
   async projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot> {
@@ -3333,6 +3394,45 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   /**
+   * The newest frames strictly below `before`, inside {@link SESSION_HISTORY_WINDOW}.
+   *
+   * Read backwards a chunk at a time, because the byte bound is only known once
+   * a chunk's artifacts are read: what a window costs is the chunk it stops in,
+   * never the history behind it. Each chunk is an indexed range read — event
+   * sequences are dense per Session, so "the `n` before `cursor`" is the range
+   * after `cursor - 1 - n` — and anything outside that range is dropped rather
+   * than trusted, which keeps a sparse ledger (one that skipped a retired kind)
+   * from returning a frame twice.
+   */
+  async #window(sessionId: string, before: number): Promise<SessionHistoryPage> {
+    const newestFirst: SessionStreamFrame[] = [];
+    // The frames as one JSON array: its brackets, and a separator per frame.
+    let bytes = 1;
+    // Every event strictly below the cursor is still unread.
+    let cursor = before;
+    while (cursor > 1 && newestFirst.length < SESSION_HISTORY_WINDOW.events) {
+      const want = Math.min(HISTORY_READ_CHUNK, SESSION_HISTORY_WINDOW.events - newestFirst.length);
+      const afterSequence = Math.max(0, cursor - 1 - want);
+      const upTo = cursor;
+      const events = (
+        await this.ports.engine.listEvents({ sessionId, afterSequence, limit: want })
+      ).filter((event) => event.sequence > afterSequence && event.sequence < upTo);
+      const chunk = await this.#frames(events);
+      for (let index = chunk.length - 1; index >= 0; index -= 1) {
+        const frame = chunk[index]!;
+        const size = utf8.encode(JSON.stringify(frame)).length + 1;
+        if (newestFirst.length > 0 && bytes + size > SESSION_HISTORY_WINDOW.bytes) {
+          return { frames: newestFirst.toReversed(), before: frame.sequence + 1 };
+        }
+        newestFirst.push(frame);
+        bytes += size;
+      }
+      cursor = afterSequence + 1;
+    }
+    return { frames: newestFirst.toReversed(), before: cursor > 1 ? cursor : null };
+  }
+
+  /**
    * The one place a command result is built, which is why `refusal` can be a
    * required field without asking twenty-seven call sites about it: only the
    * paths that carry an adapter's judgement pass one, and every other path
@@ -3395,8 +3495,8 @@ class DefaultSessionRuntime implements SessionRuntime {
    * which is linear in Session length per read and quadratic across a streaming
    * turn. A live entry and a persisted checkpoint now both retain the reducer's
    * complete resumable state and ask only for events after `throughSequence`.
-   * The legacy full snapshot remains the one route that explicitly asks for
-   * every frame.
+   * No route asks for every frame any more: a snapshot reads a bounded window
+   * (VC-315).
    *
    * That makes the invalidation rule the ledger's own contract, and the fold
    * has exactly two durable inputs, each covered by one clause of it:
@@ -3592,7 +3692,6 @@ function foldHistory(
     events: prior ? [...prior.events, ...events] : events,
     throughSequence: folded.throughSequence,
     checkpoint: folded,
-    completeEvents: prior?.completeEvents ?? checkpoint === null,
   };
 }
 

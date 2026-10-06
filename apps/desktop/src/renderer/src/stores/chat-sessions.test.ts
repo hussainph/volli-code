@@ -120,6 +120,7 @@ function fakeTransport() {
           return { projection, frames: [], throughSequence: 0 };
         },
       },
+      history: { query: async () => ({ frames: [], before: null }) },
       projection: { query: async () => ({ projection }) },
       subscribe: {
         subscribe: (input) => {

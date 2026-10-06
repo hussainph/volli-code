@@ -257,6 +257,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "modelAccess.pickerView": "coordination",
   "modelAccess.setPickerView": "coordination",
   "session.snapshot": "coordination",
+  "session.history": "coordination",
   "session.projection": "coordination",
   "session.subscribe": "coordination",
   "session.command": "coordination",
@@ -1279,6 +1280,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "modelAccess.pickerView": ["host", "read"],
     "modelAccess.setPickerView": ["host", "natural"],
     "session.snapshot": ["workspace", "read"],
+    "session.history": ["workspace", "read"],
     "session.projection": ["workspace", "read"],
     "session.subscribe": ["workspace", "read"],
     "session.command": ["workspace", "command-id"],
@@ -1317,6 +1319,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "sessions.create"
       | "sessions.attach"
       | "session.snapshot"
+      | "session.history"
       | "session.projection"
       | "session.subscribe"
       | "session.command"

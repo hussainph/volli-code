@@ -653,6 +653,9 @@ importers:
 
   packages/session-presentation:
     dependencies:
+      '@volli/host-protocol':
+        specifier: workspace:*
+        version: link:../host-protocol
       '@volli/session-engine':
         specifier: workspace:*
         version: link:../session-engine

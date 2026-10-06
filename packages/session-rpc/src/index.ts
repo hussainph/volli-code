@@ -10,9 +10,11 @@ import {
   type SessionRuntimeCommandResult,
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
+  type SessionHistoryPage,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
   type SessionStreamFrame,
+  type SessionTranscriptArtifact,
   type SessionStreamOverlay,
   type SessionStartResult,
 } from "@volli/session-engine";
@@ -700,6 +702,50 @@ const sessionSubscriptionSchema = z.object({
   lastEventId: sseCursor.optional(),
 });
 
+/** `before` is an event sequence: the page holds frames strictly below it (VC-315). */
+const sessionHistorySchema = z.object({
+  sessionId: nonEmptyString,
+  before: nonNegativeSafeInteger.min(1),
+});
+
+/**
+ * Whether a value survives a JSON wire unchanged: finite numbers, plain arrays
+ * and records, nothing else, no cycles. The frame's event and transcript are
+ * opaque to the envelope schema below, so this is what validates them (HP §
+ * Commands, subscriptions and errors: new opaque seams validate JSON
+ * recursively).
+ */
+function isJsonValue(value: unknown, path: Set<object> = new Set()): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || path.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return false;
+  path.add(value);
+  const items = Array.isArray(value) ? value : Object.values(value);
+  const json = items.every((item) => isJsonValue(item, path));
+  path.delete(value);
+  return json;
+}
+
+/**
+ * One page of older transcript (VC-315), validated at the envelope: frames in
+ * order with JSON payloads, and the cursor for the page before it.
+ */
+const sessionHistoryPageSchema = z.object({
+  frames: z.array(
+    z.object({
+      sessionId: nonEmptyString,
+      sequence: nonNegativeSafeInteger.min(1),
+      event: z.custom<RendererSessionEvent>((value) => isJsonValue(value), "Expected JSON"),
+      transcript: z
+        .custom<SessionTranscriptArtifact>((value) => isJsonValue(value), "Expected JSON")
+        .nullable(),
+    }),
+  ),
+  before: nonNegativeSafeInteger.min(1).nullable(),
+});
+
 const diagnosticsSubscriptionSchema = z.object({
   afterId: nonNegativeSafeInteger.optional(),
   lastEventId: sseCursor.optional(),
@@ -933,6 +979,11 @@ export function createSessionRouter() {
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
       ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+      // Older transcript, a bounded page at a time, for a surface scrolling
+      // back past the snapshot's tail (VC-315). The engine owns the bound.
+      history: workspaceProcedure("session.history", sessionHistorySchema, sessionResource)
+        .output(sessionHistoryPageSchema)
+        .query(async ({ ctx, input }) => rendererHistoryPage(await ctx.runtime.history(input))),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
@@ -1198,14 +1249,28 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
-  projection: SessionPresentationProjection;
+/** One window of transcript as the renderer receives it: scrubbed frames, then the older cursor. */
+export interface RendererSessionHistoryPage {
   frames: RendererSessionStreamFrame[];
+  before: number | null;
+}
+
+function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPage {
+  return { frames: page.frames.map(rendererFrame), before: page.before };
+}
+
+/**
+ * The projection checkpoint plus the newest window of frames (VC-315). The
+ * window's own artifact list stays behind: every one of them is already inlined
+ * on its frame.
+ */
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): RendererSessionHistoryPage & {
+  projection: SessionPresentationProjection;
   throughSequence: number;
 } {
   return {
     ...rendererProjection(snapshot),
-    frames: snapshot.frames.map(rendererFrame),
+    ...rendererHistoryPage(snapshot),
   };
 }
 

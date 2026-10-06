@@ -21,6 +21,7 @@ import type {
   RendererSessionEvent,
   RendererSessionEventPayload,
   RendererSessionInteraction,
+  SessionPresentationProjection,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -112,6 +113,13 @@ export interface TranscriptReasoningDrop {
 export interface ChatTranscriptState {
   frames: readonly ChatSessionFrame[];
   throughSequence: number;
+  /**
+   * The history the host still holds above `frames` (VC-315): the cursor to
+   * hand `session.history`, or `null` once the transcript reaches the
+   * Session's first event. A snapshot is a bounded tail, so an old Session
+   * opens with this set and fills in as the reader scrolls back.
+   */
+  before: number | null;
   turnActive: boolean;
   /**
    * How many turn boundaries this Session has crossed.
@@ -193,6 +201,7 @@ const EMPTY_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
+  before: null,
   turnActive: false,
   turnEpoch: 0,
   durableMessages: [],
@@ -353,6 +362,7 @@ export function appendFrames(
   return {
     frames: last ? [...state.frames, ...fresh] : state.frames,
     throughSequence: last ? last.sequence : state.throughSequence,
+    before: state.before,
     turnActive,
     turnEpoch,
     durableMessages,
@@ -375,6 +385,102 @@ export function appendFrames(
         ? state.reasoningDrops
         : [...state.reasoningDrops, ...landedReasoningDrops],
   };
+}
+
+/** One window of transcript as the host answers it: frames in order, and the cursor above them. */
+export interface TranscriptWindow {
+  frames: readonly ChatSessionFrame[];
+  before: number | null;
+}
+
+/**
+ * A snapshot's window, folded into the transcript a surface already holds.
+ *
+ * When the window carries on from what is held — the common reopen, a stream
+ * that dropped and came straight back — it is an ordinary append, and the
+ * history already paged in stays where the reader left it. When it does not,
+ * because the transcript is new or the host's tail starts past a gap (a
+ * resnapshot after a long lid-close), the transcript restarts from the window:
+ * the newest work paints first and older pages come back on scroll.
+ *
+ * A window that starts after the Session's first event cannot say what its
+ * missing prefix said, and two facts a person acts on live there: whether a
+ * turn is open (the Stop control) and which interactions a receipt in view
+ * answers. Both are read off the projection checkpoint the window arrived
+ * with instead. A window from the first event needs neither and folds exactly
+ * as the whole log always did.
+ */
+export function seedTranscriptWindow(
+  state: ChatTranscriptState,
+  window: TranscriptWindow,
+  projection: SessionPresentationProjection,
+): ChatTranscriptState {
+  const first = window.frames[0];
+  const gap = first !== undefined && first.sequence > state.throughSequence + 1;
+  if (state.throughSequence > 0 && !gap) return appendFrames(state, window.frames);
+  const partial = window.before !== null;
+  const base: ChatTranscriptState = {
+    ...EMPTY_TRANSCRIPT,
+    before: window.before,
+    // Counted on from the transcript it replaces, so a turn boundary in the
+    // window still reads as one to `settledLifecycle`.
+    turnEpoch: state.turnEpoch,
+    turnActive: partial && projection.turnActive,
+    openedInteractions: partial ? projectedInteractions(projection) : EMPTY_INTERACTION_INDEX,
+  };
+  return appendFrames(base, window.frames);
+}
+
+/**
+ * An older page, put above the transcript (VC-315).
+ *
+ * Applied only when it answers the cursor the transcript still holds: a page
+ * requested before a resnapshot restarted the transcript belongs to the
+ * transcript that is gone.
+ *
+ * Everything a frame says about its position — where a message first spoke,
+ * what a compaction boundary sits after, which skills opened the Session — is
+ * a forward fold, so the durable half is refolded over the whole held history
+ * rather than patched: a page is a reader's scroll, not a stream batch, and
+ * its cost is what the transcript already holds. The live half — the turn the
+ * stream says is open, the overlays mid-word, a summary in progress — is about
+ * the newest moment and is kept exactly as it was.
+ */
+export function prependTranscriptHistory(
+  state: ChatTranscriptState,
+  requested: number,
+  page: TranscriptWindow,
+): ChatTranscriptState {
+  if (state.before !== requested) return state;
+  const older = page.frames.filter((frame) => frame.sequence < requested);
+  if (older.length === 0) return { ...state, before: page.before };
+  const refolded = appendFrames(
+    { ...EMPTY_TRANSCRIPT, openedInteractions: state.openedInteractions },
+    [...older, ...state.frames],
+  );
+  return {
+    ...refolded,
+    throughSequence: state.throughSequence,
+    before: page.before,
+    turnActive: state.turnActive,
+    turnEpoch: state.turnEpoch,
+    overlay: state.overlay,
+    liveCompaction: state.liveCompaction,
+    lastCompactionSequence: state.lastCompactionSequence,
+    messages: layerTranscriptOverlay(refolded.durableMessages, state.overlay),
+  };
+}
+
+/** Every interaction the projection still remembers, open or answered, by id. */
+function projectedInteractions(
+  projection: SessionPresentationProjection,
+): ReadonlyMap<string, RendererSessionInteraction> {
+  const byId = new Map<string, RendererSessionInteraction>();
+  for (const { interaction } of projection.interactions.resolved) {
+    byId.set(interaction.id, interaction);
+  }
+  for (const interaction of projection.interactions.active) byId.set(interaction.id, interaction);
+  return byId;
 }
 
 /**

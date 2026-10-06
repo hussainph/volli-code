@@ -36,6 +36,7 @@ describe("Session RPC wire protocol", () => {
       "sessions.create",
       "sessions.attach",
       "session.snapshot",
+      "session.history",
       "session.projection",
       "session.subscribe",
       "session.command",

@@ -19,6 +19,7 @@
  * that has to be right; its transport and its container are details it names
  * requirements for.
  */
+import { readHostError } from "@volli/host-protocol";
 import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
@@ -32,7 +33,12 @@ import type {
 import type { UIMessage } from "ai";
 
 import { isUntitledChatSession, nextRelease, type QueuedMessage } from "./session-model";
-import { movesProjection, type ChatSessionFrame, type ChatTranscriptState } from "./transcript";
+import {
+  movesProjection,
+  type ChatSessionFrame,
+  type ChatTranscriptState,
+  type TranscriptWindow,
+} from "./transcript";
 import {
   chatSessionCompactionProgress,
   chatSessionFrame,
@@ -210,6 +216,20 @@ export interface ChatSessionWrites {
     progress?: readonly SessionStreamCompactionProgress[],
     clearLiveCompaction?: boolean,
   ): void;
+  /**
+   * A snapshot: the newest window of frames and the projection checkpoint they
+   * end at, in one write (VC-315).
+   */
+  applySnapshot(
+    sessionId: string,
+    window: TranscriptWindow,
+    projection: SessionPresentationProjection,
+  ): void;
+  /**
+   * One older page, put above the transcript — only while the transcript still
+   * holds `requested`, the cursor the page answers.
+   */
+  prependHistory(sessionId: string, requested: number, page: TranscriptWindow): void;
   setProjection(sessionId: string, projection: SessionPresentationProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
@@ -292,11 +312,25 @@ export interface ChatCommandRequest {
  */
 export interface ChatSessionRpc {
   session: {
+    /**
+     * The projection checkpoint plus the newest window of frames, bounded by
+     * the host (VC-315). `before` is the cursor for the history above it;
+     * absent from a host that predates the bound, which always sent the whole
+     * log.
+     */
     snapshot: {
       query(input: { sessionId: string }): Promise<{
         projection: SessionPresentationProjection;
         frames: readonly unknown[];
         throughSequence: number;
+        before?: number | null;
+      }>;
+    };
+    /** One older window: frames strictly below `before`, and the cursor above them. */
+    history: {
+      query(input: { sessionId: string; before: number }): Promise<{
+        frames: readonly unknown[];
+        before: number | null;
       }>;
     };
     projection: {
@@ -489,6 +523,14 @@ export class ChatSessionClient {
   #overlays: SessionStreamOverlay[] = [];
   #compactionProgress: SessionStreamCompactionProgress[] = [];
   #lastEventId: string | null = null;
+  /** The one page request in flight, which every caller asking for more shares. */
+  #loadingOlder: Promise<boolean> | null = null;
+  /**
+   * A resnapshot this client answered quietly and whose reopened stream has
+   * not started yet. A second one before it starts is a host that cannot be
+   * resumed at all, and that is reported rather than retried in a loop.
+   */
+  #resnapshotting = false;
   /**
    * Which open owns the stream. Bumped by every reconnect and by dispose, so a
    * snapshot that resolves after the surface moved on cannot seed a second
@@ -561,6 +603,38 @@ export class ChatSessionClient {
   async connect(): Promise<void> {
     delete this.#reportedLocalFailures.stream;
     await this.#open(null);
+  }
+
+  /**
+   * Reads the window of history above the transcript, if the host has any.
+   *
+   * The reader is waiting on this — they scrolled up to read it — so a failure
+   * is told, once per attempt, and leaves the transcript as it was for the
+   * next reveal to ask again. Concurrent asks share one request: the sentinel
+   * and the button can both fire for the same scroll.
+   */
+  loadOlder(): Promise<boolean> {
+    const before = this.#slice()?.transcript.before ?? null;
+    if (before === null) return Promise.resolve(false);
+    this.#loadingOlder ??= this.#readOlder(before).finally(() => {
+      this.#loadingOlder = null;
+    });
+    return this.#loadingOlder;
+  }
+
+  async #readOlder(before: number): Promise<boolean> {
+    try {
+      const page = await this.#rpc.session.history.query({ sessionId: this.sessionId, before });
+      if (this.#retired) return false;
+      this.#writes().prependHistory(this.sessionId, before, {
+        frames: readFrames(page.frames),
+        before: readBefore(page.before),
+      });
+      return true;
+    } catch (failure) {
+      if (!this.#retired) this.#notify(`Earlier messages: ${errorMessage(failure)}`, "error");
+      return false;
+    }
   }
 
   /**
@@ -1012,8 +1086,11 @@ export class ChatSessionClient {
       if (cursor === null) {
         const snapshot = await this.#rpc.session.snapshot.query({ sessionId: this.sessionId });
         if (this.#stale(generation)) return false;
-        this.#writes().applyStream(this.sessionId, readFrames(snapshot.frames), []);
-        this.#writes().setProjection(this.sessionId, snapshot.projection);
+        this.#writes().applySnapshot(
+          this.sessionId,
+          { frames: readFrames(snapshot.frames), before: readBefore(snapshot.before) },
+          snapshot.projection,
+        );
         afterSequence = snapshot.throughSequence;
       }
       this.#subscription = this.#rpc.session.subscribe.subscribe(
@@ -1026,6 +1103,7 @@ export class ChatSessionClient {
         {
           onStarted: () => {
             delete this.#reportedLocalFailures.stream;
+            this.#resnapshotting = false;
             this.#reconnectable = true;
             this.#streamAlive = true;
           },
@@ -1063,6 +1141,19 @@ export class ChatSessionClient {
     this.#subscription?.unsubscribe();
     this.#subscription = null;
     this.#streamAlive = false;
+    // The host could not resume from this cursor — retention moved past it, or
+    // the backlog is beyond its replay bound — and said so instead of leaving a
+    // gap. That is not a broken stream: reading a fresh tail and resuming after
+    // it is the whole recovery, and it needs no one's attention (VC-315). It is
+    // asked before the reconnect budget because a resume refused this way
+    // fails before it starts. Once per started stream, so a host that refuses
+    // the snapshot's own cursor too ends in the band instead of a loop.
+    if (isResnapshotRequired(failure) && !this.#resnapshotting) {
+      this.#resnapshotting = true;
+      this.#reconnectable = false;
+      void this.#open(null);
+      return;
+    }
     if (!this.#reconnectable) {
       this.#lost(failure);
       return;
@@ -1444,6 +1535,20 @@ function wire(resolution: SessionInteractionResolution): WireResolution {
         }
       : {}),
   };
+}
+
+/** The host's "read a fresh snapshot" answer, on either link (HP § Commands, subscriptions and errors). */
+function isResnapshotRequired(failure: unknown): boolean {
+  return readHostError(failure).reason === "subscription-resnapshot-required";
+}
+
+/**
+ * A window's older cursor. Anything but a positive integer reads as "nothing
+ * above": a host that predates the bound sent no cursor because it sent the
+ * whole log, and a malformed one is not a page worth asking for.
+ */
+function readBefore(before: unknown): number | null {
+  return typeof before === "number" && Number.isSafeInteger(before) && before > 0 ? before : null;
 }
 
 /** A snapshot's frames, with anything malformed dropped rather than drawn. */

@@ -26,7 +26,15 @@ import {
   type ModelAccessSnapshot,
   type ModelSelection,
 } from "@volli/shared";
-import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
+import {
+  appendFrames,
+  disposeChatClient,
+  EMPTY_TRANSCRIPT,
+  getOrCreateChatClient,
+  type ChatSessionFrame,
+  type ChatSessionRpc,
+  type ChatSessionTransport,
+} from "@volli/session-presentation";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -787,5 +795,129 @@ describe("a chat plane holding a long transcript", () => {
     await mountPlane(store);
     expect(shows(revealedTop)).toBe(true);
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS + TRANSCRIPT_PAGE_ROWS);
+  });
+});
+
+describe("a chat plane holding only the host's newest window (VC-315)", () => {
+  /** Turn `index` as a durable frame at sequence `index + 1`. */
+  const turnFrame = (index: number): ChatSessionFrame =>
+    ({
+      sessionId: SESSION,
+      sequence: index + 1,
+      event: {
+        id: `event-${index + 1}`,
+        sessionId: SESSION,
+        sequence: index + 1,
+        occurredAt: index,
+        recordedAt: index,
+        provenance: {
+          source: { kind: "system", id: "session-runtime", detail: null },
+          venue: null,
+        },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: `sha256:${index}`, mediaType: null, digest: null },
+        },
+      },
+      transcript: { message: transcript(index + 1)[index]! },
+    }) as never;
+  const frames = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_value, offset) => turnFrame(from + offset));
+
+  /**
+   * A store holding turns [`from`, TOTAL) with the host's cursor above them,
+   * and a resident client whose host answers pages of `PAGE` turns.
+   */
+  function windowedStore(from: number, total: number, page: number) {
+    const store = chatStore([]);
+    const held = appendFrames({ ...EMPTY_TRANSCRIPT, before: from + 1 }, frames(from, total));
+    store.setState((state) => ({
+      sessions: { [SESSION]: { ...state.sessions[SESSION]!, transcript: held } },
+    }));
+    const requests: number[] = [];
+    const rpc = {
+      session: {
+        history: {
+          query: async ({ before }: { before: number }) => {
+            requests.push(before);
+            const start = Math.max(0, before - 1 - page);
+            return { frames: frames(start, before - 1), before: start > 0 ? start + 1 : null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    return { store, requests };
+  }
+
+  afterEach(() => {
+    disposeChatClient(SESSION);
+  });
+
+  it("offers the host's history above a short window, and reveals each page as it lands", async () => {
+    const { store, requests } = windowedStore(30, 40, 20);
+    await mountPlane(store);
+
+    expect(turnRows()).toBe(10);
+    const button = earlierButton();
+    if (button === null) throw new Error("expected an earlier affordance");
+    expect(button.getAttribute("data-transcript-earlier")).toBe("0");
+
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(requests).toEqual([31]);
+    expect(shows(10)).toBe(true);
+    expect(shows(9)).toBe(false);
+    expect(turnRows()).toBe(30);
+
+    // Pressed until the host has nothing more; bounded so a stuck window fails.
+    for (let press = 0; press < 10 && earlierButton() !== null; press += 1) {
+      await act(async () => {
+        earlierButton()!.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+    }
+    expect(shows(0)).toBe(true);
+    expect(turnRows()).toBe(40);
+    expect(requests).toEqual([31, 11]);
+    expect(store.getState().sessions[SESSION]?.transcript.before).toBeNull();
+  });
+
+  it("reads back on its own past a window with nothing to draw", async () => {
+    const { store, requests } = windowedStore(40, 40, 20);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: { ...EMPTY_TRANSCRIPT, throughSequence: 40, before: 41 },
+        },
+      },
+    }));
+    await mountPlane(store);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(requests).toEqual([41]);
+    expect(shows(39)).toBe(true);
+    expect(shows(19)).toBe(false);
   });
 });
