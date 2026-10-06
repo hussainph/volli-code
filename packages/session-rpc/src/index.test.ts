@@ -19,6 +19,7 @@ import type { HostReceiptStatus } from "@volli/host-protocol";
 import {
   AsyncQueue,
   createSessionRouter,
+  LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
   type AppRouter,
@@ -524,6 +525,7 @@ describe("Session tRPC router", () => {
       cloud: { enabled: false, source: "default" },
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readExperiments: () => experimentSnapshot,
       writeExperiment: (id, enabled) => {
@@ -547,6 +549,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readExperiments: () => ({ cloud: { enabled: false, source: "default" } }),
       writeExperiment: (id, enabled) => {
@@ -568,6 +571,7 @@ describe("Session tRPC router", () => {
     expect(writes).toEqual([]);
 
     const invalidSnapshot = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readExperiments: () => ({ cloud: { enabled: "false", source: "unknown" } }) as never,
       diagnostics: new RpcDiagnosticLog(),
@@ -578,6 +582,7 @@ describe("Session tRPC router", () => {
   it("reports when experimental settings callbacks are unavailable", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -597,6 +602,7 @@ describe("Session tRPC router", () => {
       projection: async () => ({ projection: {}, throughSequence: 4 }) as never,
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -626,6 +632,7 @@ describe("Session tRPC router", () => {
       }),
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -662,6 +669,7 @@ describe("Session tRPC router", () => {
     const serverSnapshot = { ...snapshotWithRecovery(), frames: attachmentFrames() };
     const runtime: SessionRuntime = { ...fixture.runtime, snapshot: async () => serverSnapshot };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -716,6 +724,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const serverFrames = attachmentFrames();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -758,7 +767,11 @@ describe("Session tRPC router", () => {
   it("yields a transient overlay beside durable frames, leaving both exactly as published", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
     const iterator = stream[Symbol.asyncIterator]();
@@ -785,6 +798,7 @@ describe("Session tRPC router", () => {
   it("yields a transient compaction marker at its durable cursor", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -809,7 +823,11 @@ describe("Session tRPC router", () => {
       projection: async () => ({ projection: base.projection, throughSequence: 9 }),
     };
     const diagnostics = new RpcDiagnosticLog();
-    const caller = createSessionRouter().createCaller({ runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime,
+      diagnostics,
+    });
 
     const resolved = await caller.session.projection({ sessionId: "session-1" });
 
@@ -826,6 +844,7 @@ describe("Session tRPC router", () => {
     const samples: unknown[] = [];
     let now = 20;
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
       performanceObserver: {
@@ -850,6 +869,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const defaultClockSamples: unknown[] = [];
     const defaultClockCaller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
       performanceObserver: { record: (sample) => defaultClockSamples.push(sample) },
@@ -860,6 +880,7 @@ describe("Session tRPC router", () => {
     expect(defaultClockSamples).toHaveLength(1);
 
     const throwingCaller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
       performanceObserver: {
@@ -882,6 +903,7 @@ describe("Session tRPC router", () => {
       const samples: unknown[] = [];
       let reads = 0;
       const caller = createSessionRouter().createCaller({
+        caller: LOCAL_DESKTOP_CALLER,
         runtime: fixture.runtime,
         diagnostics: new RpcDiagnosticLog(),
         performanceObserver: {
@@ -905,6 +927,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       inspectModelAccess: async (input) => {
         calls.push(input);
@@ -1004,6 +1027,7 @@ describe("Session tRPC router", () => {
     // Access caller (composer, Settings, `setDefault`'s availability check).
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       inspectModelAccess: async () => ({
         observedAt: 42,
@@ -1047,6 +1071,7 @@ describe("Session tRPC router", () => {
     // same way — the entry's own identity — and the catalog survives.
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       inspectModelAccess: async () => ({
         observedAt: 42,
@@ -1119,6 +1144,7 @@ describe("Session tRPC router", () => {
   it("carries an account's usage limits across the edge, and only the fields it knows", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       inspectModelAccess: async () => ({
         observedAt: 42,
@@ -1206,6 +1232,7 @@ describe("Session tRPC router", () => {
       },
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readModelAccessDefaults: () => stored,
       writeModelAccessDefault: (purpose, selection) => {
@@ -1250,6 +1277,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readHiddenModels: () => [{ providerId: "anthropic", modelId: "claude-haiku" }],
       writeHiddenModels: (hidden) => {
@@ -1271,6 +1299,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readCompactionPolicy: () => ({ autoCompaction: true }),
       writeCompactionPolicy: (policy) => {
@@ -1292,6 +1321,7 @@ describe("Session tRPC router", () => {
   it("says so rather than inventing a policy when preferences are unavailable", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -1312,6 +1342,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readCodeModePolicy: () => ({
         enabled: true,
@@ -1345,6 +1376,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       writeCodeModePolicy: (policy) => {
         writes.push(policy);
@@ -1385,6 +1417,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       readModelPickerView: () => "all",
       writeModelPickerView: (view) => {
@@ -1406,6 +1439,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         calls.push(["create", input]);
@@ -1448,6 +1482,7 @@ describe("Session tRPC router", () => {
 
     // Unconfigured transports refuse explicitly, like every other product facade.
     const bare = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -1465,6 +1500,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         calls.push(input);
@@ -1500,6 +1536,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         calls.push(input);
@@ -1556,6 +1593,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         calls.push(input);
@@ -1591,6 +1629,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const auto = { confidence: 0.8, alternatives: [] };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: {
         ...fixture.runtime,
         projection: async (input) => {
@@ -1606,6 +1645,7 @@ describe("Session tRPC router", () => {
 
     const submitted: unknown[] = [];
     const commandCaller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: {
         ...fixture.runtime,
         command: async (request) => {
@@ -1632,6 +1672,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         calls.push(input);
@@ -1687,6 +1728,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const admitted: unknown[] = [];
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       createSession: async (input) => {
         admitted.push(input);
@@ -1734,6 +1776,7 @@ describe("Session tRPC router", () => {
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
       transport: "electron-ipc",
@@ -1772,6 +1815,7 @@ describe("Session tRPC router", () => {
       throughSequence: 6,
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       attachSession: async (input) => {
         calls.push(["attach", input]);
@@ -1793,6 +1837,7 @@ describe("Session tRPC router", () => {
   it("fails product facades explicitly when a transport did not configure them", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -1829,6 +1874,7 @@ describe("Session tRPC router", () => {
   it("classifies unconfigured product facades as unavailable transport capabilities", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -1860,33 +1906,43 @@ describe("Session tRPC router", () => {
     }
   });
 
-  it("passes a structurally valid create command to the runtime without a session identifier", async () => {
-    const fixture = runtimeFixture();
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      diagnostics: new RpcDiagnosticLog(),
-    });
+  // VC-564: the guard was keyed on `transport === "electron-ipc"`, so any other
+  // door (the WebSocket harness link passed "unknown") reached the runtime with
+  // a raw create. It is the catalog entry's policy now, and holds on every door.
+  it.each(["electron-ipc", "unknown", undefined] as const)(
+    "refuses the start kinds through session.command over transport %s, before the handler",
+    async (transport) => {
+      const fixture = runtimeFixture();
+      const caller = createSessionRouter().createCaller({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        ...(transport === undefined ? {} : { transport }),
+      });
 
-    await caller.session.command({
-      commandId: "create-command",
-      command: {
-        kind: "session.create",
-        projectId: "project-1",
-        ticketId: null,
-        role: "project",
-        parentSessionId: null,
-        title: null,
-      },
-    });
-
-    expect(fixture.calls.command).toEqual([
-      expect.objectContaining({
-        commandId: "create-command",
-        command: expect.objectContaining({ kind: "session.create" }),
-        origin: { kind: "user" },
-      }),
-    ]);
-  });
+      await expect(
+        caller.session.command({
+          commandId: "create-command",
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+      await expect(
+        caller.session.command({
+          commandId: "attach-command",
+          sessionId: "session-1",
+          command: { kind: "adapter.attach", continuity: "fresh" },
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+      expect(fixture.calls.command).toEqual([]);
+    },
+  );
 
   // VC-141: the adapter's judgement is in-memory detail, so it only reaches a
   // client if this edge forwards it deliberately. Nullable rather than
@@ -1897,6 +1953,7 @@ describe("Session tRPC router", () => {
     async (refusal) => {
       const fixture = runtimeFixture(refusal);
       const caller = createSessionRouter().createCaller({
+        caller: LOCAL_DESKTOP_CALLER,
         runtime: fixture.runtime,
         diagnostics: new RpcDiagnosticLog(),
       });
@@ -1915,6 +1972,7 @@ describe("Session tRPC router", () => {
   it("passes executor retry attachment identity to the Session runtime only when supplied", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -1950,6 +2008,7 @@ describe("Session tRPC router", () => {
   it("passes a person's scheduled resume and its cancel, and never a settle", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2039,6 +2098,7 @@ describe("Session tRPC router", () => {
       }),
     };
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2054,6 +2114,7 @@ describe("Session tRPC router", () => {
   it("passes an explicit compaction, with or without instructions", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2088,6 +2149,7 @@ describe("Session tRPC router", () => {
   it("refuses compaction instructions too long to be a summarizer's brief", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2107,6 +2169,7 @@ describe("Session tRPC router", () => {
   it("passes a durable model selection without adapter or profile identity", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2150,6 +2213,7 @@ describe("Session tRPC router", () => {
   it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2215,6 +2279,7 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics,
       transport: "electron-ipc",
@@ -2283,7 +2348,11 @@ describe("Session tRPC router", () => {
       code: null,
       message: null,
     });
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const sessionStream = await caller.session.subscribe({
       sessionId: "session-1",
@@ -2317,7 +2386,11 @@ describe("Session tRPC router", () => {
   it("records a sanitized diagnostic when either bounded subscription queue overflows", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const sessionStream = await caller.session.subscribe({
       sessionId: "session-1",
@@ -2358,7 +2431,11 @@ describe("Session tRPC router", () => {
   it("ends an overflowing session subscription with an error its subscriber can catch", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
     const iterator = stream[Symbol.asyncIterator]();
@@ -2400,7 +2477,11 @@ describe("Session tRPC router", () => {
   it("ends a subscription whose runtime source failed with an error its subscriber can catch", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
     const iterator = stream[Symbol.asyncIterator]();
@@ -2428,7 +2509,11 @@ describe("Session tRPC router", () => {
   it("ends an overflowing diagnostics subscription with an error its subscriber can catch", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     const stream = await caller.labDiagnostics.subscribe({ afterId: 0 });
     const iterator = stream[Symbol.asyncIterator]();
@@ -2466,7 +2551,7 @@ describe("Session tRPC router", () => {
     const diagnostics = new RpcDiagnosticLog();
     const controller = new AbortController();
     const caller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: controller.signal },
     );
 
@@ -2490,7 +2575,11 @@ describe("Session tRPC router", () => {
       throw new Error('provider={"token":"super-secret"} /Users/alice/failure');
     };
     const diagnostics = new RpcDiagnosticLog();
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     await expect(caller.session.snapshot({ sessionId: "session-1" })).rejects.toThrow();
     await expect(
@@ -2547,6 +2636,7 @@ describe("Session tRPC router", () => {
   it("rejects non-JSON opaque UIMessage payloads before runtime submission", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
       runtime: fixture.runtime,
       diagnostics: new RpcDiagnosticLog(),
     });
@@ -2603,7 +2693,11 @@ describe("Session tRPC router", () => {
   it("rejects whitespace identifiers and unsafe SSE resume cursors", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
-    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+    const caller = createSessionRouter().createCaller({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: fixture.runtime,
+      diagnostics,
+    });
 
     await expect(caller.session.snapshot({ sessionId: " " })).rejects.toThrow();
     await expect(
@@ -2620,7 +2714,7 @@ describe("Session tRPC router", () => {
     const controller = new AbortController();
     controller.abort();
     const caller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: controller.signal },
     );
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
@@ -2632,7 +2726,7 @@ describe("Session tRPC router", () => {
     const diagnosticsController = new AbortController();
     diagnosticsController.abort();
     const diagnosticsCaller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: diagnosticsController.signal },
     );
     const diagnosticsStream = await diagnosticsCaller.labDiagnostics.subscribe({ afterId: 0 });
@@ -2652,7 +2746,11 @@ describe("Session tRPC router", () => {
         completeSetup = () => void startSubscription(input, listener).then(resolve);
       });
     const caller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics: new RpcDiagnosticLog() },
+      {
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      },
       { signal: controller.signal },
     );
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
@@ -2673,7 +2771,7 @@ describe("Session tRPC router", () => {
       return unsubscribe;
     };
     const diagnosticsCaller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: diagnosticsController.signal },
     );
     const diagnosticsStream = await diagnosticsCaller.labDiagnostics.subscribe({ afterId: 0 });
@@ -2689,7 +2787,7 @@ describe("Session tRPC router", () => {
     const diagnostics = new RpcDiagnosticLog();
     const controller = new AbortController();
     const caller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: controller.signal },
     );
     const stream = await caller.session.subscribe({ sessionId: "session-1" });
@@ -2704,7 +2802,7 @@ describe("Session tRPC router", () => {
 
     const diagnosticsController = new AbortController();
     const diagnosticsCaller = createSessionRouter().createCaller(
-      { runtime: fixture.runtime, diagnostics },
+      { caller: LOCAL_DESKTOP_CALLER, runtime: fixture.runtime, diagnostics },
       { signal: diagnosticsController.signal },
     );
     const diagnosticsStream = await diagnosticsCaller.labDiagnostics.subscribe({ afterId: 999 });

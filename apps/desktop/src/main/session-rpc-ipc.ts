@@ -3,8 +3,9 @@ import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import {
   createSessionRouter,
+  hostErrorOf,
+  LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
-  sanitizeDiagnosticText,
   type RpcProcedurePerformanceObserver,
   type SessionAttachInput,
   type SessionCreateInput,
@@ -31,6 +32,7 @@ import {
   SESSION_RPC_IPC_PROCEDURES,
 } from "@volli/shared";
 import type {
+  SessionRpcIpcError,
   SessionRpcIpcEvent,
   SessionRpcIpcProcedure,
   SessionRpcIpcRequest,
@@ -110,6 +112,13 @@ export type SessionRpcIpcCoverage = AssertNever<
   Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
 >;
 
+/**
+ * What main wires into the bridge. There is deliberately no caller here: this
+ * window is the desktop's own, `LOCAL_DESKTOP_CALLER`, in every Workspace
+ * (VC-564 D7), and no option can make it anyone else. The contract harness
+ * judges other actors over this link by wrapping the router in the test
+ * (`session-rpc-contract.test-support.ts`), never through production options.
+ */
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
@@ -181,7 +190,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         if (request.procedure === "session.subscribe") {
           return await startSubscription(request.input, event.sender);
         }
-        const caller = router.createCaller({
+        const procedures = router.createCaller({
+          caller: LOCAL_DESKTOP_CALLER,
           runtime: options.runtime,
           inspectModelAccess: options.inspectModelAccess,
           readModelAccessDefaults: options.readModelAccessDefaults,
@@ -202,7 +212,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           transport: "electron-ipc",
           performanceObserver: options.performanceObserver,
         });
-        return { ok: true, data: await callProcedure(caller, request) };
+        return { ok: true, data: await callProcedure(procedures, request) };
       } catch (error) {
         return failure(error);
       }
@@ -221,8 +231,9 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     owner: WebContents,
   ): Promise<SessionRpcIpcResponse> {
     const abort = new AbortController();
-    const caller = router.createCaller(
+    const procedures = router.createCaller(
       {
+        caller: LOCAL_DESKTOP_CALLER,
         runtime: options.runtime,
         inspectModelAccess: options.inspectModelAccess,
         diagnostics,
@@ -231,7 +242,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
       },
       { signal: abort.signal },
     );
-    const stream = await caller.session.subscribe(input as never);
+    const stream = await procedures.session.subscribe(input as never);
     const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<readonly [string, unknown]>;
     const subscriptionId = randomUUID();
     if (owner.isDestroyed()) {
@@ -408,6 +419,11 @@ function invalidRequest(): SessionRpcIpcResponse {
   return { ok: false, error: { code: "BAD_REQUEST", message: "Invalid Session RPC request" } };
 }
 
+/**
+ * The router's own envelope (`hostErrorOf`), the one the WebSocket link
+ * carries as `data.hostError`: code, sanitized message and any reason, and
+ * nothing else of the error.
+ */
 function failure(error: unknown): SessionRpcIpcResponse {
   return { ok: false, error: subscriptionError(error, "Session RPC request failed") };
 }
@@ -415,11 +431,8 @@ function failure(error: unknown): SessionRpcIpcResponse {
 function subscriptionError(
   error: unknown,
   fallback = "Session subscription failed",
-): { code: string; message: string } {
-  return {
-    code: isRecord(error) && typeof error.code === "string" ? error.code : "INTERNAL_SERVER_ERROR",
-    message: error instanceof Error ? sanitizeDiagnosticText(error.message) : fallback,
-  };
+): SessionRpcIpcError {
+  return hostErrorOf(error, fallback);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

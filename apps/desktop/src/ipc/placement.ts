@@ -1118,7 +1118,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "workspace",
     owner: "VC-564",
     reason:
-      "The Session tRPC edge; moves to the WebSocket (VC-564) and the generic IPC bridge (VC-608).",
+      "The Session tRPC edge; moves to the WebSocket (VC-564) and the generic IPC bridge (VC-608). Its session.*/sessions.* catalog entries are workspace-scoped; settings.* and modelAccess.* are host-scoped entries VC-572 refines (D3).",
   },
 
   // ---- VolliSendContract -------------------------------------------------

@@ -51,9 +51,10 @@ import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 /**
  * Where a verb is projected. `cli` is the Agent CLI (the local agent socket),
  * `tool` is the Agent Tool Surface (a Role bundle's named tools, VC-162), and
- * `hostApi` is reserved for the future External Agent Surface — declared so a
- * host without a shell can simply not project `cli`, unprojected until that
- * surface exists. A verb on two surfaces is one entry with two modes.
+ * `hostApi` is the host protocol's WebSocket projection (VC-564): the tRPC
+ * area routers a paired device or a remote Session reaches, judged by the
+ * entry's {@link VerbCatalogDeclaration}. A verb on two surfaces is one entry
+ * with two modes.
  */
 export type VerbAccessMode = "cli" | "tool" | "hostApi";
 
@@ -321,6 +322,65 @@ export interface VerbToolProjection {
   readonly resultDetails?: VerbResultDetailsSchema;
 }
 
+/**
+ * Which Workspace a catalog entry's resource belongs to (HP § Command catalog;
+ * VC-564 D8).
+ *
+ * - `workspace`: the call names one resource (a Session, a project), and the
+ *   router resolves its Workspace and authorizes it BEFORE the handler runs. A
+ *   resource in another Workspace answers exactly as an absent one does:
+ *   `NOT_FOUND` / `workspace-unknown`.
+ * - `host`: host-level state every Workspace on this host shares (profile-wide
+ *   settings, Model Access). It carries no Workspace data, and only the person
+ *   (device-as-user) may call it unless the entry's actor is `any`.
+ */
+export type VerbScope = "workspace" | "host";
+
+/**
+ * What a repeat of the same call does (HP § Commands).
+ *
+ * - `command-id`: intent-recording. The caller mints a key and keeps it across
+ *   retries; the same key and intent answer the durable receipt again, and a
+ *   different intent under that key is `CONFLICT` / `command-conflict`.
+ * - `natural`: the call states a whole value, so a repeat leaves the same state.
+ * - `read`: no effect to repeat.
+ */
+export type VerbIdempotency = "command-id" | "natural" | "read";
+
+/** Every scope and idempotency, for the guards and tests that enumerate them. */
+export const VERB_SCOPES = ["workspace", "host"] as const satisfies readonly VerbScope[];
+export const VERB_IDEMPOTENCIES = [
+  "command-id",
+  "natural",
+  "read",
+] as const satisfies readonly VerbIdempotency[];
+
+/**
+ * The host-protocol catalog's half of an entry (VC-564, HP § Command catalog).
+ *
+ * An entry carrying this is a COMMAND some router projects: `@volli/session-rpc`
+ * binds exactly one tRPC procedure to it, named by the entry's key, and the
+ * procedure's policy middleware reads its actor requirement and this block —
+ * nothing else. Its name is {@link VerbEntry.key}, its actor policy
+ * {@link VerbEntry.actor}, and its one handler is that procedure's resolver.
+ * Validators stay zod in the router (D2): data here, executable shape there.
+ *
+ * Present on an entry with a `hostApi` access mode, and on a procedure no
+ * network door serves (an entry with no access mode at all, like the lab's
+ * diagnostics): declared, policed, and projected onto nothing.
+ */
+export interface VerbCatalogDeclaration {
+  readonly scope: VerbScope;
+  readonly idempotency: VerbIdempotency;
+  /**
+   * Intent kinds no actor may send through this `command-id` entry, on any
+   * door, because each has an entry of its own. The router refuses them
+   * `FORBIDDEN` / `verb-refused` before the handler runs, reading
+   * `input.command.kind`.
+   */
+  readonly refusedIntents?: readonly string[];
+}
+
 /** One agent-facing verb. Pure data; see the module comment for what is not here. */
 export interface VerbEntry {
   /** The dot-name — this verb's identity on every surface. */
@@ -369,6 +429,11 @@ export interface VerbEntry {
    * refused. The string says what replaced it.
    */
   readonly retired?: string;
+  /**
+   * The host-protocol catalog declaration: scope and idempotency (VC-564).
+   * Required by a `hostApi` access mode; see {@link VerbCatalogDeclaration}.
+   */
+  readonly catalog?: VerbCatalogDeclaration;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
   /**
@@ -3080,6 +3145,281 @@ export const VERB_REGISTRY = [
     },
     options: [],
   },
+  // ---- The host-protocol command catalog: the Session router (VC-564) -----
+  //
+  // One entry per `@volli/session-rpc` procedure, keyed by its tRPC path; the
+  // router's policy middleware reads nothing about a call but these rows. They
+  // are on no agent surface: `hostApi` is the WebSocket projection, so `volli`
+  // and a Role bundle never see them, and `listed: false` keeps them out of
+  // help and the managed skill.
+  //
+  // Every row requires the person (`user`, a paired device or the desktop's
+  // own window). The three reads included: a Session reading another
+  // Session's transcript is `session.peek`'s disclosure policy to decide, and
+  // a router door that admitted Sessions here would route around it.
+  //
+  // `settings.*` and `modelAccess.*` are host-scoped placeholders (D3), left
+  // as they are for VC-572 to refine. `labDiagnostics.*` carries no access
+  // mode: the router keeps it for the in-process lab, and no door serves it.
+  {
+    key: "sessions.create",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "sessions.create" },
+    listed: false,
+    group: "Session",
+    summary: "Create a durable Session in a project, with no executor attached yet.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "command-id" },
+  },
+  {
+    key: "sessions.attach",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "sessions.attach" },
+    listed: false,
+    group: "Session",
+    summary: "Attach or reattach a Session's executor, starting or recovering its work.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "command-id" },
+  },
+  {
+    key: "settings.experiments",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "settings.experiments" },
+    listed: false,
+    group: "App",
+    summary: "Read the experimental feature flags.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "settings.setExperiment",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "settings.setExperiment" },
+    listed: false,
+    group: "App",
+    summary: "Turn one experimental feature on or off.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "modelAccess.inspect",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.inspect" },
+    listed: false,
+    group: "App",
+    summary: "Read the Model Access snapshot: providers, models and their availability.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.defaults",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.defaults" },
+    listed: false,
+    group: "App",
+    summary: "Read the default model for each purpose.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.setDefault",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.setDefault" },
+    listed: false,
+    group: "App",
+    summary: "Set or clear the default model for one purpose.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "modelAccess.hiddenModels",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.hiddenModels" },
+    listed: false,
+    group: "App",
+    summary: "Read the models hidden from the pickers.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.setHiddenModels",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.setHiddenModels" },
+    listed: false,
+    group: "App",
+    summary: "Replace the list of models hidden from the pickers.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "modelAccess.compactionPolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.compactionPolicy" },
+    listed: false,
+    group: "App",
+    summary: "Read the automatic compaction policy.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.setCompactionPolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.setCompactionPolicy" },
+    listed: false,
+    group: "App",
+    summary: "Replace the automatic compaction policy.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "modelAccess.codeModePolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.codeModePolicy" },
+    listed: false,
+    group: "App",
+    summary: "Read the Code Mode policy and its per-model pins.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.setCodeModePolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.setCodeModePolicy" },
+    listed: false,
+    group: "App",
+    summary: "Replace the Code Mode policy and its per-model pins.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "modelAccess.pickerView",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.pickerView" },
+    listed: false,
+    group: "App",
+    summary: "Read which list the model pickers open on.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "modelAccess.setPickerView",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "modelAccess.setPickerView" },
+    listed: false,
+    group: "App",
+    summary: "Set which list the model pickers open on.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "session.snapshot",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.snapshot" },
+    listed: false,
+    group: "Session",
+    summary: "Read one Session's projection with its transcript frames.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
+    key: "session.projection",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.projection" },
+    listed: false,
+    group: "Session",
+    summary: "Read one Session's durable state without its transcript.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
+    key: "session.subscribe",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.subscribe" },
+    listed: false,
+    group: "Session",
+    summary: "Follow one Session's stream, resuming after a cursor.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
+    key: "session.command",
+    // The start kinds have their own entries (`sessions.create`/`attach`),
+    // which carry the Role, skills and model policy this raw command cannot.
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.command" },
+    listed: false,
+    group: "Session",
+    summary: "Send one command to a Session under a caller-minted command id.",
+    options: [],
+    catalog: {
+      scope: "workspace",
+      idempotency: "command-id",
+      refusedIntents: ["session.create", "adapter.attach"],
+    },
+  },
+  {
+    key: "session.cancelInteraction",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.cancelInteraction" },
+    listed: false,
+    group: "Session",
+    summary: "Cancel a pending interaction the person left undecided.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "natural" },
+  },
+  {
+    key: "session.reconcile",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.reconcile" },
+    listed: false,
+    group: "Session",
+    summary: "Reconcile one attachment whose delivery is uncertain.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "natural" },
+  },
+  {
+    key: "labDiagnostics.list",
+    accessModes: [],
+    actor: "user",
+    handler: { site: "main", id: "labDiagnostics.list" },
+    listed: false,
+    group: "App",
+    summary: "List the Session router's route diagnostics.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "labDiagnostics.subscribe",
+    accessModes: [],
+    actor: "user",
+    handler: { site: "main", id: "labDiagnostics.subscribe" },
+    listed: false,
+    group: "App",
+    summary: "Follow the Session router's route diagnostics.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
 ] as const satisfies readonly VerbEntry[];
 
 type RegistryEntry = (typeof VERB_REGISTRY)[number];
@@ -3194,15 +3534,23 @@ export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as
  * - **null** — no access mode at all. An app-only verb is on no agent surface,
  *   so it holds no governance class; `ticket.archive` becomes this in VC-163.
  *
+ * A `hostApi`-only verb (VC-564) is tiered by the same actor rule as the CLI:
+ * the WebSocket projection is a door an authenticated caller reaches, like the
+ * socket, and never a Role bundle. So `any` reads, `user` and `session`
+ * coordinate, and a Role-gated verb cannot ride it.
+ *
  * Contradictory combinations throw instead of being mislabeled: a Role-gated
- * verb cannot remain on `cli`, and absence from `cli` alone does not make a
- * non-Role or `hostApi` verb control tier.
+ * verb cannot remain on `cli` or `hostApi`, and absence from `cli` alone does
+ * not make a non-Role verb control tier.
  */
 export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbTier | null {
   if (entry.accessModes.length === 0) return null;
-  if (entry.accessModes.includes("cli")) {
+  const hostApiOnly = entry.accessModes.every((mode) => mode === "hostApi");
+  if (entry.accessModes.includes("cli") || hostApiOnly) {
     if (entry.actor === "role") {
-      throw new Error("A control-tier verb cannot carry a cli access mode");
+      throw new Error(
+        `A control-tier verb cannot carry a ${hostApiOnly ? "hostApi" : "cli"} access mode`,
+      );
     }
     // `session` and `user` are both coordination: a visible, attributable
     // write on the socket. Who may run a `user` verb is the admission gate's
@@ -3213,6 +3561,88 @@ export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbT
     throw new Error("Control tier requires tool-only access and a role actor");
   }
   return "control";
+}
+
+/** A Verb Registry entry the host-protocol catalog declares (VC-564). */
+export type CatalogEntry = VerbEntry & { readonly catalog: VerbCatalogDeclaration };
+
+// Distributive for the reason `ToolProjected` below spells out.
+type Catalogued<E extends VerbEntry> = E extends { catalog: VerbCatalogDeclaration }
+  ? E["key"]
+  : never;
+type ScopedTo<E extends VerbEntry, Scope extends VerbScope> = E extends {
+  catalog: { scope: Scope };
+}
+  ? E["key"]
+  : never;
+type HostApiProjected<E extends VerbEntry> = E extends VerbEntry
+  ? "hostApi" extends E["accessModes"][number]
+    ? E["key"]
+    : never
+  : never;
+
+/** Every key the catalog declares: exactly the procedures the routers may publish. */
+export type CatalogKey = Catalogued<RegistryEntry>;
+
+/** The catalog keys of one scope, so a router builder can demand the resolver a scope needs. */
+export type CatalogKeyScopedTo<Scope extends VerbScope> = ScopedTo<RegistryEntry, Scope>;
+
+/** The WebSocket projection: every key a network door serves. */
+export type HostApiKey = HostApiProjected<RegistryEntry>;
+
+type AssertNever<Type extends never> = Type;
+/** A `hostApi` entry with no catalog declaration has no policy to judge it by, and fails here. */
+export type HostApiCatalogCoverage = AssertNever<Exclude<HostApiKey, CatalogKey>>;
+
+/**
+ * The catalog projection: entries carrying a {@link VerbCatalogDeclaration},
+ * in declaration order. Throws on an entry no router could police:
+ *
+ * - a `hostApi` access mode with no declaration;
+ * - an actor requirement other than `any` or `user`. A router judges a
+ *   paired device as the person and refuses every worker (D10); a `session`
+ *   requirement would need the per-project authority policy the socket reads,
+ *   which no router consults yet, and a `role` verb is tool-only;
+ * - `refusedIntents` on anything but a workspace `command-id` entry, the one
+ *   shape whose router judges intents with the parsed input.
+ */
+export function catalogEntriesFrom(entries: readonly VerbEntry[]): readonly CatalogEntry[] {
+  const declared: CatalogEntry[] = [];
+  for (const entry of entries) {
+    if (entry.catalog === undefined) {
+      if (entry.accessModes.includes("hostApi")) {
+        throw new Error(`Verb ${entry.key} declares a hostApi access mode with no catalog entry`);
+      }
+      continue;
+    }
+    if (entry.actor !== "any" && entry.actor !== "user") {
+      throw new Error(
+        `Catalog entry ${entry.key} requires a ${entry.actor} actor; a router judges only any and user`,
+      );
+    }
+    if (
+      entry.catalog.refusedIntents !== undefined &&
+      (entry.catalog.idempotency !== "command-id" || entry.catalog.scope !== "workspace")
+    ) {
+      throw new Error(`Catalog entry ${entry.key} refuses intents but is no workspace command`);
+    }
+    declared.push(entry as CatalogEntry);
+  }
+  return declared;
+}
+
+/** Every catalog entry this build declares, checked once at load. */
+export const CATALOG_ENTRIES: readonly CatalogEntry[] = catalogEntriesFrom(VERB_REGISTRY);
+
+const CATALOG_BY_KEY: ReadonlyMap<string, CatalogEntry> = new Map(
+  CATALOG_ENTRIES.map((entry) => [entry.key, entry]),
+);
+
+/** One catalog entry. Throws for a key the catalog does not declare. */
+export function catalogEntry(key: CatalogKey): CatalogEntry {
+  const entry = CATALOG_BY_KEY.get(key);
+  if (entry === undefined) throw new Error(`No catalog entry declares ${key}`);
+  return entry;
 }
 
 /**

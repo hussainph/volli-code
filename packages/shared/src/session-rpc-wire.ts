@@ -66,6 +66,19 @@ export type SessionRpcIpcRequest = {
 }[SessionRpcIpcProcedure];
 
 /**
+ * A failure as it crosses this wire: the host protocol's `HostError`
+ * (`@volli/host-protocol`), restated as plain strings because this package
+ * cannot import it. `reason` is present exactly when the router named one, so
+ * a renderer reads the same `{code, message, reason}` the WebSocket link puts
+ * on `data.hostError` (VC-564).
+ */
+export interface SessionRpcIpcError {
+  code: string;
+  message: string;
+  reason?: string;
+}
+
+/**
  * One main-to-renderer subscription frame. `data` carries the tracked event id
  * the router minted, so a consumer can resume from it after a re-subscribe.
  */
@@ -83,7 +96,7 @@ export type SessionRpcIpcEvent =
   | {
       kind: "error";
       subscriptionId: string;
-      error: { code: string; message: string };
+      error: SessionRpcIpcError;
     };
 
 /**
@@ -94,4 +107,4 @@ export type SessionRpcIpcEvent =
 export type SessionRpcIpcResponse =
   | { ok: true; data: unknown }
   | { ok: true; subscriptionId: string }
-  | { ok: false; error: { code: string; message: string } };
+  | { ok: false; error: SessionRpcIpcError };

@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import type { SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
 
 const { handlers, listeners } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
 }));
-const { terminalStream } = vi.hoisted(() => ({
+const { terminalStream, routerCallers } = vi.hoisted(() => ({
   terminalStream: { current: null as AsyncIterable<readonly [string, unknown]> | null },
+  /** Every caller the bridge handed the real router, in order. */
+  routerCallers: [] as unknown[],
 }));
 
 vi.mock("electron", () => ({
@@ -26,7 +28,16 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
     ...actual,
     createSessionRouter: () => {
       const stream = terminalStream.current;
-      if (stream === null) return actual.createSessionRouter();
+      if (stream === null) {
+        const router = actual.createSessionRouter();
+        return {
+          ...router,
+          createCaller: (context: Parameters<typeof router.createCaller>[0], options) => {
+            routerCallers.push((context as { caller: unknown }).caller);
+            return router.createCaller(context, options);
+          },
+        } as typeof router;
+      }
       return {
         createCaller: () => ({
           session: { subscribe: async () => stream },
@@ -44,9 +55,12 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
+import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
+
 import {
   registerDegradedSessionRpcIpcHandlers,
   registerSessionRpcIpcHandlers,
+  type RegisterSessionRpcIpcOptions,
 } from "./session-rpc-ipc";
 
 interface FakeSender {
@@ -182,9 +196,47 @@ beforeEach(() => {
   handlers.clear();
   listeners.clear();
   terminalStream.current = null;
+  routerCallers.length = 0;
 });
 
 describe("registerSessionRpcIpcHandlers", () => {
+  // VC-564 review B2: the window is the desktop's own (D7), and production
+  // options cannot make it anyone else.
+  it("takes no caller and no Session-to-Workspace port in its options", () => {
+    expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("caller");
+    expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("sessionWorkspace");
+    const fixture = runtimeFixture();
+    // @ts-expect-error -- a caller is not a production option.
+    registerSessionRpcIpcHandlers({ runtime: fixture.runtime, caller: LOCAL_DESKTOP_CALLER });
+  });
+
+  it("always judges the desktop's own window, whatever else rides in the options", async () => {
+    const fixture = runtimeFixture();
+    const network = {
+      actor: {
+        kind: "device",
+        deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+        workspaceId: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+      },
+      current: () => true,
+    };
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      ...({ caller: network, sessionWorkspace: () => null } as object),
+    });
+    const owner = sender();
+    // A network device with that port would be refused this Session; the
+    // desktop skips Workspace resolution and reads it.
+    await expect(
+      invoke(owner, { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+    ).resolves.toMatchObject({ ok: true });
+    await invoke(owner, { procedure: "session.subscribe", input: { sessionId: "session-1" } });
+    expect(fixture.calls.snapshot).toEqual(["session-1"]);
+    expect(routerCallers).toEqual([LOCAL_DESKTOP_CALLER, LOCAL_DESKTOP_CALLER]);
+    expect(routerCallers.every((caller) => caller === LOCAL_DESKTOP_CALLER)).toBe(true);
+    await registration.close();
+  });
+
   it("routes a query through the Session tRPC router and marks diagnostics as Electron IPC", async () => {
     const fixture = runtimeFixture();
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
