@@ -191,6 +191,41 @@ export abstract class BrowserTabRegistry<
     return entry;
   }
 
+  /**
+   * Why agent Browser calls are refused right now, or null when they are not
+   * (VC-577). Set when the desktop closes every window for menu-bar mode: the
+   * tabs went with them, and a turn that keeps running must be told so in
+   * words, not left waiting on a tab or a stage window that cannot exist.
+   */
+  private closedReason: string | null = null;
+
+  unavailableReason(): string | null {
+    return this.closedReason;
+  }
+
+  /** Close every tab and refuse agent Browser calls with `reason` until {@link reopenForAgents}. */
+  closeAllForAgents(reason: string): void {
+    this.closedReason = reason;
+    this.closeAll();
+  }
+
+  /** A window is back: agents may open tabs again. */
+  reopenForAgents(): void {
+    this.closedReason = null;
+  }
+
+  /**
+   * Live tabs a Session is using: born to one, or held by one right now. What
+   * closing every tab would take away from running agents (VC-577).
+   */
+  sessionTabCount(): number {
+    let count = 0;
+    for (const entry of this.tabs.values()) {
+      if (entry.state.ownerSessionId !== null || entry.hold?.kind === "session") count += 1;
+    }
+    return count;
+  }
+
   /** The holder as the renderer sees it, for the overlay's label and colour. */
   heldBy(tabId: string): BrowserTabHolder | null {
     const entry = this.tabs.get(tabId);
