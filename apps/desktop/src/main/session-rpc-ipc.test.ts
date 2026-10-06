@@ -94,6 +94,7 @@ function runtimeFixture(): {
   runtime: SessionRuntime;
   calls: {
     snapshot: string[];
+    history: number[];
     projection: string[];
     subscribe: number[];
     cancelled: { sessionId: string; interactionId: string; reason: string }[];
@@ -104,6 +105,7 @@ function runtimeFixture(): {
 } {
   const calls = {
     snapshot: [] as string[],
+    history: [] as number[],
     projection: [] as string[],
     subscribe: [] as number[],
     cancelled: [] as { sessionId: string; interactionId: string; reason: string }[],
@@ -120,7 +122,12 @@ function runtimeFixture(): {
           throughSequence: 0,
           frames: [],
           transcript: [],
+          latestReply: null,
         } as never;
+      },
+      history: async ({ before }) => {
+        calls.history.push(before);
+        return { frames: [], before: null };
       },
       projection: async ({ sessionId }) => {
         calls.projection.push(sessionId);
@@ -313,6 +320,13 @@ describe("registerSessionRpcIpcHandlers", () => {
       ok: true,
       data: { projection: {}, throughSequence: 4 },
     });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.history",
+        input: { sessionId: "session-1", before: 7 },
+      }),
+    ).resolves.toEqual({ ok: true, data: { frames: [], before: null } });
+    expect(fixture.calls.history).toEqual([7]);
     await expect(
       invoke(sender(), {
         procedure: "session.cancelInteraction",

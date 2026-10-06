@@ -49,6 +49,7 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "sessions.create",
   "sessions.attach",
   "session.snapshot",
+  "session.history",
   "session.projection",
   "session.subscribe",
   "session.command",
