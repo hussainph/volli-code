@@ -34,6 +34,7 @@ import {
   type AppRouter,
   type SessionRouterContext,
 } from "./index";
+import { sessionHandlersFrom } from "./session-handlers.test-support";
 import {
   HOST_PROTOCOL_CLOSE_CODES,
   boundOutboundSends,
@@ -175,7 +176,10 @@ async function serve(
     verifier?: HostCredentialVerifier;
     limits?: Partial<HostProtocolListenerLimits>;
     /** What a test changes about the connection's context, given the ledger behind it. */
-    context?: (source: ReturnType<typeof ledger>) => Partial<Omit<SessionRouterContext, "caller">>;
+    context?: (source: ReturnType<typeof ledger>) => {
+      runtime?: SessionRuntime;
+      resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
+    };
     /** A source that keeps replaying after it was cancelled. */
     ignoresCancel?: boolean;
   } = {},
@@ -200,12 +204,16 @@ async function serve(
     verifier: options.verifier ?? {
       verify: ({ credential: presented }) => grants[presented] ?? null,
     },
-    context: () => ({
-      runtime: source.runtime,
-      diagnostics: new RpcDiagnosticLog(),
-      resourceWorkspace: ({ id }) => (id === SESSION ? WORKSPACE : null),
-      ...options.context?.(source),
-    }),
+    context: () => {
+      const changed = options.context?.(source);
+      return {
+        // The map over the ledger, as a root hands its router (VC-668).
+        handlers: sessionHandlersFrom({ runtime: changed?.runtime ?? source.runtime }),
+        diagnostics: new RpcDiagnosticLog(),
+        resourceWorkspace:
+          changed?.resourceWorkspace ?? (({ id }) => (id === SESSION ? WORKSPACE : null)),
+      };
+    },
     limits,
     log: (event) => events.push(event),
   });
@@ -700,7 +708,10 @@ describe("the listener's own lifetime", () => {
       features: HOST_V1_FEATURES,
       workspace: () => null,
       verifier: { verify: () => null },
-      context: () => ({ runtime: ledger().runtime, diagnostics: new RpcDiagnosticLog() }),
+      context: () => ({
+        handlers: sessionHandlersFrom({ runtime: ledger().runtime }),
+        diagnostics: new RpcDiagnosticLog(),
+      }),
     });
     cleanups.push(() => listener.close());
     expect(listener.url).toBe(`ws://[::1]:${listener.address.port}`);
@@ -758,7 +769,10 @@ describe("isLoopbackHost", () => {
         features: HOST_V1_FEATURES,
         workspace: () => null,
         verifier: { verify: () => null },
-        context: () => ({ runtime: ledger().runtime, diagnostics: new RpcDiagnosticLog() }),
+        context: () => ({
+          handlers: sessionHandlersFrom({ runtime: ledger().runtime }),
+          diagnostics: new RpcDiagnosticLog(),
+        }),
       }),
     ).rejects.toThrow("binds loopback only until VC-575; refusing 0.0.0.0");
   });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AgentRequest } from "@volli/shared";
 import { createAgentCommandService } from "../agent-commands";
+import { testHostHandlers } from "../testing/host-handlers";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -32,7 +33,7 @@ function fixture() {
     db: db.db,
     sessionEngine: createTestSessionEngine(db.db),
     appVersion: "test",
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: db.db }),
     verifySessionToken: tokens.verify,
     verifyOperatorToken: (token) => (token === "op" ? { login: "ops" } : null),
     sessions: { start },

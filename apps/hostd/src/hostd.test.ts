@@ -61,8 +61,10 @@ const faults = vi.hoisted(() => ({
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
   foreignOwner: null as string | null,
-  /** The headless runtime offers no Sessions facade, as a degraded one does not. */
+  /** The host's handler map is built with no Sessions facade, as a degraded one would be. */
   noSessionsFacade: false,
+  /** Every verdict the host's handler map gave, by door (VC-668). */
+  admissions: [] as { door: string; key: string; admitted: boolean }[],
   /** The execute hostd handed the socket, to call without a connection. */
   execute: null as ((request: AgentRequest) => Promise<AgentResponse>) | null,
 }));
@@ -109,6 +111,20 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   };
 });
 
+// The handler map hostd builds (VC-668): the move's guard and drain are its.
+vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/host-core/src/handlers/host-handlers")>();
+  return {
+    ...actual,
+    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) => {
+      faults.busySites = options.busyWorktreeSites;
+      faults.detachedWork = options.detachedWork ?? null;
+      return actual.createHostHandlers(ports, options);
+    },
+  };
+});
+
 vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../packages/host-core/src/agent-services")>();
@@ -117,8 +133,6 @@ vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal)
     createHostAgentCommands: (
       ...[ports, options]: Parameters<typeof actual.createHostAgentCommands>
     ) => {
-      faults.busySites = options.busyWorktreeSites;
-      faults.detachedWork = options.detachedWork ?? null;
       const commands = actual.createHostAgentCommands(ports, options);
       return {
         ...commands,
@@ -165,6 +179,19 @@ vi.mock("../../../packages/host-core/src/agent-socket", async (importOriginal) =
   };
 });
 
+vi.mock("@volli/host-core/handlers", async (original) => {
+  const actual = await original<typeof import("@volli/host-core/handlers")>();
+  return {
+    ...actual,
+    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) =>
+      actual.createHostHandlers(ports, {
+        ...options,
+        ...(faults.noSessionsFacade ? { sessions: null } : {}),
+        onAdmission: (record) => faults.admissions.push(record),
+      }),
+  };
+});
+
 vi.mock("./session-runtime", async (original) => {
   const actual = await original<typeof import("./session-runtime")>();
   return {
@@ -184,9 +211,6 @@ vi.mock("./session-runtime", async (original) => {
           return {
             ...ready,
             automationsAvailable: !faults.automationsUnavailable && ready.automationsAvailable,
-            sessionRouter: faults.noSessionsFacade
-              ? { ...ready.sessionRouter, sessions: null }
-              : ready.sessionRouter,
           };
         },
         close: async () => {
@@ -214,6 +238,7 @@ afterEach(async () => {
   faults.runtimeCloseError = false;
   faults.automationsUnavailable = false;
   faults.noSessionsFacade = false;
+  faults.admissions = [];
   faults.runtimeReadyGate = null;
   faults.runtimeOwned = false;
   faults.order = [];
@@ -918,7 +943,7 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
     ]);
   });
 
-  it("hands commands the host's detached work, and drains it after the socket, before the database", async () => {
+  it("hands its handlers the host's detached work, and drains it after the socket, before the database", async () => {
     const host = await boot();
     if (!isLiveHost(host.host)) throw new Error("database did not open");
     const live = host.host;
@@ -1159,12 +1184,25 @@ describe("the host protocol listener (VC-663)", () => {
         "host protocol: revoked",
         expect.objectContaining({ streams: 1 }),
       );
+      // Every handler the WebSocket reached, it reached through the router's
+      // policy at the host's one map (VC-668): none without it.
+      const reached = faults.admissions.filter(({ door }) => door === "router");
+      expect(reached.map(({ key }) => key)).toEqual(
+        expect.arrayContaining([
+          "session.list",
+          "session.show",
+          "session.projection",
+          "sessions.create",
+          "session.subscribe",
+        ]),
+      );
+      expect(reached.every(({ admitted }) => admitted)).toBe(true);
     } finally {
       await close();
     }
   });
 
-  it("answers create and attach as unavailable when the runtime has no Sessions facade", async () => {
+  it("answers create as unavailable when the host's map has no Sessions facade", async () => {
     faults.noSessionsFacade = true;
     const lever = device();
     const host = await boot({ env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier });

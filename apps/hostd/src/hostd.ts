@@ -295,27 +295,31 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           // ownership. Override packaged/source runtime path metadata alike.
           options: { ...runtimeOptions, venue },
         });
-        const { sessionRouter, ...sessionPorts } = await sessionRuntime.ready();
+        const { handlers, automationsAvailable, serveSessionReads, ...sessionPorts } =
+          await sessionRuntime.ready();
         capabilities = {
           ...UNAVAILABLE,
           board: "available",
           sessions: "available",
-          automations: sessionPorts.automationsAvailable ? "available" : "unavailable",
+          automations: automationsAvailable ? "available" : "unavailable",
         };
         const commands = createHostAgentCommands(ports, {
           db: host.database.db,
           ...sessionPorts,
+          // The one object every door projects (VC-668). A Done move's trim,
+          // its armed arrival and its drain at stop are the handler's.
+          handlers,
           appVersion: options.version,
           verifyOperatorToken: operators.verify,
-          // A Done move's worktree trim outlives its reply; the host's stop
-          // drains it before the database closes.
-          detachedWork: host.detachedWork,
           // The audit line beside each operator write. `SO_PEERCRED` would
           // add the peer's uid and pid, but Node's `net` cannot read it
           // without a native addon; the login the token names is the
           // attribution (README, "Operators").
           onOperatorWrite: (record) => logger.info("operator write", { ...record }),
         });
+        // The map's Session reads (VC-663, D4) are the socket verbs' own,
+        // Workspace-scoped: the map reaches them once the service exists.
+        serveSessionReads(commands.executeInWorkspace);
         settle(commands.execute);
         if (cloud && listen !== null) {
           try {
@@ -327,10 +331,8 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
               ...(options.hostProtocolVerifier === undefined
                 ? {}
                 : { verifier: options.hostProtocolVerifier }),
-              runtime: sessionRouter.runtime,
+              handlers,
               sessionEngine: sessionPorts.sessionEngine,
-              sessions: sessionRouter.sessions,
-              commands,
               logger,
             });
           } catch (error) {

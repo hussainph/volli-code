@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AgentCommand, AgentResponse, SessionOrigin, SessionRole } from "@volli/shared";
 import { createAgentCommandService } from "../agent-commands";
+import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { recordSessionResumedOnce, recordTicketEvent } from "../db/events-repo";
@@ -38,7 +39,7 @@ function fixture(observeTerminal = false) {
     nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
   });
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: db.db }),
     db: db.db,
     appVersion: "test",
     sessionEngine: engine,

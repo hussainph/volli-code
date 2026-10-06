@@ -12,29 +12,26 @@
  *   (the same-machine bootstrap) and a hosted control plane each plug a
  *   verifier into the one port.
  * - **What it serves.** The Session router's commands, its stream and the
- *   socket's Session reads, from the headless runtime: the same runtime,
- *   Sessions facade and verb handlers the agent socket already answers
- *   through. Model Access is not composed here, so `model-access` is not
- *   offered.
+ *   socket's Session reads, from the host's one handler map (VC-668) under
+ *   the router's policy: the same handlers the agent socket answers through.
+ *   `model-access` is not offered yet: VC-572 decides its policy for a
+ *   paired device.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
 import { getProjectById, prepared } from "@volli/host-core/db";
-import type { AgentCommandService } from "@volli/host-core/agents";
+import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import {
   REFUSING_CREDENTIAL_VERIFIER,
   type HostCredentialVerifier,
   type HostV1Feature,
 } from "@volli/host-protocol";
-import type { SessionEngine, SessionRuntime, SessionStartResult } from "@volli/session-engine";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   createSessionRouter,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
-  type SessionAttachInput,
-  type SessionCreateInput,
-  type SessionCreateResult,
   type WorkspaceResource,
 } from "@volli/session-rpc";
 import {
@@ -44,7 +41,7 @@ import {
   type HostProtocolListenerEvent,
   type ServedWorkspace,
 } from "@volli/session-rpc/websocket";
-import { parseExperimentEnvironment, roleImpliedByTicket } from "@volli/shared";
+import { parseExperimentEnvironment } from "@volli/shared";
 import type Database from "better-sqlite3";
 
 import type { HostdLogger } from "./log";
@@ -118,23 +115,22 @@ export interface HostdProtocolPorts {
   readonly version: string;
   readonly bind: HostProtocolBind;
   readonly verifier?: HostCredentialVerifier;
-  readonly runtime: SessionRuntime;
+  /**
+   * The host's one handler map (VC-668). The listener projects it through
+   * the router's policy, as every router door does: no handler is reachable
+   * without it, and the catalog's network re-checks run before the map.
+   */
+  readonly handlers: HostHandlerMap;
   readonly sessionEngine: SessionEngine;
-  readonly sessions: {
-    create(
-      input: SessionCreateInput & { role: "ticket" | "project" },
-    ): Promise<SessionCreateResult>;
-    attach(input: SessionAttachInput): Promise<SessionStartResult>;
-  } | null;
-  readonly commands: Pick<AgentCommandService, "executeInWorkspace">;
   readonly logger: HostdLogger;
 }
 
 export function startHostdProtocolListener(
   ports: HostdProtocolPorts,
 ): Promise<HostProtocolListener> {
-  const { db, sessions, sessionEngine, logger } = ports;
+  const { db, sessionEngine, logger } = ports;
   const diagnostics = new RpcDiagnosticLog();
+  const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
     router: createSessionRouter(),
     bind: ports.bind,
@@ -143,20 +139,9 @@ export function startHostdProtocolListener(
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
     verifier: ports.verifier ?? REFUSING_CREDENTIAL_VERIFIER,
     context: () => ({
-      runtime: ports.runtime,
+      handlers,
       diagnostics,
       resourceWorkspace: sessionWorkspace(sessionEngine),
-      readSessionVerb: (verb, workspaceId, args) =>
-        ports.commands.executeInWorkspace(verb, workspaceId, args),
-      ...(sessions === null
-        ? {}
-        : {
-            // A person's create names a Ticket or none; the Role is what that
-            // implies (VC-9), exactly as the desktop's door says it.
-            createSession: (input: SessionCreateInput) =>
-              sessions.create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
-            attachSession: sessions.attach.bind(sessions),
-          }),
     }),
     log: (event) => logListenerEvent(logger, event),
   });

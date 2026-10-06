@@ -47,14 +47,12 @@ import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionStartedNotice,
-  TicketMovedNotice,
 } from "@volli/shared";
 
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
-import type { DetachedWorkPort } from "../detached-work";
-import type { BusyWorktreeSites } from "../worktree/activity";
+import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGit, RunGitAsync } from "../worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
@@ -185,20 +183,15 @@ export interface AgentCommandServiceOptions {
    * action is the only door into the new session's tab.
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
-  /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
-  busyWorktreeSites: BusyWorktreeSites;
   /**
-   * Where a `ticket move` into Done enrols its detached worktree trim, so the
-   * host's shutdown drains it before the database closes (VC-627). Absent
-   * (tests) means the trim runs untracked, as it always has.
+   * The host's handler map (VC-668), as far as this door projects it: every
+   * verb that is also a catalog command is bound in `table.ts` as a
+   * projection of `handlers[key]`, never as a handler of its own. A Done
+   * move's trim, its interrupts and its armed arrival therefore belong to the
+   * handler, which the composition root built once for every door. The
+   * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
    */
-  detachedWork?: DetachedWorkPort;
-  /**
-   * Interrupts every live agent attachment of a ticket after a committed
-   * backward move. Its command and receipt are Session evidence; Esc leaves
-   * the terminal attachment alive. Absent (tests) means a no-op.
-   */
-  interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+  handlers: HostHandlerMap;
   /**
    * Called after a socket command COMMITS a planning mutation, with the exact
    * ticket it resolved and touched — the scope index.ts broadcasts as
@@ -209,18 +202,6 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
-  /**
-   * Called after `ticket.move` COMMITS a real column change, carrying the
-   * before/after fact main's pending-arrival coordinator cannot reconstruct
-   * afterward (VC-226).
-   *
-   * Separate from {@link AgentCommandOptions.onMutation}, which only tells
-   * renderers to re-read planning data. CONTEXT.md makes an explicit `volli
-   * ticket move` a Deliberate move with the same semantics as a drag, so this
-   * seam creates the same one durable countdown even when no renderer exists.
-   * Never called for a same-column no-op. Absent in tests means no observer.
-   */
-  onDeliberateMove?: (notice: TicketMovedNotice) => void;
   /**
    * Called for every canonical harness event this door ingests (harness-events),
    * after any session-record write it implies has committed — the notice
@@ -470,6 +451,13 @@ export interface AgentCommandContext {
    * judged them: that runs off the token alone.
    */
   readonly actor: TicketEventActor | null;
+  /**
+   * This request's policy at the handler map (VC-668): a projected verb
+   * reaches `handlers[key]` only through it. It judges the socket's own
+   * coordination policy for this request again, at the map, and admits only
+   * the key this request's verb projects.
+   */
+  readonly handlerPolicy: HandlerPolicy;
 }
 
 /**

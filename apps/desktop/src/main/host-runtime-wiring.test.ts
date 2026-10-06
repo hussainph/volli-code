@@ -310,6 +310,7 @@ describe("index.ts desktop host runtime wiring", () => {
   function liftedDesktopRuntime() {
     const proof = { services: { kind: "recovered" } };
     const rpc = { kind: "session-rpc" };
+    const handlers = { kind: "host-handlers" };
     let owner: HostRuntimeOwner | undefined;
     const createDesktopHostRuntimeSpy = vi.fn(createDesktopHostRuntime);
     const scope: Record<string, unknown> = {
@@ -325,6 +326,8 @@ describe("index.ts desktop host runtime wiring", () => {
         close: vi.fn(async () => {}),
       },
       sessionRpc: null,
+      // The host's one handler map (VC-668), built at readiness.
+      handlersFor: vi.fn(() => handlers),
       createSessionRpc: vi.fn(() => rpc),
       runtimeSessionAgents: { toolDoor: vi.fn(), stop: vi.fn() },
       runtimeAutomations: { stop: vi.fn(), settled: vi.fn(async () => {}) },
@@ -343,6 +346,7 @@ describe("index.ts desktop host runtime wiring", () => {
       desktopRuntime,
       proof,
       rpc,
+      handlers,
       scope,
       createDesktopHostRuntimeSpy,
       owner: () => {
@@ -385,7 +389,8 @@ describe("index.ts desktop host runtime wiring", () => {
     // start: host adopts the owner, which binds only the recovered services.
     expect(await f.desktopRuntime.start()).toBe(f.proof);
     expect(spy(f.scope, "hostCore.start")).toHaveBeenCalledOnce();
-    expect(spy(f.scope, "createSessionRpc")).toHaveBeenCalledExactlyOnceWith(f.proof);
+    expect(spy(f.scope, "handlersFor")).toHaveBeenCalledExactlyOnceWith(f.proof);
+    expect(spy(f.scope, "createSessionRpc")).toHaveBeenCalledExactlyOnceWith(f.proof, f.handlers);
     expect(f.scope["sessionRpc"]).toBe(f.rpc);
     expect(spy(f.scope, "runtimeSessionAgents.toolDoor")).toHaveBeenCalledWith(f.proof);
 

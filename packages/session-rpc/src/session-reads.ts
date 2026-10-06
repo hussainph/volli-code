@@ -1,17 +1,18 @@
 /**
  * The socket's Session reads on the router (VC-663, D4): `session.list`,
  * `show`, `peek` and `answer`, Workspace-scoped. The door maps a name and an
- * envelope, nothing more: the handler is the socket verb's own, run by the
- * composition root with its roster forced to the named project
- * (`AgentCommandService.executeInWorkspace` in host-core), and every input
- * names that project, so the catalog authorizes it before anything is read.
+ * envelope, nothing more: the handler is the map's `ctx.handlers[key]`, which
+ * runs the socket verb's own handler with its roster forced to the named
+ * project (`AgentCommandService.executeInWorkspace` in host-core; a
+ * socket-delegated key, VC-668), and every input names that project, so the
+ * catalog authorizes it before anything is read.
  *
  * The answers are the socket's JSON, validated recursively as JSON before
  * they leave (`z.json()`): the shape is the socket verb's, which its own
  * tests pin.
  */
 import { TRPCError } from "@trpc/server";
-import { SESSION_LIST_STATES, type AgentResponse, type SessionReadVerb } from "@volli/shared";
+import { SESSION_LIST_STATES, type AgentResponse } from "@volli/shared";
 import { z } from "zod";
 
 import {
@@ -21,12 +22,11 @@ import {
   type WorkspaceResource,
 } from "./catalog";
 
-/** What the composition root answers a Session read with: the socket verb's own response. */
-export type ReadSessionVerb = (
-  verb: SessionReadVerb,
-  workspaceId: string,
-  args: Record<string, unknown>,
-) => Promise<AgentResponse>;
+/** What a Session read's handler is asked: the Workspace it is forced to, and the verb's args. */
+export interface SessionReadInput {
+  readonly workspaceId: string;
+  readonly args: Record<string, unknown>;
+}
 
 const MAX_SELECTOR_LENGTH = 128;
 const MAX_PEEK_LINES = 1000;
@@ -70,21 +70,14 @@ const CALLER_CODES = new Set([
   "CONTEXT_MISMATCH",
 ]);
 
-/** Runs one read through the port, maps its envelope onto the wire, and validates the answer. */
+/** Runs one read through its handler, maps its envelope onto the wire, and validates the answer. */
 export async function readSession<Output extends z.ZodType>(
-  read: ReadSessionVerb | undefined,
-  verb: SessionReadVerb,
+  read: (input: SessionReadInput) => AgentResponse | Promise<AgentResponse>,
   workspaceId: string,
   args: Record<string, unknown>,
   output: Output,
 ): Promise<z.output<Output>> {
-  if (read === undefined) {
-    throw new HostProcedureError(
-      "operation-unavailable",
-      "Session reads are unavailable on this transport",
-    );
-  }
-  const response = await read(verb, workspaceId, withoutUndefined(args));
+  const response = await read({ workspaceId, args: withoutUndefined(args) });
   if (response.ok) return output.parse(response.data);
   const { code, message } = response.error;
   if (NOT_FOUND_CODES.has(code)) {

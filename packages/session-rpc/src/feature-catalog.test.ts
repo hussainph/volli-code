@@ -23,9 +23,11 @@ describe("the v1 features against the catalog", () => {
 
   // An entry on the WebSocket that no feature grants is refused there. Each
   // one is named, so leaving a new entry out of every feature is a decision.
-  it("leave out only the host's experiment switches, for VC-572 to name", () => {
+  // `ticket.move` (VC-668) is the board router's, which no listener serves
+  // yet; VC-565 gives it its board feature (VC-669).
+  it("leave out only the experiment switches and the board's move, for VC-572 and VC-565 to name", () => {
     expect(
       projected.map((entry) => entry.key).filter((key) => !granted.includes(key)),
-    ).toStrictEqual(["settings.experiments", "settings.setExperiment"]);
+    ).toStrictEqual(["ticket.move", "settings.experiments", "settings.setExperiment"]);
   });
 });

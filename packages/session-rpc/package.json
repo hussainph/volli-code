@@ -12,6 +12,10 @@
     "./websocket": {
       "types": "./src/websocket-server.ts",
       "import": "./src/websocket-server.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.ts",
+      "import": "./src/testing.ts"
     }
   },
   "scripts": {

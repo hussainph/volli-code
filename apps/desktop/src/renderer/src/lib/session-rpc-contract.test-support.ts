@@ -25,7 +25,7 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
-import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
+import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
 import {
   assertIdentityConsumed,
   judgeNextRegistrationAs,
@@ -40,9 +40,10 @@ import { createSessionRpcClient } from "./session-rpc-ipc-link";
  * test's mocked router (`withHarnessIdentity`); the WebSocket link has the
  * listener's real handshake mint it from a credential.
  */
-export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
+export type SessionRouterHost = Omit<LegacySessionPorts, "diagnostics" | "performanceObserver"> & {
   caller: RouterCaller;
   resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
+  diagnostics?: RpcDiagnosticLog;
 };
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
@@ -74,9 +75,13 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
     async open(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
-      const { caller, resourceWorkspace, ...options } = host;
+      const { caller, resourceWorkspace, diagnostics, ...ports } = host;
       judgeNextRegistrationAs({ caller, resourceWorkspace });
-      const registration = registerSessionRpcIpcHandlers(options);
+      // One object, as main hands it: the map over the ports the case states.
+      const registration = registerSessionRpcIpcHandlers({
+        handlers: sessionHandlersFrom(ports),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+      });
       assertIdentityConsumed();
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
@@ -155,8 +160,9 @@ export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRoute
         features: HOST_V1_FEATURES,
         workspace: (id) => (id === actor.workspaceId ? { id, epoch: 1 } : null),
         verifier,
+        // The map over the ports the case states, exactly as the IPC link hands it.
         context: () => ({
-          ...ports,
+          handlers: sessionHandlersFrom(ports),
           diagnostics: diagnostics ?? new RpcDiagnosticLog(),
           ...(resourceWorkspace === undefined ? {} : { resourceWorkspace }),
         }),

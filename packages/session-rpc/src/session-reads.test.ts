@@ -1,12 +1,13 @@
 // The socket's Session reads and the welcome, as router procedures (VC-663).
 import type { HostActor, HostWelcome } from "@volli/host-protocol";
-import type { SessionRuntime } from "@volli/session-engine";
 import { makeAgentError, type AgentResponse } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import { createSessionRouter, RpcDiagnosticLog, type SessionRouterContext } from "./index";
-import type { ReadSessionVerb } from "./session-reads";
+import { sessionHandlersFrom, type LegacySessionPorts } from "./session-handlers.test-support";
+
+type ReadSessionVerb = NonNullable<LegacySessionPorts["readSessionVerb"]>;
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
@@ -16,12 +17,22 @@ const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const device: HostActor = { kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE };
 const network = (actor: HostActor): RouterCaller => ({ actor, current: () => true });
 
-function router(caller: RouterCaller, extra: Partial<SessionRouterContext> = {}) {
+function router(
+  caller: RouterCaller,
+  extra: Partial<Omit<SessionRouterContext, "handlers">> & {
+    readSessionVerb?: ReadSessionVerb;
+  } = {},
+) {
+  const { readSessionVerb, ...rest } = extra;
   const context: SessionRouterContext = {
     caller,
-    runtime: {} as SessionRuntime,
     diagnostics: new RpcDiagnosticLog(),
-    ...extra,
+    ...rest,
+    // The map's Session reads over the port the case states (VC-668).
+    handlers: sessionHandlersFrom({
+      runtime: {},
+      ...(readSessionVerb === undefined ? {} : { readSessionVerb }),
+    }),
   };
   return createSessionRouter().createCaller(context);
 }

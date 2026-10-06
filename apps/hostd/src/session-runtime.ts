@@ -12,11 +12,11 @@ import {
   errorMessage,
   VOLLI_SOCKET_ENV,
   type SessionExecutionVenue,
-  type TicketMovedNotice,
 } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
+import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
@@ -271,7 +271,7 @@ export function createHeadlessSessionRuntime(input: {
     reclaim,
     async ready() {
       const ready = await lifecycle.ready();
-      const { sessions, runtime } = recoveredRuntimeSessionServices(ready);
+      const { sessions, runtime, piRuntimeHost } = recoveredRuntimeSessionServices(ready);
       if (sessions === null || runtime === null)
         throw new Error("The headless Session runtime is unavailable.");
       automations.start(recoveredSessionAutomationPorts(ready));
@@ -289,20 +289,38 @@ export function createHeadlessSessionRuntime(input: {
         return sites;
       };
       recovered = { busyWorktreeSites, runtime };
+      let sessionReads: SessionReadPort | undefined;
       return {
         ...recoveredSessionCommandPorts(ready),
-        /** What the host protocol's Session router serves (VC-663). */
-        sessionRouter: { runtime, sessions },
+        /**
+         * Hands the map its Session reads (VC-663, D4): the agent command
+         * service's Workspace-scoped `executeInWorkspace`, which is built
+         * after this map, so the map forwards to it once served.
+         */
+        serveSessionReads(read: SessionReadPort): void {
+          sessionReads = read;
+        },
         venue: options.venue,
         verifySessionToken: tokens.verify,
-        busyWorktreeSites,
         automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
-        onDeliberateMove: (notice: TicketMovedNotice) => {
-          if (automations.kind === "live") {
-            const execution = automations.execution;
-            if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
-          }
-        },
+        // The host's one handler map (VC-668): every door this host serves
+        // projects it. hostd keeps no experiments and composes no terminals,
+        // so those handlers answer unavailable and a backward move interrupts
+        // nothing a terminal holds.
+        handlers: createHostHandlers(ports, {
+          db,
+          dataDir: host.dataDir,
+          runtime,
+          sessions,
+          modelAccess: piRuntimeHost,
+          experiments: null,
+          automations,
+          busyWorktreeSites,
+          detachedWork: host.detachedWork,
+          // Served before any door opens: hostd hands it over before it
+          // settles the socket or starts the listener.
+          sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+        }),
       };
     },
   };

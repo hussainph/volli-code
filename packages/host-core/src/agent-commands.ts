@@ -29,7 +29,8 @@ import type {
 } from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
-import { coordinationRefusal } from "./agent-dispatch/admission";
+import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
+import { isHostHandlerMap } from "./handlers/handler-map";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
@@ -51,9 +52,10 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
-  // JS callers must fail closed too; the type alone cannot guard a missing supplier.
-  if (typeof options.busyWorktreeSites !== "function") {
-    throw new Error("The busy-worktree supplier is required.");
+  // JS callers must fail closed too: without the map there is no move, and
+  // a socket that answered one some other way would be a second handler.
+  if (!isHostHandlerMap(options.handlers)) {
+    throw new Error("The host's handler map is required.");
   }
   const now = options.now ?? Date.now;
   /**
@@ -249,6 +251,9 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
+        handlerPolicy: socketHandlerPolicy(request, () =>
+          coordinationRefusal(readPolicy, projects, envSession, request, door),
+        ),
       };
       return auditOperatorWrite(door, request, await binding.handle(context, request));
     },

@@ -20,5 +20,5 @@ export {
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "../ticket-commands";
-export { executeTicketMove, trimFinishedTicketInBackground } from "../ticket-move";
+export { trimFinishedTicketInBackground } from "../ticket-move";
 export { subscribeTicketWake, type TicketWake, withTicketWake } from "../ticket-wake";
