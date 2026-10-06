@@ -23,6 +23,9 @@ export type HostFeature = string;
 const FEATURE = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/u;
 const MAX_FEATURES = 256;
 const MAX_FEATURE_LENGTH = 128;
+/** Bounds on what a verifier and a log ever see of a hello's free strings. */
+const MAX_CREDENTIAL_LENGTH = 8192;
+const MAX_CLIENT_VERSION_LENGTH = 128;
 
 /** Self-description only. The host never authorizes on it; the credential decides the actor. */
 export const HOST_CLIENT_KINDS = ["desktop", "web", "mobile", "cli", "worker"] as const;
@@ -36,7 +39,18 @@ export interface HostHello {
   readonly lastSeen: WorkspaceAuthority | null;
   readonly features: readonly HostFeature[];
   readonly credential: string;
+  /**
+   * Fresh per handshake, never reused: the challenge the host signs its
+   * welcome over, so a recorded welcome cannot be replayed to this client
+   * (HI § Keys). Required in v1 (VC-663, D6); VC-575 signs and verifies.
+   */
+  readonly nonce: HostNonce;
 }
+
+/** Base64url, at least 128 random bits. {@link createHostNonce} mints 256. */
+export type HostNonce = string;
+const NONCE = /^[A-Za-z0-9_-]{22,128}$/u;
+const NONCE_BYTES = 32;
 
 /** Which host held a workspace, and under which epoch (`docs/plans/host-identity.md`). */
 export interface WorkspaceAuthority {
@@ -51,6 +65,22 @@ export interface HostWelcome {
   readonly workspace: { readonly id: WorkspaceId; readonly epoch: WorkspaceEpoch };
   readonly actor: HostActor;
   readonly features: readonly HostFeature[];
+  /**
+   * Reserved in v1 (VC-663): the host key's signature over this welcome and
+   * the hello's nonce. Every v1 host sends `null` until VC-575 signs it; a
+   * client checks it through `validateWelcome`'s `verifyProof` hook.
+   */
+  readonly proof: HostWelcomeProof | null;
+}
+
+/**
+ * The welcome proof's shape, reserved for VC-575: a named signature scheme
+ * and its encoded value. Opaque to this package; nothing reads either field
+ * until VC-575 fills the hook.
+ */
+export interface HostWelcomeProof {
+  readonly scheme: string;
+  readonly value: string;
 }
 
 /** What a host knows about itself when it judges a hello. */
@@ -114,6 +144,7 @@ export function negotiateWelcome(
       workspace: { ...offer.workspace },
       actor,
       features: negotiateFeatures(hello.features, offer.features),
+      proof: null,
     },
   };
 }
@@ -140,6 +171,46 @@ export function checkWorkspaceFence(
 
 /** The `connectionParams` key the hello travels under. tRPC carries string values only. */
 export const HOST_HELLO_PARAM = "volli-hello";
+
+/** What a client knows before it says hello; the builder fills the rest. */
+export interface HostHelloInput {
+  readonly client: HostHello["client"];
+  readonly workspaceId: WorkspaceId;
+  readonly credential: string;
+  readonly features: readonly HostFeature[];
+  readonly lastSeen: WorkspaceAuthority | null;
+  /** Defaults to every version this build speaks. */
+  readonly protocol?: ProtocolVersionRange;
+}
+
+/**
+ * A hello for ONE handshake, with a fresh nonce: a client builds a new one on
+ * every connect and reconnect, and keeps it to validate the welcome against.
+ */
+export function buildHostHello(input: HostHelloInput): HostHello {
+  return {
+    protocol: input.protocol ?? HOST_PROTOCOL_VERSIONS,
+    client: { kind: input.client.kind, version: input.client.version },
+    workspaceId: input.workspaceId,
+    lastSeen: input.lastSeen,
+    features: [...input.features],
+    credential: input.credential,
+    nonce: createHostNonce(),
+  };
+}
+
+/** 256 bits from the platform CSPRNG, base64url. Web Crypto: Node, browsers and mobile alike. */
+export function createHostNonce(): HostNonce {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+export function isHostNonce(value: unknown): value is HostNonce {
+  return typeof value === "string" && NONCE.test(value);
+}
 
 export function encodeHostHello(hello: HostHello): Record<string, string> {
   return { [HOST_HELLO_PARAM]: JSON.stringify(hello) };
@@ -176,6 +247,7 @@ export function isHostHello(value: unknown): value is HostHello {
     isProtocolVersionRange(value.protocol) &&
     (HOST_CLIENT_KINDS as readonly unknown[]).includes(value.client.kind) &&
     typeof value.client.version === "string" &&
+    value.client.version.length <= MAX_CLIENT_VERSION_LENGTH &&
     isUuidV4(value.workspaceId) &&
     (value.lastSeen === null ||
       (isRecord(value.lastSeen) &&
@@ -185,7 +257,9 @@ export function isHostHello(value: unknown): value is HostHello {
     value.features.length <= MAX_FEATURES &&
     value.features.every(isHostFeature) &&
     typeof value.credential === "string" &&
-    value.credential.length > 0
+    value.credential.length > 0 &&
+    value.credential.length <= MAX_CREDENTIAL_LENGTH &&
+    isHostNonce(value.nonce)
   );
 }
 

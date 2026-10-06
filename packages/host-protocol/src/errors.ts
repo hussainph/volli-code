@@ -44,6 +44,8 @@ export type HostErrorCodeCoverage = AssertNever<Exclude<TRPC_ERROR_CODE_KEY, Hos
 export const HOST_ERROR_REASON_CODES = {
   "protocol-version-unsupported": "PRECONDITION_FAILED",
   "hello-invalid": "BAD_REQUEST",
+  /** Client-side: the host's welcome failed `validateWelcome` (an upstream answered badly). */
+  "welcome-invalid": "BAD_GATEWAY",
   "credential-invalid": "UNAUTHORIZED",
   "workspace-unknown": "NOT_FOUND",
   "workspace-epoch-fenced": "PRECONDITION_FAILED",
@@ -77,6 +79,15 @@ export function isHostError(value: unknown): value is HostError {
   }
   if (value.reason === undefined) return true;
   return isHostErrorReason(value.reason) && HOST_ERROR_REASON_CODES[value.reason] === value.code;
+}
+
+/**
+ * Whether a failure says "your cursor cannot be resumed; re-read the snapshot
+ * and subscribe from its cursor" (`subscription-resnapshot-required`). A
+ * client link branches on this, never on message text.
+ */
+export function isResnapshotRequired(error: unknown): boolean {
+  return readHostError(error).reason === "subscription-resnapshot-required";
 }
 
 /** Read a HostError, data.hostError, or legacy data.code failure on either link. */
