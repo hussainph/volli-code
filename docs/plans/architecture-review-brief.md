@@ -1,5 +1,7 @@
 # Post-M1 architecture review: common brief (read fully)
 
+Template seeded from the post-M1 review (2026-10-06); refresh every placeholder.
+
 ## Why this review exists
 The owner asked for a fresh-eyes architecture review after every milestone. **M1 (the headless host) is code-complete;** the owner passed the demo locally. M2 (one host protocol: desktop attaches to a local or remote `hostd` and feels identical) has just started, so this is the cheapest moment to change course.
 
@@ -34,8 +36,8 @@ The owner's questions, verbatim in spirit:
 - `CONTEXT.md` (the domain glossary).
 
 ## Where to read
-- **A fresh read-only checkout of main** (`3a8abeceb`) is at `/Users/phalasiya/Desktop/code/volli-code/.scratch/arch-review-m1/main`. Read there. Use `git -C <that path> log/show` for history.
-- **Since the last review (2026-10-04, at `800cec0f2`), 42 PRs merged (#734–#776).** They include:
+- **A fresh read-only checkout of main** (`<pinned main SHA>`) is at `<read-only main checkout>`. Read there. Use `git -C <read-only main checkout> log/show` for history.
+- **Since the last review (2026-10-04, at `<previous review SHA>`), 42 PRs merged (#734–#776).** They include:
   - hostd;
   - the Session composition lift (VC-622);
   - the host lifecycle (VC-627);
@@ -43,7 +45,7 @@ The owner's questions, verbatim in spirit:
   - host-core narrowed to 14 cluster entries plus `./testing` (VC-632);
   - the IPC/app_state placement registry (VC-574);
   - the credential lock retry policy (VC-653).
-- **The previous review**, so you don't repeat it: `/Users/phalasiya/Desktop/code/volli-code/.scratch/arch-review/architecture-review-2026-10-04.html` (read as text) and its lens notes in `/Users/phalasiya/Desktop/code/volli-code/.scratch/arch-review/notes/`. Say which of its findings are now fixed, which are still open, and which got worse.
+- **The previous review**, so you don't repeat it: `<repo>/.scratch/arch-review-<previous milestone>/architecture-review-<previous milestone>.html` (read as text) and its lens notes in `<repo>/.scratch/arch-review-<previous milestone>/notes/`. Say which of its findings are now fixed, which are still open, and which got worse.
 - **In flight, not on main. Read them as the pattern M2 will copy:**
   - PR #777: VC-564 A, the command catalog, the policy middleware and the Sessions projection;
   - PR #778: A2, catalog extensions (per-door actor, `session-own`, multi-resource resolvers, `createCatalogBuilders`).
@@ -65,12 +67,12 @@ Re-open one only if the friction is real, and then flag it clearly:
 
 ## Rules
 - **Read-only.** Don't modify, commit or push anything, anywhere. No installs or builds; read the code.
-- The only place you may write is `/Users/phalasiya/Desktop/code/volli-code/.scratch/arch-review-m1/notes/`.
+- The only place you may write is `<repo>/.scratch/arch-review-<milestone>/notes/`.
 - Web research is allowed where your lens asks for it; cite URLs.
 - You can't ask questions, so state your assumptions.
 
 ## Vocabulary
-Read `/Users/phalasiya/.agents/skills/codebase-design/SKILL.md` and `DEEPENING.md` first. Use their terms exactly: module, interface, implementation, depth, deep, shallow, seam, adapter, leverage, locality. Apply the deletion test, and "one adapter = a hypothetical seam, two = a real one". Use domain terms from `CONTEXT.md`. Don't design type signatures; name each candidate and describe its shape in a sentence.
+Read the codebase-design skill and its `DEEPENING.md` first. Use their terms exactly: module, interface, implementation, depth, deep, shallow, seam, adapter, leverage, locality. Apply the deletion test, and "one adapter = a hypothetical seam, two = a real one". Use domain terms from `CONTEXT.md`. Don't design type signatures; name each candidate and describe its shape in a sentence.
 
 ## Output: at most 1,600 words of markdown
 Write it to `notes/<LENS>.md` and also return it as your answer.
