@@ -5,17 +5,41 @@ import {
   expectHostError,
   recordSubscription,
 } from "@volli/host-protocol/testing";
-import { createSessionRouter, RpcDiagnosticLog } from "@volli/session-rpc";
-import type { SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
+import type { HostError } from "@volli/host-protocol";
+import { createSessionRouter, RpcDiagnosticLog, type RouterCaller } from "@volli/session-rpc";
+import {
+  SessionRuntimeCommandConflictError,
+  type SessionRuntime,
+  type SessionStreamFrame,
+} from "@volli/session-engine";
 import { createSessionProjectionCheckpoint, EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
-import { fakeElectron, sessionRouterContractLinks } from "./session-rpc-contract.test-support";
+import {
+  fakeElectron,
+  sessionRouterContractLinks,
+  type SessionRouterHost,
+} from "./session-rpc-contract.test-support";
 
 vi.mock("electron", () => fakeElectron);
 
 const selection = { providerId: "test", modelId: "model", reasoningLevel: "high" as const };
+const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
+/** A paired device bound to the fixture's Workspace: what part B's handshake will mint. */
+const device: RouterCaller = {
+  actor: {
+    kind: "device",
+    deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+    workspaceId: WORKSPACE,
+  },
+};
+/** Which Workspace owns each Session the host knows; any other id is absent. */
+const OWNERS: Readonly<Record<string, string>> = {
+  "session-1": WORKSPACE,
+  "foreign-session": OTHER_WORKSPACE,
+};
 const session = {
   id: "session-1",
-  projectId: "project-1",
+  projectId: WORKSPACE,
   ticketId: null,
   role: "project" as const,
   parentSessionId: null,
@@ -57,23 +81,45 @@ function fixture() {
     recordedAt: 10,
     sequence: 5,
   };
+  // Idempotent by command id, as the engine is: the same intent answers the
+  // durable result again, and another intent under that id is a conflict.
+  const accepted = new Map<string, string>();
+  const reads: string[] = [];
   const runtime: SessionRuntime = {
-    snapshot: async () => snapshot,
-    projection: async () => ({ projection: snapshot.projection, throughSequence: 4 }),
-    command: async (request) => ({
-      sessionId: session.id,
-      command: {
-        id: request.commandId,
+    snapshot: async () => {
+      reads.push("snapshot");
+      return snapshot;
+    },
+    projection: async () => {
+      reads.push("projection");
+      return { projection: snapshot.projection, throughSequence: 4 };
+    },
+    command: async (request) => {
+      reads.push("command");
+      const intent = JSON.stringify(request.command);
+      const prior = accepted.get(request.commandId);
+      if (prior !== undefined && prior !== intent) {
+        throw new SessionRuntimeCommandConflictError(
+          `Command ${request.commandId} was already accepted with different intent`,
+        );
+      }
+      accepted.set(request.commandId, intent);
+      return {
         sessionId: session.id,
-        createdAt: 10,
-        route: null,
-        intent: { kind: "model.select", selection },
-      },
-      receipt,
-      throughSequence: 5,
-      refusal: null,
-    }),
+        command: {
+          id: request.commandId,
+          sessionId: session.id,
+          createdAt: 10,
+          route: null,
+          intent: { kind: "model.select", selection },
+        },
+        receipt,
+        throughSequence: 5,
+        refusal: null,
+      };
+    },
     subscribe: async ({ afterSequence }, next, onFailure) => {
+      reads.push("subscribe");
       cursors.push(afterSequence);
       emit = next;
       fail = onFailure!;
@@ -83,11 +129,17 @@ function fixture() {
     reconcile: async () => {},
     close: async () => {},
   };
-  const host = { runtime, diagnostics: new RpcDiagnosticLog() };
+  const host = {
+    caller: device,
+    sessionWorkspace: (sessionId: string) => OWNERS[sessionId] ?? null,
+    runtime,
+    diagnostics: new RpcDiagnosticLog(),
+  } satisfies SessionRouterHost;
   return {
     host,
     receipt,
     cursors,
+    reads,
     emit: (value: SessionStreamFrame) => emit(value),
     fail: (error: unknown) => fail(error),
   };
@@ -189,4 +241,135 @@ describeContract("Session router", sessionRouterContractLinks(), ({ connect }) =
       error: { code: "INTERNAL_SERVER_ERROR" },
     });
   });
+
+  // VC-564 (a): a guessed id in another Workspace must reveal nothing that an
+  // id nobody holds would not, on every operation kind, before any read.
+  it("answers a Session in another Workspace exactly as an absent one", async () => {
+    const f = fixture();
+    const client = await connect(f.host);
+    const refusals = async (sessionId: string): Promise<HostError[]> => {
+      const stream = recordSubscription((handlers) =>
+        client.session.subscribe.subscribe({ sessionId }, handlers),
+      );
+      return [
+        await expectHostError(client.session.projection.query({ sessionId })),
+        await expectHostError(
+          client.session.command.mutate({
+            sessionId,
+            commandId: "command-1",
+            command: { kind: "model.select", selection },
+          }),
+        ),
+        await stream.ended.then((end) => (end.kind === "error" ? end.error : null)),
+      ].filter((error): error is HostError => error !== null);
+    };
+    const foreign = await refusals("foreign-session");
+    expect(foreign).toHaveLength(3);
+    for (const error of foreign) {
+      expect(error).toStrictEqual({
+        code: "NOT_FOUND",
+        message: "Not found in this Workspace.",
+        reason: "workspace-unknown",
+      });
+    }
+    expect(await refusals("no-such-session")).toStrictEqual(foreign);
+    expect(f.reads).toStrictEqual([]);
+  });
+
+  // VC-564 (b): a Session may not read another's transcript through a door
+  // that skips `session.peek`'s disclosure policy; every entry is the person's.
+  it("refuses a caller the entry's policy does not admit", async () => {
+    const f = fixture();
+    const agent: RouterCaller = {
+      actor: { kind: "session", sessionId: "agent-session", workspaceId: WORKSPACE },
+    };
+    const client = await connect({ ...f.host, caller: agent });
+    expect(
+      await expectHostError(client.session.projection.query({ sessionId: session.id })),
+    ).toStrictEqual({
+      code: "FORBIDDEN",
+      message: "session.projection is not open to this caller.",
+      reason: "verb-refused",
+    });
+    expect(f.reads).toStrictEqual([]);
+  });
+
+  // VC-564 (c): the start guard was keyed on the Electron transport, so the
+  // WebSocket link passed a raw create straight to the runtime.
+  it("refuses session.command's start kinds on every link", async () => {
+    const f = fixture();
+    const client = await connect(f.host);
+    const refused = await expectHostError(
+      client.session.command.mutate({
+        commandId: "forged-create",
+        command: {
+          kind: "session.create",
+          projectId: WORKSPACE,
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: null,
+        },
+      }),
+    );
+    expect(refused).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+    expect(
+      await expectHostError(
+        client.session.command.mutate({
+          commandId: "forged-attach",
+          sessionId: session.id,
+          command: { kind: "adapter.attach", continuity: "fresh" },
+        }),
+      ),
+    ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+    expect(f.reads).toStrictEqual([]);
+  });
+
+  // VC-564 (d): retries reuse the key; only a different intent under it is refused.
+  it("replays the same command id and intent, and refuses another intent under it", async () => {
+    const f = fixture();
+    const client = await connect(f.host);
+    const request = {
+      sessionId: session.id,
+      commandId: "command-1",
+      command: { kind: "model.select" as const, selection },
+    };
+    const first = await client.session.command.mutate(request);
+    expect(await client.session.command.mutate(request)).toStrictEqual(first);
+    expect(
+      await expectHostError(
+        client.session.command.mutate({
+          ...request,
+          command: { kind: "model.select", selection: { ...selection, reasoningLevel: "low" } },
+        }),
+      ),
+    ).toStrictEqual({
+      code: "CONFLICT",
+      message: "Command command-1 was already accepted with different intent",
+      reason: "command-conflict",
+    });
+  });
+});
+
+// VC-564 (e): the same refusal reads as the same envelope, reason included,
+// whichever link carried it.
+it("carries an identical host error on the IPC and WebSocket links", async () => {
+  const seen: HostError[] = [];
+  for (const link of sessionRouterContractLinks()) {
+    const connection = await link.open(fixture().host);
+    try {
+      seen.push(
+        await expectHostError(
+          connection.client.session.projection.query({ sessionId: "foreign-session" }),
+        ),
+        await expectHostError(connection.client.modelAccess.inspect.query({})),
+      );
+    } finally {
+      await connection.close();
+    }
+  }
+  expect(seen).toHaveLength(4);
+  expect(seen.slice(2)).toStrictEqual(seen.slice(0, 2));
+  expect(seen[0]?.reason).toBe("workspace-unknown");
+  expect(seen[1]?.reason).toBe("operation-unavailable");
 });

@@ -1,12 +1,17 @@
 import Ajv2020 from "ajv/dist/2020.js";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
   AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
   agentCommandBindingsFrom,
   agentCommandsFrom,
+  CATALOG_ENTRIES,
+  catalogEntriesFrom,
+  catalogEntry,
   cliVerbName,
+  VERB_IDEMPOTENCIES,
+  VERB_SCOPES,
   DISCOVERABLE_VERBS,
   REFERENCE_VERBS,
   referenceVerbsFrom,
@@ -16,7 +21,16 @@ import {
   verbTier,
   verbToolWireName,
 } from "./verb-registry";
-import type { VerbEntry, VerbKey, VerbResultDetailsSchema, VerbTier } from "./verb-registry";
+import type {
+  CatalogKey,
+  CatalogKeyScopedTo,
+  HostApiCatalogCoverage,
+  HostApiKey,
+  VerbEntry,
+  VerbKey,
+  VerbResultDetailsSchema,
+  VerbTier,
+} from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 
 /**
@@ -222,7 +236,39 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
+  // The Session router's catalog entries (VC-564): `hostApi`-only, tiered by
+  // the CLI's actor rule. Every one requires the person, so every one reads
+  // coordination, the same answer VC-623 gave `project.add`.
+  "sessions.create": "coordination",
+  "sessions.attach": "coordination",
+  "settings.experiments": "coordination",
+  "settings.setExperiment": "coordination",
+  "modelAccess.inspect": "coordination",
+  "modelAccess.defaults": "coordination",
+  "modelAccess.setDefault": "coordination",
+  "modelAccess.hiddenModels": "coordination",
+  "modelAccess.setHiddenModels": "coordination",
+  "modelAccess.compactionPolicy": "coordination",
+  "modelAccess.setCompactionPolicy": "coordination",
+  "modelAccess.codeModePolicy": "coordination",
+  "modelAccess.setCodeModePolicy": "coordination",
+  "modelAccess.pickerView": "coordination",
+  "modelAccess.setPickerView": "coordination",
+  "session.snapshot": "coordination",
+  "session.projection": "coordination",
+  "session.subscribe": "coordination",
+  "session.command": "coordination",
+  "session.cancelInteraction": "coordination",
+  "session.reconcile": "coordination",
+  // Declared and policed, projected by no door: no tier, like ticket.archive.
+  "labDiagnostics.list": null,
+  "labDiagnostics.subscribe": null,
 };
+
+/** A router-only catalog entry: on the WebSocket projection at most, on no agent surface. */
+function routerOnly(entry: VerbEntry): boolean {
+  return entry.catalog !== undefined && entry.accessModes.every((mode) => mode === "hostApi");
+}
 
 /** A registry that is not the real one, for projections nothing declares yet. */
 const SYNTHETIC: readonly VerbEntry[] = [
@@ -416,13 +462,23 @@ describe("verbTier", () => {
   it("rejects non-Role and non-tool attempts to declare control tier", () => {
     for (const entry of [
       { accessModes: ["tool"], actor: "session" },
-      { accessModes: ["hostApi"], actor: "any" },
       { accessModes: ["tool", "hostApi"], actor: "role" },
     ] as const) {
       expect(() => verbTier(entry)).toThrow(
         "Control tier requires tool-only access and a role actor",
       );
     }
+  });
+
+  // VC-564: `hostApi` is the WebSocket projection, a door like the socket.
+  it("tiers a hostApi-only verb by the socket's actor rule, and never as control", () => {
+    expect(verbTier({ accessModes: ["hostApi"], actor: "any" })).toBe("read");
+    expect(verbTier({ accessModes: ["hostApi"], actor: "user" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["hostApi"], actor: "session" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["cli", "hostApi"], actor: "any" })).toBe("read");
+    expect(() => verbTier({ accessModes: ["hostApi"], actor: "role" })).toThrow(
+      "A control-tier verb cannot carry a hostApi access mode",
+    );
   });
 
   it("splits the socket by actor: any caller reads, a session actor coordinates", () => {
@@ -432,9 +488,15 @@ describe("verbTier", () => {
   });
 
   it("keeps the person's verbs off every Session surface (VC-623)", () => {
-    const userVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+    const personVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
       (entry) => entry.actor === "user",
     );
+    // The router's catalog entries (VC-564) are the person's too, and reach no
+    // agent surface at all: no `cli`, no `tool`, unlisted.
+    for (const entry of personVerbs.filter(routerOnly)) {
+      expect(entry.listed, entry.key).toBe(false);
+    }
+    const userVerbs = personVerbs.filter((entry) => !routerOnly(entry));
     expect(userVerbs.map((entry) => entry.key)).toEqual(["project.add"]);
     for (const entry of userVerbs) {
       // Never a tool, so no Role bundle can carry it; never listed, so neither
@@ -507,7 +569,13 @@ describe("the registry table", () => {
   // restoring a surface is putting a string back rather than rebuilding a verb.
   it("lets a verb be on no agent surface, and keeps its binding when it is", () => {
     const appOnly = VERB_REGISTRY.filter((entry) => entry.accessModes.length === 0);
-    expect(appOnly.map((entry) => entry.key)).toEqual(["ticket.archive"]);
+    expect(appOnly.map((entry) => entry.key)).toEqual([
+      "ticket.archive",
+      // The lab's diagnostics (VC-564): declared so the router can police
+      // them, served by no door.
+      "labDiagnostics.list",
+      "labDiagnostics.subscribe",
+    ]);
     for (const entry of appOnly) {
       expect(entry.handler.id).toBe(entry.key);
       expect(verbTier(entry)).toBeNull();
@@ -539,14 +607,23 @@ describe("the registry table", () => {
   });
 
   it("keys are dot-names that spell their own CLI form", () => {
-    for (const entry of VERB_REGISTRY) {
+    for (const entry of VERB_REGISTRY.filter((candidate) => !routerOnly(candidate))) {
       expect(entry.key).toMatch(/^[a-z]+(\.[a-z]+)?$/);
       expect(cliVerbName(entry.key)).toBe(entry.key.replace(".", " "));
     }
   });
 
+  // A router-only entry is keyed by its tRPC path (VC-564), which no CLI spells.
+  it("keys a router-only catalog entry by its procedure path", () => {
+    for (const entry of VERB_REGISTRY.filter(routerOnly)) {
+      expect(entry.key).toMatch(/^[a-z][A-Za-z]*\.[a-z][A-Za-z]*$/);
+    }
+  });
+
   it("hides the two involuntary verbs and the tool-only await from the reference", () => {
-    const unlisted = VERB_REGISTRY.filter((entry) => !entry.listed).map((entry) => entry.key);
+    const unlisted = VERB_REGISTRY.filter((entry) => !entry.listed && !routerOnly(entry)).map(
+      (entry) => entry.key,
+    );
     // `ticket.await` is unlisted for a different reason than the involuntary
     // pair: it has no cli access mode at all, so a reference line would teach
     // an invocation the socket refuses. Its discovery surface is the tool
@@ -1151,5 +1228,123 @@ describe("verb result details (VC-471)", () => {
     expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
     expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
     expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
+  });
+});
+
+describe("the host-protocol command catalog (VC-564)", () => {
+  /** The Session router, procedure by procedure: the catalog's first area. */
+  const SESSION_ROUTER = {
+    "sessions.create": ["workspace", "command-id"],
+    "sessions.attach": ["workspace", "command-id"],
+    "settings.experiments": ["host", "read"],
+    "settings.setExperiment": ["host", "natural"],
+    "modelAccess.inspect": ["host", "read"],
+    "modelAccess.defaults": ["host", "read"],
+    "modelAccess.setDefault": ["host", "natural"],
+    "modelAccess.hiddenModels": ["host", "read"],
+    "modelAccess.setHiddenModels": ["host", "natural"],
+    "modelAccess.compactionPolicy": ["host", "read"],
+    "modelAccess.setCompactionPolicy": ["host", "natural"],
+    "modelAccess.codeModePolicy": ["host", "read"],
+    "modelAccess.setCodeModePolicy": ["host", "natural"],
+    "modelAccess.pickerView": ["host", "read"],
+    "modelAccess.setPickerView": ["host", "natural"],
+    "session.snapshot": ["workspace", "read"],
+    "session.projection": ["workspace", "read"],
+    "session.subscribe": ["workspace", "read"],
+    "session.command": ["workspace", "command-id"],
+    "session.cancelInteraction": ["workspace", "natural"],
+    "session.reconcile": ["workspace", "natural"],
+    "labDiagnostics.list": ["host", "read"],
+    "labDiagnostics.subscribe": ["host", "read"],
+  } as const satisfies Record<CatalogKey, readonly [string, string]>;
+
+  it("declares every Session-router procedure, with its scope and idempotency", () => {
+    expect(
+      Object.fromEntries(
+        CATALOG_ENTRIES.map((entry) => [
+          entry.key,
+          [entry.catalog.scope, entry.catalog.idempotency],
+        ]),
+      ),
+    ).toEqual(SESSION_ROUTER);
+    for (const entry of CATALOG_ENTRIES) {
+      expect(VERB_SCOPES).toContain(entry.catalog.scope);
+      expect(VERB_IDEMPOTENCIES).toContain(entry.catalog.idempotency);
+      // The person's, on no agent surface (D3, D8).
+      expect(entry.actor, entry.key).toBe("user");
+      expect(entry.listed, entry.key).toBe(false);
+    }
+  });
+
+  it("projects onto the WebSocket every entry but the lab's", () => {
+    const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("hostApi"));
+    expect(projected.map((entry) => entry.key)).toEqual(
+      Object.keys(SESSION_ROUTER).filter((key) => !key.startsWith("labDiagnostics.")),
+    );
+    expectTypeOf<HostApiCatalogCoverage>().toEqualTypeOf<never>();
+    expectTypeOf<Exclude<HostApiKey, CatalogKey>>().toEqualTypeOf<never>();
+    expectTypeOf<CatalogKeyScopedTo<"workspace">>().toEqualTypeOf<
+      | "sessions.create"
+      | "sessions.attach"
+      | "session.snapshot"
+      | "session.projection"
+      | "session.subscribe"
+      | "session.command"
+      | "session.cancelInteraction"
+      | "session.reconcile"
+    >();
+  });
+
+  it("withholds the start kinds from session.command, whoever asks", () => {
+    expect(catalogEntry("session.command").catalog.refusedIntents).toEqual([
+      "session.create",
+      "adapter.attach",
+    ]);
+  });
+
+  it("answers by key, and refuses a key it does not declare", () => {
+    expect(catalogEntry("session.snapshot").key).toBe("session.snapshot");
+    expect(() => catalogEntry("ticket.list" as CatalogKey)).toThrow(
+      "No catalog entry declares ticket.list",
+    );
+  });
+
+  const base: VerbEntry = {
+    key: "area.verb",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "area.verb" },
+    listed: false,
+    group: "App",
+    summary: "A synthetic entry.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "command-id" },
+  };
+
+  it("refuses an entry no router could police", () => {
+    expect(
+      catalogEntriesFrom([
+        base,
+        { ...base, key: "other.verb", catalog: undefined, accessModes: ["cli"] },
+      ]),
+    ).toEqual([base]);
+    expect(() => catalogEntriesFrom([{ ...base, catalog: undefined }])).toThrow(
+      "Verb area.verb declares a hostApi access mode with no catalog entry",
+    );
+    for (const actor of ["session", "role"] as const) {
+      expect(() => catalogEntriesFrom([{ ...base, actor }])).toThrow(
+        `Catalog entry area.verb requires a ${actor} actor; a router judges only any and user`,
+      );
+    }
+    expect(catalogEntriesFrom([{ ...base, actor: "any" }])).toHaveLength(1);
+    for (const catalog of [
+      { scope: "workspace", idempotency: "natural", refusedIntents: ["x"] },
+      { scope: "host", idempotency: "command-id", refusedIntents: ["x"] },
+    ] as const) {
+      expect(() => catalogEntriesFrom([{ ...base, catalog }])).toThrow(
+        "Catalog entry area.verb refuses intents but is no workspace command",
+      );
+    }
   });
 });

@@ -1,7 +1,12 @@
 /** Real Session IPC bridge/link (structured clone) and stock WS router (JSON), for tests only. */
 import type { TRPCClient } from "@trpc/client";
 import { webSocketContractLink, type ContractLink } from "@volli/host-protocol/testing";
-import { createSessionRouter, RpcDiagnosticLog, type AppRouter } from "@volli/session-rpc";
+import {
+  createSessionRouter,
+  RpcDiagnosticLog,
+  type AppRouter,
+  type RouterCaller,
+} from "@volli/session-rpc";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -14,8 +19,15 @@ import {
 import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
 import { createSessionRpcClient } from "./session-rpc-ipc-link";
 
-/** Everything a contract case can hand the Session router: the runtime and its optional facades. */
-export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver">;
+/**
+ * Everything a contract case can hand the Session router: who is calling, the
+ * runtime and its optional facades. The caller is required here because both
+ * links must judge the same actor; production IPC defaults to the desktop's
+ * own window, and part B's handshake will mint it on the WebSocket.
+ */
+export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
+  caller: RouterCaller;
+};
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
 
@@ -91,7 +103,11 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
   };
 }
 
-/** The same router behind tRPC's WebSocket adapter, as a host would serve it. */
+/**
+ * The same router behind tRPC's WebSocket adapter, as a host would serve it.
+ * Until part B's handshake mints the caller from a credential, the case names
+ * it, exactly as it names it to the IPC link.
+ */
 export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRouter> {
   return webSocketContractLink({
     router: createSessionRouter(),

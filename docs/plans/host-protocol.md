@@ -27,18 +27,18 @@
 | Errors | `HostError { code, message, reason? }`; tRPC codes | Same branchable failure on either link, no thrown strings | IPC registry's result envelope + Session RPC's code/message |
 | JSON seams | `IsJsonSafe` on every raw input/output, subscription yield included | Structured-clone success must not conceal JSON data loss | BOUNDARIES rule 3; moved checker, Session RPC re-export |
 | Operation placement | Authority/resource ownership, not the caller's machine | One host API, no remote tools routed back to the desktop | Cloud rulings 1–3; classification below |
-| Command catalog (F3) | One host-core entry per domain command; area routers, IPC, the agent socket and tools are projections | Three door vocabularies have already diverged; VC-92 policy is checked once | Verb Registry, `AGENT_VERB_TABLE` |
+| Command catalog (F3) | One Verb Registry entry per domain command, bound to exactly one handler; area routers, IPC, the agent socket and tools are projections | Three door vocabularies diverge unless one table drives them; VC-92 policy is checked once | Verb Registry `catalog` (VC-564), `@volli/session-rpc` `catalog.ts`, `AGENT_VERB_TABLE` |
 | Board delivery (F1) | One change feed per Workspace: tracked cursor, resume or resnapshot | Fire-and-forget `data-changed` pings vanish with no listener and cannot resume after a lid-close | Session stream contract below |
 | Host events (F4) | Every host fact is a `HostEventMap` topic with a Workspace scope and a delivery class; cadence in host-core | Two topics bypass the bus; coalescing lives in an adapter; `publish` names no Workspace | `ports/events.ts` |
 | Client capabilities (F2) | Requests to the one connection that asked; per-connection focus and presence; auth-callback relay | A process-wide `client` means nothing with N Clients; remote OAuth fails | `HostClientEventSink`; VS Code `asExternalUri` |
 
 ## Handshake and capabilities
 
-`HOST_PROTOCOL_VERSION = HOST_PROTOCOL_MIN_VERSION = 1`. A breaking semantic or wire change raises the integer; supported ranges must describe versions actually implemented. Additive procedures/optional fields use named features (`sessions`, `terminals.stream`, etc.; lowercase dotted words, ≤128 characters, ≤256 requested features). Names have fixed semantics; incompatible semantics need a new name or protocol version. Absent means unsupported; unknown names are ignored. The welcome grants the deduplicated intersection of requested features and those the host serves **to this actor**. Capability advertisement is not authorization. Features under `client.` run the other way (F2): requesting `client.open-external` declares that this Client performs the intent, and the grant means this host may send it ([The Client is a connection](#the-client-is-a-connection-f2)).
+`HOST_PROTOCOL_VERSION = HOST_PROTOCOL_MIN_VERSION = 1`. A breaking semantic or wire change raises the integer; supported ranges must describe versions actually implemented. Additive procedures/optional fields use named features (`sessions`, `terminals.stream`, etc.; lowercase dotted words, ≤128 characters, ≤256 requested features). The first v1 names: the listener (VC-663) advertises `sessions`, `sessions.subscribe` and `verbs.read`; host events and per-connection Clients (VC-664) add `events`, `client.open-external` and `client.clipboard-write`. Names have fixed semantics; incompatible semantics need a new name or protocol version. Absent means unsupported; unknown names are ignored. The welcome grants the deduplicated intersection of requested features and those the host serves **to this actor**. Capability advertisement is not authorization. Features under `client.` run the other way (F2): requesting `client.open-external` declares that this Client performs the intent, and the grant means this host may send it ([The Client is a connection](#the-client-is-a-connection-f2)).
 
 The client sends `encodeHostHello(hello)` as tRPC `connectionParams`, under `volli-hello` (a JSON string). `HostHello` contains `{protocol:{min,max}, client:{kind,version}, workspaceId, lastSeen, features, credential}`. `client.kind` is desktop/web/mobile/cli/worker, self-description only; it never selects an actor. Missing/malformed hello is `BAD_REQUEST` / `hello-invalid`; missing/expired/revoked credentials are `UNAUTHORIZED` / `credential-invalid`. Credentials are never logged, embedded in URLs, recorded as diagnostics or put in the welcome. Use WSS outside loopback; private-network routing does not remove authentication.
 
-VC-564 authenticates and negotiates in connection context before executing any area procedure. A base-v1 `protocol.welcome` query returns the immutable negotiated `HostWelcome`; this bootstrap query is not feature-gated. VC-564 implements runtime welcome validation before area calls/subscriptions; the interface alone is not validation and this package currently guards only hellos. Welcome is `{protocolVersion, host:{id,version}, workspace:{id,epoch}, actor, features}`. The identity spec's `workspaceEpoch` is encoded as welcome `workspace.epoch` and hello `lastSeen.epoch` (when non-null); preserve these nested v1 wire fields, not a flattened or renamed `workspaceEpoch` field. The client checks selected version, requested workspace, actor workspace and granted-feature subset. It verifies the welcome's host-key proof against the key it pinned for `host.id` at pairing (F5). Only then does it apply the fence and record the authority before becoming ready. VC-575 adds the hello nonce and the welcome proof to v1 itself, not as a feature a downgrade could strip: v1 has no production listener before VC-564. Reconnect repeats the handshake; it is not implicit acceptance of a new host. A rejected handshake cannot leave an authenticated half-open subscription.
+VC-564 authenticates and negotiates in connection context before executing any area procedure. A base-v1 `protocol.welcome` query returns the immutable negotiated `HostWelcome`; this bootstrap query is not feature-gated. VC-564 implements runtime welcome validation before area calls/subscriptions; the interface alone is not validation and this package currently guards only hellos. Welcome is `{protocolVersion, host:{id,version}, workspace:{id,epoch}, actor, features}`. The identity spec's `workspaceEpoch` is encoded as welcome `workspace.epoch` and hello `lastSeen.epoch` (when non-null); preserve these nested v1 wire fields, not a flattened or renamed `workspaceEpoch` field. The client checks selected version, requested workspace, actor workspace and granted-feature subset. It verifies the welcome's host-key proof against the key it pinned for `host.id` at pairing (F5). Only then does it apply the fence and record the authority before becoming ready. The hello nonce and the welcome proof are v1 itself, not a feature a downgrade could strip: VC-663 adds a required nonce and a reserved proof field before any production client exists, and VC-575 signs and verifies them. Reconnect repeats the handshake; it is not implicit acceptance of a new host. A rejected handshake cannot leave an authenticated half-open subscription.
 
 VC-550 agreement: host id is UUIDv4, host-local, **not** `installationId`. Backup bundles omit it, so a bundle restore mints a new host id and re-enrolls devices/workers. A raw profile copy instead duplicates the singleton: detection is not implemented, and the copy must not serve until detection/re-enrollment establishes a fresh identity. Workspace id is existing `projects.id` and travels with it. Epoch 0 means never served under the flag; first validated serve is 1. Promotion raises the latest known fence (normally max+1) **only after authority validation/arbitration**; a lagging replica's local MAX(epoch)+1 proves no exclusivity. Keep the highest accepted `{epoch,hostId}` per workspace. `checkWorkspaceFence` rejects a lower epoch (`workspace-epoch-fenced`) and equal epoch/different host (`workspace-split-brain`); on split brain stop using both, retain the conflict and require an explicit fenced promotion. A higher epoch may name a new host only after authentication and authority/promotion validation. The pin survives client/worker restarts. The helper alone is not control-plane compare-and-swap, conflict persistence or durable authority storage.
 
@@ -48,7 +48,14 @@ T3 is a precedent for **readiness gated by an environment descriptor and absence
 
 VC-575 owns pairing, token format/storage/rotation/revocation. Device credentials come from pairing and bind `(deviceId, workspaceId)` and the issuing host; session credentials bind a durable Session to that workspace; worker credentials bind an enrolled worker to that workspace. A device or worker credential is short-lived and obtained by proving the key pinned at pairing or registration, so revocation drops a public key and a phone holds no long-lived bearer secret (F5, [Keys](host-identity.md#keys-proof-behind-the-names)). A host serving several workspaces requires a separate authorized connection per workspace. The host derives the actor from credential verification, never hello fields, a supplied Session id or transport location. `isHostActor` validates grammar, **not** authority; actors' `sessionId` tolerates the bounded legacy identifiers accepted by session-rpc, while new Session ids are UUIDv4.
 
-Carry VC-92's read / coordination / control policy into per-procedure middleware. A paired device maps to today's `user` policy actor (human intent, not an agent control tier). A Session retains its birth-frozen Role tool surface and scope. Agent control travels through a worker only on behalf of a Session it hosts, checked against that Session's frozen grants; worker identity alone confers no control tier. The paired-device human routes remain available under user policy. Today's socket is read/coordination only; control remains tool-only, not newly exposed by a token. Declare policy for every procedure, exhaustive on additions, and check grants/revocation at dispatch, not only handshake. VC-564 must adapt the reserved `hostApi` verb projection and worker delegation explicitly; today's registry cannot tier hostApi-only verbs or authorize workers. A bad agent credential is refused, never downgraded to user (VC-163).
+Carry VC-92's read / coordination / control policy into per-procedure middleware. A paired device maps to today's `user` policy actor (human intent, not an agent control tier). A Session retains its birth-frozen Role tool surface and scope. Agent control travels through a worker only on behalf of a Session it hosts, checked against that Session's frozen grants; worker identity alone confers no control tier. The paired-device human routes remain available under user policy. Today's socket is read/coordination only; control remains tool-only, not newly exposed by a token. Declare policy for every procedure, exhaustive on additions, and check grants/revocation at dispatch, not only handshake. A bad agent credential is refused, never downgraded to user (VC-163).
+
+VC-564 implements this in the catalog middleware ([Command catalog](#command-catalog-f3)):
+
+- **One actor mapping.** `@volli/shared`'s `catalog-actor.ts` maps both door vocabularies onto the policy actor: `HOST_ACTOR_POLICY` (device → `user`, session → `session`, worker → refused) and `DOOR_ACTOR_POLICY` (the VC-623 operator → `user`, as a paired device is). The socket's admission gate and the router read the same tables.
+- **Workers are refused** at every procedure until VC-580/581 give them delegated Session grants.
+- **The desktop's own window** is the reserved local device `{kind:"device", deviceId:"local"}` (`LOCAL_DEVICE_ACTOR`, `@volli/host-protocol`): device-as-user, every Workspace on its host. `isHostActor` refuses `"local"`, so no verifier can mint it from a network handshake.
+- **Grants at dispatch.** The context's caller carries `current()`, asked on every call; `false` is `UNAUTHORIZED` / `credential-invalid`.
 
 Context carries the authorized workspace; inputs cannot override it. Every ticket, Session, terminal, artifact, blob, subscription and worker lookup verifies workspace ownership **before** returning data or mutating. Cross-workspace ids and absent ids have the same `NOT_FOUND` answer (`workspace-unknown`), including subscriptions and bulk-channel grants. Policy denial within the workspace is `FORBIDDEN` / `verb-refused`. A promoted authority rejects old-epoch writes; worker checkout writes additionally carry `(workspaceEpoch, leaseEpoch)`, ordered lexicographically, and must equal the current live, unexpired per-ticket grant for the authenticated worker. A claimed higher token is not authorization. Lease epochs belong on writes, not the hello; a valid workspace connection is not a checkout lease.
 
@@ -60,16 +67,71 @@ Desktop has three verb vocabularies:
 - the Session tRPC router;
 - the agent verb table (`shared/src/verb-registry.ts`, `host-core/src/agent-dispatch/table.ts`).
 
-They have already diverged. The renderer's `volli:ticket-move` trims a newly Done worktree at once (`data-ipc.ts:591-606, 922-955`); socket `ticket.move` (`ticket-verbs.ts:349-490`) leaves it to the 60-second retention poll. M2's area routers must not become a fourth vocabulary.
+Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newly Done worktree at once while socket `ticket.move` left it to the 60-second retention poll; VC-629 fixed that by having both doors call one handler (`host-core/src/ticket-move.ts`). M2's area routers must not become a fourth vocabulary.
 
-**One entry per domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half and host-core's `AGENT_VERB_TABLE` its binding half. Both grow to cover human commands; no second table appears beside them. An entry carries:
+**One entry per domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler each door's projection resolves to: `AGENT_VERB_TABLE` for socket verbs, one tRPC procedure for router commands. Both grow to cover human commands; no second table appears beside them. An entry carries:
 
-- its dot-name: one identity on every door, chosen once;
-- JSON input/output validators, transport-independent (BOUNDARIES rule 3);
-- its Workspace resource scope, resolved and authorized before the handler runs (cross-Workspace is `NOT_FOUND`);
-- actor policy: which actor kinds may call it (paired device as `user`, Session, worker on a hosted Session's behalf). Tiers stay derived from access modes and actor requirement, never stored (VC-92). Human and agent policy may differ for one command;
-- idempotency: `command-id` (intent-recording: `HostCommandRequest`, durable receipt), `natural` (a repeat leaves the same state) or `read`;
-- exactly one handler.
+- its dot-name, `key`: one identity on every door, chosen once. A router entry's key is its procedure path (`session.snapshot`);
+- its actor policy, `actor`: `user` (the person: a paired device, the desktop's own window, a VC-623 operator) or `any` (Sessions too). A router judges these two; `session` (per-project policy) and `role` (a frozen Role bundle) are refused at load until a router can consult them. Tiers stay derived from access modes and actor requirement, never stored (VC-92). Human and agent policy may differ for one command;
+- its `catalog` declaration (`VerbCatalogDeclaration`):
+  - `scope`: `workspace` (the call names a resource, authorized before the handler runs; cross-Workspace is `NOT_FOUND`) or `host` (host-level state, no Workspace data; person-only unless the actor is `any`, D8);
+  - `idempotency`: `command-id` (intent-recording: `HostCommandRequest`, durable receipt), `natural` (a repeat leaves the same state) or `read`;
+  - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own;
+- its access modes: `hostApi` is the WebSocket projection; an entry with a `catalog` and no access mode is policed but served by no network door (the lab's `labDiagnostics.*`);
+- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2). JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
+- exactly one handler: the procedure's resolver, or the socket binding.
+
+**A worked example**, the entry behind `session.snapshot`:
+
+```ts
+// packages/shared/src/verb-registry.ts, in VERB_REGISTRY
+{
+  key: "session.snapshot",
+  accessModes: ["hostApi"],
+  actor: "user",
+  handler: { site: "main", id: "session.snapshot" },
+  listed: false,
+  group: "Session",
+  summary: "Read one Session's projection with its transcript frames.",
+  options: [],
+  catalog: { scope: "workspace", idempotency: "read" },
+},
+
+// packages/session-rpc/src/index.ts, in createSessionRouter's catalogRouter({...})
+session: {
+  snapshot: workspaceProcedure(
+    "session.snapshot",                    // typed to the catalog's workspace keys
+    z.object({ sessionId: nonEmptyString }), // the validator
+    sessionResource,                        // input -> { sessionId }: what to authorize
+  ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+},
+```
+
+**At dispatch**, every call runs the same checks in this order, before its handler (`packages/session-rpc/src/catalog.ts`):
+
+1. the caller's grant is still current, else `UNAUTHORIZED` / `credential-invalid`;
+2. the caller's actor, mapped through `HOST_ACTOR_POLICY`, meets the entry's `actor`, and a network caller reaches only `hostApi` entries; else `FORBIDDEN` / `verb-refused`;
+3. the input parses (`BAD_REQUEST`);
+4. a withheld intent is refused (`FORBIDDEN` / `verb-refused`);
+5. a workspace resource is resolved and authorized: a project id is its own Workspace, a Session through the context's `sessionWorkspace` port. Foreign and absent answer the same `NOT_FOUND` / `workspace-unknown`, with the same message. The desktop's own window owns every Workspace, so it skips this step and reads nothing new.
+
+After the handler, an engine or runtime command-id conflict becomes `CONFLICT` / `command-conflict`.
+
+**Exhaustive, at compile time and at construction.**
+
+- `hostProcedure(key)` and `workspaceProcedure(key, input, resource)` take only catalog keys of their scope, so a procedure with no entry, or a workspace procedure with no resource, does not compile.
+- `SessionRouterCatalogBinding` asserts `CatalogMismatch<ProcedurePaths<router>>` is `never`: no procedure without an entry and no entry without a procedure. The keys that disagree are named in the error. When a second area router lands, the assertion takes the union of every router's paths.
+- `HostApiCatalogCoverage` fails a `hostApi` entry with no `catalog`; `catalogEntriesFrom` refuses one at load.
+- `catalogRouter` throws at construction on a procedure the builders did not make, one at another entry's path, or one whose tRPC type contradicts its idempotency (`read` is a query or subscription; anything else is a mutation).
+- The tRPC instance never leaves `catalog.ts`, so there is no bare procedure builder.
+
+**Adding a command** (what VC-565 onward copies):
+
+1. Add or extend its Verb Registry entry: `key` = the procedure path, `actor`, `catalog: {scope, idempotency}`, `accessModes: ["hostApi"]` for a WebSocket command (beside `cli`/`tool` when other doors project it too). Add its row to `verb-registry.test.ts`'s tier table and catalog table.
+2. Build its procedure with `hostProcedure` or `workspaceProcedure` in the area's router, inside `catalogRouter`. Put validators in zod beside it, and any new port on the router context.
+3. `pnpm typecheck` names anything missing in either direction. A socket verb keeps its `AGENT_VERB_TABLE` binding; both doors must reach the same host-core function.
+4. Write its cases once in the area's `describeContract` (scope denial, policy denial, replay/conflict for `command-id`), so they run on every link.
+5. Delete the area's old per-channel IPC in the same PR (below).
 
 **The handler is the whole command.** Post-commit effects belong to the handler or the host-core services it calls: the Done trim, armed arrivals, wake scopes, feed changes (F1). They never belong to a door. A door that needs extra behavior has found a missing field or a missing command.
 
@@ -79,12 +141,12 @@ They have already diverged. The renderer's `volli:ticket-move` trims a newly Don
 - project only the entries whose policy admits their actors;
 - add no behavior.
 
-A procedure, socket verb or tool without an entry fails compilation, as `AGENT_VERB_TABLE` does today. The reserved `hostApi` access mode becomes the WebSocket projection. NDJSON v1 carries no command id, so the socket door mints one per request; a socket retry stays undeduplicated, as today.
+A procedure, socket verb or tool without an entry fails compilation, as `AGENT_VERB_TABLE` does today. The `hostApi` access mode is the WebSocket projection, and `verbTier` tiers a `hostApi`-only entry by the socket's actor rule: `any` reads, `user` coordinates, and a Role-gated verb cannot ride it. NDJSON v1 carries no command id, so when a socket verb binds a `command-id` entry the socket door mints one per request; a socket retry stays undeduplicated, as today.
 
 **Migration, area by area.** It deletes per-channel IPC as each area moves:
 
-1. VC-564 lands the entry shape, the policy middleware, and the tRPC and socket projections, with Sessions as the first area. VC-608 lands the generic IPC bridge over the same routers.
-2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` and its socket verbs into entries. Where doors disagree, the stronger behavior wins and is tested on every door: VC-565 makes `ticket.move` trim on Done from every door.
+1. VC-564 lands the entry shape, the policy middleware and the tRPC projection, with the Session router as the first area. The socket projection already dispatches through `AGENT_VERB_TABLE` and is unchanged. VC-608 lands the generic IPC bridge over the same routers.
+2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` and its socket verbs into entries. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` already has one handler for both doors (VC-629); VC-565 makes it an entry.
 3. Renderer calls go through the generic bridge: in-process IPC with the flag off, WebSocket with it on, the same procedures either way.
 4. The same PR deletes the area's channels from `contract.ts`, `ipc-descriptors.ts` and `preload/index.ts`, with their handlers. No area keeps per-channel IPC beside its router.
 
@@ -98,9 +160,11 @@ Reuse `CommandReceipt`: `accepted` = durable acceptance, not applied; `completed
 
 Every durable subscription yields tRPC tracked `{id,data}` on the client. Resume with `lastEventId`; Session RPC uses decimal non-negative safe-integer cursors and `max(afterSequence,lastEventId)`, replaying strictly after it. Keep cursors per resource, accept duplicate ids, apply durable facts idempotently. Transient overlays may repeat the durable cursor and receive a fresh baseline on resume; do not deduplicate them as durable events. No global ordering is implied (BOUNDARIES rule 2); one Workspace's change feed orders only that Workspace's board changes, for resume (F1).
 
-Bound server queues (Session RPC: 4096 frames). Overflow drains the contiguous buffered prefix then terminates with `TOO_MANY_REQUESTS` / `subscription-overflow`; source failure terminates with `INTERNAL_SERVER_ERROR` / `subscription-source-failed`. Never silently drop durable events or signal clean completion on a gap. Clients resume from the last **applied**, not merely received, id. Cancellation/disconnect removes listeners; transports must also bound outbound bytes/slow peers, not merely the router queue. If history retention removes the cursor, return `PRECONDITION_FAILED` / `subscription-resnapshot-required`, never pretend to resume. Hosts may also bound replay by event count and bytes (T3 Code's precedent is 128 events / 1 MiB); past either bound return the same `subscription-resnapshot-required` failure, never silently truncate. VC-564 picks Volli's bounds; each area must define its snapshot baseline and retention contract before migration.
+Bound server queues (Session RPC: 4096 frames). Overflow drains the contiguous buffered prefix then terminates with `TOO_MANY_REQUESTS` / `subscription-overflow`; source failure terminates with `INTERNAL_SERVER_ERROR` / `subscription-source-failed`. Never silently drop durable events or signal clean completion on a gap. Clients resume from the last **applied**, not merely received, id. Cancellation/disconnect removes listeners; transports must also bound outbound bytes/slow peers, not merely the router queue. If history retention removes the cursor, return `PRECONDITION_FAILED` / `subscription-resnapshot-required`, never pretend to resume. Hosts may also bound replay by event count and bytes (T3 Code's precedent is 128 events / 1 MiB); past either bound return the same `subscription-resnapshot-required` failure, never silently truncate. Volli's bounds are 128 events and 1 MiB per resume, on the WebSocket only (VC-663); Electron IPC keeps durable Session replay unbounded with the flag off. Each area must define its snapshot baseline and retention contract before migration.
 
-One client-visible error is `HostError {code,message,reason?}`. `HOST_ERROR_CODES` exhaustively matches tRPC's keys; `HOST_ERROR_REASON_CODES` pins each reason to its code. Non-tRPC doors use `HostResult<Data>` (`{ok:true,data}` / `{ok:false,error}`), reusing the IPC registry pattern. VC-564 attaches the envelope at tRPC `data.hostError`; `readHostError` normalizes it and today's IPC/WS `data.code` errors. Existing Session RPC does **not** yet emit the new reasons or map engine/runtime command conflicts to `CONFLICT`; VC-564 owns those mappings, along with sanitizing WS error messages. The harness asserts existing codes, not unimplemented enforcement. Clients branch on code, optionally known reason, not message text; messages are sanitized and no stack/cause/secret crosses the wire. Unknown reasons must fall back to the code. No new custom tRPC error codes.
+One client-visible error is `HostError {code,message,reason?}`. `HOST_ERROR_CODES` exhaustively matches tRPC's keys; `HOST_ERROR_REASON_CODES` pins each reason to its code. Non-tRPC doors use `HostResult<Data>` (`{ok:true,data}` / `{ok:false,error}`), reusing the IPC registry pattern. `readHostError` normalizes `data.hostError` and older `data.code` errors. Clients branch on code, optionally known reason, not message text; messages are sanitized and no stack/cause/secret crosses the wire. Unknown reasons must fall back to the code. No new custom tRPC error codes.
+
+Since VC-564 the Session router builds the envelope once, in `hostErrorOf` (`@volli/session-rpc`): the code, the message through `sanitizeDiagnosticText`, and the reason a `HostProcedureError` named. Its tRPC `errorFormatter` attaches it as `data.hostError` with `isDev: false`, so no stack ships whatever `NODE_ENV` says. The Electron bridge sends the same envelope as its failure payload, `reason` included (`SessionRpcIpcError`), and the renderer link puts it on `data.hostError`, so one assertion reads both links. Reasons the router emits today: `workspace-unknown`, `verb-refused`, `credential-invalid`, `command-conflict` (only a command id reused for a different intent, from the engine or the runtime; any other ledger conflict keeps its old answer), `operation-unavailable`, `subscription-overflow` and `subscription-source-failed`.
 
 At every router seam, assert `JsonUnsafeProcedures<Router>` is `never`; it applies `IsJsonSafe` to raw procedure input/output and subscription yield. Import from `@volli/host-protocol`; Session RPC re-exports for compatibility. Use numbers for timestamps, arrays/plain records instead of Date/Map/Set, nullable values or optional keys instead of required `undefined`. The checker deliberately tolerates opaque `unknown`/`any` for existing AI SDK types: it is not runtime validation. New opaque seams must validate JSON recursively before persistence/emission; finite numbers, no cycles, no functions/bigints/symbols. Keep validators transport-independent.
 
@@ -133,7 +197,7 @@ Today board state reaches windows as `data-changed` pings (`ports/events.ts:94-1
 
 Every fact a host announces is a `HostEventMap` topic, and no host code sends to `BrowserWindow` itself. Today three things fall short:
 
-- shell state and browser-tab state skip the bus (`main/index.ts:540-552`);
+- shell state and browser-tab state skip the bus (`main/index.ts:405-416`);
 - the coalescing cadence lives in desktop's adapter (`broadcast.ts:47-55`);
 - `publish(topic, payload)` names no Workspace (`ports/events.ts:95-97`).
 
@@ -144,7 +208,7 @@ Every fact a host announces is a `HostEventMap` topic, and no host code sends to
 
 One Workspace's facts never reach another Workspace's connection.
 
-**Classed.** A mapped type, exhaustive over `HostEventMap`, gives each topic a delivery class; a topic without one fails compilation. VC-564 classifies every existing topic.
+**Classed.** A mapped type, exhaustive over `HostEventMap`, gives each topic a delivery class; a topic without one fails compilation. VC-664 classifies every existing topic, adding a fourth class, `addressed`, for the per-connection topics.
 
 | Class | Meaning | Examples |
 |---|---|---|
@@ -156,7 +220,7 @@ One Workspace's facts never reach another Workspace's connection.
 
 **Addressed streams are unchanged.** Terminal, file and worktree watches stay on `HostClientEventSink`, to the one connection that subscribed.
 
-VC-564 adds scope and class to the bus. VC-622's lift moves the shell and browser-tab publishers onto it.
+VC-664 (part C of VC-564's split) adds scope and class to the bus, and moves the shell and browser-tab publishers onto it. VC-622's lift did not; VC-571 keeps browser control and the screencast.
 
 ## Binary framing
 
@@ -239,7 +303,7 @@ The grant is single-use, bound to its flow and connection, and ends with the flo
 
 Entry point: `@volli/host-protocol/testing` → `describeContract(title, links, cases)`. Each case runs unchanged against every `ContractLink<Host,Router>`; `connect(host)` returns a typed client and teardown closes all its connections/subscriptions. `webSocketContractLink` serves the real router with stock tRPC adapters on an ephemeral loopback socket, JSON on the wire. It is not a fake serializer or production listener. The package root has no Node/Electron transport imports; `/testing` is dev/test-only and has no Electron dependency either.
 
-The desktop's `session-rpc-contract.test-support.ts` composes today's **real** `registerSessionRpcIpcHandlers` and renderer `createSessionRpcClient`, using mocked ipcMain/WebContents with structured clone, plus the WS link to the same router. `session-rpc-contract.test.ts` covers strict query equality, model facade/unavailability, receipt passthrough, BAD_REQUEST, tracked ids/resume, overflow and source failure **on both links**. Existing direct-router tests remain the unit layer; this is the portable transport contract layer. Deliberately main-only lab diagnostics and legacy IPC-only start guards are not claimed to be portable host procedures.
+The desktop's `session-rpc-contract.test-support.ts` composes today's **real** `registerSessionRpcIpcHandlers` and renderer `createSessionRpcClient`, using mocked ipcMain/WebContents with structured clone, plus the WS link to the same router. `session-rpc-contract.test.ts` covers strict query equality, model facade/unavailability, receipt passthrough, BAD_REQUEST, tracked ids/resume, overflow and source failure **on both links**, and since VC-564: a Session in another Workspace answering exactly as an absent one on query, mutation and subscribe; policy denial; `session.command`'s start kinds refused; command-id replay and conflict; and the identical `HostError` reason on each link. Both links take the case's caller: the IPC registration accepts one for this purpose (production passes none and gets the desktop's own window), and the WebSocket link takes it from the host until the VC-663 handshake mints it. Existing direct-router tests remain the unit layer; this is the portable transport contract layer. Deliberately main-only lab diagnostics are not claimed to be portable host procedures.
 
 An M2 ticket adds its typed router/context and IPC adapter, then writes cases once:
 
@@ -257,7 +321,7 @@ describeContract('Tickets', [
 });
 ```
 
-Add host-protocol as a **devDependency** for `/testing`; never import it in production. Use `recordSubscription` and `expectHostError` for shared subscription/error assertions. Each area adds command replay/conflict, scope denial, snapshot/resume and its own backpressure cases. Each catalog entry's cases run on every door that projects it, the agent socket included once VC-564 adds its link: that is the check the `ticket.move` divergence lacked (F3). Each fed command asserts its change on the Workspace feed, and resume and resnapshot are tested per area (F1). VC-608 (on VC-542's list) owns a generic IPC bridge replacing `SESSION_RPC_IPC_PROCEDURES` and `callProcedure`, not a second routing framework in this PR.
+Add host-protocol as a **devDependency** for `/testing`; never import it in production. Use `recordSubscription` and `expectHostError` for shared subscription/error assertions. Each area adds command replay/conflict, scope denial, snapshot/resume and its own backpressure cases. Each catalog entry's cases run on every door that projects it, the agent socket included once VC-565 adds its link, where a command first exists on both doors: that is the check the `ticket.move` divergence lacked (F3). Each fed command asserts its change on the Workspace feed, and resume and resnapshot are tested per area (F1). VC-608 (on VC-542's list) owns a generic IPC bridge replacing `SESSION_RPC_IPC_PROCEDURES` and `callProcedure`, not a second routing framework in this PR.
 
 Workspace glob `packages/*` includes this package in `pnpm typecheck` (`vp run -r typecheck`) and CI's `Test (packages)` (`test:coverage`); desktop contract cases run in desktop test shards. Owner review of this spec, particularly binary limits/bootstrap naming, is required before migration tickets copy it. VC-564/575 own runtime enforcement and production security; VC-550 defines the identity/fence contract; copy detection and promotion arbitration remain implementation requirements for restore/promotion (VC-591) and control-plane work. This package does not solve those by typing them.
 
