@@ -4,7 +4,15 @@
  * refuses to boot. Temp dirs only; the owner's home is a string here, never
  * read.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -75,12 +83,16 @@ describe("checkHarnessContainment", () => {
   });
 
   it("refuses a --user-data-dir outside scratch, or none", () => {
-    expect(check(env(), { userDataDir: "/Users/someone/Library/Application Support/Volli Code" }).ok).toBe(false);
+    expect(
+      check(env(), { userDataDir: "/Users/someone/Library/Application Support/Volli Code" }).ok,
+    ).toBe(false);
     expect(check(env(), { userDataDir: "" }).ok).toBe(false);
   });
 
   it("refuses a path that escapes through .. or a symlink inside scratch", () => {
-    expect(check({ ...env(), HOME: join(scratch, "home", "..", "..", "elsewhere") }).ok).toBe(false);
+    expect(check({ ...env(), HOME: join(scratch, "home", "..", "..", "elsewhere") }).ok).toBe(
+      false,
+    );
     const outside = realpathSync.native(mkdtempSync(join(tmpdir(), "volli-harness-outside-")));
     try {
       symlinkSync(outside, join(scratch, "link"));
@@ -99,7 +111,9 @@ describe("checkHarnessContainment", () => {
     expect(check(env(), { ownerHome: join(scratch, "home") }).ok).toBe(false);
     const nested = join(scratch, "inner");
     mkdirSync(nested);
-    expect(check(env(nested), { ownerHome: scratch, userDataDir: join(nested, "ud") }).ok).toBe(false);
+    expect(check(env(nested), { ownerHome: scratch, userDataDir: join(nested, "ud") }).ok).toBe(
+      false,
+    );
   });
 
   it("refuses packaged builds outright", () => {
@@ -118,6 +132,14 @@ describe("checkHarnessContainment", () => {
   });
 });
 
+function sources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return sources(path);
+    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+  });
+}
+
 /**
  * The enumeration this module's doc promises: every place main reaches a home
  * directory. A new `getPath("home")` or `homedir()` fails here until it is
@@ -125,13 +147,6 @@ describe("checkHarnessContainment", () => {
  */
 describe("home-derived paths main uses", () => {
   const MAIN = join(__dirname, "..");
-  function sources(dir: string): string[] {
-    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) return sources(path);
-      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
-    });
-  }
   const sites = sources(MAIN).flatMap((file) =>
     readFileSync(file, "utf8")
       .split("\n")

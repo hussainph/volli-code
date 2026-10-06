@@ -457,7 +457,9 @@ export function launchProblems(
     problems.push(`${bundle} is missing or lacks the harness guard/containment/recorder`);
   const stale = staleHarnessSources(bundle, sources);
   if (stale.length > 0)
-    problems.push(`${bundle} predates ${stale.map((f) => f.slice(appDir.length + 1)).join(", ")}: rebuild`);
+    problems.push(
+      `${bundle} predates ${stale.map((f) => f.slice(appDir.length + 1)).join(", ")}: rebuild`,
+    );
   return problems;
 }
 
@@ -469,7 +471,8 @@ export function assertLaunchable(spec, options) {
 
 // ---- scratch fixture repos -------------------------------------------------
 
-const inside = (path, root) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+const inside = (path, root) =>
+  path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 /**
  * A fixture repo: created in scratch, never cloned from a real one. Its only

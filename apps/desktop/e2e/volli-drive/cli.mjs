@@ -141,9 +141,7 @@ async function gitFacts() {
 async function ensureBuilt(flags) {
   if (launchProblems({ build: "dev", bundle: BUILT_MAIN }).length === 0) return;
   if (flags.noBuild)
-    fail(
-      `${BUILT_MAIN} is missing, lacks the harness, or is stale; run \`pnpm run build\``,
-    );
+    fail(`${BUILT_MAIN} is missing, lacks the harness, or is stale; run \`pnpm run build\``);
   process.stderr.write("volli-drive: building the app (pnpm run build)…\n");
   await new Promise((resolve, reject) => {
     const child = spawn("pnpm", ["run", "build"], { cwd: REPO, stdio: ["ignore", 2, 2] });
@@ -160,7 +158,8 @@ async function launch(flags) {
   if (!["fake", "env"].includes(model)) fail("--model is fake or env");
   // Packed mode is disabled: a packaged app's bundle cannot be validated
   // before it runs, so it could start without the guard (VC-705).
-  if (build !== "dev" || flags.app) fail(`--build ${build}${flags.app ? " --app" : ""}: not yet safe; dev builds only`);
+  if (build !== "dev" || flags.app)
+    fail(`--build ${build}${flags.app ? " --app" : ""}: not yet safe; dev builds only`);
   await ensureBuilt(flags);
   if (!existsSync(ELECTRON))
     fail(`Electron is not installed at ${ELECTRON}; run \`pnpm run ensure:electron\``);
@@ -619,7 +618,8 @@ async function main() {
       if (result.note) out(`  ${result.note}`);
       out(`  evidence kept: ${result.evidence}`);
       out(`  processes signalled: ${result.leftovers.length}`);
-      for (const p of result.leftovers) out(`    ${p.signal} ${p.pid} ${String(p.command ?? "").slice(0, 100)}`);
+      for (const p of result.leftovers)
+        out(`    ${p.signal} ${p.pid} ${String(p.command ?? "").slice(0, 100)}`);
       break;
     }
     default:

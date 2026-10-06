@@ -281,7 +281,10 @@ async function memory() {
 
 async function liveGuard() {
   return app.evaluate(
-    ({ safeStorage, shell, app: electronApp }, { methods, symbol, shellMethods, recorderSymbol }) => {
+    (
+      { safeStorage, shell, app: electronApp },
+      { methods, symbol, shellMethods, recorderSymbol },
+    ) => {
       const trap = Symbol.for(symbol);
       const recorder = Symbol.for(recorderSymbol);
       return {
@@ -296,7 +299,10 @@ async function liveGuard() {
         ),
         // Reads each property; never calls one.
         recorded: Object.fromEntries(
-          shellMethods.map((m) => [m, typeof shell[m] === "function" && shell[m][recorder] === true]),
+          shellMethods.map((m) => [
+            m,
+            typeof shell[m] === "function" && shell[m][recorder] === true,
+          ]),
         ),
         mockKeychainSwitch: electronApp.commandLine.hasSwitch("use-mock-keychain"),
         passwordStore: electronApp.commandLine.getSwitchValue("password-store"),
@@ -459,7 +465,11 @@ async function finalize(reason, { keepScratch = false } = {}) {
   );
   // Keep the guard's own record and any violation beside the evidence.
   await fs.mkdir(join(L.evidence, "harness"), { recursive: true });
-  for (const file of ["harness-guard.json", "keychain-violations.jsonl", "external-requests.jsonl"]) {
+  for (const file of [
+    "harness-guard.json",
+    "keychain-violations.jsonl",
+    "external-requests.jsonl",
+  ]) {
     await fs.copyFile(join(L.harnessDir, file), join(L.evidence, "harness", file)).catch(() => {});
   }
   const violated = await violations();

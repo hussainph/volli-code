@@ -54,8 +54,8 @@ describe("every launch path goes through assertLaunchable", () => {
     const launches = [...source.matchAll(/\bawait launch\(/g)];
     assert.equal(launches.length, 1, "exactly one Electron launch");
     const lineStart = source.lastIndexOf("\n", launches[0].index);
-    const before = source.slice(0, lineStart).trimEnd().split("\n");
-    assert.equal(before.at(-1).trim(), "assertLaunchable(spec);");
+    const preceding = source.slice(0, lineStart).trimEnd().split("\n");
+    assert.equal(preceding.at(-1).trim(), "assertLaunchable(spec);");
     // And at the top of boot, before the provider or the environment.
     const boot = source.slice(source.indexOf("async function boot()"));
     assert.ok(boot.indexOf("assertLaunchable(spec)") < boot.indexOf("startFakeProvider"));

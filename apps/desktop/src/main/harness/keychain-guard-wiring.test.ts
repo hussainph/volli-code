@@ -85,8 +85,12 @@ describe("shell recorder coverage", () => {
     for (const { name, text } of files) {
       // A destructured or bound method would keep the real one past the
       // recorder's install; a call through `shell.` reads the recorder.
-      expect(text, name).not.toMatch(/\{[^}]*\b(openExternal|openPath|showItemInFolder|trashItem)\b[^}]*\}\s*=\s*shell\b/);
-      expect(text, name).not.toMatch(/shell\.(openExternal|openPath|showItemInFolder|trashItem)\.bind\(/);
+      expect(text, name).not.toMatch(
+        /\{[^}]*\b(openExternal|openPath|showItemInFolder|trashItem)\b[^}]*\}\s*=\s*shell\b/,
+      );
+      expect(text, name).not.toMatch(
+        /shell\.(openExternal|openPath|showItemInFolder|trashItem)\.bind\(/,
+      );
     }
   });
 

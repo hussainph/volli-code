@@ -260,6 +260,8 @@ const GUARDED =
   'installHarnessGuard(); "volli-harness-keychain-guard:v1"; "use-mock-keychain"; ' +
   '"volli-harness-containment:v1"; "volli-harness-shell-recorder:v1"';
 
+const dev = (bundle) => ({ build: "dev", appBinary: null, bundle });
+
 describe("launchProblems (the one launch gate)", () => {
   function fixture() {
     const appDir = join(dir, "app");
@@ -272,7 +274,6 @@ describe("launchProblems (the one launch gate)", () => {
     utimesSync(source, new Date(1_000_000), new Date(1_000_000));
     return { appDir, bundle, source, opts: { env: {}, bundle, appDir, sources: [source] } };
   }
-  const dev = (bundle) => ({ build: "dev", appBinary: null, bundle });
 
   it("passes a current, guarded dev bundle", () => {
     const { bundle, opts } = fixture();
@@ -345,7 +346,14 @@ describe("scratch fixture repos", () => {
     assert.ok(repo.startsWith(`${scratch}/`) && origin.startsWith(`${scratch}/`));
     const remotes = execFileSync("git", ["remote", "-v"], { cwd: repo, encoding: "utf8" });
     assert.deepEqual(
-      [...new Set(remotes.trim().split("\n").map((l) => l.split(/\s+/).slice(0, 2).join(" ")))],
+      [
+        ...new Set(
+          remotes
+            .trim()
+            .split("\n")
+            .map((l) => l.split(/\s+/).slice(0, 2).join(" ")),
+        ),
+      ],
       [`origin ${origin}`],
     );
     const head = execFileSync("git", ["rev-parse", "main"], { cwd: origin, encoding: "utf8" });
@@ -368,11 +376,12 @@ describe("scratch fixture repos", () => {
   });
 });
 
+const row = (pid, ppid, pgid, started, command = "x") => ({ pid, ppid, pgid, started, command });
+
 describe("ownedProcesses (identity, never name or path)", () => {
   const T0 = "Tue Oct 6 21:00:00 2026";
   const T1 = "Tue Oct 6 21:00:05 2026";
   const BEFORE = "Tue Oct 6 20:00:00 2026";
-  const row = (pid, ppid, pgid, started, command = "x") => ({ pid, ppid, pgid, started, command });
 
   it("owns a verified root, its group and its descendants", () => {
     const table = [
