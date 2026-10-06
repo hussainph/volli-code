@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { AgentCommand, AgentResponse, SessionOrigin, SessionRole } from "@volli/shared";
 import { createAgentCommandService } from "../agent-commands";
+import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { recordSessionResumedOnce, recordTicketEvent } from "../db/events-repo";
@@ -38,7 +39,7 @@ function fixture(observeTerminal = false) {
     nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
   });
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: db.db }),
     db: db.db,
     appVersion: "test",
     sessionEngine: engine,
@@ -117,7 +118,7 @@ function fixture(observeTerminal = false) {
   };
   const ids = (response: AgentResponse) =>
     (data(response)["sessions"] as { id: string }[]).map((s) => s.id);
-  return { engine, read, create, active, ids };
+  return { engine, read, create, active, ids, service };
 }
 
 describe("session roster and detail", () => {
@@ -825,5 +826,49 @@ describe("who started and who resumed a Session", () => {
     const wire = JSON.stringify(await f.read("ticket.events", { id: "VC-12", limit: 20 }));
     for (const full of [parent, started, resumed]) expect(wire).not.toContain(full);
     expect(wire).not.toContain("22222222-0000");
+  });
+});
+
+// VC-663 (D4): the WebSocket's Session reads run these same handlers with the
+// roster forced to the connection's Workspace.
+describe("executeInWorkspace", () => {
+  it("lists only that Workspace's Sessions, whatever project the caller names", async () => {
+    const { create, service, ids } = fixture();
+    const mine = await create("mine", 10 * DAY);
+    await create("theirs", 10 * DAY, { projectId: "other" });
+    for (const args of [{ all: true }, { all: true, project: "other" }]) {
+      expect(ids(await service.executeInWorkspace("session.list", "p", args))).toEqual([
+        mine.slice(0, 8),
+      ]);
+    }
+  });
+
+  it("answers another Workspace's Session exactly as an absent one, on every read", async () => {
+    const { create, service } = fixture();
+    const mine = (await create("mine", 10 * DAY)).slice(0, 8);
+    const theirs = (await create("theirs", 10 * DAY, { projectId: "other" })).slice(0, 8);
+    expect(data(await service.executeInWorkspace("session.show", "p", { id: mine }))["id"]).toBe(
+      mine,
+    );
+    for (const verb of ["session.show", "session.peek", "session.answer"] as const) {
+      const foreign = await service.executeInWorkspace(verb, "p", { id: theirs });
+      const absent = await service.executeInWorkspace(verb, "p", { id: "ffffffff" });
+      expect(foreign).toEqual({
+        v: 1,
+        ok: false,
+        error: expect.objectContaining({ code: "SESSION_NOT_FOUND" }),
+      });
+      expect(foreign.ok || absent.ok ? null : foreign.error.code).toBe(
+        absent.ok ? null : absent.error.code,
+      );
+    }
+  });
+
+  it("refuses a Workspace this host does not have", async () => {
+    const { service } = fixture();
+    expect(await service.executeInWorkspace("session.list", "nowhere", {})).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_NOT_FOUND" },
+    });
   });
 });

@@ -655,6 +655,70 @@ const MCP_SERVER_FIELDS: readonly VerbToolField[] = [
 ];
 
 /**
+ * The board area's catalog rows (VC-668): the commands a board router
+ * projects, typed by exactly these rows so its family cannot build another
+ * area's key (HP § Command catalog, "Adding a command"). Spread into
+ * {@link VERB_REGISTRY} where the socket order has always had them.
+ */
+export const BOARD_ENTRIES = [
+  {
+    key: "ticket.move",
+    // The first command both kinds of door serve (VC-668): the socket keeps
+    // judging `actor`, and the WebSocket admits only the person until VC-565
+    // writes the board's `sessionMayAct` policy and widens it to `session-own`.
+    accessModes: ["cli", "hostApi"],
+    actor: "session",
+    handler: { site: "main", id: "ticket.move" },
+    // Column-only, like the socket: moving to the column a ticket already
+    // occupies is a no-op, so a repeat leaves the same state.
+    catalog: { actor: "user", scope: "workspace", idempotency: "natural" },
+    listed: true,
+    referenceOrder: 15,
+    group: "Write",
+    summary: "Move a ticket to another column.",
+    example: "volli ticket move VC-12 --to needs-review",
+    notes: [
+      "Moving to the current column is a no-op.",
+      "Columns ignore case and accept board labels such as Needs Review or needs_review.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the Ticket's board status and order and append one status-change Ticket event.",
+        },
+      ],
+      humanVisible: [
+        "The Ticket moves to the selected board column.",
+        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
+        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
+      ],
+      nonEffects: [
+        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
+      ],
+    },
+    positionalId: "required",
+    positionalSubject: "ticket",
+    options: [
+      {
+        name: "--to",
+        kind: "value",
+        placeholder: "<column>",
+        values: COLUMN_VALUES,
+        required: true,
+        help: "Destination column.",
+      },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
+  },
+] as const satisfies readonly VerbEntry[];
+
+/** One board row: the board router family's entry type. */
+export type BoardEntry = (typeof BOARD_ENTRIES)[number];
+
+/**
  * Every agent-facing verb, in the order the socket projection has always had.
  *
  * Declaration order is the socket order, so {@link AGENT_COMMANDS} is a plain
@@ -942,52 +1006,7 @@ export const VERB_REGISTRY = [
       { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
-  {
-    key: "ticket.move",
-    accessModes: ["cli"],
-    actor: "session",
-    handler: { site: "main", id: "ticket.move" },
-    listed: true,
-    referenceOrder: 15,
-    group: "Write",
-    summary: "Move a ticket to another column.",
-    example: "volli ticket move VC-12 --to needs-review",
-    notes: [
-      "Moving to the current column is a no-op.",
-      "Columns ignore case and accept board labels such as Needs Review or needs_review.",
-    ],
-    effects: {
-      durableWrites: [
-        {
-          resource: "ticket",
-          operation: "update",
-          summary:
-            "Update the Ticket's board status and order and append one status-change Ticket event.",
-        },
-      ],
-      humanVisible: [
-        "The Ticket moves to the selected board column.",
-        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
-        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
-      ],
-      nonEffects: [
-        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
-      ],
-    },
-    positionalId: "required",
-    positionalSubject: "ticket",
-    options: [
-      {
-        name: "--to",
-        kind: "value",
-        placeholder: "<column>",
-        values: COLUMN_VALUES,
-        required: true,
-        help: "Destination column.",
-      },
-      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
-    ],
-  },
+  ...BOARD_ENTRIES,
   {
     key: "ticket.comment",
     accessModes: ["cli"],
@@ -1526,7 +1545,10 @@ export const VERB_REGISTRY = [
   },
   {
     key: "session.list",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
@@ -1559,10 +1581,14 @@ export const VERB_REGISTRY = [
         help: "Activity window: RFC 3339 instant or look-back (24h, 7d, 90m).",
       },
     ],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     key: "session.show",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.show" },
     listed: true,
@@ -1577,12 +1603,16 @@ export const VERB_REGISTRY = [
     ],
     positionalId: "required",
     options: [],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // Read tier despite the disclosure it carries: cross-session transcript
     // access is per-actor policy data (VC-44), not a tier change.
     key: "session.peek",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
@@ -1605,6 +1635,7 @@ export const VERB_REGISTRY = [
         help: "How much trailing output to show.",
       },
     ],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // A Session's answer (VC-9): its final message, in full, and how its
@@ -1615,7 +1646,10 @@ export const VERB_REGISTRY = [
     // transcript already is (`session peek`); the trust line is drawn by the
     // rendering, which quotes the message as another author's prose.
     key: "session.answer",
-    accessModes: ["cli"],
+    // Also on the WebSocket (VC-663, D4): Workspace-scoped there, and the
+    // person's only. A Session reading another's transcript stays this
+    // socket verb's disclosure policy to decide.
+    accessModes: ["cli", "hostApi"],
     actor: "any",
     handler: { site: "main", id: "session.answer" },
     listed: true,
@@ -1631,6 +1665,7 @@ export const VERB_REGISTRY = [
     ],
     positionalId: "required",
     options: [],
+    catalog: { actor: "user", scope: "workspace", idempotency: "read" },
   },
   {
     // Agent control stays tool-only. VC-622 admits the person at a headless
@@ -3196,6 +3231,20 @@ export const VERB_REGISTRY = [
   // as they are for VC-572 to refine. `labDiagnostics.*` carries no access
   // mode: the router keeps it for the in-process lab, and no door serves it.
   {
+    // The v1 bootstrap read (HP § Handshake): the welcome this connection's
+    // handshake negotiated. In no feature, so every authenticated connection
+    // may ask, a Session's included; it reveals only the caller's own grant.
+    key: "protocol.welcome",
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: "protocol.welcome" },
+    listed: false,
+    group: "App",
+    summary: "Read the welcome this connection's handshake negotiated.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
     key: "sessions.create",
     accessModes: ["hostApi"],
     actor: "user",
@@ -3565,6 +3614,19 @@ export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly Agent
 export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as Readonly<
   Record<AgentCommand, AgentCommandBindingId>
 >;
+
+/**
+ * The socket's Session reads the WebSocket also serves (VC-663, D4): the same
+ * handler, run with its roster forced to the connection's one Workspace.
+ * Their router policy is the person's (`catalog.actor: "user"`).
+ */
+export const SESSION_READ_VERBS = [
+  "session.list",
+  "session.show",
+  "session.peek",
+  "session.answer",
+] as const satisfies readonly (AgentCommand & CatalogKey)[];
+export type SessionReadVerb = (typeof SESSION_READ_VERBS)[number];
 
 /**
  * The Verb Tier a verb's access modes and actor requirement imply (VC-92 §2).

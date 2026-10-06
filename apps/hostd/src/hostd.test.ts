@@ -18,6 +18,15 @@ import { createConnection } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { createTRPCClient, createWSClient, wsLink } from "@trpc/client";
+import {
+  buildHostHello,
+  encodeHostHello,
+  HOST_V1_FEATURES,
+  type HostCredentialVerifier,
+} from "@volli/host-protocol";
+import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
+import type { AppRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
@@ -30,7 +39,7 @@ import { resetRetentionWatcherForTest } from "@volli/host-core/testing";
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
 import type { HostdLogger } from "./log";
-import { startHostd, type RunningHostd } from "./hostd";
+import { startHostd, type HostdOptions, type RunningHostd } from "./hostd";
 import { readStatus, statusFilePath, type HostdState } from "./status";
 
 /** Faults a test can switch on in the modules hostd composes. */
@@ -52,6 +61,10 @@ const faults = vi.hoisted(() => ({
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
   foreignOwner: null as string | null,
+  /** The host's handler map is built with no Sessions facade, as a degraded one would be. */
+  noSessionsFacade: false,
+  /** Every verdict the host's handler map gave, by door (VC-668). */
+  admissions: [] as { door: string; key: string; admitted: boolean }[],
   /** The execute hostd handed the socket, to call without a connection. */
   execute: null as ((request: AgentRequest) => Promise<AgentResponse>) | null,
 }));
@@ -98,6 +111,20 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   };
 });
 
+// The handler map hostd builds (VC-668): the move's guard and drain are its.
+vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/host-core/src/handlers/host-handlers")>();
+  return {
+    ...actual,
+    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) => {
+      faults.busySites = options.busyWorktreeSites;
+      faults.detachedWork = options.detachedWork ?? null;
+      return actual.createHostHandlers(ports, options);
+    },
+  };
+});
+
 vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../packages/host-core/src/agent-services")>();
@@ -106,10 +133,9 @@ vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal)
     createHostAgentCommands: (
       ...[ports, options]: Parameters<typeof actual.createHostAgentCommands>
     ) => {
-      faults.busySites = options.busyWorktreeSites;
-      faults.detachedWork = options.detachedWork ?? null;
       const commands = actual.createHostAgentCommands(ports, options);
       return {
+        ...commands,
         execute: async (request: AgentRequest) => {
           if (faults.hold !== null) await faults.hold;
           return commands.execute(request);
@@ -150,6 +176,19 @@ vi.mock("../../../packages/host-core/src/agent-socket", async (importOriginal) =
       });
       return failing(await actual.startAgentSocket(options, (server) => claim(failing(server))));
     },
+  };
+});
+
+vi.mock("@volli/host-core/handlers", async (original) => {
+  const actual = await original<typeof import("@volli/host-core/handlers")>();
+  return {
+    ...actual,
+    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) =>
+      actual.createHostHandlers(ports, {
+        ...options,
+        ...(faults.noSessionsFacade ? { sessions: null } : {}),
+        onAdmission: (record) => faults.admissions.push(record),
+      }),
   };
 });
 
@@ -198,6 +237,8 @@ afterEach(async () => {
   faults.runtimeConstructError = false;
   faults.runtimeCloseError = false;
   faults.automationsUnavailable = false;
+  faults.noSessionsFacade = false;
+  faults.admissions = [];
   faults.runtimeReadyGate = null;
   faults.runtimeOwned = false;
   faults.order = [];
@@ -238,6 +279,8 @@ async function boot(
     drainTimeoutMs?: number;
     /** Leaves the owner to hostd's own default, root. */
     rootOwnsOperators?: boolean;
+    listen?: HostdOptions["listen"];
+    hostProtocolVerifier?: HostdOptions["hostProtocolVerifier"];
   } = {},
   log = logger(),
 ): Promise<RunningHostd> {
@@ -253,6 +296,10 @@ async function boot(
     operatorsFile: join(root, "operators"),
     ...(options.rootOwnsOperators === true ? {} : { operatorsOwnerUid: process.getuid!() }),
     ...(options.drainTimeoutMs === undefined ? {} : { drainTimeoutMs: options.drainTimeoutMs }),
+    ...(options.listen === undefined ? {} : { listen: options.listen }),
+    ...(options.hostProtocolVerifier === undefined
+      ? {}
+      : { hostProtocolVerifier: options.hostProtocolVerifier }),
   });
   running.push(host);
   return host;
@@ -896,7 +943,7 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
     ]);
   });
 
-  it("hands commands the host's detached work, and drains it after the socket, before the database", async () => {
+  it("hands its handlers the host's detached work, and drains it after the socket, before the database", async () => {
     const host = await boot();
     if (!isLiveHost(host.host)) throw new Error("database did not open");
     const live = host.host;
@@ -973,5 +1020,232 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
     await expect(options.reclaim!.busyWorktreeSites!(root)).rejects.toThrow("not composed yet");
     await expect(options.reclaim!.releaseAgentSites!(root)).rejects.toThrow("not composed yet");
     expect(faults.order).toEqual(["maintenance.stop", "socket.close"]);
+  });
+});
+
+describe("the host protocol listener (VC-663)", () => {
+  const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+  const DEVICE = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";
+  const CLOUD = { VOLLI_EXPERIMENTAL: "cloud" };
+  const LOOPBACK = { host: "127.0.0.1", port: 0 };
+
+  /** The test verifier: one credential, for a device in WORKSPACE, revocable. */
+  function device() {
+    let valid = true;
+    let push: (() => void) | null = null;
+    const verifier: HostCredentialVerifier = {
+      verify: ({ credential }) =>
+        credential === "device-token"
+          ? {
+              actor: { kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE },
+              current: () => valid,
+              watch: (revoked) => {
+                push = revoked;
+                return () => (push = null);
+              },
+            }
+          : null,
+    };
+    return {
+      verifier,
+      revoke: () => {
+        valid = false;
+        push?.();
+      },
+    };
+  }
+
+  function client(url: string, credential = "device-token") {
+    const socket = createWSClient({
+      url,
+      connectionParams: () =>
+        encodeHostHello(
+          buildHostHello({
+            client: { kind: "cli", version: "test" },
+            workspaceId: WORKSPACE,
+            credential,
+            features: [...HOST_V1_FEATURES],
+            lastSeen: null,
+          }),
+        ),
+    });
+    const trpc = createTRPCClient<AppRouter>({ links: [wsLink({ client: socket })] });
+    return { trpc, close: () => socket.close() };
+  }
+
+  it("serves nothing with the flag off, whatever --listen says, and says why", async () => {
+    const log = logger();
+    const host = await boot({ listen: LOOPBACK }, log);
+    expect(host.status().hostProtocol).toBeNull();
+    expect(readStatus(join(root, "data"))).toMatchObject({ hostProtocol: null });
+    expect(log.warn).toHaveBeenCalledWith(
+      "--listen is ignored: the host protocol needs VOLLI_EXPERIMENTAL=cloud",
+      { listen: "127.0.0.1:0" },
+    );
+  });
+
+  it("serves nothing with the flag on and no address", async () => {
+    const host = await boot({ env: CLOUD });
+    expect(host.status().hostProtocol).toBeNull();
+  });
+
+  it("listens on loopback with the flag on, names it in the status file, and refuses every credential", async () => {
+    const log = logger();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK }, log);
+    const listening = host.status().hostProtocol!;
+    expect(listening).toMatchObject({ host: "127.0.0.1", url: `ws://127.0.0.1:${listening.port}` });
+    expect(listening.port).toBeGreaterThan(0);
+    expect(readStatus(join(root, "data"))).toMatchObject({ hostProtocol: listening });
+    // No production verifier exists before VC-575/577 (D5).
+    const { trpc, close } = client(listening.url);
+    try {
+      expect(await expectHostError(trpc.protocol.welcome.query())).toMatchObject({
+        code: "UNAUTHORIZED",
+        reason: "credential-invalid",
+      });
+    } finally {
+      await close();
+    }
+    expect(log.info).toHaveBeenCalledWith(
+      "host protocol: handshake-refused",
+      expect.objectContaining({ reason: "credential-invalid" }),
+    );
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain("device-token");
+    await host.stop("test over");
+    expect(readStatus(join(root, "data"))).toMatchObject({ state: "stopped", hostProtocol: null });
+  });
+
+  it("serves the Session router from the headless runtime to a verified device", async () => {
+    const lever = device();
+    const log = logger();
+    const host = await boot(
+      { env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier },
+      log,
+    );
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const { db } = host.host.database;
+    insertProject(db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    db.prepare(
+      "INSERT INTO workspace_epochs (workspace_id, epoch, host_id, created_at) VALUES (?, ?, ?, ?)",
+    ).run(WORKSPACE, 3, DEVICE, 1);
+    const created = await host.host.sessionEngine.createSession({
+      commandId: "create-1",
+      projectId: WORKSPACE,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Over the wire",
+      provenance: { source: { kind: "user", id: "test", detail: null }, venue: null },
+    });
+    const sessionId = created.session.id;
+    const { trpc, close } = client(host.status().hostProtocol!.url);
+    try {
+      const welcome = await trpc.protocol.welcome.query();
+      expect(welcome).toMatchObject({
+        workspace: { id: WORKSPACE, epoch: 3 },
+        features: ["sessions", "sessions.subscribe", "session.read"],
+      });
+      // The socket's own handler, scoped to this Workspace.
+      const listed = await trpc.session.list.query({ projectId: WORKSPACE, all: true });
+      expect(listed.sessions.map((row) => row["id"])).toEqual([sessionId.slice(0, 8)]);
+      expect(
+        await expectHostError(
+          trpc.session.show.query({ projectId: WORKSPACE, session: "ffffffff" }),
+        ),
+      ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      expect((await trpc.session.projection.query({ sessionId })).projection.session?.title).toBe(
+        "Over the wire",
+      );
+      expect(
+        await expectHostError(trpc.session.projection.query({ sessionId: "no-such-session" })),
+      ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
+      // The create door is the Sessions facade's; with no model it says so.
+      expect(
+        await expectHostError(
+          trpc.sessions.create.mutate({
+            operationId: "op-1",
+            projectId: WORKSPACE,
+            ticketId: null,
+            title: null,
+          }),
+        ),
+      ).not.toMatchObject({ reason: "operation-unavailable" });
+      // Revoked mid-stream: the stream hears why, and the host says so.
+      const stream = recordSubscription((handlers) =>
+        trpc.session.subscribe.subscribe({ sessionId }, handlers),
+      );
+      await stream.started;
+      lever.revoke();
+      expect(await stream.ended).toMatchObject({
+        kind: "error",
+        error: { code: "UNAUTHORIZED", reason: "credential-invalid" },
+      });
+      expect(log.warn).toHaveBeenCalledWith(
+        "host protocol: revoked",
+        expect.objectContaining({ streams: 1 }),
+      );
+      // Every handler the WebSocket reached, it reached through the router's
+      // policy at the host's one map (VC-668): none without it.
+      const reached = faults.admissions.filter(({ door }) => door === "router");
+      expect(reached.map(({ key }) => key)).toEqual(
+        expect.arrayContaining([
+          "session.list",
+          "session.show",
+          "session.projection",
+          "sessions.create",
+          "session.subscribe",
+        ]),
+      );
+      expect(reached.every(({ admitted }) => admitted)).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it("answers create as unavailable when the host's map has no Sessions facade", async () => {
+    faults.noSessionsFacade = true;
+    const lever = device();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier });
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const url = host.status().hostProtocol!.url;
+    // A Workspace is a project this host has; before it does, the hello is refused.
+    const early = client(url);
+    try {
+      expect(await expectHostError(early.trpc.protocol.welcome.query())).toMatchObject({
+        code: "NOT_FOUND",
+        reason: "workspace-unknown",
+      });
+    } finally {
+      await early.close();
+    }
+    insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    const { trpc, close } = client(url);
+    try {
+      expect((await trpc.protocol.welcome.query()).workspace.epoch).toBe(0);
+      expect(
+        await expectHostError(
+          trpc.sessions.create.mutate({
+            operationId: "op",
+            projectId: WORKSPACE,
+            ticketId: null,
+            title: null,
+          }),
+        ),
+      ).toMatchObject({ reason: "operation-unavailable" });
+    } finally {
+      await close();
+    }
+  });
+
+  it("refuses to boot when it cannot listen where it was told", async () => {
+    const first = await boot({ env: CLOUD, listen: LOOPBACK });
+    const taken = first.status().hostProtocol!;
+    const error = await refused({
+      dataDir: join(root, "second"),
+      env: CLOUD,
+      listen: { host: "127.0.0.1", port: taken.port },
+    });
+    expect(error.reason).toBe("host-protocol");
+    expect(error.fields).toEqual({ listen: `127.0.0.1:${taken.port}` });
   });
 });

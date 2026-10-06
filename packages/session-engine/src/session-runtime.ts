@@ -504,8 +504,16 @@ export interface SessionRuntime {
   history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage>;
   /** Durable Session state without the transcript replay a fresh surface needs. */
   projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot>;
+  /**
+   * Replays the durable history after `afterSequence`, then delivers live.
+   * Aborting `signal` ends the subscription exactly as the returned disposer
+   * does, and may come while the replay is still being read or delivered: the
+   * replay stops at the next frame and nothing more reaches `listener`. That
+   * is how a bounded door (the WebSocket's replay bounds, VC-663) cancels a
+   * replay it has already refused, before the subscribe call returns.
+   */
   subscribe(
-    input: { sessionId: string; afterSequence: number },
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
     onFailure?: (error: unknown) => void,
   ): Promise<() => void>;
@@ -2297,7 +2305,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async subscribe(
-    input: { sessionId: string; afterSequence: number },
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
     onFailure?: (error: unknown) => void,
   ): Promise<() => void> {
@@ -2305,6 +2313,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!Number.isInteger(input.afterSequence) || input.afterSequence < 0) {
       throw new Error("Session subscription cursor must be a non-negative integer");
     }
+    const { signal } = input;
+    // Cancelled before it began: nothing is registered, nothing is read.
+    if (signal?.aborted === true) return () => {};
     const subscriber: Subscriber = {
       sessionId: input.sessionId,
       cursor: input.afterSequence,
@@ -2320,15 +2331,21 @@ class DefaultSessionRuntime implements SessionRuntime {
       this.#subscribers.set(input.sessionId, subscribers);
     }
     subscribers.add(subscriber);
+    // The drain checks `active` before every frame, so an abort mid-replay
+    // stops delivery at the next one, and the paging below stops too.
+    const cancel = (): void => this.#removeSubscriber(subscriber);
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       const replay = await this.#listEventsPaged({
         sessionId: input.sessionId,
         afterSequence: input.afterSequence,
+        signal,
       });
       await this.#enqueue(subscriber, replay);
       await this.#enqueueOverlayBaselines(subscriber);
       await this.#enqueueCompactionProgressBaseline(subscriber);
     } catch (error) {
+      signal?.removeEventListener("abort", cancel);
       subscribers.delete(subscriber);
       // The empty Set has to go too: {@link #keepHistory} reads membership of
       // this map as "a surface is watching", so a subscription that never
@@ -2337,9 +2354,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       throw error;
     }
     return () => {
-      subscriber.active = false;
-      subscribers?.delete(subscriber);
-      if (subscribers?.size === 0) this.#subscribers.delete(input.sessionId);
+      signal?.removeEventListener("abort", cancel);
+      this.#removeSubscriber(subscriber);
     };
   }
 
@@ -3468,6 +3484,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #listEventsPaged(input: {
     sessionId: string;
     afterSequence?: number;
+    /** A subscriber's: once aborted, no further page is read. */
+    signal?: AbortSignal | undefined;
   }): Promise<readonly SessionEvent[]> {
     let afterSequence = input.afterSequence ?? 0;
     const events: SessionEvent[] = [];
@@ -3477,6 +3495,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         afterSequence,
         limit: EVENT_PAGE_SIZE,
       });
+      // Cancelled while this page was read: what it held is never delivered.
+      if (input.signal?.aborted === true) return [];
       events.push(...page);
       const latest = page.at(-1);
       if (!latest || page.length < EVENT_PAGE_SIZE) return events;

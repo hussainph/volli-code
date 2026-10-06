@@ -10,6 +10,7 @@ import { makeAgentError } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
 import {
   createAgentSocketLifecycle,
   startAgentSocket,
@@ -328,7 +329,7 @@ describe("agent socket", () => {
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
-      busyWorktreeSites: async () => [],
+      handlers: testHostHandlers({ db: ctx.db }),
       db: ctx.db,
       sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "1.2.3",

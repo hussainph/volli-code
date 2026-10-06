@@ -90,6 +90,7 @@ import type {
   VerbEntry,
 } from "@volli/shared";
 
+import { ADMITTED, refused, type HandlerPolicy } from "../handlers/handler-map";
 import { failure } from "./context";
 import type { EnvSessionIdentity } from "./context";
 import { presentedOperatorToken } from "./resolution";
@@ -247,4 +248,31 @@ export function coordinationRefusal(
     `${request.cmd} is not among the coordination-tier verbs this project allows a ${kind} caller to run.`,
     "This is per-project policy, held outside the agent-writable tree. A person can change it in Settings; a Session cannot grant it to itself. A write into another project is judged by that project's policy too.",
   );
+}
+
+/**
+ * The agent socket's policy at the host's handler map (VC-668), for one
+ * request: a projected verb reaches `handlers[key]` only through it.
+ *
+ * It is the socket's coordination policy, judged again at the map rather than
+ * trusted from the dispatch line that already ran it, and it admits only the
+ * key this request's verb projects (a both-door entry's socket binding id is
+ * its key). It is deliberately not the catalog's router actor: `ticket.move`
+ * is person-only on the WebSocket until VC-565, while a Session the project's
+ * policy admits has always moved tickets here.
+ */
+export function socketHandlerPolicy(
+  request: AgentRequest,
+  coordination: () => AgentResponse | null,
+): HandlerPolicy {
+  return {
+    door: "agent-socket",
+    admit(key) {
+      if (key !== request.cmd) return refused(`${request.cmd} does not reach ${key}.`);
+      const refusal = coordination();
+      return refusal === null || refusal.ok
+        ? ADMITTED
+        : refused(refusal.error.message, refusal.error.next);
+    },
+  };
 }

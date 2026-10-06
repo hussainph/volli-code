@@ -19,7 +19,7 @@
  * that has to be right; its transport and its container are details it names
  * requirements for.
  */
-import { readHostError } from "@volli/host-protocol";
+import { isResnapshotRequired } from "@volli/host-protocol";
 import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
@@ -420,8 +420,31 @@ export function racingFlushScheduler(host: FlushHost): FlushScheduler {
 
 /* ----------------------------------------------------------------- the core */
 
+/**
+ * Who recovers a Session stream that ended (VC-670).
+ *
+ * - `"resume-once"`, the default: the in-process Electron IPC edge, where an
+ *   end is a producer's teardown race. A stream that had started resumes once
+ *   from its cursor; a `subscription-resnapshot-required` reloads the
+ *   snapshot once (VC-315); anything else surfaces. Flag off, this is all
+ *   there is.
+ * - `"host-link"`: the WebSocket edge, behind a client host link
+ *   (`@volli/host-protocol/client-link`). The link already resumed every
+ *   transport drop from the last tracked id, after the next welcome
+ *   validated, so what reaches this client is the host's own answer. A
+ *   `subscription-resnapshot-required` reloads the snapshot and subscribes
+   *   from its cursor, up to three times in a row; anything else surfaces.
+ *   This client retries nothing else.
+ *
+ * Both count quiet reloads with the one guard, `#silentReloads`, which only
+ * an emission clears — never the transport's `started`.
+ */
+export type ChatStreamRecovery = "resume-once" | "host-link";
+
 export interface ChatSessionTransport {
   rpc: ChatSessionRpc;
+  /** Absent means `"resume-once"`: the IPC edge's policy, unchanged. */
+  streamRecovery?: ChatStreamRecovery;
   scheduler: FlushScheduler;
   newCommandId(): string;
   /**
@@ -490,6 +513,20 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 
 export type ProductSessionResult = SessionStartResult;
 
+/**
+ * Quiet resnapshot reloads a stream may make in a row before one of them
+ * delivers anything; see `#silentReloads`. One guard, one budget per edge.
+ * Over IPC replay is unbounded, so only retention can refuse a cursor, and a
+ * host that refuses the fresh snapshot's own cursor is broken: one reload,
+ * then the band (VC-315). Behind the host link a resume is bounded and the
+ * link has already resumed every drop it could, so a refusal can recur
+ * honestly while the head races ahead: three, then the band (VC-670).
+ */
+const MAX_SILENT_RELOADS: Readonly<Record<ChatStreamRecovery, number>> = {
+  "resume-once": 1,
+  "host-link": 3,
+};
+
 /** The tone a refusal of each weight is said in. */
 const TONE_OF: Readonly<Record<CommandRefusalSeverity, NotifyTone>> = {
   benign: "neutral",
@@ -500,6 +537,7 @@ export class ChatSessionClient {
   readonly sessionId: string;
 
   readonly #rpc: ChatSessionRpc;
+  readonly #streamRecovery: ChatStreamRecovery;
   readonly #store: ChatSessionStore;
   readonly #scheduler: FlushScheduler;
   readonly #newCommandId: () => string;
@@ -526,12 +564,6 @@ export class ChatSessionClient {
   /** The one page request in flight, which every caller asking for more shares. */
   #loadingOlder: Promise<boolean> | null = null;
   /**
-   * A resnapshot this client answered quietly and whose reopened stream has
-   * not started yet. A second one before it starts is a host that cannot be
-   * resumed at all, and that is reported rather than retried in a loop.
-   */
-  #resnapshotting = false;
-  /**
    * Which open owns the stream. Bumped by every reconnect and by dispose, so a
    * snapshot that resolves after the surface moved on cannot seed a second
    * subscription onto the one that replaced it.
@@ -539,6 +571,18 @@ export class ChatSessionClient {
   #generation = 0;
   /** One reconnect per stream that actually started — see {@link #dropped}. */
   #reconnectable = false;
+  /**
+   * Resnapshot reloads in a row with no emission between them. A host that
+   * keeps refusing its own snapshot's cursor would otherwise reload forever,
+   * so past {@link MAX_SILENT_RELOADS} the stream surfaces instead.
+   *
+   * Only an emission clears it — the replay or a baseline actually arriving —
+   * never the transport's `started`. tRPC's WebSocket adapter sends `started`
+   * as soon as the subscription's iterator exists, before its first `next()`
+   * runs the replay that may refuse; a guard cleared there is cleared by
+   * every refusal it was meant to count (VC-315 review, B4).
+   */
+  #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
   // Automatic queue reattachment can meet the same transport failure twice.
@@ -578,6 +622,7 @@ export class ChatSessionClient {
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
     this.#rpc = deps.rpc;
+    this.#streamRecovery = deps.streamRecovery ?? "resume-once";
     this.#store = deps.store;
     this.#scheduler = deps.scheduler;
     this.#newCommandId = deps.newCommandId;
@@ -1103,11 +1148,11 @@ export class ChatSessionClient {
         {
           onStarted: () => {
             delete this.#reportedLocalFailures.stream;
-            this.#resnapshotting = false;
             this.#reconnectable = true;
             this.#streamAlive = true;
           },
           onData: (event) => {
+            this.#silentReloads = 0;
             this.#lastEventId = event.id;
             this.#receive(event.data);
           },
@@ -1146,12 +1191,22 @@ export class ChatSessionClient {
     // gap. That is not a broken stream: reading a fresh tail and resuming after
     // it is the whole recovery, and it needs no one's attention (VC-315). It is
     // asked before the reconnect budget because a resume refused this way
-    // fails before it starts. Once per started stream, so a host that refuses
-    // the snapshot's own cursor too ends in the band instead of a loop.
-    if (isResnapshotRequired(failure) && !this.#resnapshotting) {
-      this.#resnapshotting = true;
+    // fails before it delivers anything, whether or not the transport said
+    // `started` first. Past the edge's budget of reloads that delivered
+    // nothing, the host cannot be resumed at all: the band, not a loop.
+    if (isResnapshotRequired(failure)) {
       this.#reconnectable = false;
-      void this.#open(null);
+      if (this.#silentReloads < MAX_SILENT_RELOADS[this.#streamRecovery]) {
+        this.#silentReloads += 1;
+        void this.#open(null);
+      } else {
+        this.#lost(failure);
+      }
+      return;
+    }
+    if (this.#streamRecovery === "host-link") {
+      // The link resumed every drop it could; this is the host's answer.
+      this.#lost(failure);
       return;
     }
     if (!this.#reconnectable) {
@@ -1535,11 +1590,6 @@ function wire(resolution: SessionInteractionResolution): WireResolution {
         }
       : {}),
   };
-}
-
-/** The host's "read a fresh snapshot" answer, on either link (HP § Commands, subscriptions and errors). */
-function isResnapshotRequired(failure: unknown): boolean {
-  return readHostError(failure).reason === "subscription-resnapshot-required";
 }
 
 /**

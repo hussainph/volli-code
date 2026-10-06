@@ -3466,6 +3466,71 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(runtime.snapshot({ sessionId })).rejects.toThrow("Session runtime is closed");
   });
 
+  it("stops a replay at the next frame when its signal aborts, and reads nothing once aborted", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const history = (await runtime.projection({ sessionId })).throughSequence;
+    expect(history).toBeGreaterThan(2);
+
+    // Aborted before it began: no listener, no read, a disposer that does nothing.
+    const early = new AbortController();
+    early.abort();
+    const never: unknown[] = [];
+    const none = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: early.signal },
+      (emission) => void never.push(emission),
+    );
+    none();
+    expect(never).toEqual([]);
+
+    // Aborted while the history is still being read: not one frame arrives.
+    const reading = new AbortController();
+    const unread: unknown[] = [];
+    const pending = runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: reading.signal },
+      (emission) => void unread.push(emission),
+    );
+    reading.abort();
+    (await pending)();
+    expect(unread).toEqual([]);
+
+    // Aborted by the listener after the first replayed frame: nothing more arrives.
+    const midway = new AbortController();
+    const seen: number[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: midway.signal },
+      (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        seen.push(emission.sequence);
+        midway.abort();
+      },
+    );
+    expect(seen).toEqual([1]);
+    await adapter.emit({ kind: "turn", state: "started", turnId: "after-abort", occurredAt: 500 });
+    expect(seen).toEqual([1]);
+    stop();
+
+    // Aborting a live subscription ends it as its disposer would.
+    const live = new AbortController();
+    const delivered: number[] = [];
+    const head = (await runtime.projection({ sessionId })).throughSequence;
+    const dispose = await runtime.subscribe(
+      { sessionId, afterSequence: head, signal: live.signal },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) delivered.push(emission.sequence);
+      },
+    );
+    live.abort();
+    await adapter.emit({
+      kind: "turn",
+      state: "completed",
+      turnId: "after-abort",
+      occurredAt: 600,
+    });
+    expect(delivered).toEqual([]);
+    dispose();
+  });
+
   it("reports missing sessions, bindings, and invalid persisted binding metadata explicitly", async () => {
     const { runtime } = composition();
     await expect(runtime.snapshot({ sessionId: "missing" })).rejects.toBeInstanceOf(

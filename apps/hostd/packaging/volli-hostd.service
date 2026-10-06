@@ -83,7 +83,15 @@ CapabilityBoundingSet=
 # The agent socket, outbound HTTPS and git, and the interface lookups Node
 # and git make. No raw or packet sockets.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-RestrictNamespaces=yes
+# Namespaces: only the three the agent browser's sandbox makes (VC-619).
+# Chromium's Linux sandbox puts each renderer in new user, PID and network
+# namespaces; with RestrictNamespaces=yes it cannot, and refuses to start
+# ("No usable sandbox!"). The alternative, --no-sandbox, runs every web page
+# with this service's whole reach, so the unit allows these three and denies
+# the rest (mount, IPC, UTS, cgroup, time). On Ubuntu 23.10+ the binary also
+# needs packaging/volli-chromium.apparmor; scripts/probe-chromium-sandbox.sh
+# checks both against this file.
+RestrictNamespaces=user pid net
 SystemCallArchitectures=native
 # Not MemoryDenyWriteExecute=: V8's JIT needs writable executable memory.
 

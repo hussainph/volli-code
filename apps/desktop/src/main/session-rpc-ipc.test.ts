@@ -57,11 +57,28 @@ import {
 
 import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
 
+import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
+
 import {
   registerDegradedSessionRpcIpcHandlers,
-  registerSessionRpcIpcHandlers,
+  registerSessionRpcIpcHandlers as registerBridge,
   type RegisterSessionRpcIpcOptions,
 } from "./session-rpc-ipc";
+
+/**
+ * The bridge over a map built from the per-behaviour ports a case states
+ * (VC-668). Anything else a case passes, a rogue caller included, reaches the
+ * bridge untouched, so a test of what the bridge ignores still tests it.
+ */
+function registerSessionRpcIpcHandlers(
+  options: Omit<LegacySessionPorts, "caller" | "diagnostics"> &
+    Omit<RegisterSessionRpcIpcOptions, "handlers">,
+) {
+  return registerBridge({
+    ...(options as object),
+    handlers: sessionHandlersFrom(options),
+  } as RegisterSessionRpcIpcOptions);
+}
 
 interface FakeSender {
   readonly id: number;

@@ -7,6 +7,7 @@ import {
 } from "@volli/host-protocol/testing";
 import type { HostError } from "@volli/host-protocol";
 import { createSessionRouter, RpcDiagnosticLog, type RouterCaller } from "@volli/session-rpc";
+import { sessionContext } from "@volli/session-rpc/testing";
 import {
   SessionRuntimeCommandConflictError,
   type SessionRuntime,
@@ -160,7 +161,7 @@ function fixture() {
 describeContract("Session router", sessionRouterContractLinks(), ({ connect }) => {
   it("preserves projection and snapshot exactly as the direct caller answers", async () => {
     const { host } = fixture();
-    const caller = createSessionRouter().createCaller(host);
+    const caller = createSessionRouter().createCaller(sessionContext(host));
     const client = await connect(host);
     const input = { sessionId: session.id };
     expect(await client.session.projection.query(input)).toStrictEqual(

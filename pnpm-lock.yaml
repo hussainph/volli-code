@@ -356,6 +356,9 @@ importers:
         specifier: 0.35.4
         version: 0.35.4(@types/node@26.3.0)
     devDependencies:
+      '@trpc/client':
+        specifier: ^11.18.0
+        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -368,6 +371,15 @@ importers:
       '@volli/host-core':
         specifier: workspace:*
         version: link:../../packages/host-core
+      '@volli/host-protocol':
+        specifier: workspace:*
+        version: link:../../packages/host-protocol
+      '@volli/session-engine':
+        specifier: workspace:*
+        version: link:../../packages/session-engine
+      '@volli/session-rpc':
+        specifier: workspace:*
+        version: link:../../packages/session-rpc
       '@volli/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -600,6 +612,9 @@ importers:
       ai:
         specifier: ^7.0.83
         version: 7.0.84(zod@4.4.3)
+      playwright-core:
+        specifier: ^1.62.1
+        version: 1.62.1
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -612,13 +627,13 @@ importers:
 
   packages/host-protocol:
     dependencies:
+      '@trpc/client':
+        specifier: ^11.18.0
+        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
       '@trpc/server':
         specifier: ^11.18.0
         version: 11.18.0(typescript@7.0.2)
     devDependencies:
-      '@trpc/client':
-        specifier: ^11.18.0
-        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
       '@types/node':
         specifier: 'catalog:'
         version: 26.3.0
@@ -690,10 +705,22 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+      ws:
+        specifier: ^8.21.3
+        version: 8.21.3
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@trpc/client':
+        specifier: ^11.18.0
+        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.3.0
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.2
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

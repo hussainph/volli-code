@@ -38,13 +38,26 @@
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { AGENT_COMMAND_BINDINGS, AGENT_COMMANDS, VERB_REGISTRY } from "@volli/shared";
+import {
+  AGENT_COMMAND_BINDINGS,
+  AGENT_COMMANDS,
+  DEFAULT_AUTHORITY_POLICY,
+  HOST_HANDLER_KEYS,
+  SOCKET_DELEGATED_HANDLER_KEYS,
+  OperationUnavailableError,
+  VERB_REGISTRY,
+} from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { socketHandlerPolicy } from "./agent-dispatch/admission";
+import { refused } from "./handlers/handler-map";
+import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
+import { projectedHandlerKey, projectHandler } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
+import { getTicket, insertTicket } from "./db/tickets-repo";
 import { insertProject } from "./db/projects-repo";
 import { insertSession } from "./session-control/test-support";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
 import { createSessionTokenRegistry } from "./session-tokens";
@@ -77,13 +90,13 @@ function scenario() {
     token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
   };
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: ctx.db }),
     db: ctx.db,
     sessionEngine,
     appVersion: "1.2.3",
     verifySessionToken: tokens.verify,
   });
-  return { service, listSessions, getSession, env };
+  return { service, listSessions, getSession, env, verify: tokens.verify };
 }
 
 describe("the dispatch table (VC-167)", () => {
@@ -131,13 +144,204 @@ describe("the dispatch table (VC-167)", () => {
   });
 
   it("names each handler for the verb it answers", () => {
-    // Exhaustiveness cannot catch a table that binds `ticket.move` to the
+    // Exhaustiveness cannot catch a table that binds `ticket.create` to the
     // archive handler. The handler names can: every one of them is its verb's
-    // key in camelCase, suffixed `Verb`.
+    // key in camelCase, suffixed `Verb`. A catalog command's binding has no
+    // handler of its own to name; it is checked as a projection below.
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
+      if (projectedHandlerKey(binding) !== undefined) continue;
       const expected = `${id.replaceAll(/\.([a-z])/g, (_, initial: string) => initial.toUpperCase())}Verb`;
       expect(binding.handle.name).toBe(expected);
     }
+  });
+});
+
+describe("a catalog command's socket verb is a projection of the host's map (VC-668)", () => {
+  // The socket's Session reads are delegated the other way round (VC-663, D4):
+  // the map runs the socket verb, so the socket keeps its own binding.
+  const delegated: readonly string[] = SOCKET_DELEGATED_HANDLER_KEYS;
+  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter(
+    (key) => key in AGENT_VERB_TABLE && !delegated.includes(key),
+  );
+
+  it("binds exactly the both-door commands as projections, each of its own key", () => {
+    expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move"]);
+    for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
+    for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
+      expect(projectedHandlerKey(binding), id).toBe(
+        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : undefined,
+      );
+    }
+  });
+
+  it("reaches handlers[key] with the decoded input and the attributed actor, admitted first", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const log: string[] = [];
+    const move = vi.fn(async () => {
+      log.push("handler ticket.move");
+      return [{ ...getTicket(ctx.db, "ticket-one")!, status: "done" as const }];
+    });
+    const projected = createAgentCommandService({
+      handlers: sealTestHandlers({ "ticket.move": move }, ({ door, key, admitted }) =>
+        log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+    });
+    const response = await projected.execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response).toMatchObject({ ok: true, data: { ticket: { id: "VC-1", status: "done" } } });
+    // The socket's coordination policy, judged at the map, before the handler.
+    expect(log).toEqual(["agent-socket admitted ticket.move", "handler ticket.move"]);
+    expect(move).toHaveBeenCalledExactlyOnceWith(
+      { projectId: "project-one", ticketId: "ticket-one", toStatus: "done" },
+      { actor: { kind: "session", sessionId: SESSION_ID, ticketId: null } },
+    );
+  });
+
+  it("judges the coordination policy again at the map, and a refusal there never reaches the handler", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    // The project narrows its Sessions between the dispatch's admission line
+    // and the handler: the map's own judgement is what still stops the move.
+    const narrowed = {
+      ...DEFAULT_AUTHORITY_POLICY,
+      actors: {
+        ...DEFAULT_AUTHORITY_POLICY.actors,
+        session: { ...DEFAULT_AUTHORITY_POLICY.actors.session, coordinationVerbs: [] },
+      },
+    };
+    let reads = 0;
+    const log: string[] = [];
+    const move = vi.fn(() => []);
+    const response = await createAgentCommandService({
+      handlers: sealTestHandlers({ "ticket.move": move }, ({ door, key, admitted }) =>
+        log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+      readAuthorityPolicy: () => (reads++ === 0 ? DEFAULT_AUTHORITY_POLICY : narrowed),
+    }).execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "FORBIDDEN_ACTOR",
+        message: expect.stringContaining(
+          "ticket.move is not among the coordination-tier verbs this project allows a session caller to run.",
+        ),
+      },
+    });
+    expect(log).toEqual(["agent-socket refused ticket.move"]);
+    expect(move).not.toHaveBeenCalled();
+    expect(getTicket(ctx.db, "ticket-one")?.status).toBe("todo");
+  });
+
+  it("answers a refusal at the map with the socket's own refusal, hint or not", async () => {
+    const move = vi.fn(() => []);
+    const binding = projectHandler("ticket.move", {
+      envSession: "resolve",
+      decode: () => ({
+        input: { projectId: "p", ticketId: "t", toStatus: "done" },
+        call: { actor: { kind: "user" } },
+        reply: () => ({ v: 1, ok: true, data: null }),
+      }),
+    });
+    const request = { v: 1, cmd: "ticket.move", args: {}, ctx: { cwd: "/", env: {} } } as const;
+    for (const hint of [null, "Ask a person to change the project's policy."]) {
+      const response = await binding.handle(
+        {
+          options: { handlers: sealTestHandlers({ "ticket.move": move }) },
+          handlerPolicy: { door: "agent-socket", admit: () => refused("Not here.", hint) },
+        } as never,
+        request,
+      );
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "FORBIDDEN_ACTOR",
+          message: "Not here.",
+          next: hint ?? expect.any(String),
+        },
+      });
+    }
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("admits at the map only the key the request's own verb projects", () => {
+    const policy = socketHandlerPolicy(
+      { v: 1, cmd: "ticket.show", args: {}, ctx: { cwd: "/", env: {} } },
+      () => null,
+    );
+    expect(policy.door).toBe("agent-socket");
+    expect(policy.admit("ticket.move", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: false,
+      message: "ticket.show does not reach ticket.move.",
+      hint: null,
+    });
+  });
+
+  it("answers a handler's unavailable as retryable, and any other throw as a failed write", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const answer = async (thrown: unknown) =>
+      createAgentCommandService({
+        handlers: sealTestHandlers({
+          "ticket.move": () => {
+            throw thrown;
+          },
+        }),
+        db: ctx.db,
+        sessionEngine: createTestSessionEngine(ctx.db),
+        appVersion: "1.2.3",
+        verifySessionToken: verify,
+      }).execute({
+        v: 1,
+        cmd: "ticket.move",
+        args: { id: "VC-1", to: "done" },
+        ctx: { cwd: "/repo/volli", env },
+      });
+    await expect(answer(new OperationUnavailableError("No board here"))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE", message: expect.stringContaining("No board here") },
+    });
+    await expect(answer(new Error("Unknown ticket"))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: expect.stringContaining("Unknown ticket") },
+    });
+  });
+
+  it("refuses to build without the map, for a JavaScript caller too", () => {
+    ctx = openTestDb();
+    expect(() =>
+      createAgentCommandService({
+        db: ctx.db,
+        sessionEngine: createTestSessionEngine(ctx.db),
+        appVersion: "1.2.3",
+      } as never),
+    ).toThrow("The host's handler map is required.");
   });
 });
 

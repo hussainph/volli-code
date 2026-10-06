@@ -12,8 +12,9 @@
  * - Desktop answers with `BrowserTabHost` (`apps/desktop/src/main/browser/tab-host.ts`):
  *   `WebContentsView`s, each tab's app-private `webContents.debugger` as its
  *   CDP wire.
- * - A headless host will answer with standalone Chromium (VC-619), attached
- *   over a CDP pipe and never `--remote-debugging-port` (the VC-110 stance).
+ * - A headless host answers with `ChromiumBrowserBackend` (`./chromium-backend`,
+ *   VC-619): standalone Chromium, attached over a CDP pipe and never
+ *   `--remote-debugging-port` (the VC-110 stance).
  *
  * The policy half every backend shares — ownership (VC-238), holds (VC-239),
  * the per-Project and per-Session caps, console bounds, pictures and traces —
@@ -23,16 +24,20 @@
  * overlay — is not here; it stays with the desktop.
  */
 import type {
+  BrowserDialogResponse,
+  BrowserPendingDialog,
   BrowserTabBounds,
   BrowserTabCreatedBy,
   BrowserTabHolder,
   BrowserTabPresentation,
   BrowserTabState,
   BrowserTrace,
+  BrowserViewerInput,
 } from "@volli/shared";
 
 import type { AgentBrowserBackend } from "./agent-port";
 import type { CdpTransport } from "./cdp-controller";
+import type { BrowserScreencastAttachment } from "./screencast";
 
 /**
  * One Session's claim on a tab (VC-239), keyed by attachment as well as
@@ -247,4 +252,34 @@ export interface BrowserBackend extends AgentBrowserBackend {
 
   /** A Session's kept Browser Traces, oldest first; empty when nothing was recorded. */
   tracesOf(sessionId: string): BrowserTrace[];
+
+  // ---- optional capabilities a backend advertises (VC-619) ----------------
+  //
+  // The seam stays open: a capability one engine has and another does not is
+  // an optional member, present on the backends that offer it. Desktop draws
+  // its pages natively and has neither of these.
+
+  /**
+   * A frame source for one shown tab, for a client that draws the page
+   * itself (`./screencast`): JPEG frames, latest wins, metadata at attach.
+   * `deviceScaleFactor` is what the viewer's display wants (2 on Retina). A
+   * headless tab refuses; the attachment ends when the tab closes or goes
+   * headless.
+   */
+  attachScreencast?(
+    tabId: string,
+    options: { deviceScaleFactor: number },
+  ): BrowserScreencastAttachment;
+  /** A person's input in a client's view of one shown tab. A headless tab refuses. */
+  viewerInput?(tabId: string, input: BrowserViewerInput): Promise<void>;
+  /**
+   * The JavaScript dialog a shown tab's page waits on while a viewer is
+   * attached, or null. A backend that offers it never answers such a dialog
+   * itself before the person can, and gives the safe answer (never "leave
+   * the page") when nobody does in its time. Attachments hear it too
+   * (`BrowserScreencastAttachment.onDialog`).
+   */
+  pendingDialog?(tabId: string): BrowserPendingDialog | null;
+  /** The person's answer to dialog `dialogId`; false when it is no longer the one waiting. */
+  respondToDialog?(tabId: string, dialogId: string, response: BrowserDialogResponse): boolean;
 }
