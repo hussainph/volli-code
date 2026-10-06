@@ -45,6 +45,47 @@ export const HOST_FEATURE_OPERATIONS = {
   /** The socket's Session reads, scoped to the connection's Workspace (VC-663, D4). */
   "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
   /**
+   * One Workspace's board, read (VC-565): its project, tickets, labels and
+   * comments, the per-ticket reads a board surface paints, and the
+   * Workspace's change feed. Its own name: board reads never widen
+   * `session.read` (VC-669).
+   */
+  "board.read": [
+    "board.snapshot",
+    "board.roster",
+    "board.changes",
+    "board.projectFolder",
+    "board.ticketBody",
+    "board.archivedTickets",
+    "board.ticketEvents",
+    "board.latestSignals",
+    "board.statusEntries",
+    "board.comments",
+  ],
+  /**
+   * One Workspace's board, written (VC-565): the person's board commands,
+   * each under a Client-minted `commandId` answered from a durable receipt,
+   * and the column-only `ticket.move` both doors serve (VC-668).
+   */
+  "board.write": [
+    "ticket.move",
+    "board.updateProject",
+    "board.setSkillModes",
+    "board.setSessionDefaults",
+    "board.createTicket",
+    "board.moveTickets",
+    "board.setPriority",
+    "board.updateTicket",
+    "board.setLabels",
+    "board.archiveTicket",
+    "board.unarchiveTicket",
+    "board.deleteTicket",
+    "board.createComment",
+    "board.updateComment",
+    "board.removeComment",
+    "board.setLabelColor",
+  ],
+  /**
    * The host's Model Access catalog and preferences (VC-663), as the Session
    * router declares them today (D3). VC-572 refines their policy; anything it
    * adds takes a new name.

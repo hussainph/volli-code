@@ -123,6 +123,8 @@ import { createElectronClientCapabilities } from "./client-capabilities";
 import {
   getProjectById,
   getTicket,
+  getTicketRow,
+  listProjects,
   listRegisteredHarnesses,
   getFirstPaintHint,
   getGlobalAppearance,
@@ -237,9 +239,10 @@ import {
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
   broadcastUpdateState,
+  tapDataChanged,
   windowEventBus,
 } from "./broadcast";
-import { subscribeTicketWake } from "@volli/host-core/board";
+import { createBoardChangeFeed, subscribeTicketWake } from "@volli/host-core/board";
 import { installDownloadedUpdate, registerUpdateIpcHandlers } from "./update-ipc";
 import {
   countOpenAgentTurns,
@@ -1284,6 +1287,19 @@ const appStartup = app.whenReady().then(async () => {
   const listOpenNativeBindings =
     sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  /**
+   * The board's change feeds (VC-565): its handlers stamp their rows, and
+   * every other writer's `data-changed` on the window bus is stamped too, so
+   * a Client following the feed (the renderer with `cloud` on) misses none.
+   * With the flag off nothing subscribes, and the windows hear exactly what
+   * they heard before.
+   */
+  const boardFeed = createBoardChangeFeed({
+    projectOfTicket: (ticketId) =>
+      sessionDb === null ? undefined : getTicketRow(sessionDb, ticketId)?.project_id,
+    workspaces: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
+  });
+  tapDataChanged((change) => boardFeed.noteDataChanged(change));
   const runtimeAutomations = createRuntimeAutomations({
     host: hostCore,
     events: hostPorts.events,
@@ -1408,6 +1424,13 @@ const appStartup = app.whenReady().then(async () => {
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
       logs: desktopLog?.ring ?? null,
+      boardFeed,
+      ticketSignals:
+        sessionEngine === null
+          ? null
+          : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
+      // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
+      piSessionsDirectory,
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
@@ -1688,6 +1711,8 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
+    // A removed Workspace's board feed is released, its followers told to resnapshot.
+    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its

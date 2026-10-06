@@ -57,7 +57,12 @@ try {
     }).trim();
     if (paths) {
       const previous = JSON.parse(
-        execFileSync("git", ["show", `${base}:${schemaPath}`], { cwd: root, encoding: "utf8" }),
+        execFileSync("git", ["show", `${base}:${schemaPath}`], {
+          cwd: root,
+          encoding: "utf8",
+          // The committed schema passed 1 MiB (Node's default buffer) with VC-565's board.
+          maxBuffer: 64 * 1024 * 1024,
+        }),
       );
       const allowlist = JSON.parse(
         await readFile(new URL(`../../${exceptionPath}`, import.meta.url), "utf8"),

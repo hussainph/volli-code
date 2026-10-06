@@ -66,7 +66,7 @@ Everything else is an implementation detail.
 | `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                                                      | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
 | `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
 | `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
-| `@volli/host-core/board`           | `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                           | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes                                                                            |
+| `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                 | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                 |
 | `@volli/host-core/handlers`        | `handlers/`                                                                                                                                                                                                                                                                                                                                                                                                                 | `createHostHandlers`, `invokeHandler`, `admittedHandlers`, the door policies: the [one handler map](#the-handler-map) every door projects                        |
 | `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                                                                                                                                                                                                                                                      | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                                         |
 | `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                                                                                                                                                                                                                                                  | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))                                  |
@@ -783,6 +783,37 @@ call carries `origin: "desktop-window"`, which keeps the reply-carries-the-board
 rule above; every other caller's change is published. No production entry
 serves `executeTicketMove`, and `package-interface.test.ts` refuses any
 production importer of it but the handler map.
+
+## The Board module
+
+`src/board/` (VC-565) is the board's commands and feed. `createBoardHandlers`
+(`commands.ts`) builds every `board.*` handler, and `ticket.move`, for the
+handler map: each is the whole command (T13), owning its clock, attribution,
+transaction and receipt, ticket wakes, the worktree materialization of a
+switch into worktree scope, its rows on the Workspace change feed (naming the
+Client's `commandId`) and its `data-changed` announcement, which it never
+echoes to the desktop window that asked unless the change moved a checkout.
+Doors hold no repository: desktop's legacy board channels, the board router
+and the socket's `ticket.move` all invoke the map.
+
+- `receipts.ts`: `board_command_receipts` (migration 062), written in the
+  effect's own transaction (a move's through `TicketMoveSeam`). Same
+  `commandId` and intent replays: the recorded outcome with the resource as it
+  stands now; another intent is a branded `CommandIntentConflict`. Seven days
+  is a hard expiry (an expired receipt never answers); excluded from backups.
+- `change-feed.ts`: `BoardChangeFeed`, one in-memory feed per Workspace with an
+  opaque `epoch:instance:seq` cursor, a compacted 2,048-entity window, and
+  resume-or-resnapshot. The epoch is read on every use: a changed epoch, or a
+  removed Workspace (`dispose`), ends the feed and tells its followers to
+  resnapshot. A root makes one, hands it to `createHostHandlers`
+  (`boardFeed`) and feeds it every `data-changed` its bus carries
+  (`noteDataChanged`): desktop through `tapDataChanged` (`broadcast.ts`), hostd
+  through `headlessPorts`.
+- `resources.ts`: `boardResourceWorkspace(db)`, the board's half of a root's
+  `resourceWorkspace` port.
+
+The contract: HP § Command catalog, "The board (VC-565)", and § Workspace
+change feed.
 
 ## The handler map
 

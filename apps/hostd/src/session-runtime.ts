@@ -11,6 +11,7 @@ import { displayTicketId, VOLLI_SOCKET_ENV, type SessionExecutionVenue } from "@
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
+import type { BoardChangeFeed } from "@volli/host-core/board";
 import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
 import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
@@ -82,6 +83,8 @@ export function createHeadlessSessionRuntime(input: {
   host: LiveHostCore;
   version: string;
   ports: HostCorePorts;
+  /** The host's board change feeds (VC-565): its bus already feeds them. */
+  boardFeed?: BoardChangeFeed;
   secrets: HeadlessSecrets;
   env: Readonly<Record<string, string | undefined>>;
   /** The agent socket this host serves; every Session command is pointed at it. */
@@ -320,6 +323,8 @@ export function createHeadlessSessionRuntime(input: {
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
           logs: input.logs ?? null,
+          ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
+          ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
         }),
       };
     },

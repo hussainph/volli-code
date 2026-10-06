@@ -26,6 +26,8 @@ export default defineConfig({
         // (VC-668): every door reaches a command through these, so a branch
         // nobody drove is a door that behaves differently from the others.
         "src/handlers/host-handlers.ts",
+        // The Board module (VC-565): its commands, receipts, feed and resources.
+        "src/board/*.ts",
         // Its one invocation path and the catalog doors' policies: a branch
         // nobody drove is a way to a handler no policy judged.
         "src/handlers/handler-map.ts",
