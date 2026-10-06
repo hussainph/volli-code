@@ -11,7 +11,7 @@ description: Prove a Volli desktop change in the LIVE app — launch an isolated
 - **Isolated.** Its own `--user-data-dir`, DB, `HOME`, Pi agent dir, worktree home, git config, socket — all under `/tmp/vd-<id>-*`. The outer Session's `VOLLI_*` addressing, provider keys, `SSH_AUTH_SOCK` and `GH_TOKEN` are stripped; `gh` is shadowed by a refusing shim.
 - **Quiet.** Accessory app (no Dock, never key/focused), synthetic CDP input only — never your pointer or keyboard.
 - **Bounded.** At most 3 live instances per machine (registry lock in `/tmp/volli-drive-<uid>`), idle auto-stop after 20 min, `stop` kills only the exact pids it started.
-- **Fake agent by default.** A loopback fake model (`azure-openai-responses/gpt-4.1-mini`) is pinned as the default: it replies `fake-agent: <what you typed>`; `[slow:5000]` keeps a turn running 5 s; `[plan]` replies with a markdown plan. `--model env` uses real provider keys from your environment instead.
+- **Fake agent by default.** A loopback fake model (`azure-openai-responses/gpt-4.1-mini`) is pinned as the default: it replies `fake-agent: <what you typed>`; `[slow:5000]` keeps a turn running 5 s; `[plan]` replies with a markdown plan. `--model env` uses real provider keys from your environment instead. **The fake provider is a dev-only server:** volli-drive starts it on loopback for its own instance and hands only that instance its Azure-shaped env. Nothing in the product registers or offers it. Never point a real config (your own app, a shell profile, a real Azure setting) at it.
 
 Never run the app any other way (`pnpm dev`, `pnpm start`, a smoke) to "check something quickly", never point it at your real profile, and never run `security` or any keychain experiment.
 
@@ -79,7 +79,7 @@ volli-drive stop vd-xxxxxx          # graceful close → TERM → KILL of the ex
 volli-drive list                    # nothing of yours should remain live
 ```
 
-`stop` never kills by name or path: it signals only the recorded supervisor and Electron, each while its pid still has the start time recorded at launch, plus their process groups and descendants. A recorded pid now held by another process is left alone (and reported). Evidence survives (`logs`, `console` still work on a stopped id). Stop every instance you launched, including after a failed attempt.
+`stop` never kills by name or path: it signals only the recorded supervisor and Electron, each while its pid still has the start time recorded at launch, plus the group of a recorded leader that is **still running**, their descendants, and every instance process the supervisor recorded by identity as it appeared. Once a recorded group leader is gone nothing is claimed by its group number (it can be reused); a recorded pid now held by another process is left alone (and reported). Evidence survives (`logs`, `console` still work on a stopped id). Stop every instance you launched, including after a failed attempt.
 
 ## Feature map
 

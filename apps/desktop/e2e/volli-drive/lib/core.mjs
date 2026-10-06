@@ -558,30 +558,24 @@ export async function processIdentity(pid, run = execFileAsync) {
  * What we own, from recorded identities only, never from a name or a path:
  *   • a recorded root that is still the same process (pid AND start time);
  *   • every descendant of a verified root, by parent pid;
- *   • every member of a group a verified root leads (pgid === its pid), or,
- *     when that leader has exited, members of its group that started no
- *     earlier than it did (a pgid is never reused while its group lives).
- * A root whose pid now names a different process is someone else's, and so
- * is its group.
+ *   • every member of a group a verified, still-running root leads
+ *     (pgid === its pid): the live leader proves the group is the same one.
+ * Once a recorded leader is gone NOTHING is claimed by its pgid: the number
+ * can be reused by an unrelated group, and a later start time proves nothing.
+ * Its former members are ours only if their own {pid, start time} was
+ * recorded (the supervisor records the instance's processes as they appear;
+ * pass those as roots too). A root whose pid now names a different process
+ * is someone else's, and so is its group.
  */
 export function ownedProcesses(table, roots, { self = process.pid } = {}) {
   const byPid = new Map(table.map((p) => [p.pid, p]));
   const owned = new Map();
-  const verified = [];
   for (const root of roots.filter(Boolean)) {
     const row = byPid.get(root.pid);
-    if (row) {
-      if (row.started !== root.started) continue; // reused pid: not ours
-      verified.push(row);
-      owned.set(row.pid, row);
-    }
-    if (root.pgid === root.pid) {
-      const since = Date.parse(root.started);
-      for (const p of table) {
-        if (p.pgid !== root.pgid) continue;
-        if (!row && !(Date.parse(p.started) >= since)) continue;
-        owned.set(p.pid, p);
-      }
+    if (!row || row.started !== root.started) continue; // gone, or a reused pid
+    owned.set(row.pid, row);
+    if (root.pgid === root.pid && row.pgid === row.pid) {
+      for (const p of table) if (p.pgid === row.pgid) owned.set(p.pid, p);
     }
   }
   const children = new Map();

@@ -417,7 +417,10 @@ async function reapSupervisor(entry) {
 }
 
 async function stopUnreachable(entry, keepScratch, error) {
-  const roots = [entry.supervisor, entry.electron].filter(Boolean);
+  // Recorded identities only: the supervisor, Electron, and the instance
+  // members the supervisor recorded as they appeared. A group whose recorded
+  // leader is gone claims nothing (ownedProcesses).
+  const roots = [entry.supervisor, entry.electron, ...(entry.members ?? [])].filter(Boolean);
   const table = await processTable();
   const targets = ownedProcesses(table, roots);
   const supervisor = targets.filter((p) => p.pid === entry.supervisor?.pid);
@@ -430,9 +433,11 @@ async function stopUnreachable(entry, keepScratch, error) {
       { signal: "SIGTERM", graceMs: 5_000 },
     )),
   );
-  const unverified = roots.filter(
-    (r) => !table.some((p) => p.pid === r.pid && p.started === r.started) && pidAlive(r.pid),
-  );
+  const unverified = [entry.supervisor, entry.electron]
+    .filter(Boolean)
+    .filter(
+      (r) => !table.some((p) => p.pid === r.pid && p.started === r.started) && pidAlive(r.pid),
+    );
   if (!keepScratch) await fs.rm(entry.scratch, { recursive: true, force: true });
   await createRegistry().remove(entry.id);
   return {

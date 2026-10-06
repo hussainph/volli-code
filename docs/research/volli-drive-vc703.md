@@ -22,6 +22,10 @@ cli.mjs (no supervisor needed): logs, console (evidence files), state sql (sqlit
                                  state cli (the real volli CLI with VOLLI_SOCKET=<instance socket>)
 ```
 
+**Fake provider scope (owner decision, final round):** `fake-provider.mjs` is a dev-only server. It answers only clients pointed at it with Azure-shaped env values, which volli-drive supplies to its own instance alone; nothing ships in the product or appears in its model picker, so it is documented rather than gated on `VOLLI_HARNESS`. Never point real configs at it.
+
+**Stop ownership (final round):** processes are claimed by recorded identity only (pid + start time); a group is claimed only while its recorded leader is still running, and the supervisor records the instance's processes as they appear so an orphaned helper is reaped by its own identity, never by a group number that could be reused.
+
 Files: `apps/desktop/e2e/volli-drive/{cli.mjs,supervisor.mjs,lib/core.mjs,lib/protocol.mjs,lib/fixtures.mjs,lib/fake-provider.mjs,lib/sshd-fixture.mjs}` plus `node --test` suites for core (14), the fake provider (14) and the sshd fixture (1). App change: `apps/desktop/src/main/harness/` (guard + file-backed ports) and four guarded lines in `index.ts`.
 
 ## The keychain guarantee, and how it is proven without touching the keychain

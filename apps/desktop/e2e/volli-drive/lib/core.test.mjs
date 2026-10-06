@@ -31,6 +31,7 @@ import {
   ensurePrivateDir,
   findInSnapshot,
   instanceLayout,
+  killExactly,
   isInstanceId,
   newInstanceId,
   readOnlySql,
@@ -402,12 +403,40 @@ describe("ownedProcesses (identity, never name or path)", () => {
     assert.deepEqual(ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }]), []);
   });
 
-  it("owns an exited leader's group members only if they started after it", () => {
-    const table = [row(101, 1, 100, T1, "orphaned helper"), row(102, 1, 100, BEFORE)];
+  it("claims nothing by pgid once the recorded leader is gone", () => {
+    // Newer or older, a member of the old number's group is not provably ours.
+    const table = [row(101, 1, 100, T1, "orphan or stranger"), row(102, 1, 100, BEFORE)];
+    assert.deepEqual(ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }]), []);
+  });
+
+  it("still owns an exited leader's members whose own identity was recorded", () => {
+    const table = [row(101, 1, 100, T1, "recorded helper"), row(102, 1, 100, T1, "stranger")];
+    const roots = [
+      { pid: 100, pgid: 100, started: T0 },
+      { pid: 101, pgid: 100, started: T1 },
+    ];
     assert.deepEqual(
-      ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }]).map((p) => p.pid),
+      ownedProcesses(table, roots).map((p) => p.pid),
       [101],
     );
+  });
+
+  // The re-check's repro (VC-703), kept: the whole original group exited, the
+  // number 31000 was reused by an unrelated group whose leader also exited,
+  // and only that group's orphan is left. Fabricated rows and a recording
+  // kill function: no real process is signalled.
+  it("never signals a reused group's orphan (group-reuse repro)", async () => {
+    const oldRoot = { pid: 31000, pgid: 31000, started: "Tue Oct 6 21:00:00 2026" };
+    const table = [row(32000, 1, 31000, "Wed Oct 7 00:00:00 2026", "unrelated-new-group-child")];
+    const owned = ownedProcesses(table, [oldRoot], { self: 1 });
+    assert.deepEqual(owned, []);
+    const signals = [];
+    await killExactly(owned, {
+      graceMs: 0,
+      table: async () => table,
+      kill: (pid, signal) => signals.push({ pid, signal }),
+    });
+    assert.deepEqual(signals, []);
   });
 
   it("never owns itself", () => {

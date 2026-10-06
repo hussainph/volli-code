@@ -439,10 +439,27 @@ async function doctor() {
 
 // ---- stop --------------------------------------------------------------------
 
-/** Everything we can prove we started: the Electron child, its group, its tree. */
+/**
+ * The instance's processes by identity ({pid, pgid, started}), recorded as
+ * they appear: Electron, its group while it leads it, its tree, and every
+ * still-running process recorded before. Kept in the registry so `stop` can
+ * reap an orphaned helper by its OWN identity after Electron is gone, never
+ * by the group number it once had.
+ */
+let members = [];
+
+/** Everything we can prove we started: Electron, its group and tree, and recorded members. */
 async function owned() {
   if (!electronIdentity) return [];
-  return ownedProcesses(await processTable(), [electronIdentity]);
+  return ownedProcesses(await processTable(), [electronIdentity, ...members]);
+}
+
+async function recordMembers() {
+  if (!electronIdentity || stopping) return;
+  const rows = await owned().catch(() => null);
+  if (!rows) return;
+  members = rows.map(({ pid, pgid, started }) => ({ pid, pgid, started }));
+  await registry.update(spec.id, { members }).catch(() => {});
 }
 
 async function finalize(reason, { keepScratch = false } = {}) {
@@ -623,6 +640,8 @@ async function boot() {
     seeded,
     guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
   };
+  await recordMembers();
+  setInterval(() => void recordMembers(), 10_000).unref();
   writeFileSync(L.readyFile, `${JSON.stringify(ready, null, 2)}\n`);
   transcript({ cmd: "launch", timings, memoryMb: mem?.totalMb });
   armIdle();
@@ -631,6 +650,7 @@ async function boot() {
 async function handle(cmd, args) {
   lastCommandAt = Date.now();
   armIdle();
+  void recordMembers();
   switch (cmd) {
     case "ping":
       return { id: spec.id };
