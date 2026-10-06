@@ -2,6 +2,7 @@
 import { isOperationUnavailable, type HandlerCall } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import type { DesktopRouterHandlers } from "./desktop-router";
 import type { SessionRouterHandlers } from "./index";
 import { sessionContext, sessionHandlersFrom, type LegacySessionPorts } from "./testing";
 import { LOCAL_DESKTOP_CALLER } from "./catalog";
@@ -13,7 +14,7 @@ const resourceWorkspace = () => null;
 type Ports = Omit<LegacySessionPorts, "caller" | "diagnostics">;
 
 /** Every handler, with an input its port can take. */
-function callAll(handlers: SessionRouterHandlers) {
+function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
   const sink = { emit: vi.fn(), fail: vi.fn() };
   return [
     () => handlers["sessions.create"]({} as never, CALL),
@@ -54,6 +55,8 @@ function callAll(handlers: SessionRouterHandlers) {
       ),
     () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
+    () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
+    () => handlers["worktree.trimSettings"](undefined, CALL),
   ];
 }
 
@@ -105,9 +108,10 @@ describe("sessionHandlersFrom", () => {
       writeCodeModePolicy: port as never,
       readModelPickerView: port as never,
       writeModelPickerView: port as never,
+      desktop: { "project.reorder": port as never, "worktree.trimSettings": port as never },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(15);
+    expect(port).toHaveBeenCalledTimes(17);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
       sessionId: "s",
@@ -145,7 +149,8 @@ describe("sessionHandlersFrom", () => {
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
     // 21 existing router handlers, session.history (VC-315), three queue
-    // operations, four Session reads and two log reads (VC-699).
-    expect(Object.keys(context.handlers)).toHaveLength(31);
+    // operations, four Session reads, the desktop-only tier's two (VC-608) and
+    // two log reads (VC-699).
+    expect(Object.keys(context.handlers)).toHaveLength(33);
   });
 });

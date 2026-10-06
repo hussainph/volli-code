@@ -2,7 +2,12 @@
  * The catalog's door policies at the handler map (VC-668): the router's rule,
  * transport-independent, and the desktop window's trusted identity.
  */
-import { HOST_HANDLER_KEYS, type HandlerCall } from "@volli/shared";
+import {
+  DESKTOP_HANDLER_KEYS,
+  HOST_HANDLER_KEYS,
+  PUBLIC_HANDLER_KEYS,
+  type HandlerCall,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ADMITTED } from "./handler-map";
@@ -18,10 +23,26 @@ const REFUSED = (key: string) => ({
 });
 
 describe("catalogVerdict", () => {
-  it("admits the desktop's own window and a paired device to every key the map serves", () => {
+  it("admits the desktop's own window to every key the map serves", () => {
     for (const key of HOST_HANDLER_KEYS) {
       expect(catalogVerdict(key, WINDOW), key).toBe(ADMITTED);
+    }
+  });
+
+  it("admits a paired device to every public key the map serves", () => {
+    for (const key of PUBLIC_HANDLER_KEYS) {
       expect(catalogVerdict(key, DEVICE), key).toBe(ADMITTED);
+    }
+  });
+
+  // Placement-derived policy (VC-608): a desktop-only entry is the person's,
+  // on no network door, so a paired device is refused it at the map as well
+  // as at the router, whatever its placement.
+  it("refuses a paired device every desktop-only key", () => {
+    expect(DESKTOP_HANDLER_KEYS.length).toBeGreaterThan(0);
+    for (const key of DESKTOP_HANDLER_KEYS) {
+      expect(catalogVerdict(key, DEVICE), key).toEqual(REFUSED(key));
+      expect(DESKTOP_WINDOW_POLICY.admit(key, {}, WINDOW), key).toBe(ADMITTED);
     }
   });
 

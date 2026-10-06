@@ -11,6 +11,13 @@ import * as mcp from "../mcp/session-host";
 import * as shell from "../shell/shell-notices";
 import * as resumptions from "./session-resumptions";
 import * as schedules from "../db/scheduled-resume-repo";
+import * as followUps from "../db/session-follow-up-repo";
+
+vi.mock("../db/session-follow-up-repo", () => ({
+  consumeFollowUpCleanClose: vi.fn(() => [] as string[]),
+  FOLLOW_UP_DOWNGRADE_HOLD_DETAIL:
+    "Held: an older Volli version ran since this was queued — edit or remove it",
+}));
 import type { SessionProjection } from "@volli/shared";
 import { shutdownNativeSessions } from "../host-shutdown";
 import { createSessionRuntimeLifecycle, SessionRuntimeClosingError } from "./lifecycle";
@@ -37,7 +44,10 @@ vi.mock("../host-shutdown", async (original) => {
 vi.mock("../shell/shell-notices", () => ({
   relayShellNotices: vi.fn(() => vi.fn(async () => {})),
 }));
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValue([]);
+});
 
 function deferred() {
   return Promise.withResolvers<void>();
@@ -89,6 +99,7 @@ function fixture() {
     projection: vi.fn(async () => ({ projection: {} })),
     command: vi.fn(async () => ({})),
     openNativeBindings: vi.fn(() => []),
+    reportMessageDeliveryFailure: vi.fn(async () => {}),
     recoverFollowUps: vi.fn(async () => {
       calls.push("follow-ups.recover");
     }),
@@ -169,6 +180,78 @@ function fixture() {
 }
 
 describe("Session lifecycle port ordering (replaces desktop source scans)", () => {
+  it("holds downgraded queues before boot event writes and explains them with existing Attention", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockImplementation(() => {
+      expect(f.calls).not.toContain("attachments");
+      expect(f.calls).not.toContain("follow-ups.recover");
+      return ["session"];
+    });
+    vi.mocked(f.runtime.reportMessageDeliveryFailure).mockImplementation(async (input) => {
+      expect(input).toEqual({
+        sessionId: "session",
+        commandId: "follow-up:session",
+        detail: followUps.FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
+      });
+      expect(f.calls).toContain("attachments");
+      expect(f.calls).not.toContain("follow-ups.recover");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.runtime.reportMessageDeliveryFailure).toHaveBeenCalledOnce();
+    await owner.close();
+  });
+
+  it("logs an unreadable Session queue without denying host readiness", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockImplementationOnce((_db, report) => {
+      report!("session", new Error("queue corrupt"));
+      return [];
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("unreadable follow-up queue", {
+      sessionId: "session",
+      error: expect.objectContaining({ message: "queue corrupt" }),
+    });
+    await owner.close();
+  });
+
+  it("reports an Attention failure without releasing durable holds or failing readiness", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValueOnce(["session"]);
+    vi.mocked(f.runtime.reportMessageDeliveryFailure).mockRejectedValueOnce(
+      new Error("attention unavailable"),
+    );
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to explain held follow-ups", {
+      sessionId: "session",
+      error: expect.objectContaining({ message: "attention unavailable" }),
+    });
+    await owner.close();
+  });
+
+  it("consumes the watermark even when the runtime is unavailable", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValueOnce(["session"]);
+    const owner = createSessionRuntimeLifecycle({ ...f.options, runtime: null });
+    await owner.ready();
+    expect(followUps.consumeFollowUpCleanClose).toHaveBeenCalledOnce();
+    expect(f.runtime.reportMessageDeliveryFailure).not.toHaveBeenCalled();
+    await owner.close();
+  });
+
+  it("fails readiness rather than releasing rows after a watermark read failure", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockImplementationOnce(() => {
+      throw new Error("watermark corrupt");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await expect(owner.ready()).rejects.toThrow("watermark corrupt");
+    expect(f.runtime.recoverFollowUps).not.toHaveBeenCalled();
+    await owner.close();
+  });
   it("installs quit synchronously and exposes no consumer until attachments, delegations and notices recover", async () => {
     const f = fixture();
     const gate = deferred();
@@ -589,6 +672,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       databaseFailure: { kind: "other" },
       start: vi.fn(async () => {}),
       stop: vi.fn(async (reason: string) => ({ reason, clean: true })),
+      warnIfFollowUpCleanCloseSkipped: vi.fn(),
     };
     const owner = createSessionRuntimeLifecycle({ ...f.options, host, runtime: null });
     await owner.ready();

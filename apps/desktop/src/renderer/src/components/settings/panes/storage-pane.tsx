@@ -91,6 +91,7 @@ import { toast } from "sonner";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
@@ -246,12 +247,12 @@ function BuildArtifactsSection() {
 
   React.useEffect(() => {
     let cancelled = false;
-    void window.api.worktree
-      .trimSettings()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) setTrimOnFinish(result.settings.trimOnFinish);
-        else toastError(`Couldn't load the trim setting: ${result.error}`);
+    // `worktree.trimSettings`, the desktop-only tier's read that replaced
+    // `volli:worktree-trim-settings-get` (VC-608).
+    void sessionRpcClient()
+      .worktree.trimSettings.query()
+      .then((settings) => {
+        if (!cancelled) setTrimOnFinish(settings.trimOnFinish);
       })
       .catch((error: unknown) => {
         if (!cancelled) toastError(`Couldn't load the trim setting: ${errorMessage(error)}`);

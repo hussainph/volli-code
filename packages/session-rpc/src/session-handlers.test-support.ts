@@ -27,6 +27,7 @@ import {
   type HostLogsQuery,
 } from "@volli/shared";
 
+import type { DesktopRouterHandlers } from "./desktop-router";
 import type {
   SessionAttachInput,
   SessionCreateInput,
@@ -75,6 +76,8 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
     listener: (batch: HostLogsBatch) => void,
     fail: (error: unknown) => void,
   ) => () => void;
+  /** The desktop-only tier (VC-608), for the desktop's bridge: the host map's own bodies. */
+  desktop?: Partial<DesktopRouterHandlers>;
 }
 
 function need<Port>(port: Port | undefined, message: string): Port {
@@ -89,9 +92,12 @@ const PREFERENCES = "Model Access preferences are unavailable on this transport"
 const RUNTIME = "The Session runtime is unavailable on this host";
 const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
+const BOARD = "The board is unavailable: the database did not open";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
-export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof SessionRouterContext>) {
+export function sessionHandlersFrom(
+  ports: Omit<LegacySessionPorts, keyof SessionRouterContext>,
+): SessionRouterHandlers & DesktopRouterHandlers {
   const runtime = <Method extends keyof SessionRuntime>(method: Method) => {
     const bound = ports.runtime[method];
     if (bound === undefined) throw new OperationUnavailableError(RUNTIME);
@@ -175,7 +181,13 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
     "session.answer": ({ workspaceId, args }) =>
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
-  return handlers;
+  const desktop: DesktopRouterHandlers = {
+    "project.reorder": (input, call) =>
+      need(ports.desktop?.["project.reorder"], BOARD)(input, call),
+    "worktree.trimSettings": (input, call) =>
+      need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+  };
+  return { ...handlers, ...desktop };
 }
 
 /** A Session router context from legacy ports. */

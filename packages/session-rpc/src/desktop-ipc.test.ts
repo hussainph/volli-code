@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { DESKTOP_IPC_EXPOSURE, DESKTOP_IPC_PATHS } from "./desktop-ipc";
+import { createDesktopRouter } from "./desktop-router";
 import { createSessionRouter } from "./index";
 
 describe("the desktop's IPC exposure", () => {
@@ -8,14 +9,16 @@ describe("the desktop's IPC exposure", () => {
   // exactly the procedures they publish, so nothing is served or withheld by a
   // path that does not exist.
   it("classifies every procedure the desktop's routers publish, and nothing else", () => {
-    // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
-    const published = Object.keys(createSessionRouter()._def.procedures).toSorted();
+    const published = [createSessionRouter(), createDesktopRouter()]
+      // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
+      .flatMap((router) => Object.keys(router._def.procedures))
+      .toSorted();
     expect(Object.keys(DESKTOP_IPC_EXPOSURE).toSorted()).toEqual(published);
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge
   // became router-generic, and nothing more.
-  it("serves the window exactly its Session, settings, Model Access and own-log procedures", () => {
+  it("serves the window its Session, settings, Model Access and own-log procedures, and the desktop-only tier", () => {
     expect(Object.isFrozen(DESKTOP_IPC_PATHS)).toBe(true);
     expect(DESKTOP_IPC_PATHS).toEqual([
       "settings.experiments",
@@ -44,6 +47,8 @@ describe("the desktop's IPC exposure", () => {
       "session.reconcile",
       "logs.tail",
       "logs.follow",
+      "project.reorder",
+      "worktree.trimSettings",
     ]);
   });
 

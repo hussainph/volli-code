@@ -600,9 +600,6 @@ const api = {
       invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
-    /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-    reorder: (orderedIds: string[]): Promise<ProjectMutationResult> =>
-      invoke("volli:project-reorder", orderedIds),
   },
   tickets: {
     create: (input: TicketCreateInput): Promise<TicketResult> =>
@@ -1313,9 +1310,6 @@ const api = {
      */
     trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
     trim: (): Promise<WorktreeTrimResult> => invoke("volli:worktree-trim"),
-    /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-    trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
-      invoke("volli:worktree-trim-settings-get"),
     setTrimSettings: (input: WorktreeTrimSettingsInput): Promise<WorktreeTrimSettingsResult> =>
       invoke("volli:worktree-trim-settings-set", input),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */

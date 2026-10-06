@@ -18,10 +18,15 @@ import type { IpcClientRouter } from "@volli/host-protocol/ipc";
 import type { AnyRouter } from "@trpc/server";
 
 import type { RouterProcedurePaths } from "./catalog";
+import type { DesktopRouter } from "./desktop-router";
 import type { AppRouter } from "./index";
 
-/** The routers the desktop's IPC bridge serves, composed by `src/main/session-rpc-ipc.ts`. */
-export type DesktopIpcRouters = AppRouter;
+/**
+ * The routers the desktop's IPC bridge serves, composed by
+ * `src/main/session-rpc-ipc.ts`: the Session router and the desktop-only
+ * tier's (VC-608). An area router joins here when its area moves.
+ */
+export type DesktopIpcRouters = AppRouter | DesktopRouter;
 
 /** Every procedure path those routers publish: each router's, together. */
 export type DesktopIpcRouterPath = RouterProcedurePaths<DesktopIpcRouters>;
@@ -85,6 +90,9 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "protocol.welcome": "websocket-only",
   "labDiagnostics.list": "lab-only",
   "labDiagnostics.subscribe": "lab-only",
+  // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
+  "project.reorder": "ipc",
+  "worktree.trimSettings": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;
