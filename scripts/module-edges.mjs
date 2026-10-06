@@ -21,14 +21,16 @@
  * import the same file by relative path. Test and tooling code only.
  */
 
+// A keyword, not the tail of a property, identifier or hyphenated word.
+const KEYWORD = String.raw`(?<![\w$.-])`;
 const STATIC_CONTEXTS = [
-  String.raw`\bfrom\s*`, // import … from, export … from
-  String.raw`\bimport\s*`, // side-effect import "x"
+  String.raw`${KEYWORD}from\s*`, // import … from, export … from
+  String.raw`${KEYWORD}import\s*`, // side-effect import "x"
 ];
 const CALL_CONTEXTS = [
-  String.raw`\bimport\s*\(\s*`,
-  String.raw`\brequire\s*\(\s*`,
-  String.raw`\bvi\s*\.\s*(?:mock|doMock|unmock|doUnmock|importActual|importMock)\s*(?:<[^>]*>)?\s*\(\s*`,
+  String.raw`${KEYWORD}import\s*\(\s*`,
+  String.raw`(?<![\w$-])require\s*\(\s*`, // also `module.require(…)`
+  String.raw`${KEYWORD}vi\s*\.\s*(?:mock|doMock|unmock|doUnmock|importActual|importMock)\s*(?:<[^>]*>)?\s*\(\s*`,
 ];
 const QUOTED = String.raw`"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'`;
 const TEMPLATE = String.raw`\x60(?:[^\x60\\]|\\[\s\S])*\x60`;
