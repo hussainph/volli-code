@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { listProjects } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
@@ -156,6 +157,12 @@ describe("the map", () => {
         empty["ticket.move"]({ projectId: PROJECT, ticketId: "t", toStatus: "done" }, USER),
       ),
     ).toBe("The board is unavailable: the database did not open");
+    expect(await unavailable(() => empty["project.reorder"]({ orderedIds: [] }, WINDOW))).toBe(
+      "The board is unavailable: the database did not open",
+    );
+    expect(await unavailable(() => empty["worktree.trimSettings"](undefined, WINDOW))).toBe(
+      "The board is unavailable: the database did not open",
+    );
     // The desktop serves the socket's Session reads over no network door.
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
@@ -441,6 +448,25 @@ describe("host settings", () => {
     expect(await map["modelAccess.codeModePolicy"](undefined, USER)).toEqual(codeMode);
     expect(await map["modelAccess.setPickerView"]("all", USER)).toBe("all");
     expect(await map["modelAccess.pickerView"](undefined, USER)).toBe("all");
+  });
+});
+
+// The desktop-only tier (VC-608): the bodies `volli:project-reorder` and
+// `volli:worktree-trim-settings-get` had, moved into the map unchanged.
+describe("desktop-only commands", () => {
+  it("puts the rail's projects in the order given", async () => {
+    insertProject(ctx.db, testProject({ id: "second", ticketPrefix: "SE" }));
+    expect(await handlers()["project.reorder"]({ orderedIds: ["second", PROJECT] }, WINDOW)).toBe(
+      null,
+    );
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second", PROJECT]);
+  });
+
+  it("reads the host's trim settings, defaults included", async () => {
+    expect(await handlers()["worktree.trimSettings"](undefined, WINDOW)).toMatchObject({
+      trimOnFinish: expect.any(Boolean),
+      keepPatterns: expect.any(Array),
+    });
   });
 });
 

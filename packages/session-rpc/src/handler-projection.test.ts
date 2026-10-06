@@ -10,6 +10,7 @@
  */
 import { LOCAL_DEVICE_ACTOR, type HostActor } from "@volli/host-protocol";
 import {
+  DESKTOP_HANDLER_KEYS,
   DOOR_LOCAL_CATALOG_KEYS,
   HandlerRefusedError,
   HOST_HANDLER_KEYS,
@@ -23,12 +24,19 @@ import { createBoardRouter, TICKET_RESOURCE, type BoardRouterContextPorts } from
 import {
   createCatalogBuilders,
   handlerCallOf,
+  type ProcedurePaths,
   hostAnswer,
   HostProcedureError,
   LOCAL_DESKTOP_CALLER,
   type RouterCaller,
 } from "./catalog";
 import type { ExampleAreaContextPorts } from "./example-area.test-support";
+import {
+  createDesktopRouter,
+  type DesktopRouter,
+  type DesktopRouterContextPorts,
+  type DesktopRouterHandlersCoverage,
+} from "./desktop-router";
 import type { HostRouterPaths } from "./host-router";
 import {
   createSessionRouter,
@@ -40,8 +48,12 @@ import {
 const SESSION = { sessionId: "session-1" };
 const PROJECT = "project-1";
 
-/** One valid input per served procedure path. */
-const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
+/** One valid input per served procedure path, both tiers. */
+const SAMPLE_INPUTS: {
+  readonly [Path in HostRouterPaths | ProcedurePaths<DesktopRouter["_def"]["record"]>]: unknown;
+} = {
+  "project.reorder": { orderedIds: [PROJECT] },
+  "worktree.trimSettings": undefined,
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },
@@ -137,6 +149,7 @@ function routerCallers(handlers: never) {
   return {
     session: createSessionRouter().createCaller(context),
     board: createBoardRouter().createCaller(context),
+    desktop: createDesktopRouter().createCaller(context),
   };
 }
 
@@ -146,12 +159,21 @@ describe("every router procedure projects its own handler (VC-668)", () => {
     expectTypeOf<BoardRouterContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<ExampleAreaContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<SessionRouterHandlersCoverage>().toEqualTypeOf<never>();
+    expectTypeOf<DesktopRouterContextPorts>().toEqualTypeOf<never>();
+    expectTypeOf<DesktopRouterHandlersCoverage>().toEqualTypeOf<never>();
   });
 
   it.each(HOST_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
     const { handlers, reached } = recordingHandlers();
     const callers = routerCallers(handlers);
-    const caller = key === "ticket.move" ? callers.board : callers.session;
+    // Both tiers (D-A1 = (c)): a desktop-only key is projected by the
+    // desktop router exactly as a public key is by its area's.
+    const caller =
+      key === "ticket.move"
+        ? callers.board
+        : (DESKTOP_HANDLER_KEYS as readonly string[]).includes(key)
+          ? callers.desktop
+          : callers.session;
     await drive(procedureAt(caller, key), SAMPLE_INPUTS[key]);
     expect(reached).toEqual([key]);
   });
