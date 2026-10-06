@@ -17,6 +17,9 @@ import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
+import * as agentRuntime from "@volli/agent-runtime";
+import * as shellPort from "../shell/agent-port";
+import { BackgroundShellHost } from "../shell/background-shell-host";
 import * as pi from "./pi-adapter";
 import * as runtime from "./index";
 import * as browser from "../browser/agent-port";
@@ -146,6 +149,50 @@ describe("runtime attachment assembly", () => {
     expect(read).not.toHaveBeenCalled();
     await assembled.sessionRuntime?.close();
   });
+
+  it.each(["execute", "background shell"] as const)(
+    "wires %s credential reads through environmentAsync with the Session and signal",
+    async (door) => {
+      const options = await fixture();
+      const environment = { API_TOKEN: "fixture-token" };
+      const read = vi.spyOn(options.secrets, "environmentAsync").mockResolvedValue(environment);
+      const syncRead = vi.spyOn(options.secrets, "environment").mockReturnValue({});
+      const execute = vi.spyOn(agentRuntime, "piExecutionEnv");
+      const shell = vi.spyOn(shellPort, "createAgentShellPort");
+      const assembled = createRuntimeAssembly({
+        ...options,
+        shells: new BackgroundShellHost({ publishState: vi.fn(), publishRemoved: vi.fn() }),
+      });
+      const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+      const scope = {
+        sessionId: `${door}-session`,
+        role: "project" as const,
+        rootThreadId: "thread",
+        attachmentId: "attachment",
+        projectId: "project",
+        ticketId: null,
+        workspacePath: root,
+      };
+      try {
+        // Exercise the callbacks supplied by assembly, without spawning a process.
+        let hook;
+        if (door === "execute") {
+          await native.executionEnvFactory!(root, scope);
+          hook = execute.mock.calls[0]![1]!.secretEnvironment;
+        } else {
+          native.resolveShellPort!(scope);
+          hook = shell.mock.calls[0]![0].secretEnvironment;
+        }
+        expect(read).not.toHaveBeenCalled();
+        const signal = new AbortController().signal;
+        expect(await hook!(signal)).toBe(environment);
+        expect(read).toHaveBeenCalledExactlyOnceWith(scope.sessionId, signal);
+        expect(syncRead).not.toHaveBeenCalled();
+      } finally {
+        await assembled.sessionRuntime?.close();
+      }
+    },
+  );
 
   it("binds the supplied browser before any recovery/attachment can run", async () => {
     const options = await fixture();
