@@ -366,9 +366,13 @@ export async function writeFakeLoginShell(binDir, loginPath) {
  * `main/index.ts`), so in packaged mode the DB lands at `<userData>/volli.db`
  * — a smoke that reads `dbPath` directly cannot run in this mode unchanged.
  *
- * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>, beforeLaunch?:()=>void}} opts
+ * `extraArgs` are appended after the profile switch (volli-drive passes
+ * Chromium's keychain switches so they hold from the first instruction, not
+ * only from main's own `appendSwitch`). Absent, the argv is unchanged.
+ *
+ * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>, extraArgs?:string[], beforeLaunch?:()=>void}} opts
  */
-export function launch({ dbPath, userDataDir, extraEnv = {}, beforeLaunch }) {
+export function launch({ dbPath, userDataDir, extraEnv = {}, extraArgs = [], beforeLaunch }) {
   const packagedBinary = process.env.VOLLI_SMOKE_APP_BINARY;
   const environment = launchEnvFor(dbPath, extraEnv);
   const executablePath = smokeExecutableFor(packagedBinary ?? ELECTRON, userDataDir, {
@@ -378,8 +382,8 @@ export function launch({ dbPath, userDataDir, extraEnv = {}, beforeLaunch }) {
   return _electron.launch({
     executablePath,
     args: packagedBinary
-      ? [`--user-data-dir=${userDataDir}`]
-      : [APP_DIR, `--user-data-dir=${userDataDir}`],
+      ? [`--user-data-dir=${userDataDir}`, ...extraArgs]
+      : [APP_DIR, `--user-data-dir=${userDataDir}`, ...extraArgs],
     env: environment,
   });
 }
