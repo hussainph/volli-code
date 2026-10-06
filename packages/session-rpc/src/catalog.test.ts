@@ -76,6 +76,7 @@ function fixture(caller: RouterCaller) {
       frames: [],
       before: null,
       transcript: [],
+      latestReply: null,
     })),
     history: vi.fn(async () => ({ frames: [], before: null })),
     projection: vi.fn(async () => ({ projection, throughSequence: 1 })),

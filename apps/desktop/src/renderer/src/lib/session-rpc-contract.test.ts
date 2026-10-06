@@ -80,6 +80,7 @@ function fixture() {
     frames: [frame(4)],
     before: 4,
     transcript: [],
+    latestReply: null,
   };
   const receipt = {
     id: "receipt-1",

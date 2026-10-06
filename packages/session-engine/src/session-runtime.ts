@@ -60,6 +60,7 @@ import {
   sessionRootThreadId,
 } from "./observation-translation";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
+import { replyText, transcriptDigest } from "./transcript-digest";
 import { transcriptReferenceFor } from "./transcript-tail";
 import {
   applyTranscriptDelta,
@@ -481,6 +482,19 @@ export interface SessionRuntimeSnapshot
   extends SessionRuntimeProjectionSnapshot, SessionHistoryPage {
   /** The window's own transcript artifacts, in frame order. */
   transcript: readonly SessionTranscriptArtifact[];
+  /**
+   * The current turn's latest reply as text, wherever it sits — the
+   * projection's {@link SessionProjection.latestReply}, read (VC-315). `null`
+   * when the current turn has said nothing, or the projection cannot say.
+   * Inside the window it costs nothing; above it, one artifact read.
+   */
+  latestReply: SessionLatestReply | null;
+}
+
+/** What `/copy` copies, and the transcript event it came from. */
+export interface SessionLatestReply {
+  sequence: number;
+  text: string;
 }
 
 /**
@@ -2286,7 +2300,30 @@ class DefaultSessionRuntime implements SessionRuntime {
       frames: page.frames,
       before: page.before,
       transcript,
+      latestReply: await this.#latestReply(history.projection.latestReply, page.frames),
     };
+  }
+
+  /**
+   * The current turn's latest reply, read where the projection says it is.
+   * An unreadable body is no reply rather than a failed open: the window is
+   * what the Session needs to draw, and `/copy` is only not offered.
+   */
+  async #latestReply(
+    location: SessionProjection["latestReply"],
+    frames: readonly SessionStreamFrame[],
+  ): Promise<SessionLatestReply | null> {
+    if (location === undefined) return null;
+    let artifact = frames.find(({ sequence }) => sequence === location.sequence)?.transcript;
+    if (artifact === undefined || artifact === null) {
+      try {
+        artifact = await this.ports.artifacts.read(location.reference);
+      } catch {
+        return null;
+      }
+    }
+    const text = replyText(artifact.message);
+    return text === null ? null : { sequence: location.sequence, text };
   }
 
   async history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage> {
@@ -2604,6 +2641,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           kind: "transcript.referenced",
           turnId: observation.turnId,
           reference,
+          // What this message means for the plan and the current reply, so
+          // the projection knows without reading the body back (VC-315).
+          digest: transcriptDigest(observation.message),
         });
         // The settled snapshot is durable, so the transient tail it supersedes
         // goes now — the durable message's own id is what a delta addresses, so
@@ -3370,82 +3410,148 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   /**
-   * Every event's frame, in event order, with at most
-   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} artifact reads in flight.
+   * `read` over every item, in item order, with at most
+   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} reads in flight: a window's
+   * artifact sizes, then its frames.
    *
    * A worker pool over a shared cursor rather than `Promise.all` over the whole
-   * list: the list is the Session's entire history, and one read per event all
-   * at once is the wrong shape for a long Session on a loaded machine. Each
-   * worker takes the next index, reads it, and writes the frame into that
-   * index's slot, so the result is positional regardless of which read
-   * finished first. VC-383 also stops workers before they claim another index
-   * after a read fails. The peer worker promises remain enrolled in
-   * `Promise.all`, so concurrent read failures are observed rather than
-   * becoming unhandled; its first rejection remains the snapshot's error, just
+   * list: one read per item all at once is the wrong shape for a long Session
+   * on a loaded machine. Each worker takes the next index, reads it, and writes
+   * the result into that index's slot, so the result is positional regardless
+   * of which read finished first. VC-383 also stops workers before they claim
+   * another index after a read fails. The peer worker promises remain enrolled
+   * in `Promise.all`, so concurrent read failures are observed rather than
+   * becoming unhandled; its first rejection remains the window's error, just
    * as the serial loop did — a transcript the store cannot verify is not a
    * frame to silently skip.
    */
-  async #frames(events: readonly SessionEvent[]): Promise<SessionStreamFrame[]> {
-    const frames: SessionStreamFrame[] = [];
-    frames.length = events.length;
+  async #pooled<Item, Result>(
+    items: readonly Item[],
+    read: (item: Item) => Promise<Result>,
+  ): Promise<Result[]> {
+    const results: Result[] = [];
+    results.length = items.length;
     let next = 0;
     let stopped = false;
     const worker = async (): Promise<void> => {
       for (;;) {
         if (stopped) return;
         const index = next++;
-        const event = events[index];
-        if (event === undefined) return;
+        if (index >= items.length) return;
         try {
-          frames[index] = await this.#frame(event);
+          results[index] = await read(items[index]!);
         } catch (error) {
           stopped = true;
           throw error;
         }
       }
     };
-    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, events.length);
+    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, items.length);
     await Promise.all(Array.from({ length: workers }, worker));
-    return frames;
+    return results;
   }
 
   /**
    * The newest frames strictly below `before`, inside {@link SESSION_HISTORY_WINDOW}.
    *
-   * Read backwards a chunk at a time, because the byte bound is only known once
-   * a chunk's artifacts are read: what a window costs is the chunk it stops in,
-   * never the history behind it. Each chunk is an indexed range read — event
-   * sequences are dense per Session, so "the `n` before `cursor`" is the range
-   * after `cursor - 1 - n` — and anything outside that range is dropped rather
-   * than trusted, which keeps a sparse ledger (one that skipped a retired kind)
-   * from returning a frame twice.
+   * Selected first, hydrated second (VC-315). Each candidate's size is its
+   * event envelope plus its artifact's persisted size
+   * ({@link TranscriptArtifactStore.byteLength}), so choosing the window reads
+   * no body at all, and then exactly the chosen frames are hydrated: a body
+   * outside the window is never read, and an unreadable one cannot fail it.
+   * A frame whose size the store cannot say is taken only on a page of its
+   * own, where it would have to be read anyway.
+   *
+   * Events are read backwards a chunk at a time. Each chunk is an indexed range
+   * read — event sequences are dense per Session, so "the `n` before `cursor`"
+   * is the range after `cursor - 1 - n` — and anything outside that range is
+   * dropped rather than trusted, which keeps a sparse ledger (one that skipped
+   * a retired kind) from returning a frame twice.
    */
   async #window(sessionId: string, before: number): Promise<SessionHistoryPage> {
-    const newestFirst: SessionStreamFrame[] = [];
+    const newestFirst: SessionEvent[] = [];
+    // A store without a size port is measured by reading: those frames are
+    // kept here so the hydration below does not read them twice.
+    const measured = new Map<number, SessionStreamFrame>();
     // The frames as one JSON array: its brackets, and a separator per frame.
     let bytes = 1;
-    // Every event strictly below the cursor is still unread.
+    // Every event strictly below the cursor is still unselected.
     let cursor = before;
-    while (cursor > 1 && newestFirst.length < SESSION_HISTORY_WINDOW.events) {
+    let older: number | null = null;
+    select: while (cursor > 1 && newestFirst.length < SESSION_HISTORY_WINDOW.events) {
       const want = Math.min(HISTORY_READ_CHUNK, SESSION_HISTORY_WINDOW.events - newestFirst.length);
       const afterSequence = Math.max(0, cursor - 1 - want);
       const upTo = cursor;
       const events = (
         await this.ports.engine.listEvents({ sessionId, afterSequence, limit: want })
       ).filter((event) => event.sequence > afterSequence && event.sequence < upTo);
-      const chunk = await this.#frames(events);
-      for (let index = chunk.length - 1; index >= 0; index -= 1) {
-        const frame = chunk[index]!;
-        const size = utf8.encode(JSON.stringify(frame)).length + 1;
-        if (newestFirst.length > 0 && bytes + size > SESSION_HISTORY_WINDOW.bytes) {
-          return { frames: newestFirst.toReversed(), before: frame.sequence + 1 };
+      const sizes = await this.#pooled(events, (event) => this.#frameSize(event, measured));
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index]!;
+        const size = sizes[index]!;
+        if (
+          newestFirst.length > 0 &&
+          (size === null || bytes + size + 1 > SESSION_HISTORY_WINDOW.bytes)
+        ) {
+          older = event.sequence + 1;
+          break select;
         }
-        newestFirst.push(frame);
-        bytes += size;
+        newestFirst.push(event);
+        bytes += (size ?? 0) + 1;
       }
       cursor = afterSequence + 1;
     }
-    return { frames: newestFirst.toReversed(), before: cursor > 1 ? cursor : null };
+    if (older === null && cursor > 1) older = cursor;
+    const selected = newestFirst.toReversed();
+    const frames = await this.#pooled(
+      selected,
+      async (event) => measured.get(event.sequence) ?? this.#frame(event),
+    );
+    // Persisted sizes choose the window; the bound is still checked on what
+    // was hydrated, so a size that lied cannot carry an oversized page. Trimmed
+    // from the oldest end, keeping one frame, the way the selection would have.
+    let total = 1;
+    for (const frame of frames) total += utf8.encode(JSON.stringify(frame)).length + 1;
+    while (frames.length > 1 && total > SESSION_HISTORY_WINDOW.bytes) {
+      total -= utf8.encode(JSON.stringify(frames.shift()!)).length + 1;
+      older = frames[0]!.sequence;
+    }
+    return { frames, before: older };
+  }
+
+  /**
+   * One candidate frame's size in the window's accounting: UTF-8 JSON of the
+   * frame, its artifact inlined, read from metadata. `null` when the store
+   * cannot say. A frame with no transcript is just its envelope.
+   */
+  async #frameSize(
+    event: SessionEvent,
+    measured: Map<number, SessionStreamFrame>,
+  ): Promise<number | null> {
+    const reference = transcriptReferenceFor(event);
+    const envelope = {
+      sessionId: event.sessionId,
+      sequence: event.sequence,
+      event,
+      transcript: null,
+    };
+    const bare = utf8.encode(JSON.stringify(envelope)).length;
+    if (reference === null) return bare;
+    const byteLength = this.ports.artifacts.byteLength;
+    if (byteLength === undefined) {
+      const frame = await this.#frame(event);
+      measured.set(event.sequence, frame);
+      return utf8.encode(JSON.stringify(frame)).length;
+    }
+    let artifact: number | null;
+    try {
+      artifact = await byteLength.call(this.ports.artifacts, reference);
+    } catch {
+      artifact = null;
+    }
+    if (artifact === null || !Number.isSafeInteger(artifact) || artifact < 0) return null;
+    // `null` in the envelope is the four bytes the inlined artifact replaces.
+    return bare - 4 + artifact;
   }
 
   /**

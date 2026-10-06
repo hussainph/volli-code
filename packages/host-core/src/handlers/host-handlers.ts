@@ -131,7 +131,10 @@ export interface HostHandlerSignatures {
   readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
   readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
   /** One page of older transcript, strictly below `before` (VC-315). The engine owns the bound. */
-  readonly "session.history": HostHandler<{ sessionId: string; before: number }, SessionHistoryPage>;
+  readonly "session.history": HostHandler<
+    { sessionId: string; before: number },
+    SessionHistoryPage
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot

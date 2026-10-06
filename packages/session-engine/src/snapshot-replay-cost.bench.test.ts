@@ -35,9 +35,13 @@ import {
  *
  * After it a snapshot is the projection checkpoint plus a window bounded by
  * {@link SESSION_HISTORY_WINDOW}, so the first three columns stop depending on
- * the Session's age. This probe pins that, and pins the other half of the
- * contract: paging back with `history` and resuming with `subscribe` both
- * reach every event exactly once, so the bound never hides a gap.
+ * the Session's age. The window is chosen from persisted artifact sizes and
+ * then hydrated, so the artifact reads are exactly the window's own
+ * transcript frames: not one body outside it is read, on open or on any page.
+ * This probe pins that, and pins the other half of the contract: paging back
+ * with `history` and resuming with `subscribe` both reach every event exactly
+ * once, so the bound never hides a gap. Sizes are the ticket's own 100, 1,000
+ * and 10,000 events, and the review's 500.
  *
  * Counts and bytes are asserted; times are printed (the in-memory stores make
  * them a floor, not a disk figure). The one time asserted is the review's own
@@ -49,12 +53,12 @@ import {
  * percentile of 30 KB): per turn, a start, four tool results whose sizes cycle
  * through that spread, one reply and a completion. It is written straight
  * into the log rather than through a live executor, because the in-memory
- * ledger is quadratic to append to and a 5,000-event Session would take
+ * ledger is quadratic to append to and a 10,000-event Session would take
  * minutes to grow; the runtime under test reads it exactly as it would read
  * one it had recorded.
  */
 
-const SIZES = [50, 500, 1_668, 5_000] as const;
+const SIZES = [100, 500, 1_000, 10_000] as const;
 /** A lid closed long enough to miss this many events, resumed by cursor. */
 const MISSED_BACKLOG = 1_000;
 const RESULT_CHARS = [400, 1_200, 3_000, 800, 600, 2_000, 900, 24_000] as const;
@@ -120,6 +124,8 @@ interface Seeded {
   sessionId: string;
   log: readonly SessionEvent[];
   reads: () => number;
+  /** Persisted artifact sizes asked for: metadata, not bodies. */
+  sizes: () => number;
   resetReads: () => void;
 }
 
@@ -225,11 +231,16 @@ async function seedHistory(events: number): Promise<Seeded> {
     },
   };
   let reads = 0;
+  let sizes = 0;
   const counted: TranscriptArtifactStore = {
     write: (record) => memory.write(record),
     read: (reference) => {
       reads += 1;
       return memory.read(reference);
+    },
+    byteLength: (reference) => {
+      sizes += 1;
+      return memory.byteLength!(reference);
     },
   };
   const runtime = createSessionRuntime({
@@ -248,8 +259,10 @@ async function seedHistory(events: number): Promise<Seeded> {
     sessionId,
     log,
     reads: () => reads,
+    sizes: () => sizes,
     resetReads: () => {
       reads = 0;
+      sizes = 0;
     },
   };
 }
@@ -258,6 +271,7 @@ interface Row {
   events: number;
   openFrames: number;
   openReads: number;
+  openSizes: number;
   openBytes: number;
   openMs: number;
   pages: number;
@@ -270,7 +284,7 @@ interface Row {
 }
 
 async function measure(events: number): Promise<Row> {
-  const { runtime, sessionId, log, reads, resetReads } = await seedHistory(events);
+  const { runtime, sessionId, log, reads, sizes, resetReads } = await seedHistory(events);
   const transcriptEvents = log.filter(({ payload }) => payload.kind === "transcript.referenced");
 
   // Open: the snapshot a surface reads first, as the router would serialize it.
@@ -279,6 +293,7 @@ async function measure(events: number): Promise<Row> {
   const snapshot = await runtime.snapshot({ sessionId });
   const openMs = performance.now() - started;
   const openReads = reads();
+  const openSizes = sizes();
   const openBytes = bytesOf({
     projection: snapshot.projection,
     throughSequence: snapshot.throughSequence,
@@ -290,11 +305,11 @@ async function measure(events: number): Promise<Row> {
   expect(snapshot.frames.length).toBeLessThanOrEqual(SESSION_HISTORY_WINDOW.events);
   expect(bytesOf(snapshot.frames)).toBeLessThanOrEqual(SESSION_HISTORY_WINDOW.bytes);
   expect(openBytes).toBeLessThanOrEqual(OPEN_BYTES_TARGET);
-  // Lazy hydration: one artifact per transcript frame returned, plus at most
-  // the rest of the chunk the window stopped in.
+  // Selected, then hydrated: one body per transcript frame returned, and not
+  // one more. Sizes are metadata reads, at most the chunk the window stopped in.
   const openTranscripts = snapshot.frames.filter(({ transcript }) => transcript !== null).length;
-  expect(openReads).toBeGreaterThanOrEqual(openTranscripts);
-  expect(openReads).toBeLessThan(openTranscripts + 32);
+  expect(openReads).toBe(openTranscripts);
+  expect(openSizes).toBeLessThan(openTranscripts + 32);
 
   // Scroll back to the first event: every frame exactly once, in order.
   resetReads();
@@ -312,6 +327,8 @@ async function measure(events: number): Promise<Row> {
   expect(everything.filter(({ transcript }) => transcript !== null)).toHaveLength(
     transcriptEvents.length,
   );
+  // Every body above the window read exactly once, on the page that returns it.
+  expect(pagedReads).toBe(transcriptEvents.length - openTranscripts);
 
   // Resume after a lid-close: every missed event once, strictly after the cursor.
   const afterSequence = Math.max(0, events - MISSED_BACKLOG);
@@ -337,6 +354,7 @@ async function measure(events: number): Promise<Row> {
     events,
     openFrames: snapshot.frames.length,
     openReads,
+    openSizes,
     openBytes,
     openMs,
     pages: pages.length,
@@ -356,13 +374,13 @@ describe("session snapshot and replay cost (VC-315)", () => {
     const rows: Row[] = [];
     for (const events of SIZES) rows.push(await measure(events));
 
-    // Flat: the open of a 5,000-event Session costs what a 500-event one does.
-    const [, at500, , at5000] = rows;
+    // Flat: the open of a 10,000-event Session costs what a 500-event one does.
+    const [, at500, , at10000] = rows;
     // Not equal: where the window's edge falls in the turn cycle moves by a
     // frame or two between ages, which is the whole of the difference.
-    expect(at5000!.openFrames).toBeLessThanOrEqual(at500!.openFrames * 1.1);
-    expect(at5000!.openBytes).toBeLessThanOrEqual(at500!.openBytes * 1.1);
-    expect(at5000!.openReads).toBeLessThanOrEqual(at500!.openReads * 1.1);
+    expect(at10000!.openFrames).toBeLessThanOrEqual(at500!.openFrames * 1.1);
+    expect(at10000!.openBytes).toBeLessThanOrEqual(at500!.openBytes * 1.1);
+    expect(at10000!.openReads).toBeLessThanOrEqual(at500!.openReads * 1.1);
     expect(at500!.openMs).toBeLessThanOrEqual(OPEN_MS_TARGET);
 
     // eslint-disable-next-line no-console -- the probe's numbers ARE the deliverable
@@ -371,12 +389,13 @@ describe("session snapshot and replay cost (VC-315)", () => {
         "",
         "[snapshot-replay-cost] open = snapshot; scroll = history pages to the first event; " +
           `resume = subscribe after missing ${MISSED_BACKLOG} events`,
-        "  events | open frames | open reads | open bytes | open ms | pages | max page | full log  | resume frames | resume bytes | resume ms",
+        "  events | open frames | open reads | open sizes | open bytes | open ms | pages | max page | full log  | resume frames | resume bytes | resume ms",
         ...rows.map((row) =>
           [
             String(row.events).padStart(8),
             String(row.openFrames).padStart(11),
             String(row.openReads).padStart(10),
+            String(row.openSizes).padStart(10),
             kb(row.openBytes).padStart(10),
             row.openMs.toFixed(1).padStart(7),
             String(row.pages).padStart(5),

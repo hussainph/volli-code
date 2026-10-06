@@ -17,7 +17,12 @@ import type { HostFeature } from "./handshake";
 export const HOST_BASE_OPERATIONS = ["protocol.welcome"] as const;
 
 export const HOST_FEATURE_OPERATIONS = {
-  /** The Session router's own commands and reads, by Session id (VC-663). */
+  /**
+   * The Session router's own commands and reads, by Session id (VC-663).
+   * `session.history` joined before any independently released Client
+   * negotiated this set (VC-315): a snapshot is a bounded window, and paging
+   * above it is part of reading a Session at all.
+   */
   sessions: [
     "sessions.create",
     "sessions.attach",

@@ -96,7 +96,14 @@ function ledger(options: { ignoresCancel?: boolean } = {}) {
   const runtime: SessionRuntime = {
     snapshot: async () => {
       reads.push("snapshot");
-      return { projection, throughSequence: frames.length, frames: [...frames], before: null, transcript: [] };
+      return {
+        projection,
+        throughSequence: frames.length,
+        frames: [...frames],
+        before: null,
+        transcript: [],
+        latestReply: null,
+      };
     },
     history: async () => ({ frames: [], before: null }),
     projection: async () => {

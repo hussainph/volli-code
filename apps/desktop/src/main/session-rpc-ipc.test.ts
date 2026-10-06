@@ -121,6 +121,7 @@ function runtimeFixture(): {
           throughSequence: 0,
           frames: [],
           transcript: [],
+          latestReply: null,
         } as never;
       },
       history: async ({ before }) => {

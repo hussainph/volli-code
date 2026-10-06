@@ -265,6 +265,7 @@ function snapshot(): SessionRuntimeSnapshot {
     frames: [frame(4)],
     before: null,
     transcript: [],
+    latestReply: null,
   };
 }
 
@@ -694,7 +695,11 @@ describe("Session tRPC router", () => {
       },
     };
     const caller = createSessionRouter().createCaller(
-      sessionContext({ caller: LOCAL_DESKTOP_CALLER, runtime, diagnostics: new RpcDiagnosticLog() }),
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
     );
 
     await expect(caller.session.snapshot({ sessionId: "session-1" })).resolves.toMatchObject({
@@ -742,7 +747,11 @@ describe("Session tRPC router", () => {
         history: async () => pageWith(value) as never,
       };
       const caller = createSessionRouter().createCaller(
-        sessionContext({ caller: LOCAL_DESKTOP_CALLER, runtime, diagnostics: new RpcDiagnosticLog() }),
+        sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime,
+          diagnostics: new RpcDiagnosticLog(),
+        }),
       );
       await expect(
         caller.session.history({ sessionId: "session-1", before: 3 }),
@@ -756,7 +765,11 @@ describe("Session tRPC router", () => {
       history: async () => pageWith(plain, { message: { id: "m", parts: [] } }) as never,
     };
     const caller = createSessionRouter().createCaller(
-      sessionContext({ caller: LOCAL_DESKTOP_CALLER, runtime, diagnostics: new RpcDiagnosticLog() }),
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
     );
     await expect(
       caller.session.history({ sessionId: "session-1", before: 3 }),

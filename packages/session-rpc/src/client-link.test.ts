@@ -78,6 +78,7 @@ function ledger() {
       frames: [...frames],
       before: null,
       transcript: [],
+      latestReply: null,
     }),
     history: async () => ({ frames: [], before: null }),
     projection: async () => ({ projection, throughSequence: frames.length }),

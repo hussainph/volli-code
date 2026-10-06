@@ -16,6 +16,7 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionHistoryPage,
+  type SessionLatestReply,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
   type SessionStreamFrame,
@@ -271,7 +272,10 @@ export interface SessionRouterHandlers {
   readonly "modelAccess.pickerView": HostHandler<void, ModelPickerView>;
   readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
   readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
-  readonly "session.history": HostHandler<{ sessionId: string; before: number }, SessionHistoryPage>;
+  readonly "session.history": HostHandler<
+    { sessionId: string; before: number },
+    SessionHistoryPage
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -1448,6 +1452,8 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
+  // The plan as it stands, whatever part of the transcript a surface holds (VC-315).
+  if (source.todoList !== undefined) projection.todoList = source.todoList;
   if (source.liveExecutor !== undefined) {
     projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
     // Derived from the same attachment in the same branch, so the identity a
@@ -1484,10 +1490,12 @@ function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPa
 function rendererSnapshot(snapshot: SessionRuntimeSnapshot): RendererSessionHistoryPage & {
   projection: SessionPresentationProjection;
   throughSequence: number;
+  latestReply: SessionLatestReply | null;
 } {
   return {
     ...rendererProjection(snapshot),
     ...rendererHistoryPage(snapshot),
+    latestReply: snapshot.latestReply,
   };
 }
 
