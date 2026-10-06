@@ -15,10 +15,15 @@
  *    `<releaseBase>/<releaseTag>/<name>`, downloaded and checked before it is
  *    kept.
  * 2. **No release assets** (the manifest is missing, as in `vp dev`, or has
- *    `assets: []`, as local and CI builds do): only the dev source, a local
- *    tarball path as `gh run download … -n volli-hostd-linux-x64` leaves it,
- *    checked against its own `.sha256` (dev builds only, the owner's
- *    2026-10-07 allowance: it guards against a torn copy, not a forger).
+ *    `assets: []`, as local and CI builds do): only the dev source, local
+ *    tarballs as `gh run download … -n volli-hostd-linux-x64` (or a Mac's
+ *    `node apps/hostd/scripts/package.mjs`) leaves them, each checked
+ *    against its own `.sha256` (dev builds only, the owner's 2026-10-07
+ *    allowance: it guards against a torn copy, not a forger).
+ *
+ * **What a build can install** (`supportedTargets`) follows from the same
+ * sources: the pinned assets' targets (VC-701's manifest carries linux and,
+ * from VC-700 PR 1c, darwin, each x64 and arm64), else the dev tarballs'.
  */
 import { createHash } from "node:crypto";
 import {
@@ -30,7 +35,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
@@ -95,11 +100,27 @@ export function parseHostdReleasePin(value: unknown): HostdReleasePin | null {
   return { version, releaseTag: `v${version}`, assets };
 }
 
-/** The targets this build can install: the pinned assets, or the dev source's. */
-export function supportedTargets(pin: HostdReleasePin | null): readonly string[] {
-  return pin === null || pin.assets.length === 0
-    ? DEFAULT_SUPPORTED_TARGETS
-    : pin.assets.map((asset) => asset.target);
+/**
+ * The targets this build can install: the pinned assets', or, with none
+ * pinned, the dev tarballs' (named `volli-hostd-<version>-<target>.tar.gz`),
+ * or the CI artifact's when no dev tarball is named either.
+ */
+export function supportedTargets(
+  pin: HostdReleasePin | null,
+  devTarballs: readonly string[] = [],
+): readonly string[] {
+  if (pin !== null && pin.assets.length > 0) return pin.assets.map((asset) => asset.target);
+  const dev = [
+    ...new Set(
+      devTarballs.flatMap((path) => {
+        const target = /^volli-hostd-.+-((?:linux|darwin)-(?:x64|arm64))\.tar\.gz$/u.exec(
+          basename(path),
+        )?.[1];
+        return target === undefined ? [] : [target];
+      }),
+    ),
+  ];
+  return dev.length > 0 ? dev : DEFAULT_SUPPORTED_TARGETS;
 }
 
 export interface HostdArtifact {
@@ -144,8 +165,8 @@ export interface ArtifactRequest {
   readonly cacheDir: string;
   /** The signed app's pin; `null` when the build has none (dev). */
   readonly pin: HostdReleasePin | null;
-  /** Dev builds without release assets: a local tarball, `.sha256` beside it. */
-  readonly devTarball?: string | null;
+  /** Dev builds without release assets: local tarballs, each `.sha256` beside it; the one named for the target is used. */
+  readonly devTarballs?: readonly string[];
   readonly releaseBaseUrl?: string;
   readonly fetch?: typeof fetch;
   readonly logger: InstallLogger;
@@ -163,12 +184,11 @@ export async function resolveArtifact(
   };
 
   if (pin === null || pin.assets.length === 0) {
-    const tarball = request.devTarball ?? null;
+    const tarball = (request.devTarballs ?? []).find((path) => basename(path) === fileName) ?? null;
     if (tarball === null) {
       return {
         kind: "artifact-unavailable",
-        detail:
-          "This build carries no hostd release assets; give it a local tarball (dev builds only).",
+        detail: `This build carries no hostd release assets; give it a local ${fileName} (dev builds only).`,
       };
     }
     let expected: string | null;

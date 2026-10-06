@@ -234,6 +234,17 @@ export function describeSystem(facts: ProbeFacts): string[] {
   return [system || facts.kernel, arch, ...memory];
 }
 
+/**
+ * When a host this check found would come up on its own, for the checklist's
+ * facts: a Mac's host is the person's launchd agent, so it starts when they
+ * log in to it (not at boot with nobody logged in; VC-700 PR 1c, v1 ruling).
+ * A Linux host's unit starts at boot (a user unit through lingering, which
+ * `start` turns on or asks for); `null` says nothing.
+ */
+export function describeStartup(facts: Pick<ProbeFacts, "launchd">, host: string): string | null {
+  return facts.launchd ? `Starts when you log in to ${host}` : null;
+}
+
 /** Compares dotted versions numerically; a prerelease sorts before its release. */
 function versionParts(value: string): { parts: number[]; pre: string | undefined } {
   const [core, pre] = value.replace(/^v/u, "").split("-", 2) as [string, string | undefined];

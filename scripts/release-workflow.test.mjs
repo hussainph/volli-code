@@ -58,6 +58,124 @@ test("tag and owner-button releases require both architecture builds and verifie
     { arch: "x64", runner: "ubuntu-24.04" },
     { arch: "arm64", runner: "ubuntu-24.04-arm" },
   ]);
+  assert.deepEqual(workflow.jobs["hostd-darwin"].strategy.matrix.include, [
+    { arch: "arm64", runner: "macos-15" },
+    { arch: "x64", runner: "macos-15-intel" },
+  ]);
+});
+
+test("hostd-darwin runs exactly when the Linux build does", () => {
+  const darwin = workflow.jobs["hostd-darwin"];
+  const linux = workflow.jobs.hostd;
+  assert.deepEqual(darwin.needs, linux.needs);
+  assert.equal(darwin.if, linux.if);
+  assert.equal(darwin.strategy["fail-fast"], false);
+  assert.equal(darwin["runs-on"], "${{ matrix.runner }}");
+  for (const result of ["success", "failure", "skipped", "cancelled"]) {
+    for (const event of ["push", "workflow_dispatch"]) {
+      const ctx = { event, dryRun: true, results: { "hostd-ref": result } };
+      assert.equal(enabled("hostd-darwin", ctx), enabled("hostd", ctx));
+    }
+  }
+});
+
+test("hostd-darwin pins Node to .nvmrc, packages natively, probes and uploads", () => {
+  const steps = workflow.jobs["hostd-darwin"].steps;
+  const index = (name) => {
+    const at = steps.findIndex((step) => step.name === name);
+    assert.ok(at >= 0, `missing step: ${name}`);
+    return at;
+  };
+  const checkout = steps[0];
+  assert.equal(checkout.with.ref, "${{ needs.hostd-ref.outputs.ref }}");
+  assert.equal(checkout.with["persist-credentials"], false);
+  const setup = steps[index("Setup Vite+")];
+  assert.match(setup.uses, /^voidzero-dev\/setup-vp@[0-9a-f]{40}$/);
+  assert.deepEqual(setup.with, { "node-version-file": ".nvmrc", "run-install": false });
+  // Every third-party action is pinned to a full commit SHA.
+  for (const action of steps.filter((step) => step.uses)) {
+    assert.match(action.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+  }
+  const pnpm = steps[index("Enable pinned pnpm")].run;
+  assert.match(pnpm, /corepack" enable --install-directory "\$RUNNER_TEMP\/pnpm-bin" pnpm/);
+  assert.match(pnpm, /packageManager/);
+  const arch = steps[index("Check runner architecture")];
+  assert.equal(arch.env.ARCH, "${{ matrix.arch }}");
+  assert.match(arch.run, /test "\$\(node -p process.arch\)" = "\$ARCH"/);
+  assert.match(arch.run, /test "\$\(node -p process.platform\)" = darwin/);
+  assert.match(arch.run, /process.versions.node.*\.nvmrc/);
+  // The same host-only install and integration test the Linux image runs.
+  const linuxBuild = readFileSync(
+    new URL("../apps/hostd/scripts/ci-build-artifact.sh", import.meta.url),
+    "utf8",
+  );
+  const install = steps[index("Host-only install")].run;
+  assert.equal(
+    install,
+    "pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile",
+  );
+  assert.ok(linuxBuild.replace(/ \\\n\s+/g, " ").includes(install));
+  const integration = steps[index("Hostd integration test")].run;
+  assert.match(integration, /src\/session-runtime\.integration\.test\.ts/);
+  assert.match(linuxBuild, /src\/session-runtime\.integration\.test\.ts/);
+  const pack = steps[index("Package and probe hostd")].run;
+  assert.match(pack, /node apps\/hostd\/scripts\/package\.mjs --out "\$RUNNER_TEMP\/hostd"/);
+  assert.match(pack, /bash apps\/hostd\/scripts\/ci-boot-artifact\.sh "\$RUNNER_TEMP\/hostd"/);
+  assert.ok(index("Enable pinned pnpm") > index("Setup Vite+"));
+  assert.ok(index("Check runner architecture") < index("Host-only install"));
+  assert.ok(index("Host-only install") < index("Hostd integration test"));
+  assert.ok(index("Hostd integration test") < index("Package and probe hostd"));
+  const upload = steps[index("Upload architecture assets")];
+  assert.ok(index("Package and probe hostd") < index("Upload architecture assets"));
+  assert.equal(upload.with.name, "hostd-darwin-${{ matrix.arch }}");
+  assert.equal(
+    upload.with.path,
+    "${{ runner.temp }}/hostd/*.tar.gz\n${{ runner.temp }}/hostd/*.tar.gz.sha256\n",
+  );
+  assert.equal(upload.with["if-no-files-found"], "error");
+  const guardStep = steps[index("Guard release version")];
+  const linuxGuard = workflow.jobs.hostd.steps.find(
+    (step) => step.name === "Guard release version",
+  );
+  assert.deepEqual(guardStep, linuxGuard);
+});
+
+test("hostd-assets needs both platforms' builds and downloads exactly their artifacts", () => {
+  const assets = workflow.jobs["hostd-assets"];
+  assert.deepEqual(assets.needs, ["hostd-ref", "hostd", "hostd-darwin"]);
+  const both = { "hostd-ref": "success", hostd: "success", "hostd-darwin": "success" };
+  for (const event of ["push", "workflow_dispatch"]) {
+    for (const dryRun of [true, false]) {
+      assert.equal(enabled("hostd-assets", { event, dryRun, results: both }), true);
+      for (const job of ["hostd", "hostd-darwin"]) {
+        for (const result of ["failure", "cancelled", "skipped"]) {
+          const results = { ...both, [job]: result };
+          assert.equal(enabled("hostd-assets", { event, dryRun, results }), false);
+        }
+      }
+      assert.equal(
+        enabled("hostd-assets", { event, dryRun, results: both, cancelled: true }),
+        false,
+      );
+    }
+  }
+  const downloads = assets.steps.filter((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.deepEqual(
+    downloads.map((step) => step.with),
+    ["hostd-linux-*", "hostd-darwin-*"].map((pattern) => ({
+      pattern,
+      "merge-multiple": true,
+      path: "${{ runner.temp }}/hostd-assets",
+    })),
+  );
+  const generate = assets.steps.findIndex(
+    (step) => step.name === "Generate verified manifest and SHA256SUMS",
+  );
+  assert.ok(downloads.every((step) => assets.steps.indexOf(step) < generate));
+  const sign = assets.steps.find((step) => step.id === "provenance");
+  assert.match(sign.with["subject-path"], /hostd-assets\/\*\.tar\.gz$/m);
 });
 
 test("failed preparation blocks hostd/release; dry builds have read-only contents", () => {
@@ -69,7 +187,8 @@ test("failed preparation blocks hostd/release; dry builds have read-only content
   assert.equal(enabled("hostd-ref", ctx), false);
   assert.equal(enabled("release", ctx), false);
   assert.equal(enabled("hostd", { ...ctx, results: { "hostd-ref": "failure" } }), false);
-  for (const job of ["hostd-ref", "hostd", "hostd-assets", "dry-run-desktop"]) {
+  assert.equal(enabled("hostd-darwin", { ...ctx, results: { "hostd-ref": "failure" } }), false);
+  for (const job of ["hostd-ref", "hostd", "hostd-darwin", "hostd-assets", "dry-run-desktop"]) {
     assert.equal(workflow.jobs[job].permissions.contents, "read");
     const commands = workflow.jobs[job].steps.map((step) => step.run ?? "").join("\n");
     assert.doesNotMatch(commands, /\bsecurity\b|\bgit (?:tag|push)\b|gh release (?:create|upload)/);
@@ -104,6 +223,8 @@ test("desktop gets the same generated pin; release cleanup keeps hostd assets an
   const precreate = steps.findIndex((step) => step.name === "Pre-create GitHub release");
   assert.ok(download >= 0 && download < verify && verify < precreate);
   assert.match(steps[verify].run, /shasum -a 256 -c SHA256SUMS/);
+  // 4 tarballs + 4 sidecars + SHA256SUMS + manifest + provenance.
+  assert.match(steps[verify].run, /\[ "\$\{#hostdFiles\[@\]\}" -eq 11 \]/);
   assert.match(steps[verify].run, /hostd-provenance.sigstore.json/);
   assert.match(steps[verify].run, /hostd release asset missing or empty/);
 });

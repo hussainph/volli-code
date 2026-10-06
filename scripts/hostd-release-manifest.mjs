@@ -6,7 +6,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const arches = ["x64", "arm64"];
+// Every release carries exactly these hostd targets, in this order (Linux
+// first, as it shipped first). The desktop's artifact parser derives a target
+// from each asset's name, so a target added here flows through to it.
+export const targets = Object.freeze([
+  Object.freeze({ platform: "linux", arch: "x64" }),
+  Object.freeze({ platform: "linux", arch: "arm64" }),
+  Object.freeze({ platform: "darwin", arch: "arm64" }),
+  Object.freeze({ platform: "darwin", arch: "x64" }),
+]);
+const targetList = targets.map(({ platform, arch }) => `${platform} ${arch}`).join(", ");
 
 export function releaseVersion(root = repositoryRoot) {
   const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -24,12 +33,12 @@ export function releaseVersion(root = repositoryRoot) {
   return version;
 }
 
-function assetName(version, arch) {
-  return `volli-hostd-${version}-linux-${arch}.tar.gz`;
+function assetName(version, { platform, arch }) {
+  return `volli-hostd-${version}-${platform}-${arch}.tar.gz`;
 }
 
-// Shared by generation and desktop copying: release inputs must contain both
-// exact-version Linux targets. An empty local manifest is never a release input.
+// Shared by generation and desktop copying: release inputs must contain every
+// exact-version target above. An empty local manifest is never a release input.
 export function validateReleaseManifest(manifest, version) {
   if (
     manifest?.schemaVersion !== 1 ||
@@ -38,24 +47,28 @@ export function validateReleaseManifest(manifest, version) {
   ) {
     throw new Error("Hostd manifest schema/version/releaseTag mismatch");
   }
-  if (!Array.isArray(manifest.assets) || manifest.assets.length !== arches.length) {
-    throw new Error("Hostd manifest requires exactly linux x64 and arm64 assets");
+  if (!Array.isArray(manifest.assets) || manifest.assets.length !== targets.length) {
+    throw new Error(`Hostd manifest requires exactly these assets: ${targetList}`);
   }
-  const assets = arches.map((arch) => {
-    const asset = manifest.assets.find((entry) => entry?.arch === arch);
+  const assets = targets.map((target) => {
+    const { platform, arch } = target;
+    const matches = manifest.assets.filter(
+      (entry) => entry?.platform === platform && entry?.arch === arch,
+    );
+    const asset = matches.length === 1 ? matches[0] : undefined;
     if (
-      asset?.platform !== "linux" ||
-      asset.name !== assetName(version, arch) ||
+      asset === undefined ||
+      asset.name !== assetName(version, target) ||
       typeof asset.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(asset.sha256)
     ) {
-      throw new Error(`Invalid hostd manifest asset: linux ${arch}`);
+      throw new Error(`Invalid hostd manifest asset: ${platform} ${arch}`);
     }
     if (asset.size !== undefined && (!Number.isSafeInteger(asset.size) || asset.size <= 0)) {
       throw new Error(`Invalid hostd asset size: ${asset.name}`);
     }
     return {
-      platform: "linux",
+      platform,
       arch,
       name: asset.name,
       sha256: asset.sha256,
@@ -67,7 +80,7 @@ export function validateReleaseManifest(manifest, version) {
 
 export async function generateHostdReleaseManifest(assetsDir, root = repositoryRoot) {
   const version = releaseVersion(root);
-  const names = arches.map((arch) => assetName(version, arch));
+  const names = targets.map((target) => assetName(version, target));
   const required = names.flatMap((name) => [name, `${name}.sha256`]);
   const allowed = new Set([...required, "SHA256SUMS", "hostd-release-manifest.json"]);
   const entries = readdirSync(assetsDir);
@@ -93,7 +106,7 @@ export async function generateHostdReleaseManifest(assetsDir, root = repositoryR
     }
     const sha256 = hash.digest("hex");
     if (sha256 !== match[1]) throw new Error(`SHA256 mismatch: ${name}`);
-    assets.push({ platform: "linux", arch: arches[index], name, sha256, size });
+    assets.push({ ...targets[index], name, sha256, size });
   }
   const manifest = validateReleaseManifest(
     { schemaVersion: 1, version, releaseTag: `v${version}`, assets },

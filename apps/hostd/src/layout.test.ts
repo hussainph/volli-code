@@ -6,6 +6,7 @@ describe("the managed install's layout", () => {
   it("puts a system install where the runbook did", () => {
     expect(installLayout("system", { home: "/home/alice", env: {} })).toEqual({
       mode: "system",
+      manager: "systemd",
       root: "/opt/volli-hostd",
       releasesDir: "/opt/volli-hostd/releases",
       currentLink: "/opt/volli-hostd/current",
@@ -19,6 +20,8 @@ describe("the managed install's layout", () => {
       devicesFile: "/etc/volli-hostd-devices",
       socketPath: "/run/volli-hostd.sock",
       serviceUser: "volli",
+      agentPlist: null,
+      logFile: null,
     });
   });
 
@@ -37,5 +40,25 @@ describe("the managed install's layout", () => {
       socketPath: "/state/volli-hostd/volli.sock",
       serviceUser: null,
     });
+  });
+
+  // VC-700 PR 1c: a Mac's host is the person's launchd agent.
+  it("puts a Mac's install under launchd, its data where the plist template did", () => {
+    const layout = installLayout("user", { home: "/Users/alice", env: {}, platform: "darwin" });
+    expect(layout).toMatchObject({
+      manager: "launchd",
+      root: "/Users/alice/.local/share/volli-hostd",
+      dataDir: "/Users/alice/Library/Application Support/volli-hostd",
+      unitDir: "/Users/alice/Library/LaunchAgents",
+      agentPlist: "/Users/alice/Library/LaunchAgents/com.volli.hostd.plist",
+      logFile: "/Users/alice/Library/Logs/volli-hostd.log",
+      keyFile: "/Users/alice/.config/volli-hostd/session-secrets.key",
+      devicesFile: "/Users/alice/Library/Application Support/volli-hostd/enrolled-devices.json",
+      socketPath: "/Users/alice/Library/Application Support/volli-hostd/volli.sock",
+      serviceUser: null,
+    });
+    expect(
+      installLayout("system", { home: "/Users/alice", env: {}, platform: "darwin" }).manager,
+    ).toBe("launchd");
   });
 });

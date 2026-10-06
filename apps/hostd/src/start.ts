@@ -18,11 +18,23 @@
  * asks logind for lingering itself (many distributions let a user turn on
  * their own); when that is refused it answers `linger-required`, naming the
  * one command that needs sudo, and starts nothing.
+ *
+ * **On a Mac** the host is the person's launchd agent (`install --user`),
+ * a `Background` session agent, and starting it is `launchctl bootstrap
+ * user/<uid>`: the per-user domain an SSH login reaches, which outlives that
+ * login and the person's GUI logout alike. The plist's session type keeps a
+ * GUI login from loading a second copy into `gui/<uid>`. A restart boots it
+ * out first (and out of `gui/<uid>`, where a hand-loaded template may sit),
+ * so there is only ever one, and re-reads its plist. A failure comes back
+ * with the last lines of `~/Library/Logs/volli-hostd.log`. After the Mac
+ * restarts, the agent loads again at the person's next login.
  */
 import type { HostdStartResult, InstallMode } from "@volli/host-install/contract";
 
+import { closeSync, fstatSync, openSync, readSync, renameSync, statSync } from "node:fs";
+
 import type { InstallLayout } from "./layout";
-import { SERVICE_UNIT, SOCKET_UNIT } from "./layout";
+import { LAUNCHD_LABEL, SERVICE_UNIT, SOCKET_UNIT } from "./layout";
 import {
   lingerOf,
   ManagementError,
@@ -62,6 +74,13 @@ export async function runStart(
 ): Promise<HostdStartResult> {
   const { layout, run } = ports;
   const { mode } = command;
+  const launchd = layout.manager === "launchd";
+  if (mode === "system" && launchd) {
+    throw new ManagementError(
+      "system-unsupported",
+      "A Mac runs volli-hostd as your launchd agent: start --user.",
+    );
+  }
   if (mode === "system" && ports.uid() !== ROOT_UID) {
     throw new ManagementError("not-root", "start --system runs as root (sudo).", [], 77);
   }
@@ -77,7 +96,9 @@ export async function runStart(
   }
 
   let linger: boolean | null = null;
-  if (mode === "user") {
+  // Where a Mac's agent runs: the per-user domain an SSH login reaches.
+  const domain: LaunchdDomain | null = launchd ? "user" : null;
+  if (mode === "user" && !launchd) {
     const login = ports.login();
     linger = lingerOf(run, login);
     if (linger !== true) {
@@ -108,21 +129,58 @@ export async function runStart(
   let { report, ok } = await matches();
   const restarted = !ok || !releaseStarted;
   if (restarted) {
-    const units = mode === "system" ? [SERVICE_UNIT, SOCKET_UNIT] : [SERVICE_UNIT];
-    must(run, "systemctl", systemctlArgs(mode, "stop", ...units));
-    const started = run("systemctl", systemctlArgs(mode, "start", ...units.toReversed()));
-    if (started.code !== 0) {
-      // The common start failure: the job failed at once. The journal says why.
-      throw new ManagementError(
-        "start-failed",
-        "volli-hostd did not start.",
-        journalTail(run, mode),
-      );
+    // The process serving before this restart, if one was: what answers after
+    // it must be another, or an old host still holding the port (one launchd
+    // would not stop, a hand-started one) would pass for the new release.
+    const replaced = report.verdict === "serving" ? report.status!.pid : null;
+    const isReplacement = () => replaced === null || report.status?.pid !== replaced;
+    if (domain !== null) {
+      // One agent only: out of both domains, then in. A bootout that fails is
+      // fine only when the job is verifiably gone from that domain.
+      for (const each of ["gui", "user"] as const) {
+        const target = launchdTarget(each, ports.uid());
+        const out = run("launchctl", ["bootout", target]);
+        if (out.code !== 0 && run("launchctl", ["print", target]).code === 0) {
+          throw new ManagementError(
+            "start-failed",
+            `Couldn't stop the volli-hostd already loaded in ${each}/${ports.uid()}; it is still running.`,
+            lines(out.stderr),
+          );
+        }
+      }
+      // Bounded: the agent's log is launchd's to write and nobody else's to rotate.
+      rotateLog(layout.logFile!);
+      // A person's `launchctl disable` would refuse the bootstrap.
+      run("launchctl", ["enable", launchdTarget(domain, ports.uid())]);
+      const bootstrapped = run("launchctl", [
+        "bootstrap",
+        `${domain}/${ports.uid()}`,
+        layout.agentPlist!,
+      ]);
+      if (bootstrapped.code !== 0) {
+        throw new ManagementError("start-failed", "volli-hostd did not start.", [
+          ...lines(bootstrapped.stderr),
+          ...logTail(layout),
+        ]);
+      }
+    } else {
+      const units = mode === "system" ? [SERVICE_UNIT, SOCKET_UNIT] : [SERVICE_UNIT];
+      must(run, "systemctl", systemctlArgs(mode, "stop", ...units));
+      const started = run("systemctl", systemctlArgs(mode, "start", ...units.toReversed()));
+      if (started.code !== 0) {
+        // The common start failure: the job failed at once. The journal says why.
+        throw new ManagementError(
+          "start-failed",
+          "volli-hostd did not start.",
+          journalTail(run, mode),
+        );
+      }
     }
     const deadline = ports.now() + command.timeoutMs;
     for (;;) {
       ({ report, ok } = await matches());
-      if (ok) break;
+      if (ok && isReplacement()) break;
+      ok = false;
       if (report.verdict === "refusing" && report.status?.version === managed.version) {
         const database = report.status.database;
         throw new ManagementError(
@@ -132,18 +190,25 @@ export async function runStart(
             : "volli-hostd is up but refusing to serve.",
         );
       }
-      if (unitState(run, mode).active === "failed") {
+      if (
+        domain !== null
+          ? agentFailed(run, domain, ports.uid())
+          : unitState(run, mode).active === "failed"
+      ) {
         throw new ManagementError(
           "start-failed",
           "volli-hostd did not start.",
-          journalTail(run, mode),
+          domain !== null ? logTail(layout) : journalTail(run, mode),
         );
       }
       if (ports.now() >= deadline) {
         throw new ManagementError(
           "start-timeout",
           `volli-hostd did not serve within ${Math.round(command.timeoutMs / 1000)} s.`,
-          [report.detail ?? report.verdict, ...journalTail(run, mode)],
+          [
+            report.detail ?? report.verdict,
+            ...(domain !== null ? logTail(layout) : journalTail(run, mode)),
+          ],
         );
       }
       await ports.sleep(POLL_MS);
@@ -163,6 +228,68 @@ export async function runStart(
     listen: { host: listener.host, port: listener.port },
     linger,
   };
+}
+
+type LaunchdDomain = "gui" | "user";
+
+/** The agent's service target in a domain: `gui/501/com.volli.hostd`. */
+function launchdTarget(domain: LaunchdDomain, uid: number): string {
+  return `${domain}/${uid}/${LAUNCHD_LABEL}`;
+}
+
+/** Whether launchd says the agent exited non-zero and is not running again. */
+function agentFailed(run: RunTool, domain: LaunchdDomain, uid: number): boolean {
+  const printed = run("launchctl", ["print", launchdTarget(domain, uid)]);
+  if (printed.code !== 0) return false;
+  const state = /^\s*state = (.+)$/mu.exec(printed.stdout)?.[1]?.trim();
+  const exit = /^\s*last exit code = (\d+)/mu.exec(printed.stdout)?.[1];
+  return state !== "running" && exit !== undefined && exit !== "0";
+}
+
+function lines(text: string): string[] {
+  return text.trim().split("\n").filter(Boolean).slice(-10);
+}
+
+/** Past this, the agent's log is set aside at the next (re)start: one generation, `.1`. */
+export const AGENT_LOG_MAX_BYTES = 10 * 1024 * 1024;
+/** How much of the log's end a failure's detail reads: never the whole file. */
+const LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * Sets a grown log aside before launchd reopens it: launchd appends to
+ * `StandardErrorPath` forever and rotates nothing. Only while the agent is
+ * booted out, so no writer holds the old file.
+ */
+export function rotateLog(path: string, maxBytes = AGENT_LOG_MAX_BYTES): void {
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return;
+  }
+  if (size > maxBytes) renameSync(path, `${path}.1`);
+}
+
+/** The agent's last log lines (`StandardErrorPath`), for the log under Details: its tail only. */
+export function logTail(layout: InstallLayout, tailBytes = LOG_TAIL_BYTES): string[] {
+  let fd: number;
+  try {
+    fd = openSync(layout.logFile!, "r");
+  } catch {
+    return [];
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, tailBytes);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const tail = buffer.toString("utf8").split("\n");
+    // A cut first line is a fragment, not a line.
+    if (length < size) tail.shift();
+    return tail.filter(Boolean).slice(-20);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** The unit's last journal lines, for the log under Details. */

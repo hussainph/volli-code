@@ -134,15 +134,16 @@ describe("hostd's board feed and resource port (VC-565)", () => {
 describe("hostd's listener limits", () => {
   const MIB = 1024 * 1024;
 
-  it("are tight, valid, and bound the worst case to 584 MiB", () => {
+  it("let a desktop open every project, and bound the worst case to 544 MiB", () => {
     const limits = HOSTD_LISTENER_LIMITS;
     expect(() => validateListenerLimits(limits)).not.toThrow();
     expect(limits).toMatchObject({
-      maxConnections: 8,
-      maxSubscriptions: 8,
-      maxFrameBytes: 4 * MIB,
-      maxReplayBytes: 4 * MIB,
-      maxOutboundBytes: 8 * MIB,
+      maxConnections: 32,
+      handshakeBurst: 32,
+      maxSubscriptions: 4,
+      maxFrameBytes: 2 * MIB,
+      maxReplayBytes: 1.5 * MIB,
+      maxOutboundBytes: 4 * MIB,
       maxInboundBytes: 1 * MIB,
     });
     // A full resume and the frame behind it fit what one connection may hold unsent.
@@ -153,7 +154,7 @@ describe("hostd's listener limits", () => {
       limits.maxOutboundBytes +
       limits.maxSubscriptions * 2 * limits.maxReplayBytes +
       limits.maxInboundBytes;
-    expect(limits.maxConnections * perConnection).toBe(584 * MIB);
+    expect(limits.maxConnections * perConnection).toBe(544 * MIB);
   });
 
   it("serve a literal loopback address only, never a name", () => {
