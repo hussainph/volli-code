@@ -1769,6 +1769,25 @@ describe("isAmbiguousBoardFailure", () => {
 
 // ---- T5 under latency ------------------------------------------------------------------------
 
+/** Each command sent took effect exactly once, and nothing took effect that was not sent. */
+function expectEachSentOnce(host: FakeHost): void {
+  const sent = new Set(
+    host.callsTo("moveTickets").map(({ input }) => (input as { commandId: string }).commandId),
+  );
+  expect([...host.effects.keys()].toSorted()).toEqual([...sent].toSorted());
+  expect([...host.effects.values()].every((count) => count === 1)).toBe(true);
+}
+
+/** Gives each successive call of `method` its own trip to the host, in order, then none. */
+function reorderTrips(host: FakeHost, method: "moveTickets", trips: readonly number[]): void {
+  const send = host[method].bind(host);
+  let call = 0;
+  host[method] = (input) => {
+    host.methodLatency[method] = { request: trips[call++] ?? 0 };
+    return send(input);
+  };
+}
+
 describe("a burst of drags under latency (T5)", () => {
   // The person's drags, ~10 ms apart: five different cards across columns,
   // then a reorder of a card already moved. Between them another writer edits
@@ -1787,104 +1806,114 @@ describe("a burst of drags under latency (T5)", () => {
     { at: 45, id: "I" },
   ];
 
-  it.each([
+  const shapes: [string, Latency, (readonly number[])?][] = [
     ["150 ms on every call and on the feed", { request: 150, reply: 150, feed: 150 }],
     ["the feed ahead of the reply", { request: 150, reply: 150, feed: 0 }],
     ["the feed behind the reply", { request: 150, reply: 0, feed: 150 }],
     ["all of it on the way back", { request: 0, reply: 150, feed: 150 }],
-  ])("never rubber-bands a card, and reads once (%s)", async (_shape, latency) => {
-    // The rowless edits arrive inside one 50 ms coalescing window.
-    const { host, sync, paints, view } = harness({ readCoalesceMs: 50 });
-    host.latency = latency;
-    const opening = sync.open("p1");
-    await vi.advanceTimersByTimeAsync(300);
-    await opening;
-    const start = Date.now();
+    // Each send's trip to the host differs, so a later send would overtake an
+    // earlier one if it were let go before the earlier one settled.
+    ["reordered delivery", { request: 150, reply: 150, feed: 150 }, [300, 0, 220, 10, 150, 0]],
+  ];
 
-    // What the person has made after k drags: the board a local board would show.
-    const made: Ticket[][] = [host.board("p1")];
-    for (const drag of drags) {
-      made.push(moveTicket(made.at(-1)!, drag.ids[0]!, drag.to, drag.index, 0));
-    }
-    let dragged = 0;
-    const stageOfPaint: number[] = [];
-    const record = view.paint.getMockImplementation()!;
-    view.paint.mockImplementation((...args) => {
-      record(...args);
-      stageOfPaint.push(dragged);
-    });
-    const firstPaint = paints.length;
+  it.each(shapes)(
+    "never rubber-bands a card, and reads once (%s)",
+    async (_shape, latency, trips) => {
+      // The rowless edits arrive inside one 50 ms coalescing window.
+      const { host, sync, paints, view } = harness({ readCoalesceMs: 50 });
+      host.latency = { ...latency };
+      if (trips !== undefined) reorderTrips(host, "moveTickets", trips);
+      const opening = sync.open("p1");
+      await vi.advanceTimersByTimeAsync(300);
+      await opening;
+      const start = Date.now();
 
-    const writes: Promise<void>[] = [];
-    const script = [
-      ...drags.map((drag) => ({
-        at: drag.at,
-        run: () => {
-          dragged += 1;
-          writes.push(sync.moveTickets("p1", drag.ids, drag.to, drag.index));
-        },
-      })),
-      ...rowless.map(({ at, id }) => ({
-        at,
-        run: () => void host.externalRetitle("p1", id, `${id} elsewhere`, true),
-      })),
-    ].toSorted((left, right) => left.at - right.at);
-    for (const step of script) {
-      await vi.advanceTimersByTimeAsync(start + step.at - Date.now());
-      step.run();
-    }
-    // Long enough for every answer, every batch, and any confirm timeout.
-    await vi.advanceTimersByTimeAsync(10_000);
-    await Promise.all(writes);
+      // What the person has made after k drags: the board a local board would show.
+      const made: Ticket[][] = [host.board("p1")];
+      for (const drag of drags) {
+        made.push(moveTicket(made.at(-1)!, drag.ids[0]!, drag.to, drag.index, 0));
+      }
+      let dragged = 0;
+      const stageOfPaint: number[] = [];
+      const record = view.paint.getMockImplementation()!;
+      view.paint.mockImplementation((...args) => {
+        record(...args);
+        stageOfPaint.push(dragged);
+      });
+      const firstPaint = paints.length;
 
-    // Each paint, with how many drags the person had made when it showed.
-    const painted = paints
-      .slice(firstPaint)
-      .map((paint, index) => Object.assign({}, paint, { stage: stageOfPaint[index]! }));
-    expect(painted.length).toBeGreaterThan(drags.length);
+      const writes: Promise<void>[] = [];
+      const script = [
+        ...drags.map((drag) => ({
+          at: drag.at,
+          run: () => {
+            dragged += 1;
+            writes.push(sync.moveTickets("p1", drag.ids, drag.to, drag.index));
+          },
+        })),
+        ...rowless.map(({ at, id }) => ({
+          at,
+          run: () => void host.externalRetitle("p1", id, `${id} elsewhere`, true),
+        })),
+      ].toSorted((left, right) => left.at - right.at);
+      for (const step of script) {
+        await vi.advanceTimersByTimeAsync(start + step.at - Date.now());
+        step.run();
+      }
+      // Long enough for every answer, every batch, and any confirm timeout.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await Promise.all(writes);
 
-    // No rubber band: every paint shows each card exactly where the person's
-    // latest drag left it — never an older placement — so each card's
-    // sequence of placements only ever moves toward its final one.
-    const violations: string[] = [];
-    for (const paint of painted) {
-      for (const { id } of made[0]!) {
-        const shown = placement(paint.tickets, id);
-        const newest = placement(made[paint.stage]!, id);
-        if (shown !== newest) {
-          violations.push(`t+${paint.at - start}ms: ${id} at ${shown}, last put at ${newest}`);
+      // Each paint, with how many drags the person had made when it showed.
+      const painted = paints
+        .slice(firstPaint)
+        .map((paint, index) => Object.assign({}, paint, { stage: stageOfPaint[index]! }));
+      expect(painted.length).toBeGreaterThan(drags.length);
+
+      // No rubber band: every paint shows each card exactly where the person's
+      // latest drag left it — never an older placement — so each card's
+      // sequence of placements only ever moves toward its final one.
+      const violations: string[] = [];
+      for (const paint of painted) {
+        for (const { id } of made[0]!) {
+          const shown = placement(paint.tickets, id);
+          const newest = placement(made[paint.stage]!, id);
+          if (shown !== newest) {
+            violations.push(`t+${paint.at - start}ms: ${id} at ${shown}, last put at ${newest}`);
+          }
         }
       }
-    }
-    expect(violations).toEqual([]);
-    // The same claim per card, read as a walk: each placement it shows is
-    // found at or after the previous one in the history of placements the
-    // person gave it, never only behind it.
-    for (const { id } of made[0]!) {
-      const history = made.map((board) => placement(board, id));
-      let at = 0;
-      for (const paint of painted) {
-        while (at < history.length && history[at] !== placement(paint.tickets, id)) at += 1;
-        expect(at, `${id} went back to ${placement(paint.tickets, id)}`).toBeLessThan(
-          history.length,
-        );
+      expect(violations).toEqual([]);
+      // The same claim per card, read as a walk: each placement it shows is
+      // found at or after the previous one in the history of placements the
+      // person gave it, never only behind it.
+      for (const { id } of made[0]!) {
+        const history = made.map((board) => placement(board, id));
+        let at = 0;
+        for (const paint of painted) {
+          while (at < history.length && history[at] !== placement(paint.tickets, id)) at += 1;
+          expect(at, `${id} went back to ${placement(paint.tickets, id)}`).toBeLessThan(
+            history.length,
+          );
+        }
+        expect(history[at]).toBe(history.at(-1));
       }
-      expect(history[at]).toBe(history.at(-1));
-    }
 
-    // The final view is the host's board, the other writer's edits included.
-    const finalPaint = painted.at(-1)!;
-    expect(finalPaint.tickets.toSorted((l, r) => l.id.localeCompare(r.id))).toEqual(
-      host.board("p1").toSorted((l, r) => l.id.localeCompare(r.id)),
-    );
-    expect(columns(host.board("p1"))).toEqual(columns(made.at(-1)!));
-    expect(finalPaint.tickets.find(({ id }) => id === "I")?.title).toBe("I elsewhere");
-    // Each drag took effect exactly once, none failed, and the burst's three
-    // rowless changes cost one roster read.
-    expect([...host.effects.values()]).toEqual([1, 1, 1, 1, 1, 1]);
-    expect(view.failed).not.toHaveBeenCalled();
-    expect(host.callsTo("roster")).toHaveLength(1);
-  });
+      // The final view is the host's board, the other writer's edits included.
+      const finalPaint = painted.at(-1)!;
+      expect(finalPaint.tickets.toSorted((l, r) => l.id.localeCompare(r.id))).toEqual(
+        host.board("p1").toSorted((l, r) => l.id.localeCompare(r.id)),
+      );
+      expect(columns(host.board("p1"))).toEqual(columns(made.at(-1)!));
+      expect(finalPaint.tickets.find(({ id }) => id === "I")?.title).toBe("I elsewhere");
+      // Each drag sent took effect exactly once (one still queued when its card
+      // moved again collapsed into the newer one, never sent), none failed, and
+      // the burst's three rowless changes cost one roster read.
+      expectEachSentOnce(host);
+      expect(view.failed).not.toHaveBeenCalled();
+      expect(host.callsTo("roster")).toHaveLength(1);
+    },
+  );
 
   it("never rubber-bands at 150 ms through a lost first send, a failed confirmation read and a resnapshot mid-read", async () => {
     const { host, sync, paints, view } = harness({ readCoalesceMs: 50, confirmTimeoutMs: 1_000 });
@@ -1958,10 +1987,10 @@ describe("a burst of drags under latency (T5)", () => {
     );
     expect(columns(host.board("p1"))).toEqual(columns(made.at(-1)!));
     expect(finalPaint.tickets.find(({ id }) => id === "I")?.title).toBe("I elsewhere");
-    // The lost first drag was never applied, nor sent again; each other once.
-    expect(host.effects.get("cmd-1")).toBeUndefined();
-    expect(host.callsTo("moveTickets")).toHaveLength(burst.length);
-    expect([...host.effects.values()]).toEqual(Array.from({ length: burst.length - 1 }, () => 1));
+    // The lost first drag was sent again under its id and applied once,
+    // before any later drag of the board; every other drag sent applied once.
+    expect(host.effects.get("cmd-1")).toBe(1);
+    expectEachSentOnce(host);
     // The failed read was said once, and retried until one landed.
     expect(view.failed).toHaveBeenCalledExactlyOnceWith(
       "Couldn't refresh the board: host-unreachable",
@@ -1982,18 +2011,37 @@ describe("interleavings: a newer write supersedes, any proof decides, the base i
     await vi.advanceTimersByTimeAsync(0);
     const latest = sync.moveTickets("p1", ["A"], "done", 0);
     await vi.advanceTimersByTimeAsync(0);
-    await latest;
+    // The person sees the latest drag at once; its send waits for the earlier one.
+    expect(placement(last().tickets, "A")).toBe("done#0");
+    expect(host.callsTo("moveTickets")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(100);
-    await earlier;
-    // The earlier drag is superseded: never sent again, so it cannot undo Done.
+    await Promise.all([earlier, latest]);
+    // The earlier drag's retry lands first, the latest after it: Done holds.
     expect(
       host.callsTo("moveTickets").map(({ input }) => (input as { commandId: string }).commandId),
-    ).toEqual(["cmd-1", "cmd-2"]);
-    expect(host.effects.get("cmd-1")).toBeUndefined();
+    ).toEqual(["cmd-1", "cmd-1", "cmd-2"]);
+    expect(host.effects.get("cmd-1")).toBe(1);
     expect(host.effects.get("cmd-2")).toBe(1);
     expect(placement(last().tickets, "A")).toBe("done#0");
     expect(placement(host.board("p1"), "A")).toBe("done#0");
     await vi.advanceTimersByTimeAsync(10_000);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+  });
+
+  it("collapses drags queued behind an unsettled one into the latest: only it is sent next", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.moveTickets = { request: 100 };
+    const first = sync.moveTickets("p1", ["A"], "doing", 0);
+    const second = sync.moveTickets("p1", ["A"], "todo", 0);
+    const third = sync.moveTickets("p1", ["A"], "done", 0);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+    await vi.advanceTimersByTimeAsync(300);
+    await Promise.all([first, second, third]);
+    expect(
+      host.callsTo("moveTickets").map(({ input }) => (input as { commandId: string }).commandId),
+    ).toEqual(["cmd-1", "cmd-3"]);
+    expect(placement(host.board("p1"), "A")).toBe("done#0");
     expect(placement(last().tickets, "A")).toBe("done#0");
   });
 
@@ -2652,5 +2700,114 @@ describe("edges of the rules", () => {
     expect(view.adoptProject).toHaveBeenLastCalledWith(renamed);
     await vi.advanceTimersByTimeAsync(16 + 100);
     expect(host.callsTo("snapshot")).toHaveLength(3);
+  });
+});
+
+// ---- the #810 re-check's interleavings (VC-565), each a guarantee ---------------------------
+
+describe("re-check: per-aspect order, body freshness, generation-scoped reads", () => {
+  it("keeps the latest drag even when the superseded request reaches the host late", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.moveTickets = { request: 200, reply: 0 };
+    const old = sync.moveTickets("p1", ["A"], "doing", 0);
+    await vi.advanceTimersByTimeAsync(10);
+    host.methodLatency.moveTickets = { request: 0, reply: 0 };
+    const latest = sync.moveTickets("p1", ["A"], "done", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(placement(last().tickets, "A")).toBe("done#0");
+    await vi.advanceTimersByTimeAsync(200);
+    await Promise.all([old, latest]);
+    // The latest drag was sent only once the older request settled.
+    expect(placement(host.board("p1"), "A")).toBe("done#0");
+    expect(placement(last().tickets, "A")).toBe("done#0");
+  });
+
+  it("does not let a late reply to an already proved save roll a newer save back", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.updateTicket = { request: 0, reply: 200 };
+    const old = sync.updateTicket("p1", { ticketId: "A", body: "first save" });
+    await vi.advanceTimersByTimeAsync(10);
+    host.methodLatency.updateTicket = { request: 0, reply: 0 };
+    const latest = sync.updateTicket("p1", { ticketId: "A", body: "latest save" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(last().tickets.find((t) => t.id === "A")?.body).toBe("latest save");
+    await vi.advanceTimersByTimeAsync(200);
+    await Promise.all([old, latest]);
+    expect(host.board("p1").find((t) => t.id === "A")?.body).toBe("latest save");
+    expect(last().tickets.find((t) => t.id === "A")?.body).toBe("latest save");
+  });
+
+  it("does not adopt an older write's late reply over a newer write's body", async () => {
+    const { host, sync, last } = harness({ confirmTimeoutMs: 60_000 });
+    await sync.open("p1");
+    // Two saves of different fields' writes to the body: the older one's
+    // reply is the one held back.
+    host.methodLatency.updateTicket = { request: 0, reply: 300 };
+    const first = sync.updateTicket("p1", { ticketId: "A", title: "T1", body: "one" });
+    await vi.advanceTimersByTimeAsync(0);
+    host.methodLatency.updateTicket = { request: 0, reply: 0 };
+    const second = sync.updateTicket("p1", { ticketId: "A", body: "two" });
+    await vi.advanceTimersByTimeAsync(400);
+    await Promise.all([first, second]);
+    expect(last().tickets.find((t) => t.id === "A")).toMatchObject({ title: "T1", body: "two" });
+  });
+
+  it("does not lose a new generation's rowless read behind an old generation's read", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.roster = { request: 0, reply: 300 };
+    host.externalRetitle("p1", "A", "old generation", true);
+    await vi.advanceTimersByTimeAsync(16);
+    host.methodLatency.snapshot = { request: 50, reply: 0 };
+    host.requireResnapshot("p1");
+    host.externalRetitle("p1", "A", "snapshot value");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("snapshot value");
+    host.externalRetitle("p1", "A", "post snapshot rowless", true);
+    host.methodLatency.roster = { request: 0, reply: 0 };
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.board("p1").find((t) => t.id === "A")?.title).toBe("post snapshot rowless");
+    expect(last().tickets.find((t) => t.id === "A")?.title).toBe("post snapshot rowless");
+  });
+
+  it("does not put a body back for a ticket that left the board when a late reply lands", async () => {
+    const set = Map.prototype.set;
+    let bodies: Map<string, string> | undefined;
+    const spy = vi.spyOn(Map.prototype, "set").mockImplementation(function (
+      this: Map<unknown, unknown>,
+      key: unknown,
+      value: unknown,
+    ) {
+      if (key === "A" && value === "# A") bodies = this as Map<string, string>;
+      return set.call(this, key, value);
+    });
+    try {
+      const { host, sync } = harness();
+      await sync.open("p1");
+      expect(bodies?.get("A")).toBe("# A");
+      host.methodLatency.updateTicket = { request: 0, reply: 200 };
+      const save = sync.updateTicket("p1", { ticketId: "A", body: "late saved body" });
+      await vi.advanceTimersByTimeAsync(10);
+      await sync.archiveTicket("p1", "A");
+      expect(bodies?.has("A")).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await save;
+      expect(bodies?.has("A")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps a body adopted while a snapshot read was in flight over that read's older one", async () => {
+    const { host, sync, last } = harness();
+    await sync.open("p1");
+    host.methodLatency.snapshot = { request: 0, reply: 100 };
+    host.stamp("p1", [{ kind: "project", op: "upsert", id: "p1", projectId: "p1" }]);
+    await vi.advanceTimersByTimeAsync(16); // the read captures "# A"
+    sync.adoptBody("A", "# Read since");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(last().tickets.find((t) => t.id === "A")?.body).toBe("# Read since");
   });
 });

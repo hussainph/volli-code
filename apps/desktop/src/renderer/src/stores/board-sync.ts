@@ -24,11 +24,17 @@
  *   read that answers older than the base is the base's answer up to its
  *   cursor: the feed's changes after that cursor, kept while the read is in
  *   flight (compacted to the latest per entity, bounded), replay over it.
- * - **A newer write supersedes older unsent ones.** A write that sets every
- *   aspect an older write sets (the same card's position, the same fields)
- *   replaces it: the older one is never sent again, so a retry can never land
- *   after, and undo, the newer edit. A newer write that only overlaps an older
- *   one waits for it to settle, so the host applies them in the order made.
+ * - **Writes to one aspect reach the host one at a time, in the order made.**
+ *   A request already sent may land late (no network order is promised), so
+ *   a newer write to an aspect an older unsettled write sets (the same
+ *   field; any card's place on the board, since a drop index is a place among
+ *   the others) is not sent until the older one has a reply or a proof.
+ *   Writes queued behind it collapse to the latest: one still unsent that a
+ *   newer write covers is never sent at all.
+ * - **A body is never older than the newest write or read of it.** A reply's
+ *   or a proof's body is adopted only if no later write set one, and only
+ *   while its ticket is on the board; a read's only if nothing was adopted
+ *   since it began.
  * - **An outcome is decided by any proof.** A reply, a feed change naming the
  *   `commandId`, or a retry the host answers from its receipt each prove the
  *   host took the write, and the first proof settles it: its caller's side
@@ -39,6 +45,9 @@
  *   base holds its effect: the base's cursor reaches the one the host stamped
  *   it through. If the feed does not bring it in time, a confirmation read
  *   does; a read that fails is retried with backoff until one lands.
+ * - **Reads belong to a generation.** A resnapshot starts a new one: an
+ *   older generation's read in flight is dropped when it lands, and never
+ *   touches the new generation's queued work.
  * - **Followed means subscribed.** A Workspace this window follows is opened
  *   until its snapshot lands and its feed is followed: a failed open, a
  *   resnapshot or a feed that ended are retried with backoff, never left.
@@ -221,6 +230,10 @@ interface Pending {
   readonly aspects: ReadonlySet<string>;
   /** An archive, unarchive or delete: never superseded, only waited for. */
   readonly lifecycle: boolean;
+  /** This window's order of writes: a body this write sets loses to one set by a later write or read. */
+  readonly seq: number;
+  /** A create or an unarchive: its ticket may not be on the board yet when its body is adopted. */
+  readonly revives: boolean;
   /** Its optimistic edit; cleared once the base holds the effect (or it was superseded). */
   tickets?: (view: Ticket[]) => Ticket[];
   labels?: (view: Label[]) => Label[];
@@ -248,12 +261,25 @@ interface LoggedChange {
   readonly change: BoardChange;
 }
 
+/** One read in flight, owned by the generation that started it. */
+interface Reader {
+  readonly generation: number;
+  /** The feed's changes since it started, latest per entity; null when overflowed. */
+  log: Map<string, LoggedChange> | null;
+  /** Another read was asked for while this one was in flight. */
+  again: boolean;
+}
+
 interface Workspace {
   readonly projectId: string;
   readonly tickets: Map<string, TicketSummary>;
   readonly labels: Map<string, Label>;
   /** Every ticket body this window has read for this Workspace: a roster row carries none (VC-387). */
   readonly bodies: Map<string, string>;
+  /** The write (`Pending.seq`) whose body each ticket shows: an older write's never replaces it. */
+  readonly bodySeq: Map<string, number>;
+  /** When each body was adopted (this engine's adoption clock): a read begun before never replaces it. */
+  readonly bodyAt: Map<string, number>;
   /** The feed cursor the base reflects; null until the first snapshot lands. */
   cursor: string | null;
   /** The cursor of the project row this window last adopted. */
@@ -268,12 +294,10 @@ interface Workspace {
   feedFailures: number;
   openFailures: number;
   openTimer: unknown;
-  /** The feed's changes since an in-flight read started, latest per entity; null when overflowed. */
-  readLog: Map<string, LoggedChange> | null;
+  /** The current generation's read in flight, if any: an older generation's never counts. */
+  reader: Reader | null;
   readTimer: unknown;
   readFailures: number;
-  reading: boolean;
-  readAgain: boolean;
   /** The read asked for next must carry the project (a snapshot). */
   readProject: boolean;
   closed: boolean;
@@ -354,6 +378,8 @@ interface WriteSpec<Answer> {
   readonly proved?: (pending: Pending) => Answer;
   /** A retry that finds its resource gone was the removal itself (repeated delete, comment removal). */
   readonly goneMeansDone?: boolean;
+  /** A create or an unarchive: its body may be adopted ahead of its row. */
+  readonly revives?: boolean;
   /** Told the refusal's own message. */
   readonly onRefused?: (message: string) => void;
   /** The caller says a refusal itself (a per-surface command): not told to the person here. */
@@ -377,6 +403,10 @@ export class BoardSync {
   readonly #workspaces = new Map<string, Workspace>();
   /** Insertion order is the order the writes were made, and the order their edits replay. */
   readonly #pending = new Map<string, Pending>();
+  /** Writes made so far: each write's `seq`. */
+  #writes = 0;
+  /** Bodies adopted so far: the clock a body's adoption and a read's start are read on. */
+  #adoptions = 0;
 
   constructor(options: BoardSyncOptions) {
     this.#transport = options.transport;
@@ -420,6 +450,8 @@ export class BoardSync {
         tickets: new Map(),
         labels: new Map(),
         bodies: new Map(),
+        bodySeq: new Map(),
+        bodyAt: new Map(),
         cursor: null,
         projectCursor: null,
         dirty: null,
@@ -429,11 +461,9 @@ export class BoardSync {
         feedFailures: 0,
         openFailures: 0,
         openTimer: undefined,
-        readLog: null,
+        reader: null,
         readTimer: undefined,
         readFailures: 0,
-        reading: false,
-        readAgain: false,
         readProject: false,
         closed: false,
       };
@@ -446,6 +476,8 @@ export class BoardSync {
       this.#clearTimer(workspace.openTimer);
       workspace.openTimer = undefined;
     }
+    // A body adopted while the snapshot was in flight is newer than its.
+    const readAt = this.#adoptions;
     let snapshot: Awaited<ReturnType<BoardSyncTransport["snapshot"]>>;
     try {
       snapshot = await this.#transport.snapshot(projectId);
@@ -460,7 +492,7 @@ export class BoardSync {
     workspace.tickets.clear();
     for (const { body, ...summary } of snapshot.tickets) {
       workspace.tickets.set(summary.id, summary);
-      workspace.bodies.set(summary.id, body);
+      this.#readBody(workspace, summary.id, body, readAt);
       removed.delete(summary.id);
     }
     this.#forgetBodies(workspace, removed);
@@ -503,7 +535,34 @@ export class BoardSync {
   adoptBody(ticketId: string, body: string): void {
     const projectId = this.workspaceOf(ticketId);
     if (projectId === undefined) return;
-    this.#workspaces.get(projectId)!.bodies.set(ticketId, body);
+    this.#setBody(this.#workspaces.get(projectId)!, ticketId, body);
+  }
+
+  #setBody(workspace: Workspace, ticketId: string, body: string, seq?: number): void {
+    workspace.bodies.set(ticketId, body);
+    workspace.bodyAt.set(ticketId, ++this.#adoptions);
+    if (seq !== undefined) workspace.bodySeq.set(ticketId, seq);
+  }
+
+  /**
+   * Adopts a body a read answered, begun at `startedAt` on the adoption
+   * clock: never over a body adopted after the read began, which is newer.
+   */
+  #readBody(workspace: Workspace, ticketId: string, body: string, startedAt: number): void {
+    if ((workspace.bodyAt.get(ticketId) ?? 0) > startedAt) return;
+    this.#setBody(workspace, ticketId, body);
+  }
+
+  /**
+   * Adopts a body a write set (its reply's, or the one it sent, on its
+   * proof): only while its ticket is on the board (a create or unarchive may
+   * be ahead of its row), and never over a body a later write set. A ticket
+   * that left the board keeps no body, so a late reply cannot put one back.
+   */
+  #writtenBody(workspace: Workspace, pending: Pending, ticketId: string, body: string): void {
+    if (!workspace.tickets.has(ticketId) && !pending.revives) return;
+    if ((workspace.bodySeq.get(ticketId) ?? 0) > pending.seq) return;
+    this.#setBody(workspace, ticketId, body, pending.seq);
   }
 
   // ---- writes ---------------------------------------------------------------
@@ -526,6 +585,7 @@ export class BoardSync {
         },
       }),
       bodies: new Map([[CREATED, fields.body ?? ""]]),
+      revives: true,
       send: (commandId) => this.#transport.createTicket({ commandId, projectId, ...fields }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
@@ -548,7 +608,10 @@ export class BoardSync {
     await this.#write({
       projectId,
       verb: ticketIds.length === 1 ? "move ticket" : "move tickets",
-      aspects: ticketIds.map((id) => `ticket:${id}:position`),
+      // A drop index is a place among the column's cards, so every move of a
+      // board shares one aspect (moves reach the host in the order made), and
+      // each names its cards (a newer move of the same cards replaces one queued).
+      aspects: [`board:${projectId}:positions`, ...ticketIds.map((id) => `ticket:${id}:position`)],
       edit: () => ({
         tickets: (view) =>
           ticketIds.length === 1
@@ -654,6 +717,7 @@ export class BoardSync {
       }),
       // The archived row carries the host's body: it is the confirmed one.
       bodies: new Map([[archived.id, archived.body]]),
+      revives: true,
       send: (commandId) => this.#transport.unarchiveTicket({ commandId, ticketId: archived.id }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
@@ -752,18 +816,28 @@ export class BoardSync {
       projectId: spec.projectId,
       aspects: new Set(spec.aspects),
       lifecycle: spec.lifecycle === true,
+      seq: ++this.#writes,
+      revives: spec.revives === true,
       ...edit,
       bodies: new Map(spec.bodies ?? []),
       state: "queued",
       settled,
       settle,
     };
-    // Older writes this one covers will never be sent again; older ones it
-    // only overlaps are waited for, so the host applies them in order.
+    // Writes to one aspect reach the host one at a time, in the order made:
+    // a request already sent may still land late (no network order is
+    // promised), so a newer write waits until every older overlapping one has
+    // settled (a reply or a proof). An older one still queued, never sent,
+    // that this one covers collapses into it: only the latest intent is sent.
     const blockers: Pending[] = [];
-    for (const older of this.#pending.values()) {
+    for (const older of Array.from(this.#pending.values())) {
       if (older.projectId !== spec.projectId || !overlaps(older, pending)) continue;
-      if (!older.lifecycle && !pending.lifecycle && covers(pending, older)) {
+      if (
+        older.state === "queued" &&
+        !older.lifecycle &&
+        !pending.lifecycle &&
+        covers(pending, older)
+      ) {
         this.#supersede(older);
       } else if (!isSettled(older)) {
         blockers.push(older);
@@ -853,9 +927,10 @@ export class BoardSync {
     const workspace =
       pending.projectId === undefined ? undefined : this.#workspaces.get(pending.projectId);
     if (ticket != null && workspace !== undefined) {
-      // A create's reply names its id; its body is the host's own.
+      // A create's reply names its id; its body is the host's own, unless a
+      // later write or read already set a newer one, or the ticket left.
       learnCreated(pending, ticket.id);
-      workspace.bodies.set(ticket.id, ticket.body);
+      this.#writtenBody(workspace, pending, ticket.id, ticket.body);
       pending.bodies.delete(ticket.id);
     }
     if (pending.state === "accepted") {
@@ -885,7 +960,9 @@ export class BoardSync {
       return;
     }
     // The bodies the host took: a summary row never carries one (VC-387).
-    for (const [ticketId, body] of pending.bodies) workspace.bodies.set(ticketId, body);
+    for (const [ticketId, body] of pending.bodies) {
+      this.#writtenBody(workspace, pending, ticketId, body);
+    }
     if (pending.through === undefined || reaches(workspace.cursor, pending.through)) {
       this.#retire(pending);
     } else {
@@ -908,21 +985,13 @@ export class BoardSync {
     this.#pending.delete(pending.commandId);
   }
 
-  /** A newer write covers this one: never sent again, its edit gone, its caller told. */
+  /** A newer write covers this queued one: it is never sent, its edit is gone, its caller is told. */
   #supersede(pending: Pending): void {
-    if (pending.state === "accepted") return;
+    // Only a write never sent: nothing of it can reach the host.
     pending.tickets = undefined;
     pending.labels = undefined;
-    if (pending.state === "sending") {
-      // Its attempt is out: whatever it answers, it is not sent again.
-      pending.state = "superseded";
-      pending.settle();
-      this.#pending.delete(pending.commandId);
-      return;
-    }
     pending.state = "superseded";
     pending.settle();
-    pending.wake?.();
     this.#pending.delete(pending.commandId);
   }
 
@@ -1017,7 +1086,7 @@ export class BoardSync {
     for (const change of batch.changes) {
       this.#notice(workspace, change, batch.cursor);
       if (!newer) continue;
-      if (workspace.readLog !== null) this.#log(workspace, batch.cursor, change);
+      if (workspace.reader?.log != null) this.#log(workspace.reader, batch.cursor, change);
       read = this.#applyChange(workspace, change, batch.cursor) || read;
     }
     if (newer) workspace.cursor = batch.cursor;
@@ -1110,12 +1179,12 @@ export class BoardSync {
   }
 
   /** Keeps a change for the in-flight read, latest per entity, within its bound. */
-  #log(workspace: Workspace, cursor: string, change: BoardChange): void {
-    const log = workspace.readLog!;
+  #log(reader: Reader, cursor: string, change: BoardChange): void {
+    const log = reader.log!;
     const key = `${change.kind}:${change.id}`;
     log.delete(key);
     log.set(key, { cursor, change });
-    if (log.size > READ_LOG_ENTITIES) workspace.readLog = null;
+    if (log.size > READ_LOG_ENTITIES) reader.log = null;
   }
 
   /** Whether `cursor` is newer than `than`: false when either is absent or they are of different feeds. */
@@ -1127,7 +1196,11 @@ export class BoardSync {
 
   /** Drops the bodies of tickets that left the board. */
   #forgetBodies(workspace: Workspace, ticketIds: Iterable<string>): void {
-    for (const ticketId of ticketIds) workspace.bodies.delete(ticketId);
+    for (const ticketId of ticketIds) {
+      workspace.bodies.delete(ticketId);
+      workspace.bodySeq.delete(ticketId);
+      workspace.bodyAt.delete(ticketId);
+    }
   }
 
   // ---- reads ------------------------------------------------------------------
@@ -1136,8 +1209,11 @@ export class BoardSync {
   #scheduleRead(workspace: Workspace): void {
     /* v8 ignore if -- closing clears every timer that asks; only a lost race lands here. */
     if (workspace.closed) return;
-    if (workspace.reading) {
-      workspace.readAgain = true;
+    // A read this generation started is asked to go again; one an older
+    // generation started counts for nothing here (its answer is dropped).
+    const reader = workspace.reader;
+    if (reader !== null && reader.generation === workspace.generation) {
+      reader.again = true;
       return;
     }
     if (workspace.readTimer !== undefined) return;
@@ -1187,8 +1263,9 @@ export class BoardSync {
     const { projectId } = workspace;
     const generation = workspace.generation;
     const withProject = workspace.dirtyProject !== null;
-    workspace.reading = true;
-    workspace.readLog = new Map();
+    const startedAt = this.#adoptions;
+    const reader: Reader = { generation, log: new Map(), again: false };
+    workspace.reader = reader;
     let failed = false;
     try {
       const answer = withProject
@@ -1202,20 +1279,21 @@ export class BoardSync {
       // Another feed's answer (the host restarted under it): the feed's own
       // resnapshot replaces the base, never this.
       if (order === null) return;
-      if (order < 0 && workspace.readLog === null) {
+      if (order < 0 && reader.log === null) {
         // Older than the base, and too much changed meanwhile to replay: read again.
-        workspace.readAgain = true;
+        reader.again = true;
         return;
       }
-      const log = order < 0 ? [...workspace.readLog!.values()] : [];
+      const log = order < 0 ? [...reader.log!.values()] : [];
       const removed = new Set(workspace.tickets.keys());
       workspace.tickets.clear();
       for (const row of answer.tickets) {
         const { body, ...summary } = row as Ticket;
         workspace.tickets.set(summary.id, summary);
-        // A snapshot's bodies are confirmed ones; never older than one this window already holds.
+        // A snapshot's bodies are confirmed ones, never over one this window
+        // adopted after the read began, nor (read older than the base) over any it holds.
         if (withProject && (order >= 0 || !workspace.bodies.has(summary.id))) {
-          workspace.bodies.set(summary.id, body);
+          this.#readBody(workspace, summary.id, body, startedAt);
         }
       }
       workspace.labels.clear();
@@ -1247,8 +1325,9 @@ export class BoardSync {
       }
       workspace.readFailures += 1;
     } finally {
-      workspace.reading = false;
-      workspace.readLog = null;
+      // Only this read's own state: a newer generation's reader and its
+      // queued work are that generation's.
+      if (workspace.reader === reader) workspace.reader = null;
       if (!workspace.closed && workspace.generation === generation) {
         if (!failed) this.#rearmConfirms(workspace);
         if (failed && this.#needsRead(workspace)) {
@@ -1257,17 +1336,13 @@ export class BoardSync {
             this.#feedRetryDelays[
               Math.min(workspace.readFailures - 1, this.#feedRetryDelays.length - 1)
             ]!;
-          workspace.readAgain = false;
           workspace.readTimer = this.#setTimer(() => {
             workspace.readTimer = undefined;
             void this.#read(workspace);
           }, delay);
-        } else if (workspace.readAgain || (!failed && this.#dirty(workspace))) {
-          workspace.readAgain = false;
+        } else if (reader.again || (!failed && this.#dirty(workspace))) {
           this.#scheduleRead(workspace);
         }
-      } else {
-        workspace.readAgain = false;
       }
     }
   }
