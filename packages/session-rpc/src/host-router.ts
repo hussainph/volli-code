@@ -91,7 +91,9 @@ const t = initTRPC.context<HostRouterContext>().create({
  * ever reuses one, rather than letting a spread silently shadow it.
  */
 export function createHostRouter() {
+  // oxlint-disable-next-line no-underscore-dangle -- tRPC's router record door.
   const session = createSessionRouter()._def.record;
+  // oxlint-disable-next-line no-underscore-dangle -- as above.
   const board = createBoardRouter()._def.record;
   for (const namespace of Object.keys(board)) {
     if (Object.hasOwn(session, namespace)) {
