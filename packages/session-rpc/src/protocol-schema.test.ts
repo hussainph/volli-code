@@ -1,3 +1,4 @@
+import { HOST_BASE_OPERATIONS, HOST_FEATURE_OPERATIONS } from "@volli/host-protocol";
 import { CATALOG_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
@@ -19,6 +20,14 @@ const sample: Record<string, ProcedureSchema> = {
 describe("committed protocol schema projection", () => {
   it("publishes every public entry with both z.toJSONSchema directions", () => {
     const document = generateProtocolSchema();
+    expect(document.features).toEqual(HOST_FEATURE_OPERATIONS);
+    expect(document.baseOperations).toEqual(HOST_BASE_OPERATIONS);
+    for (const operation of [
+      ...document.baseOperations,
+      ...Object.values(document.features).flat(),
+    ]) {
+      expect(Object.hasOwn(document.tiers.public!, operation)).toBe(true);
+    }
     expect(Object.keys(document.tiers.public!).toSorted()).toEqual(
       CATALOG_ENTRIES.map(({ key }) => key).toSorted(),
     );

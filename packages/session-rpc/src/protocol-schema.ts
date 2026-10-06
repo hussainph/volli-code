@@ -3,7 +3,11 @@ import { boardProcedureSchemas } from "./board-router";
  * never hand-write JSON Schema. Public providers exhaust the Verb Registry;
  * desktop-only providers publish the private bridge's schemas without new rows.
  */
-import { HOST_PROTOCOL_VERSION } from "@volli/host-protocol";
+import {
+  HOST_PROTOCOL_VERSION,
+  HOST_BASE_OPERATIONS,
+  HOST_FEATURE_OPERATIONS,
+} from "@volli/host-protocol";
 import { CATALOG_ENTRIES } from "@volli/shared";
 import { z } from "zod";
 
@@ -47,5 +51,10 @@ export function generateProtocolSchema(
     throw new Error(
       `Schema/catalog mismatch: missing ${missing.map(({ key }) => key)}; extra ${extra}`,
     );
-  return { protocolVersion: HOST_PROTOCOL_VERSION, tiers };
+  return {
+    protocolVersion: HOST_PROTOCOL_VERSION,
+    baseOperations: HOST_BASE_OPERATIONS,
+    features: HOST_FEATURE_OPERATIONS,
+    tiers,
+  };
 }
