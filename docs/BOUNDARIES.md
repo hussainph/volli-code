@@ -74,7 +74,12 @@ review, not a project to execute — none of them asks anyone to build sync.
    family (VC-630; `docs/plans/host-protocol.md`, "Command catalog"), whose
    handler calls a context port the composition root wires to host-core. IPC, the agent
    socket, tools and the WebSocket project it and carry no behavior of their
-   own. The existing raw channels migrate
+   own. A command only the desktop's own window calls is a desktop-only
+   entry instead (`DESKTOP_ENTRIES`, VC-608): no public ceremony, policy from
+   its channel's VC-574 placement, additive-only, served over the generic IPC
+   bridge from the same handler map (`docs/plans/host-protocol.md`, "Both
+   tiers"; the template is `packages/session-rpc/src/desktop-router.ts`). The
+   existing raw channels migrate
    opportunistically when a surface is touched — never as a big-bang rewrite;
    under the `cloud` flag, an area's channels are deleted when that area moves.
 
