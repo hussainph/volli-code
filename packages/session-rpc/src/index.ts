@@ -143,6 +143,13 @@ export {
   type HostRouterPaths,
 } from "./host-router";
 export {
+  createDesktopRouter,
+  desktopProcedureSchemas,
+  type DesktopRouter,
+  type DesktopRouterContext,
+  type DesktopRouterHandlers,
+} from "./desktop-router";
+export {
   DESKTOP_IPC_EXPOSURE,
   DESKTOP_IPC_PATHS,
   type DesktopIpcExposure,

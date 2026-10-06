@@ -75,7 +75,63 @@
   },
   "protocolVersion": 1,
   "tiers": {
-    "desktop": {},
+    "desktop": {
+      "project.reorder": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "orderedIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "orderedIds"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "worktree.trimSettings": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "keepPatterns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "trimOnFinish": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "keepPatterns",
+            "trimOnFinish"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      }
+    },
     "public": {
       "board.archiveTicket": {
         "input": {

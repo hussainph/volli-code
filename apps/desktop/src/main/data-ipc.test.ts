@@ -208,7 +208,6 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   // thing against real `git worktree add` checkouts.
   scanTrimTargets: vi.fn(async () => ({ worktrees: [] })),
   trimAllWorktrees: vi.fn(),
-  getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
@@ -255,7 +254,6 @@ import {
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
-  getTrimSettings,
   listBranches,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -4545,11 +4543,8 @@ describe("the build-artifact channels", () => {
     expectNoDataChange();
   });
 
-  it("reads and writes the trim settings", async () => {
-    const read = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-get");
-    expect(read).toEqual({ ok: true, settings: { keepPatterns: [".env"], trimOnFinish: true } });
-    expect(vi.mocked(getTrimSettings)).toHaveBeenCalled();
-
+  // The read is `worktree.trimSettings` on the bridge (VC-608).
+  it("writes the trim settings", async () => {
     const written = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-set", {
       trimOnFinish: false,
     });
@@ -4879,13 +4874,6 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     expect(invoke<ProjectMutationResult>("volli:project-remove", { not: "a string" })).toEqual({
       ok: false,
       error: "Invalid project id",
-    });
-  });
-
-  it("single string-array-arg shape: rejects a non-array", () => {
-    expect(invoke<ProjectMutationResult>("volli:project-reorder", "not-an-array")).toEqual({
-      ok: false,
-      error: "Invalid project order",
     });
   });
 

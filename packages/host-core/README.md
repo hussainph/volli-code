@@ -777,14 +777,16 @@ change feed.
 ## The handler map
 
 `createHostHandlers(ports, services)` (`@volli/host-core/handlers`, VC-668)
-builds the host's one map from catalog key to the whole command. A
+builds the host's one map from key to the whole command: every public
+catalog key and every desktop-only key (`DESKTOP_ENTRIES`, VC-608), whose
+policy is its channel's VC-574 placement. A
 composition root calls it once with the recovered services (database, runtime,
 Sessions facade, Model Access, Automations, busy-worktree guard, and
 desktop's experiments and interrupts) and hands the same object to every door:
 the routers' `ctx.handlers`, the socket's `handlers` option (whose
 `AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
 any legacy IPC channel that still serves a catalog command. `HostHandlers` is
-total over the catalog's keys, so a missing handler fails `pnpm typecheck`; a
+total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
 service a host lacks makes its handlers throw `OperationUnavailableError`
 rather than leaving a hole.
 
