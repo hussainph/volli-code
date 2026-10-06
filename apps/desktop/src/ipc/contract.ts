@@ -849,8 +849,6 @@ export interface VolliDataIpcContract {
   "volli:project-folder-check": { args: [input: ProjectIdInput]; result: ProjectFolderResult };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
-  /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-  "volli:project-reorder": { args: [orderedIds: string[]]; result: ProjectMutationResult };
 
   "volli:ticket-create": { args: [input: TicketCreateInput]; result: TicketResult };
   "volli:ticket-move": { args: [input: TicketMoveRequest]; result: TicketsResult };
@@ -1008,8 +1006,10 @@ export interface VolliDataIpcContract {
    * untouched — pruning is the confirmed orphan cleanup's act, not this one's.
    */
   "volli:worktree-trim": { args: []; result: WorktreeTrimResult };
-  /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-  "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
+  /**
+   * Writes the preserved-configuration allowlist and the automatic-trim
+   * opt-out. Read through `worktree.trimSettings` on the bridge (VC-608).
+   */
   "volli:worktree-trim-settings-set": {
     args: [input: WorktreeTrimSettingsInput];
     result: WorktreeTrimSettingsResult;

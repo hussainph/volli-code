@@ -8,6 +8,7 @@
  * each projection checks itself against them and the router package cannot
  * import host-core (D2).
  */
+import { DESKTOP_ENTRIES, type DesktopKey } from "./desktop-entries";
 import type { TicketEventActor } from "./ticket-events";
 import {
   CATALOG_ENTRIES,
@@ -15,6 +16,7 @@ import {
   type CatalogKey,
   type CatalogKeyOf,
   type VerbEntry,
+  type VerbKey,
 } from "./verb-registry";
 
 /**
@@ -33,8 +35,22 @@ export const DOOR_LOCAL_CATALOG_KEYS = Object.freeze([
 
 export type DoorLocalCatalogKey = (typeof DOOR_LOCAL_CATALOG_KEYS)[number];
 
-/** Every key the host's handler map answers: the catalog, less what a door answers itself. */
-export type HostHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey>;
+/** The public tier's handler keys: the catalog, less what a door answers itself. */
+export type PublicHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey>;
+
+/**
+ * Every key the host's ONE handler map answers (D-A1 = (c) hybrid): the public
+ * catalog's handler keys and the desktop-only tier's (`DESKTOP_ENTRIES`,
+ * VC-608), together. The map is total over both, so a key of either tier with
+ * no handler fails `pnpm typecheck`, and promoting a desktop entry to the
+ * public tier keeps its key, and so its handler.
+ */
+export type HostHandlerKey = PublicHandlerKey | DesktopKey;
+
+type AssertNever<Type extends never> = Type;
+
+/** No desktop-only key is a Verb Registry key: one key, one tier. */
+export type DesktopKeysDisjoint = AssertNever<Extract<DesktopKey, VerbKey>>;
 
 /** The handler keys among some entries: what one router family projects from the map. */
 export type HostHandlerKeyOf<E extends VerbEntry> = Exclude<CatalogKeyOf<E>, DoorLocalCatalogKey>;
@@ -92,9 +108,20 @@ export type HostHandler<Input, Output> = (
 
 const doorLocal: readonly string[] = DOOR_LOCAL_CATALOG_KEYS;
 
-/** {@link HostHandlerKey}, at runtime, in declaration order. */
-export const HOST_HANDLER_KEYS: readonly HostHandlerKey[] = Object.freeze(
+/** {@link PublicHandlerKey}, at runtime, in declaration order. */
+export const PUBLIC_HANDLER_KEYS: readonly PublicHandlerKey[] = Object.freeze(
   CATALOG_ENTRIES.map((entry) => entry.key).filter(
     (key) => !doorLocal.includes(key),
-  ) as HostHandlerKey[],
+  ) as PublicHandlerKey[],
 );
+
+/** {@link DesktopKey}, at runtime, in declaration order. */
+export const DESKTOP_HANDLER_KEYS: readonly DesktopKey[] = Object.freeze(
+  DESKTOP_ENTRIES.map((entry) => entry.key),
+);
+
+/** {@link HostHandlerKey}, at runtime: the public tier's keys, then the desktop tier's. */
+export const HOST_HANDLER_KEYS: readonly HostHandlerKey[] = Object.freeze([
+  ...PUBLIC_HANDLER_KEYS,
+  ...DESKTOP_HANDLER_KEYS,
+]);
