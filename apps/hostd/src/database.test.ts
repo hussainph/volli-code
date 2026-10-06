@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { runDatabaseRestore, type DatabaseRestoreCommand } from "./database";
@@ -77,6 +79,40 @@ describe("stopped-host database restore", () => {
     const lock = acquireInstanceLock(root);
     lock.release();
   });
+  it("reports both preservation directories after retrying an interrupted restore", () => {
+    const child = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL(
+            "../../../packages/host-core/src/db/database-file-crash-child.test-fixture.mjs",
+            import.meta.url,
+          ),
+        ),
+        "--restore",
+        join(root, "volli.db"),
+        command.sourcePath,
+        "59",
+        "swap:finish",
+      ],
+      { encoding: "utf8", timeout: 60_000 },
+    );
+    expect(child.signal, child.stderr).toBe("SIGKILL");
+    const earlier = readdirSync(root).find((name) => name.startsWith("rolled-back-"))!;
+    expect(probe(join(root, earlier, "volli.db"))).toBe("later writes");
+    expect(probe(join(root, "volli.db"))).toBe("rollback point");
+    expect(restore()).toBe(0);
+    const current = readdirSync(root).find(
+      (name) => name.startsWith("rolled-back-") && name !== earlier,
+    )!;
+    expect(out).toContain(`This attempt's database family preserved in ${join(root, current)}`);
+    expect(out).toContain(
+      `earlier interrupted attempt preserved the pre-restore database in ${join(root, earlier)}`,
+    );
+    expect(out).toContain("Keep every rolled-back-*");
+    expect(probe(join(root, earlier, "volli.db"))).toBe("later writes");
+    expect(probe(join(root, current, "volli.db"))).toBe("rollback point");
+  }, 90_000);
   it("requires --yes before touching anything", () => {
     command.confirmed = false;
     expect(restore()).toBe(1);

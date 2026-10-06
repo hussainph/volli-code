@@ -30,6 +30,7 @@ import {
   assertNoPendingDatabaseRecovery,
   beginDatabaseRecovery,
   finishDatabaseRecovery,
+  readDatabaseRecoveryIntent,
   recoveryPendingPath,
 } from "./recovery-pending";
 
@@ -61,6 +62,47 @@ describe("durable recovery intent", () => {
     beginDatabaseRecovery(path, "retry-preserved");
     expect(synced).toEqual([recoveryPendingPath(path), directory]);
     expect(() => assertNoPendingDatabaseRecovery(path)).toThrow("interrupted");
+  });
+
+  it("names the exact hostd retry command and retains the first restore's metadata", () => {
+    const path = profile();
+    const restore = { sourcePath: join(directory!, "operator's backup.db"), schemaVersion: 59 };
+    beginDatabaseRecovery(path, "first-preserved", restore);
+    beginDatabaseRecovery(path, "retry-preserved", {
+      sourcePath: "/another-copy",
+      schemaVersion: 58,
+    });
+    expect(readDatabaseRecoveryIntent(path)).toEqual({
+      preservedDirectory: "first-preserved",
+      restore,
+    });
+    expect(() => assertNoPendingDatabaseRecovery(path)).toThrow(
+      `volli-hostd database restore --data-dir '${directory}' --from '${directory}/operator'\\''s backup.db' --schema 59 --yes`,
+    );
+  });
+
+  it.each([
+    "not JSON",
+    "null",
+    JSON.stringify({ preservedDirectory: "../outside" }),
+    JSON.stringify({ preservedDirectory: "." }),
+  ])("keeps malformed or unsafe old intent fenced without using its metadata: %s", (marker) => {
+    const path = profile();
+    writeFileSync(recoveryPendingPath(path), marker);
+    expect(readDatabaseRecoveryIntent(path)).toBeUndefined();
+    expect(() => assertNoPendingDatabaseRecovery(path)).toThrow(
+      "--from <same-source> --schema <same-schema> --yes",
+    );
+    expect(existsSync(recoveryPendingPath(path))).toBe(true);
+  });
+
+  it("ignores invalid retry fields while preserving the original evidence directory", () => {
+    const path = profile();
+    writeFileSync(
+      recoveryPendingPath(path),
+      JSON.stringify({ preservedDirectory: "first-preserved", restore: { schemaVersion: 0 } }),
+    );
+    expect(readDatabaseRecoveryIntent(path)).toEqual({ preservedDirectory: "first-preserved" });
   });
 
   it("fences marker removal only after verification completes", () => {

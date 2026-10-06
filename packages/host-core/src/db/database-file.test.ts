@@ -38,6 +38,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
   return {
     ...fs,
+    copyFileSync: vi.fn(fs.copyFileSync),
     openSync: (...args: Parameters<typeof fs.openSync>) => {
       const fd = fs.openSync(...args);
       fdPaths.set(fd, String(args[0]));
@@ -375,8 +376,8 @@ function minReader(dbPath: string): unknown {
 
 const FORWARD: DatabaseFileStep[] = [
   "swap:lock",
-  "swap:mark",
   "swap:own",
+  "swap:mark",
   "swap:set-aside:volli.db",
   "swap:set-aside:volli.db-wal",
   "swap:set-aside:volli.db-shm",
@@ -518,6 +519,53 @@ describe.each(["healthy", "damaged"] as const)("swapInStagedProfile — %s", (mo
 });
 
 describe("swapInStagedProfile — refusals", () => {
+  it.each([false, true])(
+    "a damaged-profile busy refusal creates no marker and keeps any inherited intent (%s)",
+    (inherited) => {
+      const fx = fixture();
+      const writer = openVolliDb(fx.dbPath);
+      const marker = JSON.stringify({ preservedDirectory: "earlier-attempt" });
+      if (inherited) writeFileSync(recoveryPendingPath(fx.dbPath), marker);
+      try {
+        expect(() => swap(fx, "damaged")).toThrow(DatabaseFileBusyError);
+        expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(inherited);
+        if (inherited) expect(readFileSync(recoveryPendingPath(fx.dbPath), "utf8")).toBe(marker);
+        expect(existsSync(join(fx.root, ".aside"))).toBe(false);
+        setProbe(writer, "written after busy refusal");
+      } finally {
+        writer.close();
+      }
+      if (!inherited) expect(boot(fx.dbPath)).toBe("written after busy refusal");
+      else expect(boot(fx.dbPath)).toBe("refused");
+    },
+    15_000,
+  );
+
+  it.each([false, true])(
+    "cleans only a new incomplete raw safety copy on ENOSPC (inherited intent: %s)",
+    (inherited) => {
+      const fx = fixture();
+      const original = readFileSync(fx.dbPath);
+      const wal = readFileSync(`${fx.dbPath}-wal`);
+      const earlier = join(fx.root, "earlier-attempt");
+      mkdirSync(earlier);
+      writeFileSync(join(earlier, "keep"), "earlier evidence");
+      const marker = JSON.stringify({ preservedDirectory: "earlier-attempt" });
+      if (inherited) writeFileSync(recoveryPendingPath(fx.dbPath), marker);
+      vi.mocked(copyFileSync).mockImplementationOnce((_source, target) => {
+        writeFileSync(target, "partial copy");
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      });
+      expect(() => swap(fx, "damaged")).toThrow("disk full");
+      expect(existsSync(join(fx.root, ".aside"))).toBe(false);
+      expect(readFileSync(fx.dbPath)).toEqual(original);
+      expect(readFileSync(`${fx.dbPath}-wal`)).toEqual(wal);
+      expect(readFileSync(join(earlier, "keep"), "utf8")).toBe("earlier evidence");
+      expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(inherited);
+      if (inherited) expect(readFileSync(recoveryPendingPath(fx.dbPath), "utf8")).toBe(marker);
+    },
+  );
+
   it("refuses a live writer instead of detaching it, and leaves a healthy profile as it was", () => {
     const fx = fixture();
     const writer = openVolliDb(fx.dbPath);
@@ -1069,7 +1117,19 @@ describe("restoreDatabaseFile — exact-schema box rollback", () => {
       expect(child.stdout).toContain(`SIGKILL before ${step}`);
       expect(existsSync(fx.dbPath)).toBe(true);
       expect(() => openVolliDb(fx.dbPath)).toThrow(/restore was interrupted/);
-      restoreDatabaseFile({ dbPath: fx.dbPath, sourcePath, schemaVersion: 59 });
+      const marker = JSON.parse(readFileSync(recoveryPendingPath(fx.dbPath), "utf8")) as {
+        preservedDirectory: string;
+      };
+      expect(() => openVolliDb(fx.dbPath)).toThrow(
+        `volli-hostd database restore --data-dir '${fx.root}' --from '${sourcePath}' --schema 59 --yes`,
+      );
+      const result = restoreDatabaseFile({ dbPath: fx.dbPath, sourcePath, schemaVersion: 59 });
+      expect(result.earlierPreservedDirectory).toBe(join(fx.root, marker.preservedDirectory));
+      expect(result.preservedDirectory).not.toBe(result.earlierPreservedDirectory);
+      expect(contents(join(result.earlierPreservedDirectory!, "volli.db"))).toBe("original");
+      expect(contents(join(result.preservedDirectory, "volli.db"))).toBe(
+        step === "swap:publish" ? "original" : "rollback point",
+      );
       expect(contents(fx.dbPath)).toBe("rollback point");
       expect(schemaAt(fx.dbPath)).toBe(59);
       expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(false);
@@ -1127,7 +1187,12 @@ describe("restoreDatabaseFile — exact-schema box rollback", () => {
     const fx = fixture();
     const sourcePath = rollbackSource(fx.root);
     const source = readFileSync(sourcePath);
-    const aside = restoreDatabaseFile({ dbPath: fx.dbPath, sourcePath, schemaVersion: 59 });
+    const { preservedDirectory: aside, earlierPreservedDirectory } = restoreDatabaseFile({
+      dbPath: fx.dbPath,
+      sourcePath,
+      schemaVersion: 59,
+    });
+    expect(earlierPreservedDirectory).toBeUndefined();
     expect(contents(fx.dbPath)).toBe("rollback point");
     expect(schemaAt(fx.dbPath)).toBe(59);
     expect(contents(join(aside, "volli.db"))).toBe("original");

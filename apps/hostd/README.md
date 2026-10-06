@@ -631,6 +631,12 @@ You need two things before anything is stopped or moved:
   sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db 'PRAGMA user_version;'   # the schema now
   ```
 
+Close any `sqlite3` sessions on the live database first. Check
+`df -h /var/lib /var/tmp`: the fenced restore needs about **2× the database
+size free under `D`** for staging and the raw safety copy. A cold restore also
+needs space for the extracted archive (`S`) and full copies of the current
+data and checkouts (`R`).
+
 Then run the rollback as one block. It stops at the first failed step, and
 starts nothing until the database restore and install swap have succeeded:
 
@@ -644,9 +650,10 @@ starts nothing until the database restore and install swap have succeeded:
    host-core's database swap fence, and preserves the live database family in
    a unique `rolled-back-*` directory. It atomically installs and verifies the
    source at exactly `N`, **without migration**, leaving the source unchanged.
-   Keep that preservation directory: it holds what was written since the
-   upgrade. Do not replace the command with shell moves/copies of live database
-   or fence files.
+   Keep **every `rolled-back-*` directory** until the restore is confirmed:
+   a retry can create several, and the earliest holds the writes made after
+   the rollback point. Do not replace the command with shell moves/copies of
+   live database or fence files.
 4. It swaps `P` in as `/opt/volli-hostd`, installs its units, reloads systemd
    and starts.
 
@@ -697,15 +704,37 @@ error first. For an interrupted database swap, keep the current/new install
 and retry its `database restore` command with the same `D`, `B` and `N`;
 never remove the pending marker to unblock boot. If the safety copy is missing,
 empty, damaged or at the wrong schema, restore the pre-upgrade cold copy
-([runbook, Backups](../../docs/runbooks/hostd-box.md#backups), omitting its start
-and status lines). That stages the archive in a root-owned temporary directory,
-cold-copies the current data and checkouts instead of moving the live data
-directory away, restores non-database entries (including secrets and worktrees)
-without displacing the database/fence families, and invokes the same command on
-the staged database at its recorded schema. Then run the rollback block again:
-it keeps the database at `N` with no pending marker and finishes the install
-swap. A cold restore replaces credentials too; separately preserve any secret
-key configured outside the archive and use the matching key.
+([runbook, Backups](../../docs/runbooks/hostd-box.md#backups), with `START=no`
+to leave both units stopped). That stages the archive in a root-owned temporary
+directory and cold-copies the current data and checkouts into `R` instead of
+moving the live data directory away. **Immediately after the safety copy**, it
+invokes the fenced database command on the staged database at its recorded
+schema, **before** replacing secrets, worktrees or checkouts. Only after that
+succeeds does it replace non-database entries, leaving database/fence families
+and preservation directories alone.
+
+For a cold restore error, keep both units stopped and record `D`, `B`, `N`, `S`
+and `R` from the block (subshell variables do not survive):
+
+1. **Database restore refused, with no pending marker:** nothing else was
+   replaced. The current state is untouched and saved in `R`. Fix or replace
+   the archive, or close a busy database connection; do not repeatedly retry
+   an invalid archive.
+2. **Database restore interrupted:** rerun the current/new install's same
+   command with `D`, `B`, `N` (it converges), then run the remaining replacement
+   lines from `S`. Never remove the pending marker to unblock boot.
+3. **Copy failed after a successful restore:** finish the copy lines from `S`,
+   or put all prior state back from `R`. To revert, work on a separate copy of
+   `R/data` including sidecars, checkpoint and integrity-check that database,
+   restore it at its recorded schema through the fenced command, then use
+   `R/data` and `R/checkouts` in the non-database replacement loops. Keep the
+   original `R` untouched; never copy its database/fence files over live paths.
+
+Do not blindly rerun the whole cold block or start with mismatched state.
+After the cold restore finishes, run the rollback block again: it keeps the
+database at `N` with no pending marker and finishes the install swap. A cold
+restore replaces credentials too; separately preserve any secret key
+configured outside the archive and use the matching key.
 
 If an install swap failed partway through, inspect `/opt/volli-hostd`, `P` and
 `/opt/volli-hostd.failed-*` and finish that swap before starting; do not blindly

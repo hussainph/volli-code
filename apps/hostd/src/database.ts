@@ -32,16 +32,26 @@ export function runDatabaseRestore(command: DatabaseRestoreCommand, io: Database
         "Restore requires a local data directory owned by this user, not world-writable. Run as the service user.",
       );
     lock = acquireInstanceLock(command.dataDir);
-    const aside = restoreDatabaseFile({
+    const result = restoreDatabaseFile({
       dbPath: join(command.dataDir, "volli.db"),
       sourcePath: command.sourcePath,
       schemaVersion: command.schemaVersion,
     });
-    io.out(`Restored schema ${command.schemaVersion}. Previous database preserved in ${aside}.\n`);
+    io.out(
+      `Restored schema ${command.schemaVersion}. This attempt's database family preserved in ${result.preservedDirectory}.\n`,
+    );
+    if (result.earlierPreservedDirectory !== undefined) {
+      io.out(
+        `An earlier interrupted attempt preserved the pre-restore database in ${result.earlierPreservedDirectory}.\n`,
+      );
+    }
+    io.out(
+      "Keep every rolled-back-* directory until the restore is confirmed; the earliest holds the writes made after the rollback point.\n",
+    );
     return 0;
   } catch (error) {
     io.err(
-      `volli-hostd: ${(error as Error).message}\nKeep hostd stopped. Retry with the same source and schema after fixing the error.\n`,
+      `volli-hostd: ${(error as Error).message}\nKeep hostd stopped. If a restore was interrupted, retry with the same source and schema. If it refused, fix the cause or replace the source first; see the box runbook's three error cases.\n`,
     );
     return 1;
   } finally {
