@@ -70,7 +70,15 @@ Desktop has three verb vocabularies:
 
 Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newly Done worktree at once while socket `ticket.move` left it to the 60-second retention poll; VC-629 fixed that by having both doors call one handler (`host-core/src/ticket-move.ts`). M2's area routers must not become a fourth vocabulary.
 
-**One entry per domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler each door's projection resolves to: `AGENT_VERB_TABLE` for socket verbs, one tRPC procedure for router commands. Both grow to cover human commands; no second table appears beside them. An entry carries:
+**Amended 2026-10-06 (post-M1 review), D-A1 = (c): hybrid.** This partly amends F3 and Decided 4, not the one-handler or policy rule. Every command goes through one host-core handler map (VC-668) and the policy middleware:
+
+- **Public tier:** entries a second Client calls (phone, CLI, agent) get the catalog ceremony below: output schemas, frozen feature membership/semantics and N−1 compatibility fixtures.
+- **Desktop-only tier:** channels go through VC-608's generic bridge, with policy derived from VC-574's placement class. They remain additive-only across supported version skew; no incompatible rename, removal or semantic change. They do not need public catalog ceremony merely to move out of per-channel IPC.
+- **Promotion:** before a second Client calls a desktop-only entry, make it public with its schemas, frozen features and N−1 fixtures. Both tiers must reach the same handler, checked in CI; doors never add behavior.
+
+Source: `.scratch/arch-review-m1/architecture-review-post-M1.html`, D-A1; owner approval on VC-542 (2026-10-06). The catalog builders and their legacy exceptions below describe the public tier; this is a plan amendment, not a claim that desktop-only routing has already landed.
+
+**One entry per public domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler each door's projection resolves to: `AGENT_VERB_TABLE` for socket verbs, one tRPC procedure for router commands. Both grow to cover human commands; no second table appears beside them. An entry carries:
 
 - its dot-name, `key`: one identity on every door, chosen once. A router entry's key is its procedure path (`session.snapshot`);
 - its actor policy, per door. `actor` is what the agent doors (socket, tools, CLI) judge, unchanged. A router judges `catalog.actor`, defaulting to `actor` (`catalogActorOf`), and it must be a `CatalogActor`:
@@ -221,14 +229,14 @@ When a socket verb gains a `command-id` entry, the socket door mints a `commandI
 - project only the entries whose policy admits their actors;
 - add no behavior.
 
-A procedure, socket verb or tool without an entry fails compilation, as `AGENT_VERB_TABLE` does today. The `hostApi` access mode is the WebSocket projection, and `verbTier` tiers a `hostApi`-only entry by the socket's actor rule: `any` reads, `user` coordinates, and a Role-gated verb cannot ride it. NDJSON v1 carries no command id, so when a socket verb binds a `command-id` entry the socket door mints one per request; a socket retry stays undeduplicated, as today.
+A public procedure, socket verb or tool without an entry fails compilation, as `AGENT_VERB_TABLE` does today. Desktop-only bridge channels follow the placement-class policy above, not a public registry row per channel. The `hostApi` access mode is the WebSocket projection, and `verbTier` tiers a `hostApi`-only entry by the socket's actor rule: `any` reads, `user` coordinates, and a Role-gated verb cannot ride it. NDJSON v1 carries no command id, so when a socket verb binds a `command-id` entry the socket door mints one per request; a socket retry stays undeduplicated, as today.
 
 **Migration, area by area.** It deletes per-channel IPC as each area moves:
 
 1. VC-564 lands the entry shape, the policy middleware and the tRPC projection, with the Session router as the first area. The socket projection already dispatches through `AGENT_VERB_TABLE` and is unchanged. VC-608 lands the generic IPC bridge over the same routers. The socket read verbs are not projected onto `hostApi` in VC-564 (orchestrator ruling on D4): each selects across projects and returns opaque `data`, so serving one over a Workspace-bound connection needs forced Workspace scoping and recursive JSON validation. The Session reads (`session.list/show/peek/answer`) move to VC-663 and the board reads (`board`, `ticket.list/show/events`) to VC-565, each with its `verbs.read` coverage ([Handshake](#handshake-and-capabilities)).
-2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` and its socket verbs into entries. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` already has one handler for both doors (VC-629); VC-565 makes it an entry.
-3. Renderer calls go through the generic bridge: in-process IPC with the flag off, WebSocket with it on, the same procedures either way.
-4. The same PR deletes the area's channels from `contract.ts`, `ipc-descriptors.ts` and `preload/index.ts`, with their handlers. No area keeps per-channel IPC beside its router.
+2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` into the shared handler map. Socket/CLI/agent and phone entries are public; desktop-only channels use the generic bridge and placement-class policy without a catalog rewrite. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` already has one handler for both doors (VC-629); VC-565 makes it a public entry.
+3. Renderer calls go through the generic bridge: IPC locally, WebSocket remotely, the same handler either way. D-A2 retains the Mac's Electron host pending VC-691; flag-off is an in-process link swap, not a host handoff.
+4. The same PR deletes the area's channels from `contract.ts`, `ipc-descriptors.ts` and `preload/index.ts`, with their handlers. No area keeps per-channel IPC beside its generic bridge or public router.
 
 Client-local channels (VC-574's classification) remain desktop IPC and are not catalog entries.
 
@@ -434,7 +442,8 @@ The four questions VC-630 raised are settled.
 
 1. **The desktop provisions hostd over SSH** (lens A, candidate D; VC-615). "Add a host over SSH" probes the box, uploads the hostd that exactly matches the desktop's version, installs a systemd user unit and pairs, as VS Code Remote-SSH and Zed do. Upgrades take the same path. Pairing by code (`volli-hostd pair`) remains the fallback for a host that is already running. Version-range negotiation in the hello is the safety net, not the daily path.
 2. **Every hostd, local included, runs standalone Chromium** (lens C, candidate C5; VC-619: Chromium over a CDP pipe, plus screencast). That is the one backend code path; `WebContentsView` becomes a viewer.
-   - **Parity bar.** Chromium replaces today's in-app browser panel only when it meets every point below, measured on a loopback local hostd:
+   - **Amended 2026-10-06 (post-M1 review), D-A2 = (b), pending VC-691.** The Mac's host is Electron main in menu-bar mode and retains its native `WebContentsView` backend; hostd/Chromium is for boxes. Local Chromium applies only if VC-691's launchd/keychain/TCC/signing spike reverses D-A2. The parity bar below is therefore for remote hosts, not a local-host cutover gate. Source: `.scratch/arch-review-m1/architecture-review-post-M1.html`, D-A2; owner approval on VC-542.
+   - **Parity bar.** Remote Chromium must meet every point below (backend-parameterized capability tests and measured remote interaction):
      - **Agent capabilities:** every agent browser tool verb behaves identically on both backends, with the same results and refusals, proved by the backend-parameterized suite (VC-619).
      - **Latency:** the 95th-percentile time from a person's input in the view to the screencast frame showing its effect is at most 100 ms. The view shows at least 30 frames per second while the page changes.
      - **The person's interaction:** pointer, scroll, keyboard and text input (IME included), clipboard, navigation, and taking and releasing the browser hold all work in the view as they do in the panel today.
