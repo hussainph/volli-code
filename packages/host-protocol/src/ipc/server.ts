@@ -40,9 +40,9 @@ import {
   type IpcResponse,
 } from "./wire";
 
-type UnionToIntersection<Union> = (
-  Union extends unknown ? (value: Union) => void : never
-) extends (value: infer Intersection) => void
+type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => void : never) extends (
+  value: infer Intersection,
+) => void
   ? Intersection
   : never;
 
@@ -104,7 +104,7 @@ export function createIpcServer<Routers extends AnyRouter>(
     await subscription.iterator.return?.();
   };
 
-  async function request(peer: IpcPeer, request: unknown): Promise<IpcResponse> {
+  async function handle(peer: IpcPeer, request: unknown): Promise<IpcResponse> {
     if (!isIpcRequest(request)) {
       return { ok: false, error: { code: "BAD_REQUEST", message: "Invalid IPC request" } };
     }
@@ -213,7 +213,7 @@ export function createIpcServer<Routers extends AnyRouter>(
   }
 
   return {
-    request,
+    request: handle,
     cancel(peer, subscriptionId) {
       if (typeof subscriptionId !== "string") return;
       const subscription = active.get(subscriptionId);
@@ -241,10 +241,13 @@ function routeTable(
   const routes = new Map<string, Route>();
   for (const path of served) {
     const owners = routers.filter((router) => procedureAt(router, path) !== undefined);
-    if (owners.length > 1) throw new Error(`IPC serves ${path}, which ${owners.length} routers publish`);
+    if (owners.length > 1)
+      throw new Error(`IPC serves ${path}, which ${owners.length} routers publish`);
     const router = owners[0];
+    if (router === undefined) continue;
     // oxlint-disable-next-line no-underscore-dangle -- tRPC's pinned procedure metadata.
-    if (router !== undefined) routes.set(path, { router, type: procedureAt(router, path)!._def.type });
+    const { type } = procedureAt(router, path)!._def;
+    routes.set(path, { router, type });
   }
   return routes;
 }

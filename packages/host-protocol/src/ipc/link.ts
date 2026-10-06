@@ -24,7 +24,7 @@ import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/
 // one.
 import {
   getStatusCodeFromKey,
-  type Router,
+  type Router as TRPCRouter,
   type RouterRecord,
 } from "@trpc/server/unstable-core-do-not-import";
 
@@ -64,20 +64,22 @@ export interface IpcPerformanceObserver {
 
 /** The part of a router record whose dotted paths are among `Served`. */
 export type PickServed<Record, Served extends string, Prefix extends string = ""> = {
-  [Key in keyof Record & string as Record[Key] extends AnyProcedure
-    ? `${Prefix}${Key}` extends Served
-      ? Key
-      : never
-    : Extract<Served, `${Prefix}${Key}.${string}`> extends never
-      ? never
-      : Key]: Record[Key] extends AnyProcedure
+  [
+    Key in keyof Record & string as Record[Key] extends AnyProcedure
+      ? `${Prefix}${Key}` extends Served
+        ? Key
+        : never
+      : Extract<Served, `${Prefix}${Key}.${string}`> extends never
+        ? never
+        : Key
+  ]: Record[Key] extends AnyProcedure
     ? Record[Key]
     : PickServed<Record[Key], Served, `${Prefix}${Key}.`>;
 };
 
-type UnionToIntersection<Union> = (
-  Union extends unknown ? (value: Union) => void : never
-) extends (value: infer Intersection) => void
+type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => void : never) extends (
+  value: infer Intersection,
+) => void
   ? Intersection
   : never;
 
@@ -92,7 +94,7 @@ type UnionToIntersection<Union> = (
  * the view says so once (`transformer: true`), which is what the desktop's
  * Session client used to say with a cast.
  */
-export type IpcClientRouter<Routers extends AnyRouter, Served extends string> = Router<
+export type IpcClientRouter<Routers extends AnyRouter, Served extends string> = TRPCRouter<
   {
     ctx: object;
     meta: object;

@@ -192,9 +192,11 @@ export function servedIpcContractLink<Host, Router extends AnyRouter>(
             ipcLink<Router>({
               request: async (request) =>
                 structuredClone(await served.request(peer, structuredClone(request))),
+              // The link holds its one listener for the connection's life;
+              // `close()` drops it with the rest of the connection.
               onEvent: (listener) => {
                 pushes.add(listener);
-                return () => pushes.delete(listener);
+                return pushes.delete.bind(pushes, listener);
               },
               cancel: (subscriptionId) => served.cancel(peer, subscriptionId),
             }),
@@ -202,7 +204,8 @@ export function servedIpcContractLink<Host, Router extends AnyRouter>(
         }),
         async close() {
           destroyed = true;
-          for (const listener of [...teardown]) listener();
+          pushes.clear();
+          for (const listener of teardown) listener();
           await served.close();
         },
       };

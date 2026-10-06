@@ -38,6 +38,10 @@ const toyRouter = t.router({
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Fell behind" });
       }
     }),
+  forever: t.procedure.subscription(async function* ({ signal }) {
+    yield tracked("1", { sequence: 1 });
+    await new Promise((resolve) => signal?.addEventListener("abort", resolve));
+  }),
 });
 type ToyRouter = typeof toyRouter;
 
@@ -141,6 +145,19 @@ describe("the harness's own guards", () => {
     } finally {
       await connection.close();
     }
+  });
+
+  // Closing an IPC connection is a window closing: its peer is destroyed, so
+  // the server stops every stream it still holds for it.
+  it("tears down a live IPC stream when its connection closes", async () => {
+    const connection = await ipcContractLink<ToyHost, ToyRouter>({
+      router: toyRouter,
+      createContext: (host) => ({ ...host, hello: null }),
+    }).open({ greeting: "Hi" });
+    const stream = recordSubscription((handlers) => connection.client.forever.subscribe(undefined, handlers));
+    expect(await stream.received(1)).toHaveLength(1);
+    await connection.close();
+    expect(stream.frames).toHaveLength(1);
   });
 
   it("fails a case that expected a refusal and got an answer", async () => {

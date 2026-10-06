@@ -42,9 +42,11 @@ const router = catalogLike.router({
       return value;
     })
     .mutation(({ input }) => input),
-  refuse: catalogLike.procedure.input((value: unknown) => value as string).query(({ input }) => {
-    throw new TRPCError({ code: "FORBIDDEN", message: input });
-  }),
+  refuse: catalogLike.procedure
+    .input((value: unknown) => value as string)
+    .query(({ input }) => {
+      throw new TRPCError({ code: "FORBIDDEN", message: input });
+    }),
   stream: catalogLike.procedure
     .input((value: unknown) => {
       if (value === null) throw new TRPCError({ code: "BAD_REQUEST", message: "no input" });
@@ -64,7 +66,8 @@ const router = catalogLike.router({
         ]);
         if (signal?.aborted !== true) yield tracked("2", { sequence: 2 });
       }
-      if (input.fail !== undefined) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: input.fail });
+      if (input.fail !== undefined)
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: input.fail });
     }),
   hidden: catalogLike.procedure.query(() => "withheld"),
 });
@@ -113,7 +116,7 @@ function peer(options: { throwOnSend?: (event: IpcEvent) => boolean } = {}): Fak
     },
     destroy: () => {
       destroyed = true;
-      for (const listener of [...teardown]) listener();
+      for (const listener of teardown) listener();
     },
     listeners: () => teardown.size,
   };
@@ -148,12 +151,12 @@ describe("createIpcServer", () => {
 
   it("runs queries and mutations through the router, in the context it builds per call", async () => {
     const bridge = server();
-    await expect(bridge.request(peer(), { path: "who", type: "query", input: undefined })).resolves.toEqual(
-      { ok: true, data: "desktop" },
-    );
-    await expect(bridge.request(peer(), { path: "echo", type: "mutation", input: "hi" })).resolves.toEqual(
-      { ok: true, data: "hi" },
-    );
+    await expect(
+      bridge.request(peer(), { path: "who", type: "query", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: "desktop" });
+    await expect(
+      bridge.request(peer(), { path: "echo", type: "mutation", input: "hi" }),
+    ).resolves.toEqual({ ok: true, data: "hi" });
   });
 
   it("answers a failure with the router's own envelope, as the WebSocket would", async () => {
@@ -179,7 +182,11 @@ describe("createIpcServer", () => {
 
   it("refuses to serve one path from two routers", () => {
     expect(() =>
-      createIpcServer({ routers: [router, router], served: ["who"], createContext: () => ({ who: "x" }) }),
+      createIpcServer({
+        routers: [router, router],
+        served: ["who"],
+        createContext: () => ({ who: "x" }),
+      }),
     ).toThrow("IPC serves who, which 2 routers publish");
   });
 
@@ -252,7 +259,10 @@ describe("createIpcServer", () => {
     const bridge = server();
     await expect(
       bridge.request(peer(), { path: "stream", type: "subscription", input: null }),
-    ).resolves.toEqual({ ok: false, error: { code: "BAD_REQUEST", message: "formatted: no input" } });
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "formatted: no input" },
+    });
   });
 
   it("does not keep a subscription whose peer is already gone", async () => {

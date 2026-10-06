@@ -24,6 +24,43 @@ const repository = resolve(here, "..", "..", "..");
 const callCount = benchmarkHelpers.parsePositiveInteger("calls", 20_000);
 const frameCount = benchmarkHelpers.parsePositiveInteger("frames", 20_000);
 
+function peer(onFrame) {
+  return {
+    id: 1,
+    isDestroyed: () => false,
+    send: onFrame,
+    onDestroyed: () => () => undefined,
+  };
+}
+
+function frame(sequence) {
+  return {
+    sessionId: "session-1",
+    sequence,
+    transcript: null,
+    event: {
+      id: `event-${sequence}`,
+      sessionId: "session-1",
+      sequence,
+      occurredAt: 1,
+      recordedAt: 1,
+      provenance: { source: { kind: "system", id: "bench", detail: null }, venue: null },
+      payload: {
+        kind: "session.created",
+        session: {
+          id: "session-1",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: null,
+          createdAt: 1,
+        },
+      },
+    },
+  };
+}
+
 const vite = await createServer({
   root: repository,
   appType: "custom",
@@ -37,7 +74,7 @@ try {
   const rpc = await vite.ssrLoadModule("/packages/session-rpc/src/index.ts");
   const { sessionHandlersFrom } = await vite.ssrLoadModule("/packages/session-rpc/src/testing.ts");
 
-  let emit = () => undefined;
+  let emit = null;
   const runtime = {
     projection: async () => ({ projection: {}, throughSequence: 4 }),
     snapshot: async () => ({ projection: {}, throughSequence: 4, frames: [], transcript: [] }),
@@ -73,12 +110,6 @@ try {
     return { calls: callCount, elapsedMs, microsecondsPerCall: (elapsedMs * 1_000) / callCount };
   }
 
-  const peer = (onFrame) => ({
-    id: 1,
-    isDestroyed: () => false,
-    send: onFrame,
-    onDestroyed: () => () => undefined,
-  });
   const callPeer = peer(() => undefined);
   const request = { path: "session.projection", type: "query", input };
 
@@ -99,31 +130,6 @@ try {
     input: { sessionId: "session-1", afterSequence: 0 },
   });
   await new Promise((resolveWait) => setTimeout(resolveWait, 0));
-  const frame = (sequence) => ({
-    sessionId: "session-1",
-    sequence,
-    transcript: null,
-    event: {
-      id: `event-${sequence}`,
-      sessionId: "session-1",
-      sequence,
-      occurredAt: 1,
-      recordedAt: 1,
-      provenance: { source: { kind: "system", id: "bench", detail: null }, venue: null },
-      payload: {
-        kind: "session.created",
-        session: {
-          id: "session-1",
-          projectId: "project-1",
-          ticketId: null,
-          role: "project",
-          parentSessionId: null,
-          title: null,
-          createdAt: 1,
-        },
-      },
-    },
-  });
   const pushStartedAt = performance.now();
   // In chunks well under the stream's 4,096-frame queue, letting the pump
   // drain between them: one synchronous burst would end the stream with

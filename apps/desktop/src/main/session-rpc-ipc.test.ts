@@ -257,7 +257,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(owner, { path: "session.snapshot", type: "query", input: { sessionId: "session-1" } }),
     ).resolves.toMatchObject({ ok: true });
-    await invoke(owner, { path: "session.subscribe", type: "subscription", input: { sessionId: "session-1" } });
+    await invoke(owner, {
+      path: "session.subscribe",
+      type: "subscription",
+      input: { sessionId: "session-1" },
+    });
     expect(fixture.calls.snapshot).toEqual(["session-1"]);
     expect(routerCallers).toEqual([LOCAL_DESKTOP_CALLER, LOCAL_DESKTOP_CALLER]);
     expect(routerCallers.every((caller) => caller === LOCAL_DESKTOP_CALLER)).toBe(true);
@@ -269,7 +273,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
     await expect(
-      invoke(sender(), { path: "session.snapshot", type: "query", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toMatchObject({ ok: true, data: { throughSequence: 0 } });
 
     expect(fixture.calls.snapshot).toEqual(["session-1"]);
@@ -298,7 +306,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await invoke(sender(), {
-      path: "session.projection", type: "query",
+      path: "session.projection",
+      type: "query",
       input: { sessionId: "session-private" },
     });
 
@@ -317,28 +326,35 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
     await expect(
-      invoke(sender(), { path: "session.projection", type: "query", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.projection",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toEqual({
       ok: true,
       data: { projection: {}, throughSequence: 4 },
     });
     await expect(
       invoke(sender(), {
-        path: "session.history", type: "query",
+        path: "session.history",
+        type: "query",
         input: { sessionId: "session-1", before: 7 },
       }),
     ).resolves.toEqual({ ok: true, data: { frames: [], before: null } });
     expect(fixture.calls.history).toEqual([7]);
     await expect(
       invoke(sender(), {
-        path: "session.cancelInteraction", type: "mutation",
+        path: "session.cancelInteraction",
+        type: "mutation",
         input: { sessionId: "session-1", interactionId: "question-1" },
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
 
     await expect(
       invoke(sender(), {
-        path: "session.command", type: "mutation",
+        path: "session.command",
+        type: "mutation",
         input: {
           commandId: "command-1",
           sessionId: "session-1",
@@ -358,7 +374,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        path: "session.reconcile", type: "mutation",
+        path: "session.reconcile",
+        type: "mutation",
         input: { sessionId: "session-1", attachmentId: "attachment-1" },
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
@@ -430,12 +447,18 @@ describe("registerSessionRpcIpcHandlers", () => {
       sessionId: "session-1",
       command: { kind: "executor.retry" },
     };
-    await expect(invoke(sender(), { path: "session.command", type: "mutation", input })).resolves.toEqual({
+    await expect(
+      invoke(sender(), { path: "session.command", type: "mutation", input }),
+    ).resolves.toEqual({
       ok: true,
       data: malformed,
     });
     await expect(
-      invoke(sender(), { path: "session.command", type: "mutation", input: { ...input, commandId: "" } }),
+      invoke(sender(), {
+        path: "session.command",
+        type: "mutation",
+        input: { ...input, commandId: "" },
+      }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
     expect(fixture.runtime.command).toHaveBeenCalledTimes(1);
     await registration.close();
@@ -497,7 +520,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 2 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -531,7 +555,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -548,7 +573,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -571,7 +597,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -592,7 +619,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -613,7 +641,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(owner, {
-        path: "session.subscribe", type: "subscription",
+        path: "session.subscribe",
+        type: "subscription",
         input: { sessionId: "session-1", afterSequence: 0 },
       }),
     ).resolves.toEqual({
@@ -631,7 +660,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -652,7 +682,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -682,7 +713,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      path: "session.subscribe", type: "subscription",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -720,7 +752,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        path: "settings.setExperiment", type: "mutation",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: true },
       }),
     ).resolves.toEqual({
@@ -744,13 +777,15 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        path: "settings.setExperiment", type: "mutation",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "unknown", enabled: true },
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
     await expect(
       invoke(sender(), {
-        path: "settings.setExperiment", type: "mutation",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: 1 },
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
@@ -773,7 +808,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        path: "settings.setExperiment", type: "mutation",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: true },
       }),
     ).resolves.toMatchObject({
@@ -799,7 +835,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        path: "modelAccess.inspect", type: "query",
+        path: "modelAccess.inspect",
+        type: "query",
         input: { refresh: true },
       }),
     ).resolves.toEqual({
@@ -840,7 +877,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        path: "modelAccess.setDefault", type: "mutation",
+        path: "modelAccess.setDefault",
+        type: "mutation",
         input: { purpose: "ticket", selection: ticket },
       }),
     ).resolves.toEqual({
@@ -960,7 +998,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        path: "sessions.create", type: "mutation",
+        path: "sessions.create",
+        type: "mutation",
         input: {
           operationId: "ticket-create",
           projectId: "project-1",
@@ -971,7 +1010,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-1" } });
     await expect(
       invoke(sender(), {
-        path: "sessions.create", type: "mutation",
+        path: "sessions.create",
+        type: "mutation",
         input: {
           operationId: "project-create",
           projectId: "project-1",
@@ -1017,7 +1057,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        path: "sessions.attach", type: "mutation",
+        path: "sessions.attach",
+        type: "mutation",
         input: { operationId: "retry-1", sessionId: "session-1" },
       }),
     ).resolves.toEqual({
@@ -1039,7 +1080,11 @@ describe("registerDegradedSessionRpcIpcHandlers", () => {
     registerDegradedSessionRpcIpcHandlers(reason);
 
     await expect(
-      invoke(sender(), { path: "session.snapshot", type: "query", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "INTERNAL_SERVER_ERROR", message: reason },

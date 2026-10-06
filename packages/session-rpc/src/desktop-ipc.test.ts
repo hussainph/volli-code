@@ -9,8 +9,8 @@ describe("the desktop's IPC exposure", () => {
   // path that does not exist.
   it("classifies every procedure the desktop's routers publish, and nothing else", () => {
     // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
-    const published = Object.keys(createSessionRouter()._def.procedures).sort();
-    expect(Object.keys(DESKTOP_IPC_EXPOSURE).sort()).toEqual(published);
+    const published = Object.keys(createSessionRouter()._def.procedures).toSorted();
+    expect(Object.keys(DESKTOP_IPC_EXPOSURE).toSorted()).toEqual(published);
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge

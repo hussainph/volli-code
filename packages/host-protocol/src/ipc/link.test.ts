@@ -2,7 +2,12 @@ import { createTRPCClient } from "@trpc/client";
 import { initTRPC, tracked } from "@trpc/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ipcLink, type IpcClientRouter, type IpcPerformanceObserver, type IpcPerformanceSample } from "./link";
+import {
+  ipcLink,
+  type IpcClientRouter,
+  type IpcPerformanceObserver,
+  type IpcPerformanceSample,
+} from "./link";
 import type { IpcBridge, IpcEvent, IpcRequest, IpcResponse } from "./wire";
 
 /** A router shaped like the Session router's corner of the desktop's: the link never reads it. */
@@ -17,7 +22,10 @@ const toyRouter = t.router({
       .input(sessionId)
       .query(() => ({ projection: {}, frames: [] as unknown[], throughSequence: 0 })),
     subscribe: t.procedure
-      .input((value: unknown) => value as { sessionId: string; afterSequence?: number; lastEventId?: string })
+      .input(
+        (value: unknown) =>
+          value as { sessionId: string; afterSequence?: number; lastEventId?: string },
+      )
       .subscription(async function* () {
         yield tracked("1", { sequence: 1 });
       }),
@@ -770,4 +778,3 @@ describe("subscription", () => {
     expect(record.errors).toHaveLength(1);
   });
 });
-

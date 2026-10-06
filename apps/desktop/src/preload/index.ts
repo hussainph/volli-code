@@ -845,8 +845,7 @@ const api = {
      * can arrive after the first frame does.
      */
     onEvent: (callback: (event: IpcEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) =>
-        callback(payload);
+      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) => callback(payload);
       const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
