@@ -87,8 +87,8 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "labDiagnostics.list": "lab-only",
   "labDiagnostics.subscribe": "lab-only",
   // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
-  "ticket.body": "ipc",
-  "label.setColor": "ipc",
+  "project.reorder": "ipc",
+  "worktree.trimSettings": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

@@ -52,8 +52,8 @@ const PROJECT = "project-1";
 const SAMPLE_INPUTS: {
   readonly [Path in HostRouterPaths | ProcedurePaths<DesktopRouter["_def"]["record"]>]: unknown;
 } = {
-  "ticket.body": { ticketId: "ticket-1" },
-  "label.setColor": { labelId: "label-1", color: "#123456" },
+  "project.reorder": { orderedIds: [PROJECT] },
+  "worktree.trimSettings": undefined,
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },

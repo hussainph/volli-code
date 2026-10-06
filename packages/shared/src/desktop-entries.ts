@@ -54,16 +54,16 @@ export interface DesktopEntryDeclaration {
  */
 export const DESKTOP_ENTRIES = [
   {
-    key: "ticket.body",
-    placement: "workspace",
-    idempotency: "read",
-    summary: "One ticket's Markdown body, for the ticket that is open.",
+    key: "project.reorder",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Put the rail's projects in this order.",
   },
   {
-    key: "label.setColor",
-    placement: "workspace",
-    idempotency: "natural",
-    summary: "Set or clear one label's stored color.",
+    key: "worktree.trimSettings",
+    placement: "host",
+    idempotency: "read",
+    summary: "The host's worktree trim settings: what a finished ticket's trim keeps.",
   },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 

@@ -231,11 +231,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-565",
     reason: "Deletes the workspace and everything that cascades from it.",
   },
-  "volli:project-reorder": {
-    placement: "host",
-    owner: "VC-565",
-    reason: `Rewrites projects.sort_order across every workspace: a cross-workspace ordering of the owner's board. ${HOST_SCOPED}`,
-  },
   "volli:ticket-create": { placement: "workspace", owner: "VC-565", reason: "Board write." },
   "volli:ticket-move": {
     placement: "workspace",
@@ -250,6 +245,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:ticket-delete": { placement: "workspace", owner: "VC-565", reason: "Board write." },
   "volli:ticket-list-archived": { placement: "workspace", owner: "VC-565", reason: "Board read." },
   "volli:ticket-events": { placement: "workspace", owner: "VC-565", reason: "Board read." },
+  "volli:ticket-body": { placement: "workspace", owner: "VC-565", reason: "Board read." },
   "volli:ticket-latest-signals": {
     placement: "workspace",
     owner: "VC-565",
@@ -338,6 +334,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-566",
     reason: "Measures a ticket or board checkout on the host.",
   },
+  "volli:label-set-color": { placement: "workspace", owner: "VC-565", reason: "Board write." },
   "volli:app-state-set": {
     placement: "split",
     owner: "VC-577",
@@ -391,11 +388,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "host",
     owner: "VC-566",
     reason: `Trims across every non-active owned worktree. ${HOST_SCOPED}`,
-  },
-  "volli:worktree-trim-settings-get": {
-    placement: "host",
-    owner: "VC-566",
-    reason: "Reads the host-level app_state row volli:worktree-trim.",
   },
   "volli:worktree-trim-settings-set": {
     placement: "host",
@@ -1451,17 +1443,17 @@ type BridgedChannel = {
  * channel, and nothing else.
  */
 export const BRIDGED_CHANNELS = {
-  "volli:ticket-body": {
-    key: "ticket.body",
-    placement: "workspace",
+  "volli:project-reorder": {
+    key: "project.reorder",
+    placement: "host",
     owner: "VC-565",
-    reason: "Board read.",
+    reason: `Rewrites projects.sort_order across every workspace: a cross-workspace ordering of the owner's board. ${HOST_SCOPED}`,
   },
-  "volli:label-set-color": {
-    key: "label.setColor",
-    placement: "workspace",
-    owner: "VC-565",
-    reason: "Board write.",
+  "volli:worktree-trim-settings-get": {
+    key: "worktree.trimSettings",
+    placement: "host",
+    owner: "VC-566",
+    reason: "Reads the host-level app_state row volli:worktree-trim.",
   },
 } as const satisfies Readonly<Record<`volli:${string}`, BridgedChannel>>;
 

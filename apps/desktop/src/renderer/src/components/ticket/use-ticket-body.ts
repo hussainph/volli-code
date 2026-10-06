@@ -2,7 +2,6 @@ import * as React from "react";
 import type { Ticket } from "@volli/shared";
 
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
-import { readTicketBody } from "@renderer/lib/ticket-body-read";
 import { isTicketBodyLoaded, planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 
 /**
@@ -53,7 +52,8 @@ export function useTicketBody(ticket: Pick<Ticket, "id" | "projectId">): TicketB
     const projectId = ticket.projectId;
     const token = bodyRead.claim();
     setFailed(false);
-    void readTicketBody({ ticketId })
+    void window.api.tickets
+      .body({ ticketId })
       .then((result) => {
         // A result that lost its claim belongs to a ticket this view has since
         // left; applying it would put one ticket's body on another's workspace.

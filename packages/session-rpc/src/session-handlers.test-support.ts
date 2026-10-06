@@ -165,8 +165,10 @@ export function sessionHandlersFrom(
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
   const desktop: DesktopRouterHandlers = {
-    "ticket.body": (input, call) => need(ports.desktop?.["ticket.body"], BOARD)(input, call),
-    "label.setColor": (input, call) => need(ports.desktop?.["label.setColor"], BOARD)(input, call),
+    "project.reorder": (input, call) =>
+      need(ports.desktop?.["project.reorder"], BOARD)(input, call),
+    "worktree.trimSettings": (input, call) =>
+      need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
   };
   return { ...handlers, ...desktop };
 }

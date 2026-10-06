@@ -28,11 +28,6 @@ const shellLaunch = (title: string): SessionLaunch => ({
 });
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
-// The default gateway's desktop-only commands ride the Session RPC client (VC-608).
-const rpc = vi.hoisted(() => ({ setColor: vi.fn() }));
-vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
-  sessionRpcClient: () => ({ label: { setColor: { mutate: rpc.setColor } } }),
-}));
 
 let nextId = 1;
 
@@ -2380,30 +2375,18 @@ describe("createBoardStore() with the default gateway", () => {
     expect(setLabels).toHaveBeenCalledWith({ ticketId: "a", labels: ["bug"] });
   });
 
-  it("setLabelColor calls label.setColor over the Session RPC client", async () => {
-    const label = { id: "l1", projectId: "p1", name: "bug", color: "#123456" };
-    rpc.setColor.mockResolvedValueOnce(label);
+  it("setLabelColor calls window.api.labels.setColor", async () => {
+    const setColor = vi.fn(async () => ({
+      ok: true as const,
+      label: { id: "l1", projectId: "p1", name: "bug", color: "#123456" },
+    }));
+    vi.stubGlobal("window", { api: { labels: { setColor } } });
     const store = createBoardStore();
     store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
 
-    expect(rpc.setColor).toHaveBeenCalledWith({ labelId: "l1", color: "#123456" });
-    expect(store.getState().labelsByProject.p1).toEqual([label]);
-  });
-
-  // `label.setColor` answers null for a label that is gone, as the channel it
-  // replaced answered `{ ok: false }`: the optimistic color is reverted, loudly.
-  it("reverts a label color the host no longer has", async () => {
-    rpc.setColor.mockResolvedValueOnce(null);
-    const store = createBoardStore();
-    const original = { id: "l1", projectId: "p1", name: "bug", color: null };
-    store.getState().hydrate({}, { p1: [original] });
-
-    await store.getState().setLabelColor("p1", "l1", "#123456");
-
-    expect(store.getState().labelsByProject.p1).toEqual([original]);
-    expect(toast.error).toHaveBeenCalled();
+    expect(setColor).toHaveBeenCalledWith({ labelId: "l1", color: "#123456" });
   });
 
   it("archiveTicket calls window.api.tickets.archive", async () => {

@@ -19,12 +19,12 @@ import {
   listTicketStatusEntries,
   listAllLabels,
   listLabelsByProject,
+  setLabelColor,
   countProjects,
   deleteProject,
   getProjectById,
   insertProject,
   listProjects,
-  reorderProjects,
   updateProjectAuthorityPolicy,
   updateProjectBaseBranch,
   updateProjectSessionDefaults,
@@ -34,6 +34,7 @@ import {
   writeSessionUnread,
   prepared,
   getTicket,
+  getTicketBody,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
@@ -108,6 +109,8 @@ import type {
   DatabaseAction,
   DatabaseResult,
   DataIpcChannel,
+  LabelResult,
+  LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
   McpProjectInput,
@@ -152,6 +155,7 @@ import type {
   ProjectRosterResult,
   UsageReportInput,
   UsageReportResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -227,7 +231,6 @@ import {
   readWorktreeDiff,
   readWorktreeStatus,
   resolveWorktreeTarget,
-  getTrimSettings,
   remove as removeWorktree,
   runNet,
   scanTrimTargets,
@@ -847,11 +850,6 @@ export function registerDataIpcHandlers(
     "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
     "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
 
-    "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
-      reorderProjects(db, orderedIds, Date.now());
-      return { ok: true };
-    },
-
     // Every ticket write below announces what it committed on the ticket wake
     // bus (VC-85). The renderer door has to feed it for the same reason the
     // agent door does: a waiter cares that a ticket moved, not who moved it,
@@ -1006,6 +1004,17 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-events": (input: TicketIdInput): TicketEventsResult => {
       return { ok: true, events: listTicketEvents(db, input.ticketId) };
+    },
+
+    /**
+     * One ticket's body — what the refresh roster stopped carrying (VC-387).
+     * Read by the ticket that is OPEN, on arrival and on each planning change
+     * that names it, which is the only place a body is ever rendered.
+     */
+    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => {
+      const body = getTicketBody(db, input.ticketId);
+      if (body === undefined) return { ok: false, error: "Unknown ticket" };
+      return { ok: true, body };
     },
 
     "volli:ticket-latest-signals": async (
@@ -1323,6 +1332,12 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
+    "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {
+      const label = setLabelColor(db, input.labelId, input.color, Date.now());
+      if (!label) return { ok: false, error: "Unknown label" };
+      return { ok: true, label };
+    },
+
     "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
       // The schema floor is the migration runner's alone (VC-602): a renderer
       // write could lock older builds out of this database, or let them in.
@@ -1636,10 +1651,6 @@ export function registerDataIpcHandlers(
         broadcastDataChanged({ kind: "worktree" });
       }
       return { ok: true, report };
-    },
-
-    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
-      return { ok: true, settings: getTrimSettings(db) };
     },
 
     "volli:worktree-trim-settings-set": (

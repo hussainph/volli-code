@@ -36,7 +36,6 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
-import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -141,12 +140,7 @@ const defaultGateway: BoardGateway = {
   setTicketPriority: (input) => window.api.tickets.setPriority(input),
   updateTicket: (input) => window.api.tickets.update(input),
   setLabels: (input) => window.api.tickets.setLabels(input),
-  // `label.setColor`, the desktop-only tier's write that replaced
-  // `volli:label-set-color` (VC-608): a label that is gone answers null.
-  setLabelColor: async (input) => {
-    const label = await sessionRpcClient().label.setColor.mutate(input);
-    return label === null ? { ok: false, error: "Unknown label" } : { ok: true, label };
-  },
+  setLabelColor: (input) => window.api.labels.setColor(input),
   archiveTicket: (input) => window.api.tickets.archive(input),
   unarchiveTicket: (input) => window.api.tickets.unarchive(input),
   deleteTicket: (input) => window.api.tickets.delete(input),
@@ -349,7 +343,7 @@ export interface BoardState {
   setLabels(ticketId: string, labels: string[]): Promise<void>;
   /**
    * Sets (or clears, via `color: null`) a project label's stored color via
-   * `label.setColor` — a stored color always wins over the hash
+   * `api.labels.setColor` — a stored color always wins over the hash
    * fallback (`labelColor`/`resolveLabelColor`), so this is what a picked
    * swatch persists. Optimistic; reverts to the pre-edit color on failure. A
    * no-op (no IPC) for an unknown project/label id or an unchanged color.

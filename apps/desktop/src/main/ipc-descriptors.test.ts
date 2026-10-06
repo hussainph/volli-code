@@ -592,34 +592,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:project-reorder", () => {
-    const { guard, invalidError } = DATA_IPC["volli:project-reorder"];
-
-    it("accepts a string array", () => {
-      expect(guard([["p1", "p2"]])).toBe(true);
-    });
-
-    it("accepts an empty array", () => {
-      expect(guard([[]])).toBe(true);
-    });
-
-    it("rejects a non-array", () => {
-      expect(guard(["p1"])).toBe(false);
-    });
-
-    it("rejects an array with a non-string entry", () => {
-      expect(guard([["p1", 2]])).toBe(false);
-    });
-
-    it("rejects a wrong arity", () => {
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid project order");
-    });
-  });
-
   describe("volli:ticket-create", () => {
     const { guard, invalidError } = DATA_IPC["volli:ticket-create"];
     const valid = { projectId: "p1", title: "Do the thing", status: "todo" };
@@ -901,6 +873,8 @@ describe("DATA_IPC descriptor table", () => {
       ["volli:ticket-unarchive", "Invalid ticket"],
       ["volli:ticket-delete", "Invalid ticket"],
       ["volli:ticket-events", "Invalid ticket"],
+      // The per-open-ticket body read the steady-state roster traded away (VC-387).
+      ["volli:ticket-body", "Invalid ticket"],
     ] as const;
 
     for (const [channel, expectedError] of cases) {
@@ -1578,6 +1552,38 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:label-set-color", () => {
+    const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
+
+    it("accepts a valid payload with a string color", () => {
+      expect(guard([{ labelId: "l1", color: "#fff" }])).toBe(true);
+    });
+
+    it("accepts a null color", () => {
+      expect(guard([{ labelId: "l1", color: null }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a non-string labelId", () => {
+      expect(guard([{ labelId: 1, color: null }])).toBe(false);
+    });
+
+    it("rejects a color of the wrong type", () => {
+      expect(guard([{ labelId: "l1", color: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid label color");
+    });
+  });
+
   describe("volli:app-state-set (positional string pair)", () => {
     const { guard, invalidError } = DATA_IPC["volli:app-state-set"];
 
@@ -2154,10 +2160,10 @@ describe("DATA_IPC descriptor table", () => {
       // where every Session it starts will run.
       expect(DATA_CHANNELS).toContain("volli:project-folder-check");
       expect(DATA_CHANNELS).toContain("volli:project-relink");
-      // The steady-state refresh read (VC-387): one project's board without
-      // bodies. The open ticket's body is `ticket.body` on the bridge (VC-608).
+      // The steady-state refresh pair (VC-387): one project's board without
+      // bodies, and one ticket's body for the ticket that is open.
       expect(DATA_CHANNELS).toContain("volli:data-project-roster");
-      expect(DATA_CHANNELS).not.toContain("volli:ticket-body");
+      expect(DATA_CHANNELS).toContain("volli:ticket-body");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
       // agent verb behind it, because the agent must not author the policy that
@@ -2189,12 +2195,14 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
-      // Build artifacts (VC-340): one read, one destructive action, and the two
-      // settings that govern both.
+      // Build artifacts (VC-340): one read, one destructive action, and the
+      // settings write. The settings read is `worktree.trimSettings` on the
+      // bridge (VC-608), as the rail order is `project.reorder`.
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim");
-      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).not.toContain("volli:worktree-trim-settings-get");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+      expect(DATA_CHANNELS).not.toContain("volli:project-reorder");
     });
   });
 
@@ -2213,11 +2221,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(invalidError).toBe("Invalid trim request");
     });
 
-    it("takes no argument for either read", () => {
+    it("takes no argument for the scan", () => {
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
     });
 
     it("requires a settings patch to actually patch something", () => {

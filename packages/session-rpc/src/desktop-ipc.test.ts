@@ -45,8 +45,8 @@ describe("the desktop's IPC exposure", () => {
       "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
-      "ticket.body",
-      "label.setColor",
+      "project.reorder",
+      "worktree.trimSettings",
     ]);
   });
 

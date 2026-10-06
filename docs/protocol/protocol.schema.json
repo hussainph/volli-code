@@ -46,28 +46,19 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
-      "label.setColor": {
+      "project.reorder": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
-            "color": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "labelId": {
-              "minLength": 1,
-              "type": "string"
+            "orderedIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "required": [
-            "labelId",
-            "color"
+            "orderedIds"
           ],
           "type": "object"
         },
@@ -75,72 +66,37 @@
         "noInput": false,
         "output": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "anyOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "color": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "id": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "projectId": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id",
-                "projectId",
-                "name",
-                "color"
-              ],
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "null"
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
-      "ticket.body": {
+      "worktree.trimSettings": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
           "properties": {
-            "ticketId": {
-              "minLength": 1,
-              "type": "string"
+            "keepPatterns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "trimOnFinish": {
+              "type": "boolean"
             }
           },
           "required": [
-            "ticketId"
+            "keepPatterns",
+            "trimOnFinish"
           ],
           "type": "object"
-        },
-        "kind": "query",
-        "noInput": false,
-        "output": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false

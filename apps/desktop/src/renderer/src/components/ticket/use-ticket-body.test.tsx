@@ -8,7 +8,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { TicketBodyRead } from "@renderer/lib/ticket-body-read";
+import type { TicketBodyResult } from "../../../../ipc/contract";
 
 import { useBoardStore } from "@renderer/stores/board";
 
@@ -40,11 +40,7 @@ type TicketKey = Pick<Ticket, "id" | "projectId">;
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
-const { body } = vi.hoisted(() => ({
-  body: vi.fn<(input: { ticketId: string }) => Promise<TicketBodyRead>>(),
-}));
-// `ticket.body` over the Session RPC client (VC-608), stood in for at its module.
-vi.mock("@renderer/lib/ticket-body-read", () => ({ readTicketBody: body }));
+const body = vi.fn<(input: { ticketId: string }) => Promise<TicketBodyResult>>();
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -86,6 +82,10 @@ beforeEach(() => {
   body.mockResolvedValue({ ok: true, body: "fresh body" });
   lastStatus = null;
   lastRetry = null;
+  Object.defineProperty(window, "api", {
+    configurable: true,
+    value: { tickets: { body } },
+  });
   useBoardStore.setState({
     ticketsByProject: { p1: [TICKET] },
     labelsByProject: { p1: [] },
@@ -141,7 +141,7 @@ describe("useTicketBody", () => {
   });
 
   it("re-reads when the ticket changes and drops the previous ticket's late body", async () => {
-    const firstRead = deferred<TicketBodyRead>();
+    const firstRead = deferred<TicketBodyResult>();
     body.mockImplementation(({ ticketId }) =>
       ticketId === "t1"
         ? firstRead.promise
@@ -161,7 +161,7 @@ describe("useTicketBody", () => {
   });
 
   it("keeps the body already on screen when a refresh read fails, and stays ready", async () => {
-    body.mockResolvedValue({ ok: false });
+    body.mockResolvedValue({ ok: false, error: "Unknown ticket" });
 
     await mount();
 
@@ -191,7 +191,7 @@ describe("useTicketBody", () => {
     });
 
     it("reports loading until the read lands, so no editor is mounted over the placeholder", async () => {
-      const read = deferred<TicketBodyRead>();
+      const read = deferred<TicketBodyResult>();
       body.mockReturnValue(read.promise);
 
       await mount();
@@ -204,7 +204,7 @@ describe("useTicketBody", () => {
     });
 
     it("reports the failure, because a person opened this ticket and is waiting", async () => {
-      body.mockResolvedValue({ ok: false });
+      body.mockResolvedValue({ ok: false, error: "Unknown ticket" });
 
       await mount();
 
@@ -222,7 +222,7 @@ describe("useTicketBody", () => {
     });
 
     it("recovers through retry, which is the one action the fault surface offers", async () => {
-      body.mockResolvedValue({ ok: false });
+      body.mockResolvedValue({ ok: false, error: "Unknown ticket" });
       await mount();
       expect(lastStatus).toBe("failed");
 

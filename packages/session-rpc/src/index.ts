@@ -141,7 +141,6 @@ export {
 export {
   createDesktopRouter,
   desktopProcedureSchemas,
-  LABEL_RESOURCE,
   type DesktopRouter,
   type DesktopRouterContext,
   type DesktopRouterHandlers,

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { getOrCreateLabel } from "../db/labels-repo";
+import { listProjects } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
@@ -157,12 +157,12 @@ describe("the map", () => {
         empty["ticket.move"]({ projectId: PROJECT, ticketId: "t", toStatus: "done" }, USER),
       ),
     ).toBe("The board is unavailable: the database did not open");
-    expect(await unavailable(() => empty["ticket.body"]({ ticketId: "t" }, WINDOW))).toBe(
+    expect(await unavailable(() => empty["project.reorder"]({ orderedIds: [] }, WINDOW))).toBe(
       "The board is unavailable: the database did not open",
     );
-    expect(
-      await unavailable(() => empty["label.setColor"]({ labelId: "l", color: null }, WINDOW)),
-    ).toBe("The board is unavailable: the database did not open");
+    expect(await unavailable(() => empty["worktree.trimSettings"](undefined, WINDOW))).toBe(
+      "The board is unavailable: the database did not open",
+    );
     // The desktop serves the socket's Session reads over no network door.
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
@@ -389,27 +389,22 @@ describe("host settings", () => {
   });
 });
 
-// The desktop-only tier (VC-608): the bodies `volli:ticket-body` and
-// `volli:label-set-color` had, moved into the map unchanged.
+// The desktop-only tier (VC-608): the bodies `volli:project-reorder` and
+// `volli:worktree-trim-settings-get` had, moved into the map unchanged.
 describe("desktop-only commands", () => {
-  it("reads one ticket's body, and answers null for a ticket that is gone", async () => {
-    const created = ticket("t-body");
-    expect(await handlers()["ticket.body"]({ ticketId: created.id }, WINDOW)).toBe("");
-    expect(await handlers()["ticket.body"]({ ticketId: "no-such-ticket" }, WINDOW)).toBeNull();
+  it("puts the rail's projects in the order given", async () => {
+    insertProject(ctx.db, testProject({ id: "second", ticketPrefix: "SE" }));
+    expect(await handlers()["project.reorder"]({ orderedIds: ["second", PROJECT] }, WINDOW)).toBe(
+      null,
+    );
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second", PROJECT]);
   });
 
-  it("sets and clears a label's color, and answers null for a label that is gone", async () => {
-    const label = getOrCreateLabel(ctx.db, PROJECT, "bug", 1);
-    expect(
-      await handlers()["label.setColor"]({ labelId: label.id, color: "#123456" }, WINDOW),
-    ).toEqual({ ...label, color: "#123456" });
-    expect(await handlers()["label.setColor"]({ labelId: label.id, color: null }, WINDOW)).toEqual({
-      ...label,
-      color: null,
+  it("reads the host's trim settings, defaults included", async () => {
+    expect(await handlers()["worktree.trimSettings"](undefined, WINDOW)).toMatchObject({
+      trimOnFinish: expect.any(Boolean),
+      keepPatterns: expect.any(Array),
     });
-    expect(
-      await handlers()["label.setColor"]({ labelId: "no-such-label", color: null }, WINDOW),
-    ).toBeNull();
   });
 });
 

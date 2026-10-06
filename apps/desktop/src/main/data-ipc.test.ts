@@ -20,6 +20,7 @@ import type {
   SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -207,7 +208,6 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   // thing against real `git worktree add` checkouts.
   scanTrimTargets: vi.fn(async () => ({ worktrees: [] })),
   trimAllWorktrees: vi.fn(),
-  getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
@@ -254,7 +254,6 @@ import {
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
-  getTrimSettings,
   listBranches,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -1225,6 +1224,29 @@ describe("volli:data-project-roster — the steady-state refresh read (VC-387)",
     });
 
     expect(roster).toEqual({ ok: false, error: "Unknown project" });
+  });
+});
+
+describe("volli:ticket-body — the per-ticket body read (VC-387)", () => {
+  it("answers the body the roster no longer carries", () => {
+    const projectId = createProject();
+    const created = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "With a body",
+      body: "# Scope\n\nDo the thing.",
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: created.ticket.id });
+
+    expect(read).toEqual({ ok: true, body: "# Scope\n\nDo the thing." });
+  });
+
+  it("refuses a ticket that is gone rather than answering an empty body", () => {
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: "no-such-ticket" });
+
+    expect(read).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
 
@@ -4505,11 +4527,8 @@ describe("the build-artifact channels", () => {
     expectNoDataChange();
   });
 
-  it("reads and writes the trim settings", async () => {
-    const read = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-get");
-    expect(read).toEqual({ ok: true, settings: { keepPatterns: [".env"], trimOnFinish: true } });
-    expect(vi.mocked(getTrimSettings)).toHaveBeenCalled();
-
+  // The read is `worktree.trimSettings` on the bridge (VC-608).
+  it("writes the trim settings", async () => {
     const written = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-set", {
       trimOnFinish: false,
     });
@@ -4839,13 +4858,6 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     expect(invoke<ProjectMutationResult>("volli:project-remove", { not: "a string" })).toEqual({
       ok: false,
       error: "Invalid project id",
-    });
-  });
-
-  it("single string-array-arg shape: rejects a non-array", () => {
-    expect(invoke<ProjectMutationResult>("volli:project-reorder", "not-an-array")).toEqual({
-      ok: false,
-      error: "Invalid project order",
     });
   });
 

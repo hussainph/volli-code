@@ -9,21 +9,20 @@ import {
   ipcContractLink,
   webSocketContractLink,
 } from "@volli/host-protocol/testing";
-import { type HandlerCall, type Label } from "@volli/shared";
+import { type HandlerCall, type WorktreeTrimSettings } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { LOCAL_DESKTOP_CALLER, PROJECT_RESOURCE, type RouterCaller } from "./catalog";
+import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import {
   createDesktopRouter,
   desktopProcedureSchemas,
-  LABEL_RESOURCE,
   type DesktopRouter,
   type DesktopRouterContext,
 } from "./desktop-router";
 import { RpcDiagnosticLog } from "./index";
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
-const BUG: Label = { id: "label-1", projectId: WORKSPACE, name: "bug", color: null };
+const TRIM: WorktreeTrimSettings = { keepPatterns: [".env"], trimOnFinish: true };
 
 interface Host {
   readonly caller: RouterCaller;
@@ -42,13 +41,13 @@ function context(fixture: Host): DesktopRouterContext {
     // below is the entry's policy, never the Workspace check.
     resourceWorkspace: () => WORKSPACE,
     handlers: {
-      "ticket.body": (input, call) => {
-        fixture.calls.push({ key: "ticket.body", input, call });
-        return input.ticketId === "ticket-1" ? "# Scope" : null;
+      "project.reorder": (input, call) => {
+        fixture.calls.push({ key: "project.reorder", input, call });
+        return null;
       },
-      "label.setColor": (input, call) => {
-        fixture.calls.push({ key: "label.setColor", input, call });
-        return input.labelId === BUG.id ? { ...BUG, color: input.color } : null;
+      "worktree.trimSettings": (input, call) => {
+        fixture.calls.push({ key: "worktree.trimSettings", input, call });
+        return TRIM;
       },
     },
   };
@@ -77,34 +76,28 @@ describeContract<Host, DesktopRouter>(
     it("serves the desktop's own window, as the person, through the host's map", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
-      expect(await client.ticket.body.query({ ticketId: "ticket-1" })).toBe("# Scope");
-      expect(await client.ticket.body.query({ ticketId: "gone" })).toBeNull();
-      expect(await client.label.setColor.mutate({ labelId: BUG.id, color: "#123456" })).toEqual({
-        ...BUG,
-        color: "#123456",
-      });
-      expect(await client.label.setColor.mutate({ labelId: "gone", color: null })).toBeNull();
-      expect(fixture.calls.map(({ key, call }) => [key, call])).toEqual([
-        ["ticket.body", { actor: { kind: "user" }, origin: "desktop-window" }],
-        ["ticket.body", { actor: { kind: "user" }, origin: "desktop-window" }],
-        ["label.setColor", { actor: { kind: "user" }, origin: "desktop-window" }],
-        ["label.setColor", { actor: { kind: "user" }, origin: "desktop-window" }],
+      expect(await client.worktree.trimSettings.query()).toEqual(TRIM);
+      expect(await client.project.reorder.mutate({ orderedIds: ["b", "a"] })).toBeNull();
+      const window = { actor: { kind: "user" }, origin: "desktop-window" };
+      expect(fixture.calls).toEqual([
+        { key: "worktree.trimSettings", input: undefined, call: window },
+        { key: "project.reorder", input: { orderedIds: ["b", "a"] }, call: window },
       ]);
     });
 
-    // Placement-derived policy: the person's, on no network door. A paired
-    // device in the very Workspace, and a Session, are refused before input.
+    // Placement-derived policy: host-placed, so device-as-user, and on no
+    // network door. A paired device and a Session are refused before input.
     it("refuses every network caller, whatever its Workspace, before the handler", async () => {
       for (const caller of [device, session]) {
         const fixture = host(caller);
         const client = await connect(fixture);
-        expect(await expectHostError(client.ticket.body.query({ ticketId: "ticket-1" }))).toEqual({
+        expect(await expectHostError(client.worktree.trimSettings.query())).toEqual({
           code: "FORBIDDEN",
-          message: "ticket.body is not open to this caller.",
+          message: "worktree.trimSettings is not open to this caller.",
           reason: "verb-refused",
         });
         expect(
-          await expectHostError(client.label.setColor.mutate({ labelId: BUG.id, color: null })),
+          await expectHostError(client.project.reorder.mutate({ orderedIds: [WORKSPACE] })),
         ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
         expect(fixture.calls).toEqual([]);
       }
@@ -114,7 +107,9 @@ describeContract<Host, DesktopRouter>(
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
       expect(
-        await expectHostError(client.label.setColor.mutate({ labelId: "", color: null })),
+        await expectHostError(
+          client.project.reorder.mutate({ orderedIds: [2] as unknown as string[] }),
+        ),
       ).toMatchObject({ code: "BAD_REQUEST" });
       expect(fixture.calls).toEqual([]);
     });
@@ -122,19 +117,15 @@ describeContract<Host, DesktopRouter>(
 );
 
 describe("the desktop router's grammar", () => {
-  it("names a ticket and a label as its Workspace resources", () => {
-    expect(LABEL_RESOURCE).toBe("label");
-    expect(LABEL_RESOURCE).not.toBe(PROJECT_RESOURCE);
-  });
-
   it("publishes both validators of every desktop-only procedure", () => {
     const schemas = desktopProcedureSchemas();
-    expect(Object.keys(schemas).toSorted()).toEqual(["label.setColor", "ticket.body"]);
-    expect(schemas["ticket.body"]).toMatchObject({
+    expect(Object.keys(schemas).toSorted()).toEqual(["project.reorder", "worktree.trimSettings"]);
+    expect(schemas["worktree.trimSettings"]).toMatchObject({
       type: "query",
+      noInput: true,
       outputValidation: "network-and-tests",
     });
-    expect(schemas["label.setColor"]).toMatchObject({
+    expect(schemas["project.reorder"]).toMatchObject({
       type: "mutation",
       outputValidation: "network-and-tests",
     });

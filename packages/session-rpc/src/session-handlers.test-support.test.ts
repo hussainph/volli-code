@@ -55,8 +55,8 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
       ),
     () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
-    () => handlers["ticket.body"]({ ticketId: "t" }, CALL),
-    () => handlers["label.setColor"]({ labelId: "l", color: null }, CALL),
+    () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
+    () => handlers["worktree.trimSettings"](undefined, CALL),
   ];
 }
 
@@ -108,7 +108,7 @@ describe("sessionHandlersFrom", () => {
       writeCodeModePolicy: port as never,
       readModelPickerView: port as never,
       writeModelPickerView: port as never,
-      desktop: { "ticket.body": port as never, "label.setColor": port as never },
+      desktop: { "project.reorder": port as never, "worktree.trimSettings": port as never },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
     expect(port).toHaveBeenCalledTimes(17);

@@ -18,7 +18,8 @@
  * 2. move the channel's handler body into host-core's map
  *    (`HostHandlerSignatures`, `createHostHandlers`), and declare its slice
  *    below in {@link DesktopRouterHandlers};
- * 3. build its procedure here with both zod validators and its resources;
+ * 3. build its procedure here with both zod validators (and, for a
+ *    `workspace` entry, its resources);
  * 4. classify its path `ipc` in `DESKTOP_IPC_EXPOSURE`, give it a
  *    `SAMPLE_INPUTS` row, regenerate the protocol schema (its `desktop`
  *    tier), and move its renderer callers onto the Session RPC client;
@@ -33,12 +34,11 @@ import {
   type DesktopCatalogEntry,
   type DesktopKey,
   type HostHandler,
-  type Label,
+  type WorktreeTrimSettings,
 } from "@volli/shared";
 import type { JsonUnsafeProcedures } from "@volli/host-protocol";
 import { z } from "zod";
 
-import { TICKET_RESOURCE } from "./board-router";
 import {
   createCatalogBuilders,
   type CatalogCallerContext,
@@ -48,13 +48,10 @@ import {
 } from "./catalog";
 import { procedureSchemas } from "./procedure-schema";
 
-/** The label resource kind: a label belongs to one project's board. */
-export const LABEL_RESOURCE = "label";
-
 /** The slice of the host's handler map the desktop router projects (D2: structural). */
 export interface DesktopRouterHandlers {
-  readonly "ticket.body": HostHandler<{ ticketId: string }, string | null>;
-  readonly "label.setColor": HostHandler<{ labelId: string; color: string | null }, Label | null>;
+  readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -71,40 +68,36 @@ export interface DesktopRouterContext extends CatalogCallerContext {
 
 export type DesktopRouterContextPorts = AssertNever<RouterContextPorts<DesktopRouterContext>>;
 
-const { workspaceProcedure, catalogRouter } = createCatalogBuilders<
+const { hostProcedure, catalogRouter } = createCatalogBuilders<
   DesktopRouterContext,
   DesktopCatalogEntry
 >({ entries: DESKTOP_CATALOG_ENTRIES });
 
-const id = z.string().min(1);
-
-const labelSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  name: z.string(),
-  color: z.string().nullable(),
+const trimSettingsSchema = z.object({
+  keepPatterns: z.array(z.string()),
+  trimOnFinish: z.boolean(),
 });
 
+/**
+ * Both template commands are host-placed (VC-574), so both are
+ * `hostProcedure`s: device-as-user, no Workspace resource to name. A
+ * workspace-placed command is a `workspaceProcedure` naming every resource
+ * its input addresses, exactly as a public area's is.
+ */
 export function createDesktopRouter() {
   return catalogRouter({
-    ticket: {
-      /** Was `volli:ticket-body`: null for a ticket that is gone, as `{ ok: false }` was. */
-      body: workspaceProcedure("ticket.body", z.object({ ticketId: id }), (input) => ({
-        kind: TICKET_RESOURCE,
-        id: input.ticketId,
-      }))
-        .output(z.string().nullable())
-        .query(({ ctx, input }) => ctx.handlers["ticket.body"](input, ctx.call)),
+    project: {
+      /** Was `volli:project-reorder`: the rail's order, across every Workspace. */
+      reorder: hostProcedure("project.reorder")
+        .input(z.object({ orderedIds: z.array(z.string()) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["project.reorder"](input, ctx.call)),
     },
-    label: {
-      /** Was `volli:label-set-color`: null for a label that is gone. */
-      setColor: workspaceProcedure(
-        "label.setColor",
-        z.object({ labelId: id, color: z.string().nullable() }),
-        (input) => ({ kind: LABEL_RESOURCE, id: input.labelId }),
-      )
-        .output(labelSchema.nullable())
-        .mutation(({ ctx, input }) => ctx.handlers["label.setColor"](input, ctx.call)),
+    worktree: {
+      /** Was `volli:worktree-trim-settings-get`: the host-level trim settings. */
+      trimSettings: hostProcedure("worktree.trimSettings")
+        .output(trimSettingsSchema)
+        .query(({ ctx }) => ctx.handlers["worktree.trimSettings"](undefined, ctx.call)),
     },
   });
 }
