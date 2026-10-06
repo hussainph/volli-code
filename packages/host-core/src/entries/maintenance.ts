@@ -31,9 +31,11 @@ export { OrphanProcessService } from "../process/orphan-processes";
 export { SpawnLedger } from "../process/spawn-ledger";
 export {
   applyQuietAppPolicy,
+  hideDockForMenuBar,
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
+  showDockAfterMenuBar,
 } from "../quiet-windows";
 export { getRetentionWatcher, type RetentionReclaimSeams } from "../retention-runtime";
 export { settleShutdownBeforeDeadline } from "../shutdown-deadline";

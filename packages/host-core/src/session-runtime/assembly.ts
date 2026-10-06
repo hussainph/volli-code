@@ -431,6 +431,9 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   if (sessionEngine !== null && sessionRuntime !== null) {
     wireSessionRuntime(sessionEngine, {
       openNativeBindings: () => sessionRuntime.openNativeBindings(),
+      pendingTurnStarts: () => sessionRuntime.pendingTurnStarts(),
+      holdTurnStarts: () => sessionRuntime.holdTurnStarts(),
+      releaseTurnStarts: () => sessionRuntime.releaseTurnStarts(),
     });
   }
   return {
