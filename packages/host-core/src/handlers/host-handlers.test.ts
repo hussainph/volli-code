@@ -189,6 +189,7 @@ describe("Session commands", () => {
     const emit = vi.fn();
     const fail = vi.fn();
     await map["session.subscribe"]({ sessionId: "s", afterSequence: 3 }, USER, { emit, fail });
+    await map["session.subscribeQueue"]({ sessionId: "s", afterSequence: 3 }, USER, { emit, fail });
     expect(runtime.subscribe).toHaveBeenCalledWith(
       { sessionId: "s", afterSequence: 3 },
       expect.any(Function),

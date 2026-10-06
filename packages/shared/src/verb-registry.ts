@@ -3443,6 +3443,17 @@ export const VERB_REGISTRY = [
     catalog: { scope: "workspace", idempotency: "read" },
   },
   {
+    key: "session.subscribeQueue",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.subscribeQueue" },
+    listed: false,
+    group: "Session",
+    summary: "Follow one Session's stream with host queue updates, resuming after a cursor.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
     key: "session.command",
     // The start kinds have their own entries (`sessions.create`/`attach`),
     // which carry the Role, skills and model policy this raw command cannot.

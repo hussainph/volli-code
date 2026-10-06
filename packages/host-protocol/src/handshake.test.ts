@@ -116,6 +116,117 @@ describe("negotiateWelcome", () => {
   });
 });
 
+describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
+  // Frozen PR-base peer declarations, not derived from this build's constants.
+  // App versions are self-description: both releases speak wire v1. The
+  // feature subsets model an older installation and an additive newer one;
+  // they do not claim a real old hostd process is booted by this unit test.
+  const oldDesktop: HostHello = {
+    ...hello,
+    protocol: { min: 1, max: 1 },
+    client: { kind: "desktop", version: "0.3.0" },
+    features: ["sessions", "sessions.subscribe", "session.read", "unknown.client.feature"],
+  };
+  const newDesktop: HostHello = {
+    ...hello,
+    protocol: HOST_PROTOCOL_VERSIONS,
+    client: { kind: "desktop", version: "0.4.0" },
+    features: ["sessions", "sessions.subscribe", "model-access", "future.area", "sessions"],
+  };
+  const oldHostd: HostOffer = {
+    ...offer,
+    protocol: { min: 1, max: 1 },
+    host: { id: HOST, version: "0.3.0" },
+    features: ["sessions", "sessions.subscribe", "session.read"],
+  };
+  const newHostd: HostOffer = {
+    ...offer,
+    protocol: HOST_PROTOCOL_VERSIONS,
+    host: { id: HOST, version: "0.4.0" },
+    features: ["model-access", "sessions", "sessions.subscribe", "session.read", "model-access"],
+  };
+
+  it.each([
+    {
+      cell: "old desktop × old hostd",
+      desktop: oldDesktop,
+      hostd: oldHostd,
+      features: ["sessions", "sessions.subscribe", "session.read"],
+    },
+    {
+      cell: "new desktop × old hostd",
+      desktop: newDesktop,
+      hostd: oldHostd,
+      features: ["sessions", "sessions.subscribe"],
+    },
+    {
+      cell: "old desktop × new hostd",
+      desktop: oldDesktop,
+      hostd: newHostd,
+      features: ["sessions", "sessions.subscribe", "session.read"],
+    },
+    {
+      cell: "new desktop × new hostd",
+      desktop: newDesktop,
+      hostd: newHostd,
+      features: ["model-access", "sessions", "sessions.subscribe"],
+    },
+  ])(
+    "welcomes $cell with only the deduplicated feature intersection",
+    ({ desktop, hostd, features }) => {
+      // Use the serialized hello, so skew covers the actual connectionParams
+      // grammar as well as negotiation, never app-version arithmetic.
+      const decoded = readHostHello(encodeHostHello(desktop));
+      expect(decoded).toStrictEqual(desktop);
+      expect(negotiateWelcome(decoded!, hostd, device)).toStrictEqual({
+        ok: true,
+        welcome: {
+          protocolVersion: 1,
+          host: hostd.host,
+          workspace: hostd.workspace,
+          actor: device,
+          features,
+          proof: null,
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      cell: "new desktop drops v1 × old hostd",
+      desktop: { ...newDesktop, protocol: { min: 2, max: 2 } },
+      hostd: oldHostd,
+      message: "This host speaks protocol 1; the client speaks 2",
+    },
+    {
+      cell: "old desktop × new hostd drops v1",
+      desktop: oldDesktop,
+      hostd: { ...newHostd, protocol: { min: 2, max: 2 } },
+      message: "This host speaks protocol 2; the client speaks 1",
+    },
+  ])(
+    "refuses $cell rather than falling back by app version or feature",
+    ({ desktop, hostd, message }) => {
+      expect(negotiateWelcome(desktop, hostd, device)).toStrictEqual({
+        ok: false,
+        error: { code: "PRECONDITION_FAILED", reason: "protocol-version-unsupported", message },
+      });
+    },
+  );
+
+  it("still intersects protocol ranges when the newer peer advertises an overlapping extension", () => {
+    // Synthetic future ranges exercise both directions without claiming this
+    // build implements v2 (HOST_PROTOCOL_VERSIONS remains the actual offer).
+    expect(
+      negotiateWelcome({ ...newDesktop, protocol: { min: 1, max: 2 } }, oldHostd, device),
+    ).toMatchObject({ ok: true, welcome: { protocolVersion: 1 } });
+    expect(
+      negotiateWelcome(oldDesktop, { ...newHostd, protocol: { min: 1, max: 2 } }, device),
+    ).toMatchObject({ ok: true, welcome: { protocolVersion: 1 } });
+  });
+});
+
 describe("checkWorkspaceFence", () => {
   it("passes first contact, a later epoch, and the same epoch from the same host", () => {
     expect(checkWorkspaceFence(null, { epoch: 1, hostId: HOST })).toBeNull();

@@ -86,7 +86,12 @@ type DeliberatelyMainOnlyProcedure = PublishedProcedure<
  * listing; VC-608's generic bridge decides whether these cross IPC.
  */
 type DeliberatelyWebSocketOnlyProcedure = PublishedProcedure<
-  "protocol.welcome" | "session.list" | "session.show" | "session.peek" | "session.answer"
+  | "protocol.welcome"
+  | "session.list"
+  | "session.show"
+  | "session.peek"
+  | "session.answer"
+  | "session.subscribeQueue"
 >;
 
 /**

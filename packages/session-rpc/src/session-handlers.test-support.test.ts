@@ -34,6 +34,7 @@ function callAll(handlers: SessionRouterHandlers) {
     () => handlers["session.snapshot"]({ sessionId: "s" }, CALL),
     () => handlers["session.projection"]({ sessionId: "s" }, CALL),
     () => handlers["session.subscribe"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
+    () => handlers["session.subscribeQueue"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
     () => handlers["session.command"]({} as never, CALL),
     () =>
       handlers["session.cancelQueued"](
@@ -141,7 +142,7 @@ describe("sessionHandlersFrom", () => {
       performanceObserver: { record: () => {} },
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
-    // 21 existing router handlers, two queue mutations, and four Session reads.
-    expect(Object.keys(context.handlers)).toHaveLength(27);
+    // 21 existing router handlers, three queue operations, and four Session reads.
+    expect(Object.keys(context.handlers)).toHaveLength(28);
   });
 });

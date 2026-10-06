@@ -142,6 +142,10 @@ export interface HostHandlerSignatures {
     { sessionId: string; afterSequence: number; signal?: AbortSignal },
     SessionStreamEmission
   >;
+  readonly "session.subscribeQueue": HostSubscriptionHandler<
+    { sessionId: string; afterSequence: number; signal?: AbortSignal },
+    SessionStreamEmission
+  >;
   readonly "session.command": HostHandler<
     SessionRuntimeCommandRequest,
     SessionRuntimeCommandResult
@@ -381,6 +385,12 @@ function hostHandlerEntries(
     "session.snapshot": (input) => runtime().snapshot(input),
     "session.projection": (input) => runtime().projection(input),
     "session.subscribe": (input, _call, sink) =>
+      runtime().subscribe(
+        input,
+        (emission) => sink.emit(emission),
+        (error) => sink.fail(error),
+      ),
+    "session.subscribeQueue": (input, _call, sink) =>
       runtime().subscribe(
         input,
         (emission) => sink.emit(emission),
