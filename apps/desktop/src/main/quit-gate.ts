@@ -187,6 +187,8 @@ export function registerAcceptedQuitCoordinator(options: {
    */
   stopBackgroundWork?(): void;
   shutdownDeadlineMs?: number;
+  /** Reports an unstamped host close, without changing the accepted quit. */
+  onShutdownDeadline?(deadlineMs: number): void;
   reportFailure(error: unknown): void;
   /** Former synchronous quit listeners, called in their original order. */
   prepareQuit?(event: { preventDefault(): void }): void;
@@ -226,6 +228,7 @@ export function registerAcceptedQuitCoordinator(options: {
       void settleShutdownBeforeDeadline({
         shutdowns: [options.shutdownNativeSessions, options.shutdownAgentSocket],
         deadlineMs: options.shutdownDeadlineMs,
+        onDeadline: options.onShutdownDeadline,
         reportFailure: options.reportFailure,
       }).then(exitAfterCheckpoint, exitAfterCheckpoint);
     });
