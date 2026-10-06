@@ -44,6 +44,8 @@ export type ProvisionFailure =
   | { readonly code: "unresolvable"; readonly step: "connect"; readonly detail: string }
   | { readonly code: "host-key-changed"; readonly step: "connect"; readonly detail: string }
   | { readonly code: "host-key-rejected"; readonly step: "connect" }
+  /** The box showed keys whose fingerprints could not be computed: nothing to compare, so nothing to accept. */
+  | { readonly code: "host-key-unverifiable"; readonly step: "connect"; readonly detail: string }
   | { readonly code: "password-only"; readonly step: "connect"; readonly detail: string }
   | { readonly code: "key-refused"; readonly step: "connect"; readonly detail: string }
   | { readonly code: "ssh-missing"; readonly step: "connect"; readonly detail: string }
@@ -84,8 +86,24 @@ export type ProvisionFailure =
       readonly message: string;
       readonly detail: readonly string[];
     }
+  /**
+   * A user unit stops at logout unless the account lingers, and this login
+   * has no sudo to turn that on: an administrator runs `command`.
+   */
+  | {
+      readonly code: "linger-needs-admin";
+      readonly step: "start";
+      readonly user: string;
+      readonly command: string;
+    }
   // tunnel
-  | { readonly code: "tunnel-failed"; readonly step: "link"; readonly detail: string };
+  | { readonly code: "tunnel-failed"; readonly step: "link"; readonly detail: string }
+  /**
+   * A step found the state missing what it relies on (a result, a fact), or
+   * threw: never an exception for the caller, always this, retried from the
+   * probe so every fact and decision is gathered again.
+   */
+  | { readonly code: "unexpected-state"; readonly step: StepId; readonly detail: string };
 
 export type ProvisionQuestion =
   /** An unknown host key: compare and accept, or go back. */
@@ -100,11 +118,14 @@ export type ProvisionQuestion =
     }
   /** This Mac is already enrolled with this host. */
   | { readonly kind: "already-paired"; readonly step: "probe"; readonly hostId: string }
-  /** sudo wants a password: for a system install (or settle for a user unit), or for lingering. */
+  /**
+   * sudo wants a password: for a system install (or settle for a user unit),
+   * for lingering, or to enroll with a system install (its device store is root's).
+   */
   | {
       readonly kind: "sudo-password";
       readonly step: "install" | "start" | "enroll";
-      readonly reason: "install" | "linger" | "service-account";
+      readonly reason: "install" | "linger" | "enroll";
       readonly command: string;
       /** The last password was wrong. */
       readonly retry: boolean;
@@ -166,6 +187,11 @@ export function describeFailure(
       return {
         line: `You didn’t accept ${host}’s host key`,
         recovery: retry("Check the key again", step),
+      };
+    case "host-key-unverifiable":
+      return {
+        line: `Couldn’t compute ${host}’s host key fingerprints to show you, so they can’t be checked`,
+        recovery: retry("Try again", step),
       };
     case "password-only":
       return {
@@ -235,7 +261,17 @@ export function describeFailure(
       return { line: `Couldn’t copy Volli host to ${host}`, recovery: retry("Try again", step) };
     case "hostd-refused":
       return { line: failure.message, recovery: retry("Try again", step) };
+    case "linger-needs-admin":
+      return {
+        line: `${host} stops Volli host when ${failure.user} logs out. Ask an administrator to run: ${failure.command}`,
+        recovery: retry("Check again", step),
+      };
     case "tunnel-failed":
       return { line: `Couldn’t open the tunnel to ${host}`, recovery: retry("Try again", step) };
+    case "unexpected-state":
+      return {
+        line: `Adding ${host} lost track of where it was`,
+        recovery: retry("Check again", "probe"),
+      };
   }
 }

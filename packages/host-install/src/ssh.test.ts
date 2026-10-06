@@ -1,4 +1,14 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -9,11 +19,13 @@ import {
   classifySshFailure,
   connectionOptions,
   discoverHostKeys,
+  ensureControlDir,
   runProcess,
   shellQuote,
   systemSsh,
+  UnsafeControlDirError,
 } from "./ssh";
-import { recordingLogger, scriptedSpawn } from "./testing/fake-process";
+import { recordingLogger, scriptedSpawn, type FakeChild } from "./testing/fake-process";
 
 const TARGET = { destination: "deploy@box", port: null, label: "box" };
 let root: string;
@@ -103,6 +115,8 @@ describe("the runner's options", () => {
         "StrictHostKeyChecking=yes",
         "ForwardAgent=no",
         "ClearAllForwardings=yes",
+        "PermitLocalCommand=no",
+        "ForkAfterAuthentication=no",
       ]),
     );
     expect(options).toContain("ControlPath=/tmp/v/%C");
@@ -328,5 +342,111 @@ describe("host keys", () => {
     writeFileSync(file, "other");
     await acceptHostKeys({ target: TARGET, offer, home, spawn: defaults.spawn, logger });
     expect(readFileSync(file, "utf8")).toBe("other\nbox ssh-ed25519 AAAA\n");
+  });
+});
+
+/** ssh records `entries`; ssh-keygen answers as `keygen` says. */
+const discovering = (entries: string, keygen: (child: FakeChild) => void) =>
+  scriptedSpawn((child) => {
+    if (child.command === "ssh") {
+      const file = child.args
+        .find((arg) => arg.startsWith("UserKnownHostsFile="))!
+        .slice("UserKnownHostsFile=".length);
+      writeFileSync(file, entries);
+      child.exit(255);
+    } else {
+      keygen(child);
+    }
+  });
+
+describe("host keys that cannot be fingerprinted", () => {
+  it("discovery fails closed when fingerprints cannot be computed", async () => {
+    const { spawn } = discovering("box ssh-ed25519 AAAA\n", (child) =>
+      child.fail(Object.assign(new Error("spawn ssh-keygen ENOENT"), { code: "ENOENT" })),
+    );
+    const log = recordingLogger();
+    expect(await discoverHostKeys({ target: TARGET, spawn, logger: log.logger })).toBeNull();
+    expect(log.lines.at(-1)).toMatchObject({
+      level: "warn",
+      msg: "host key fingerprints unavailable",
+      fields: { keys: 1, fingerprints: 0, code: 127 },
+    });
+  });
+
+  it("offers nothing unless each key has exactly its own fingerprint", async () => {
+    const two = "box ssh-ed25519 AAAA\nbox ecdsa-sha2-nistp256 BBBB\n";
+    for (const [entries, code, out] of [
+      // ssh-keygen failed, whatever it printed.
+      [two, 1, "256 SHA256:abc box (ED25519)\n256 SHA256:def box (ECDSA)\n"],
+      // One fingerprint short.
+      [two, 0, "256 SHA256:abc box (ED25519)\n"],
+      // Unparseable.
+      [two, 0, "garbage\n"],
+      // In the wrong order: not the entries' own.
+      [two, 0, "256 SHA256:def box (ECDSA)\n256 SHA256:abc box (ED25519)\n"],
+      // A line that names no key at all.
+      ["box\n", 0, "256 SHA256:abc box (ED25519)\n"],
+    ] as const) {
+      const { spawn } = discovering(entries, (child) => {
+        child.out(out);
+        child.exit(code);
+      });
+      expect(
+        await discoverHostKeys({ target: TARGET, spawn, logger: recordingLogger().logger }),
+      ).toBeNull();
+    }
+    // A key type it does not know is matched by position alone.
+    const { spawn } = discovering("|1|salt|hash ssh-new-kind CCCC\n", (child) => {
+      child.out("512 SHA256:new |1|salt|hash (NEW)\n");
+      child.exit(0);
+    });
+    expect(
+      await discoverHostKeys({ target: TARGET, spawn, logger: recordingLogger().logger }),
+    ).toEqual({
+      entries: ["|1|salt|hash ssh-new-kind CCCC"],
+      fingerprints: [{ type: "NEW", fingerprint: "SHA256:new" }],
+    });
+  });
+});
+
+describe("a ControlMaster directory the caller gives", () => {
+  it("is made 0700 when missing", () => {
+    const dir = join(root, "control");
+    expect(ensureControlDir(dir)).toBe(dir);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    // A private one already there is used as it is.
+    expect(ensureControlDir(dir)).toBe(dir);
+  });
+
+  it("is refused unless it is a real, private directory of this user's", () => {
+    const real = join(root, "real");
+    mkdirSync(real, { mode: 0o700 });
+    const link = join(root, "link");
+    symlinkSync(real, link);
+    const file = join(root, "file");
+    writeFileSync(file, "");
+    const shared = join(root, "shared");
+    mkdirSync(shared);
+    chmodSync(shared, 0o750);
+    for (const [dir, uid, reason] of [
+      [link, undefined, "it is a symbolic link"],
+      [file, undefined, "it is not a directory"],
+      [shared, undefined, "others can reach it (mode 750)"],
+      [real, -1, "it is owned by uid"],
+      [join(root, "missing/control"), undefined, "ENOENT"],
+    ] as const) {
+      let caught: unknown;
+      try {
+        ensureControlDir(dir, uid);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(UnsafeControlDirError);
+      expect(caught).toMatchObject({ code: "unsafe-control-dir", path: dir });
+      expect((caught as UnsafeControlDirError).reason).toContain(reason);
+    }
+    expect(() =>
+      systemSsh({ target: TARGET, logger: recordingLogger().logger, controlDir: shared }),
+    ).toThrow(UnsafeControlDirError);
   });
 });

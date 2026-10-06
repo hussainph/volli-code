@@ -15,8 +15,11 @@
  * no secret; secrets ride in `ProvisionSecrets`, in memory, per call.
  * `advance` runs from the first step without a result until the host is
  * added, a step fails, or the person must answer. `retry` clears the failed
- * step and everything after it; `answer` records a decision. A provider's
- * steps must be idempotent, so running one twice is always safe.
+ * step and everything after it, and every decision answered on evidence
+ * those steps gathered (the box may have changed meanwhile), so it is asked
+ * again; `answer` records a decision. A provider's steps must be idempotent,
+ * so running one twice is always safe. A step that throws stops the machine
+ * with a typed `unexpected-state` failure, never an exception.
  *
  * **Logging.** Every step logs its start and its end with `component:
  * host-install`, the host, the provider and the step, never a secret.
@@ -130,7 +133,37 @@ function without<R extends ProvisionResults>(results: R, from: StepId): R {
   return Object.fromEntries(kept.map((step) => [step, results[step]])) as unknown as R;
 }
 
-/** Clears a failure so `advance` runs its step (or `from`, earlier) again. */
+/**
+ * The step whose evidence each decision was answered on. Retrying from that
+ * step, or an earlier one, gathers the evidence again, so the decision is
+ * dropped and asked again: an already-paired box may have been reinstalled,
+ * an older hostd replaced, the host id changed. `null`: the person's own
+ * intent, which no box fact answered, kept.
+ */
+const DECISION_EVIDENCE: Readonly<Record<keyof ProvisionDecisions, StepId | null>> = {
+  acceptedHostKeys: "connect",
+  existing: "probe",
+  alreadyPaired: "probe",
+  // The host id the person agreed to re-pin to is the one enroll (or the probe) reported.
+  repin: "enroll",
+  userInstall: null,
+};
+
+/** Drops each decision whose evidence `from` (or a step after it) gathers again. */
+function decisionsBefore(decisions: ProvisionDecisions, from: StepId): ProvisionDecisions {
+  const at = STEP_ORDER.indexOf(from);
+  return Object.fromEntries(
+    Object.entries(decisions).filter(([key]) => {
+      const evidence = DECISION_EVIDENCE[key as keyof ProvisionDecisions] ?? null;
+      return evidence === null || STEP_ORDER.indexOf(evidence) < at;
+    }),
+  );
+}
+
+/**
+ * Clears a failure so `advance` runs its step (or `from`, earlier) again,
+ * with every decision that rested on those steps' evidence dropped.
+ */
 export function retry<R extends ProvisionResults>(
   state: ProvisionState<R>,
   from?: StepId,
@@ -139,6 +172,7 @@ export function retry<R extends ProvisionResults>(
   return {
     ...state,
     results: step === null ? state.results : without(state.results, step),
+    decisions: step === null ? state.decisions : decisionsBefore(state.decisions, step),
     status: "ready",
     stop: null,
   };
@@ -212,7 +246,20 @@ export async function advance<R extends ProvisionResults>(
     options.onStep?.(step);
     const started = Date.now();
     logger.info("step started", { step });
-    const outcome = await provider.run(step, { state: now(), secrets, logger });
+    let outcome: StepOutcome;
+    try {
+      outcome = await provider.run(step, { state: now(), secrets, logger });
+    } catch (error) {
+      // A provider's bug or a state it did not expect: typed, never thrown at the caller.
+      outcome = {
+        kind: "failed",
+        failure: {
+          code: "unexpected-state",
+          step,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
     const ms = Date.now() - started;
     if (isStop(outcome)) {
       if (outcome.kind === "failed") {

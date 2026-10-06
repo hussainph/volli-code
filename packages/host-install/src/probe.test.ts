@@ -7,6 +7,7 @@ import {
   parseProbe,
   PROBE_SCRIPT,
   probeHost,
+  readProbe,
 } from "./probe";
 import type { SshTransport } from "./ssh";
 
@@ -29,11 +30,12 @@ const UBUNTU = [
   "disk_system=20971520",
   "mem_kb=8167236",
   "sudo=nopasswd",
+  "end=ok",
 ].join("\n");
 
-const transport = (code: number, stdout: string): SshTransport => ({
+const transport = (code: number, stdout: string, stderr = "boom"): SshTransport => ({
   target: { destination: "box", port: null, label: "box" },
-  exec: async () => ({ code, stdout, stderr: "boom" }),
+  exec: async () => ({ code, stdout, stderr }),
   close: async () => {},
 });
 
@@ -128,8 +130,28 @@ describe("the probe", () => {
       ok: true,
       facts: { kernel: "Linux" },
     });
-    expect(await probeHost(transport(1, UBUNTU))).toMatchObject({ ok: true });
     expect(await probeHost(transport(255, ""))).toEqual({ ok: false, code: 255, stderr: "boom" });
+  });
+
+  it("fails closed on an answer cut short, a failed exit, or a missing fact", async () => {
+    // A whole answer, but the script did not finish well: not believed.
+    expect(await probeHost(transport(1, UBUNTU))).toEqual({ ok: false, code: 1, stderr: "boom" });
+    // Dropped before the end: no partial facts.
+    const cut = UBUNTU.slice(0, UBUNTU.indexOf("sudo="));
+    expect(await probeHost(transport(0, cut))).toEqual({
+      ok: false,
+      code: 0,
+      stderr: "The check's answer was incomplete: boom",
+    });
+    expect(await probeHost(transport(0, cut, ""))).toMatchObject({
+      stderr: "The check's answer was incomplete",
+    });
+    expect(readProbe(UBUNTU)).toEqual(parseProbe(UBUNTU));
+    expect(readProbe(UBUNTU.replace("end=ok", "end="))).toBeNull();
+    expect(readProbe(UBUNTU.replace(/^user=.*$/mu, ""))).toBeNull();
+    expect(readProbe(UBUNTU.replace("home=/home/deploy", "home="))).toBeNull();
+    expect(readProbe(UBUNTU.replace("home=/home/deploy", "home=deploy"))).toBeNull();
+    expect(PROBE_SCRIPT.trimEnd().endsWith('echo "end=ok"')).toBe(true);
   });
 
   it("maps architectures to artifacts, and describes the box in three facts", () => {

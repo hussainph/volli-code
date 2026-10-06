@@ -9,6 +9,10 @@
  * prompt, and any hostd already here: where, which version, and its
  * `status --json` when it speaks one (VC-700 hostds and later), which says
  * whether this Mac's key is already enrolled.
+ *
+ * **Fails closed.** The script ends with `end=ok`; an answer that stops
+ * short of it (the connection dropped mid-way), exits non-zero, or lacks a
+ * fact every step relies on is a failure, never partial facts.
  */
 import { readHostdJson, type HostdManagedStatus, type InstallMode } from "./contract";
 import type { SshTransport } from "./ssh";
@@ -110,6 +114,8 @@ export const PROBE_SCRIPT = [
     '  echo "status=$s"',
     "fi",
   ]),
+  // Last: an answer without it was cut short.
+  'echo "end=ok"',
 ].join("\n");
 
 function fields(stdout: string): Map<string, string[]> {
@@ -175,6 +181,21 @@ export function parseProbe(stdout: string): ProbeFacts {
   };
 }
 
+/** The facts every step relies on: an answer without one of them is not believed. */
+const REQUIRED = ["kernel", "arch", "user", "home", "groups"] as const;
+
+/**
+ * The probe's facts when its answer is whole: it reached `end=ok`, and says
+ * every required fact, with an absolute home. `null` otherwise.
+ */
+export function readProbe(stdout: string): ProbeFacts | null {
+  const map = fields(stdout);
+  if (map.get("end")?.[0] !== "ok") return null;
+  if (REQUIRED.some((key) => !map.has(key))) return null;
+  const facts = parseProbe(stdout);
+  return facts.home.startsWith("/") ? facts : null;
+}
+
 export async function probeHost(
   ssh: SshTransport,
 ): Promise<
@@ -182,10 +203,17 @@ export async function probeHost(
   | { readonly ok: false; readonly code: number; readonly stderr: string }
 > {
   const result = await ssh.exec(PROBE_SCRIPT, { label: "probe", timeoutMs: 60_000 });
-  if (result.code !== 0 && !result.stdout.includes("kernel=")) {
-    return { ok: false, code: result.code, stderr: result.stderr };
+  if (result.code !== 0) return { ok: false, code: result.code, stderr: result.stderr };
+  const facts = readProbe(result.stdout);
+  if (facts === null) {
+    const said = result.stderr.trim();
+    return {
+      ok: false,
+      code: result.code,
+      stderr: `The check's answer was incomplete${said === "" ? "" : `: ${said}`}`,
+    };
   }
-  return { ok: true, facts: parseProbe(result.stdout) };
+  return { ok: true, facts };
 }
 
 /** The artifact target: `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, or `null`. */

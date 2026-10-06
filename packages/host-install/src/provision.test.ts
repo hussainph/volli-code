@@ -125,3 +125,78 @@ describe("the provider-neutral step machine", () => {
     expect(answer(state, { kind: "sudo-password", password: "pw" }).decisions).toEqual({});
   });
 });
+
+describe("retrying after the host may have changed", () => {
+  const decided = {
+    ...initialProvisionState(REQUEST),
+    results: {
+      connect: { ok: true },
+      probe: {},
+      deliver: {},
+      install: {},
+      start: {},
+      enroll: ENROLLED,
+    },
+    decisions: {
+      acceptedHostKeys: ["SHA256:box"],
+      existing: "adopt",
+      alreadyPaired: true,
+      userInstall: true,
+      repin: true,
+    },
+    status: "stopped",
+    stop: { kind: "failed", failure: { code: "tunnel-failed", step: "link", detail: "" } },
+  } as const;
+
+  it("asks again every decision the retried steps' evidence answered, and keeps the person's intent", () => {
+    expect(retry(decided).decisions).toEqual(decided.decisions);
+    // Enroll runs again from either, and says the host id afresh.
+    expect(retry(decided, "start").decisions).toEqual(retry(decided, "enroll").decisions);
+    expect(retry(decided, "enroll").decisions).toEqual({
+      acceptedHostKeys: ["SHA256:box"],
+      existing: "adopt",
+      alreadyPaired: true,
+      userInstall: true,
+    });
+    expect(retry(decided, "probe").decisions).toEqual({
+      acceptedHostKeys: ["SHA256:box"],
+      userInstall: true,
+    });
+    expect(retry(decided, "connect").decisions).toEqual({ userInstall: true });
+    // A decision it does not know (a newer state's) is kept.
+    const newer = { ...decided, decisions: { future: true } as never };
+    expect(retry(newer, "connect").decisions).toEqual({ future: true });
+    // Nothing to retry: nothing dropped.
+    const done = { ...decided, results: { ...decided.results, link: { url: "x" } }, stop: null };
+    expect(retry(done).decisions).toEqual(decided.decisions);
+  });
+});
+
+describe("a provider that throws", () => {
+  it("stops with unexpected-state at that step, never rejecting", async () => {
+    for (const [thrown, detail] of [
+      [
+        new TypeError("Cannot read properties of null (reading 'binary')"),
+        "Cannot read properties of null (reading 'binary')",
+      ],
+      ["a string", "a string"],
+    ] as const) {
+      const provider: HostProvider = {
+        id: "broken",
+        async run(step) {
+          if (step === "deliver") throw thrown;
+          return { result: step === "enroll" ? ENROLLED : { ok: true } };
+        },
+      };
+      const log = recordingLogger();
+      const stopped = await advance(initialProvisionState(REQUEST), provider, {
+        logger: log.logger,
+      });
+      expect(stopped.stop).toEqual({
+        kind: "failed",
+        failure: { code: "unexpected-state", step: "deliver", detail },
+      });
+      expect(log.lines.at(-1)).toMatchObject({ level: "warn", msg: "step failed" });
+    }
+  });
+});

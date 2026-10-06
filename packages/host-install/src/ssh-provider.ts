@@ -16,9 +16,22 @@
  * targets this build can install is the caller's (`supportedTargets`, from
  * the signed app's pin); a Mac is refused until a darwin hostd ships.
  *
+ * **Pinned end to end.** The tarball on the box is the one whose sha256 the
+ * signed app pinned: one already there is sent again unless it matches. It
+ * is then extracted afresh, every time, into a new staging directory beside
+ * it, and only that tree's `volli-hostd` is run (`--version`) and handed to
+ * install: an unpacked tree left from before, whatever it says, is never
+ * trusted or executed.
+ *
  * **Secrets.** A sudo password arrives in the caller's `ProvisionSecrets`, in
  * memory, and goes only to `sudo -S`'s stdin: never a command line, the state
- * or a log.
+ * or a log. sudo reads it only when it must authenticate (not with a cached
+ * timestamp, nor NOPASSWD), so the privileged command never inherits that
+ * stdin: it runs under `sh -c 'exec … </dev/null'`, and every hostd command
+ * run as the login gets `</dev/null` too.
+ *
+ * **Typed, never thrown.** A state missing what a step relies on (a result,
+ * a fact) stops with `unexpected-state`, retried from the probe.
  */
 import { createReadStream } from "node:fs";
 import type { Readable } from "node:stream";
@@ -49,6 +62,7 @@ import {
   classifySshFailure,
   shellQuote,
   type HostKeyOffer,
+  type SshExecOptions,
   type SshExecResult,
   type SshTransport,
 } from "./ssh";
@@ -58,11 +72,15 @@ export const DEFAULT_REQUIRED_DISK_BYTES = 420 * 1024 ** 2;
 const MIN_GLIBC = "2.36";
 
 export interface UploadResult {
+  /** The tree freshly extracted from the verified tarball: what install is given. */
   readonly releaseDir: string;
   readonly remoteTarball: string;
   readonly bytes: number;
   readonly sha256: string;
-  /** The box already had this exact tarball unpacked: nothing was sent. */
+  /**
+   * The box already had the tarball, matching the pin, so it was not sent
+   * again. It was still extracted afresh: `releaseDir` is new either way.
+   */
   readonly reused: boolean;
 }
 
@@ -99,6 +117,15 @@ export interface SshProviderPorts {
 const failed = (failure: ProvisionFailure): ProvisionStop => ({ kind: "failed", failure });
 const ask = (question: ProvisionQuestion): ProvisionStop => ({ kind: "question", question });
 
+/** A state without what a step relies on; `sshProvider` turns it into `unexpected-state`. */
+class UnexpectedState extends Error {}
+
+/** `value`, or an `UnexpectedState` naming what was missing. */
+function need<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) throw new UnexpectedState(`no ${what}`);
+  return value;
+}
+
 /** A connection-level failure mid-step, or `null` when ssh itself was fine. */
 function lost(step: StepId, result: SshExecResult): ProvisionStop | null {
   const failure = classifySshFailure(result);
@@ -109,10 +136,11 @@ function lost(step: StepId, result: SshExecResult): ProvisionStop | null {
 
 /** The mode the install has or will have; `null` until sudo has been settled. */
 export function modeOf(state: SshProvisionState): InstallMode | null {
+  // `null` too: a hand-edited or damaged state is not trusted to be whole.
   const install = state.results.install;
-  if (install !== undefined) return install.mode;
+  if (install !== undefined && install !== null) return install.mode;
   const probe = state.results.probe;
-  if (probe === undefined) return null;
+  if (probe === undefined || probe === null) return null;
   // A Mac's host is a launchd agent: it runs as the person, always.
   if (probe.launchd) return "user";
   if (probe.existing !== null) return probe.existing.mode;
@@ -121,37 +149,48 @@ export function modeOf(state: SshProvisionState): InstallMode | null {
 }
 
 /**
- * A command as root, or as `asUser`: `sudo -n` when sudo needs no password,
- * else `sudo -S` with the password on stdin (never in the command line, the
- * environment or a log). `null` when a password is needed and not held.
+ * `command` as root. With NOPASSWD: `sudo -n`. Else `sudo -S` with the
+ * password on the script's stdin (never in the command line, the
+ * environment or a log). sudo reads that stdin only when it must
+ * authenticate; with a cached timestamp it leaves it unread, so the command
+ * itself runs under `sh -c 'exec … </dev/null'` and never inherits it. One
+ * sudo, no reliance on its timestamp: a `timestamp_timeout=0` box works too.
+ * `null` when a password is needed and not held.
  */
-function sudo(
+function asRoot(
   ctx: StepContext,
   command: string,
-  asUser?: string,
 ): { readonly script: string; readonly stdin?: string } | null {
-  const user = asUser === undefined ? "" : `-u ${asUser} `;
-  if (ctx.state.results.probe!.sudo === "nopasswd") return { script: `sudo -n ${user}${command}` };
+  const inner = `${command} </dev/null`;
+  if (need(ctx.state.results.probe, "probe facts").sudo === "nopasswd") {
+    return { script: `sudo -n ${inner}` };
+  }
   if (ctx.secrets.sudoPassword === null) return null;
-  return { script: `sudo -S -p '' ${user}${command}`, stdin: `${ctx.secrets.sudoPassword}\n` };
+  return {
+    script: `sudo -S -p '' sh -c ${shellQuote(`exec ${inner}`)}`,
+    stdin: `${ctx.secrets.sudoPassword}\n`,
+  };
 }
 
 const WRONG_PASSWORD = /incorrect password|Sorry, try again|no password was provided/u;
 
 /**
- * Runs a hostd management command (as root, as `asUser`, or as the login)
- * and reads its one JSON answer. Asks for a sudo password when one is needed.
+ * Runs a hostd management command (as root, or as the login) and reads its
+ * one JSON answer. Asks for a sudo password when one is needed. Its stdin is
+ * always `/dev/null`.
  */
 async function hostdCommand<T>(
   ctx: StepContext,
   step: "install" | "start" | "enroll",
   command: string,
-  as: "root" | "service" | "login",
-  reason: "install" | "linger" | "service-account",
+  as: "root" | "login",
+  reason: "install" | "linger" | "enroll",
 ): Promise<T | HostdFailure | ProvisionStop> {
-  let run: { readonly script: string; readonly stdin?: string } | null = { script: command };
-  if (as !== "login") {
-    run = sudo(ctx, command, as === "service" ? "volli" : undefined);
+  let run: { readonly script: string; readonly stdin?: string } | null = {
+    script: `${command} </dev/null`,
+  };
+  if (as === "root") {
+    run = asRoot(ctx, command);
     if (run === null) return ask({ kind: "sudo-password", step, reason, command, retry: false });
   }
   const result = await ctx.ports.ssh.exec(run.script, {
@@ -216,6 +255,14 @@ const connect: Step = async (ctx) => {
   const offer = await ports.hostKeys.discover();
   if (offer === null)
     return failed({ code: "unreachable", step: "connect", detail: failure.detail });
+  // Never an offer without a fingerprint for each key: nothing to compare is nothing to accept.
+  if (offer.fingerprints.length === 0 || offer.fingerprints.length !== offer.entries.length) {
+    return failed({
+      code: "host-key-unverifiable",
+      step: "connect",
+      detail: `${offer.entries.length} keys, ${offer.fingerprints.length} fingerprints`,
+    });
+  }
   const accepted = state.decisions.acceptedHostKeys;
   if (accepted === undefined || accepted.join(" ") !== fingerprintsOf(offer).join(" ")) {
     return ask({ kind: "host-key", step: "connect", offer });
@@ -301,9 +348,9 @@ const probe: Step = async ({ state, ports }) => {
     const system =
       !mac && (existing?.mode === "system" || (existing === null && facts.sudo !== "none"));
     const free = system ? facts.disk.system : facts.disk.home;
-    const need = request.requiredDiskBytes ?? DEFAULT_REQUIRED_DISK_BYTES;
-    if (free !== null && free < need) {
-      return failed({ code: "disk-full", step: "probe", freeBytes: free, needBytes: need });
+    const needBytes = request.requiredDiskBytes ?? DEFAULT_REQUIRED_DISK_BYTES;
+    if (free !== null && free < needBytes) {
+      return failed({ code: "disk-full", step: "probe", freeBytes: free, needBytes });
     }
   }
   return { result };
@@ -319,92 +366,129 @@ function installing(state: SshProvisionState): boolean {
   return state.decisions.existing !== "adopt" || state.results.probe?.existing?.status === null;
 }
 
+/** Every staging directory deliver makes in the cache: `stage.XXXXXX`. */
+const STAGE_PREFIX = "stage.";
+
 const deliver: Step = async ({ state, ports, logger }) => {
   if (!installing(state)) return { result: { skipped: true } };
-  const probeFacts = state.results.probe!;
+  const probeFacts = need(state.results.probe, "probe facts");
   const artifact = await ports.artifact(probeFacts.artifactTarget);
   if ("kind" in artifact)
     return failed({ code: artifact.kind, step: "deliver", detail: artifact.detail });
   const dir = `${probeFacts.home}/.cache/volli-hostd`;
   const tarball = `${dir}/${artifact.fileName}`;
-  const releaseDir = `${dir}/${artifact.fileName.replace(/\.tar\.gz$/u, "")}`;
-  const binary = `${releaseDir}/bin/volli-hostd`;
+  const part = `${tarball}.part`;
+  // Where an earlier version of this step unpacked in place: never trusted, removed.
+  const legacy = `${dir}/${artifact.fileName.replace(/\.tar\.gz$/u, "")}`;
   const q = shellQuote;
-  const facts = {
-    releaseDir,
-    remoteTarball: tarball,
-    bytes: artifact.bytes,
-    sha256: artifact.sha256,
-  };
+  const exec = (script: string, options: SshExecOptions) => ports.ssh.exec(script, options);
 
-  // Resumable: the exact tarball already there and unpacked is not sent again.
-  const have = await ports.ssh.exec(
-    `sha256sum ${q(tarball)} 2>/dev/null | cut -d' ' -f1; ${q(binary)} --version 2>/dev/null`,
-    { label: "upload: check" },
-  );
+  // The tarball already there is sent again unless it is exactly the pinned one.
+  const have = await exec(`sha256sum ${q(tarball)} 2>/dev/null | cut -d' ' -f1`, {
+    label: "upload: check",
+  });
   const connection = lost("deliver", have);
   if (connection !== null) return connection;
-  const [sum, version] = have.stdout.trim().split("\n");
-  if (sum === artifact.sha256 && version === artifact.version) {
-    logger.info("tarball already on the box", { fileName: artifact.fileName });
-    return { result: { ...facts, reused: true } };
-  }
-
-  const sent = await ports.ssh.exec(
-    `umask 022 && mkdir -p ${q(dir)} && cat > ${q(`${tarball}.part`)}`,
-    {
+  const reused = have.stdout.trim() === artifact.sha256;
+  if (reused) {
+    logger.info("pinned tarball already on the box; not sending it", {
+      fileName: artifact.fileName,
+    });
+  } else {
+    const sent = await exec(`umask 022 && mkdir -p ${q(dir)} && cat > ${q(part)}`, {
       label: "upload",
       stdin: (ports.openFile ?? createReadStream)(artifact.path),
       onProgress: (bytes) => ports.onUploadProgress?.(bytes, artifact.bytes),
       timeoutMs: 30 * 60_000,
-    },
-  );
-  const dropped = lost("deliver", sent);
-  if (dropped !== null) return dropped;
-  if (sent.code !== 0)
-    return failed({ code: "upload-failed", step: "deliver", detail: sent.stderr.trim() });
-  const verified = await ports.ssh.exec(`sha256sum ${q(`${tarball}.part`)} | cut -d' ' -f1`, {
-    label: "upload: verify",
-  });
-  if (verified.stdout.trim() !== artifact.sha256) {
-    await ports.ssh.exec(`rm -f ${q(`${tarball}.part`)}`, { label: "upload: discard" });
-    return failed({
-      code: "remote-checksum",
-      step: "deliver",
-      detail: `${artifact.fileName} arrived as ${verified.stdout.trim() || "nothing"}, not ${artifact.sha256}`,
     });
+    const dropped = lost("deliver", sent);
+    if (dropped !== null) return dropped;
+    if (sent.code !== 0)
+      return failed({ code: "upload-failed", step: "deliver", detail: sent.stderr.trim() });
+    const verified = await exec(`sha256sum ${q(part)} | cut -d' ' -f1`, {
+      label: "upload: verify",
+    });
+    const verifyLost = lost("deliver", verified);
+    if (verifyLost !== null) return verifyLost;
+    if (verified.stdout.trim() !== artifact.sha256) {
+      await exec(`rm -f ${q(part)}`, { label: "upload: discard" });
+      return failed({
+        code: "remote-checksum",
+        step: "deliver",
+        detail: `${artifact.fileName} arrived as ${verified.stdout.trim() || "nothing"}, not ${artifact.sha256}`,
+      });
+    }
   }
-  const unpacked = await ports.ssh.exec(
+
+  // Always a fresh tree from the verified tarball, checked once more as it is
+  // read: an unpacked tree from before (or half of one) is never trusted.
+  const unpacked = await exec(
     [
       "umask 022",
-      `mv -f ${q(`${tarball}.part`)} ${q(tarball)}`,
-      `rm -rf ${q(releaseDir)}`,
-      `mkdir -p ${q(releaseDir)}`,
-      `tar -xzf ${q(tarball)} -C ${q(releaseDir)} --strip-components=1 --no-same-owner`,
-      `${q(binary)} --version`,
-    ].join(" && "),
+      `d=${q(dir)}`,
+      ...(reused ? [] : [`mv -f ${q(part)} ${q(tarball)} || exit 1`]),
+      `rm -rf ${q(legacy)} "$d"/${STAGE_PREFIX}*`,
+      `s=$(mktemp -d "$d/${STAGE_PREFIX}XXXXXX") || exit 1`,
+      // mktemp's 0700 would follow the copy into the install, shutting the service account out.
+      'chmod 755 "$s" || exit 1',
+      `sum=$(sha256sum ${q(tarball)} | cut -d' ' -f1)`,
+      `if [ "$sum" != ${q(artifact.sha256)} ]; then rm -rf "$s" ${q(tarball)}; echo "checksum=$sum"; exit 3; fi`,
+      `tar -xzf ${q(tarball)} -C "$s" --strip-components=1 --no-same-owner || exit 1`,
+      'echo "dir=$s"',
+      'echo "version=$("$s/bin/volli-hostd" --version </dev/null)"',
+    ].join("\n"),
     { label: "upload: unpack", timeoutMs: 5 * 60_000 },
   );
   const unpackLost = lost("deliver", unpacked);
   if (unpackLost !== null) return unpackLost;
-  if (unpacked.code !== 0 || unpacked.stdout.trim() !== artifact.version) {
+  const said = (key: string) => new RegExp(`^${key}=(.*)$`, "mu").exec(unpacked.stdout)?.[1];
+  const changed = said("checksum");
+  if (changed !== undefined) {
+    return failed({
+      code: "remote-checksum",
+      step: "deliver",
+      detail: `${artifact.fileName} on the box is ${changed || "unreadable"}, not ${artifact.sha256}`,
+    });
+  }
+  const releaseDir = said("dir") ?? "";
+  const version = said("version")?.trim() || "no version";
+  const problem =
+    unpacked.code !== 0
+      ? `exit ${unpacked.code}`
+      : !releaseDir.startsWith(`${dir}/${STAGE_PREFIX}`)
+        ? `it unpacked to ${releaseDir || "nowhere"}`
+        : version !== artifact.version
+          ? `it reports ${version}`
+          : null;
+  if (problem !== null) {
     return failed({
       code: "unpack-failed",
       step: "deliver",
-      detail: unpacked.stderr.trim() || `it reports ${unpacked.stdout.trim() || "no version"}`,
+      detail: unpacked.stderr.trim() || problem,
     });
   }
-  return { result: { ...facts, reused: false } };
+  return {
+    result: {
+      releaseDir,
+      remoteTarball: tarball,
+      bytes: artifact.bytes,
+      sha256: artifact.sha256,
+      reused,
+    } satisfies UploadResult,
+  };
 };
 
 const install: Step = async (ctx) => {
   const { state } = ctx;
-  const probeFacts = state.results.probe!;
-  const mode = modeOf(state)!;
+  const probeFacts = need(state.results.probe, "probe facts");
+  const mode = need(modeOf(state), "install mode");
   if (!installing(state)) {
-    return { result: { skipped: true, binary: probeFacts.existing!.binary, mode } };
+    const existing = need(probeFacts.existing, "existing hostd to use");
+    return { result: { skipped: true, binary: existing.binary, mode } };
   }
-  const releaseDir = (state.results.deliver as UploadResult).releaseDir;
+  // Installing, so deliver must have unpacked a release (not skipped, not lost).
+  const delivered = state.results.deliver as Partial<UploadResult> | null | undefined;
+  const releaseDir = need(delivered?.releaseDir, "delivered release to install");
   const binary = shellQuote(`${releaseDir}/bin/volli-hostd`);
   if (mode === "user") {
     // A Linux user unit needs a systemd user session; a Mac's launchd always has one.
@@ -440,15 +524,16 @@ function finish<T extends { readonly ok: true }>(
 
 const start: Step = async (ctx) => {
   const { state } = ctx;
-  const running = state.results.probe!.existing?.status;
+  const probeFacts = need(state.results.probe, "probe facts");
+  const running = probeFacts.existing?.status;
   if (
     state.decisions.alreadyPaired === true ||
     (!installing(state) && running?.verdict === "serving" && running.running?.listen != null)
   ) {
     return { result: { skipped: true } };
   }
-  const mode = modeOf(state)!;
-  const binary = shellQuote(state.results.install!.binary);
+  const mode = need(modeOf(state), "install mode");
+  const binary = shellQuote(need(state.results.install, "install result").binary);
   if (mode === "system") {
     return finish(
       "start",
@@ -461,7 +546,6 @@ const start: Step = async (ctx) => {
       ),
     );
   }
-  const user = state.results.probe!.user;
   const started = await hostdCommand<HostdStartResult>(
     ctx,
     "start",
@@ -471,9 +555,14 @@ const start: Step = async (ctx) => {
   );
   if (isStopValue(started) || started.ok || started.code !== "linger-required")
     return finish("start", started);
-  // A user unit stops at logout unless the account lingers; that one command needs sudo.
+  // A user unit stops at logout unless the account lingers; that one command needs root.
+  const user = probeFacts.user;
   const linger = `loginctl enable-linger ${shellQuote(user)}`;
-  const enable = sudo(ctx, linger);
+  if (probeFacts.sudo === "none") {
+    // No sudo for this login at all: no password would help; an administrator can.
+    return failed({ code: "linger-needs-admin", step: "start", user, command: `sudo ${linger}` });
+  }
+  const enable = asRoot(ctx, linger);
   if (enable === null) {
     return ask({
       kind: "sudo-password",
@@ -487,6 +576,8 @@ const start: Step = async (ctx) => {
     label: "start: linger",
     ...(enable.stdin === undefined ? {} : { stdin: enable.stdin }),
   });
+  const connection = lost("start", enabled);
+  if (connection !== null) return connection;
   if (enabled.code !== 0) {
     if (enable.stdin !== undefined) ctx.secrets.sudoPassword = null;
     return ask({
@@ -506,35 +597,40 @@ const start: Step = async (ctx) => {
 const enroll: Step = async (ctx) => {
   const { state } = ctx;
   const { request } = state;
-  const probeFacts = state.results.probe!;
+  const probeFacts = need(state.results.probe, "probe facts");
   if (state.decisions.alreadyPaired === true) {
     // Already enrolled: what the box said in the probe is the pairing.
-    const status = probeFacts.existing!.status!;
-    const device = status.devices!.find(
-      (entry) => entry.fingerprint === request.device.fingerprint,
-    )!;
+    const status = need(probeFacts.existing?.status, "status of the paired host");
+    const running = need(status.running, "running paired host");
+    const device = need(
+      status.devices?.find(
+        (entry) => entry.fingerprint === request.device.fingerprint && entry.revokedAt === null,
+      ),
+      "enrollment of this device",
+    );
     return {
       result: {
         v: 1,
         ok: true,
-        hostId: status.running!.hostId!,
+        hostId: need(running.hostId, "host id of the paired host"),
         deviceId: device.deviceId,
         fingerprint: device.fingerprint,
         created: false,
-        version: status.running!.version,
-        listen: status.running!.listen,
+        version: running.version,
+        listen: running.listen,
       } satisfies HostdEnrollResult,
     };
   }
-  const mode = modeOf(state)!;
-  const binary = shellQuote(state.results.install!.binary);
+  const mode = need(modeOf(state), "install mode");
+  const binary = shellQuote(need(state.results.install, "install result").binary);
   const command = `${binary} enroll --${mode} --public-key ${shellQuote(request.device.publicKey)} --name ${shellQuote(request.device.name)}`;
+  // A system install's device store is root's: enroll runs as root, as install and start do.
   const outcome = await hostdCommand<HostdEnrollResult>(
     ctx,
     "enroll",
     command,
-    mode === "system" ? "service" : "login",
-    "service-account",
+    mode === "system" ? "root" : "login",
+    "enroll",
   );
   if (isStopValue(outcome) || !outcome.ok) return finish("enroll", outcome);
   const pinned = request.pinnedHostId;
@@ -548,7 +644,7 @@ const link: Step = async ({ state, ports }) => {
   const started = state.results.start;
   const listen =
     (started !== undefined && "listen" in started ? started.listen : null) ??
-    state.results.enroll!.listen;
+    need(state.results.enroll, "enrollment").listen;
   if (listen === null) {
     return failed({
       code: "tunnel-failed",
@@ -571,6 +667,13 @@ const STEPS: Record<StepId, Step> = { connect, probe, deliver, install, start, e
 export function sshProvider(ports: SshProviderPorts): HostProvider<SshStepResults> {
   return {
     id: "ssh",
-    run: (step, context) => STEPS[step]({ ...context, ports }),
+    async run(step, context) {
+      try {
+        return await STEPS[step]({ ...context, ports });
+      } catch (error) {
+        if (!(error instanceof UnexpectedState)) throw error;
+        return failed({ code: "unexpected-state", step, detail: error.message });
+      }
+    },
   };
 }

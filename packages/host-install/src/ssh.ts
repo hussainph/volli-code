@@ -11,14 +11,17 @@
  *   fingerprint for the person to accept (`discoverHostKeys`,
  *   `acceptHostKeys`); never blind `accept-new`.
  * - ControlMaster multiplexing, so the probe, the upload and each command
- *   share one authenticated connection.
- * - No forwarding of the agent, X11 or ports from the person's config.
+ *   share one authenticated connection, its socket in a 0700 directory of
+ *   this user's alone.
+ * - No forwarding of the agent, X11 or ports from the person's config, no
+ *   `LocalCommand`, and never daemonizing (`ForkAfterAuthentication=no`,
+ *   OpenSSH 8.7+): every command's ssh stays this process's child.
  *
  * Failures are classified from ssh's own words (`classifySshFailure`), so
  * each lab failure state has its own type and its own recovery.
  */
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -122,7 +125,10 @@ export function connectionOptions(controlPath: string | null): string[] {
     "ServerAliveCountMax=3",
     "ForwardAgent=no",
     "ForwardX11=no",
+    // No -L/-R here, so clearing every forwarding drops only the config's.
     "ClearAllForwardings=yes",
+    "PermitLocalCommand=no",
+    "ForkAfterAuthentication=no",
     ...(controlPath === null
       ? ["ControlMaster=no", "ControlPath=none"]
       : ["ControlMaster=auto", `ControlPath=${controlPath}`, "ControlPersist=60"]),
@@ -205,20 +211,55 @@ export interface SystemSshOptions {
   /**
    * Where the ControlMaster socket lives. Short, because a Unix socket path
    * is capped near 104 bytes on macOS: a fresh 0700 directory under /tmp by
-   * default.
+   * default. One given is made 0700 when missing, and refused unless it is a
+   * real directory (not a symlink) of this user's that no one else can enter.
    */
   readonly controlDir?: string;
   readonly spawn?: SpawnProcess;
 }
 
-/** The runner over the system `ssh`. */
+/** A ControlMaster directory another user could reach: whoever can, can ride the connection. */
+export class UnsafeControlDirError extends Error {
+  readonly code = "unsafe-control-dir";
+  constructor(
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`Refusing ${path} for ssh's control socket: ${reason}`);
+    this.name = "UnsafeControlDirError";
+  }
+}
+
+/** Makes `dir` 0700 when missing; refuses it unless it is this user's private, real directory. */
+export function ensureControlDir(dir: string, uid: number = userInfo().uid): string {
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw new UnsafeControlDirError(dir, (error as Error).message);
+    }
+  }
+  const stat = lstatSync(dir);
+  if (stat.isSymbolicLink()) throw new UnsafeControlDirError(dir, "it is a symbolic link");
+  if (!stat.isDirectory()) throw new UnsafeControlDirError(dir, "it is not a directory");
+  if (stat.uid !== uid) throw new UnsafeControlDirError(dir, `it is owned by uid ${stat.uid}`);
+  if ((stat.mode & 0o077) !== 0) {
+    const mode = (stat.mode & 0o777).toString(8).padStart(3, "0");
+    throw new UnsafeControlDirError(dir, `others can reach it (mode ${mode})`);
+  }
+  return dir;
+}
+
+/** The runner over the system `ssh`. Throws `UnsafeControlDirError` for an unsafe `controlDir`. */
 export function systemSsh(options: SystemSshOptions): SshTransport {
   const { target, logger } = options;
   const ssh = options.sshPath ?? "ssh";
   const spawn = options.spawn ?? LIVE_SPAWN;
   const owned = options.controlDir === undefined;
   const controlDir =
-    options.controlDir ?? mkdtempSync(join("/tmp", `volli-ssh-${userInfo().uid}-`));
+    options.controlDir === undefined
+      ? mkdtempSync(join("/tmp", `volli-ssh-${userInfo().uid}-`))
+      : ensureControlDir(options.controlDir);
   const controlPath = join(controlDir, "%C");
   const base = [...connectionOptions(controlPath), "-T"];
   return {
@@ -256,12 +297,44 @@ export interface HostKeyOffer {
   readonly fingerprints: readonly { readonly type: string; readonly fingerprint: string }[];
 }
 
+/** `ssh-keygen -l`'s name for each known_hosts key type. */
+const KEYGEN_TYPES: Readonly<Record<string, string>> = {
+  "ssh-ed25519": "ED25519",
+  "ssh-rsa": "RSA",
+  "ssh-dss": "DSA",
+  "ecdsa-sha2-nistp256": "ECDSA",
+  "ecdsa-sha2-nistp384": "ECDSA",
+  "ecdsa-sha2-nistp521": "ECDSA",
+  "sk-ssh-ed25519@openssh.com": "ED25519-SK",
+  "sk-ecdsa-sha2-nistp256@openssh.com": "ECDSA-SK",
+};
+
+/**
+ * Whether each fingerprint is its entry's, in order: one per entry, of the
+ * entry's key type where that type is known.
+ */
+function fingerprintsMatch(
+  entries: readonly string[],
+  fingerprints: HostKeyOffer["fingerprints"],
+): boolean {
+  if (fingerprints.length === 0 || fingerprints.length !== entries.length) return false;
+  return entries.every((entry, index) => {
+    const keyType = entry.trim().split(/\s+/u)[1];
+    if (keyType === undefined) return false;
+    const type = KEYGEN_TYPES[keyType];
+    return type === undefined || type === fingerprints[index]!.type;
+  });
+}
+
 /**
  * The keys the box presents, without trusting them and without offering any
  * credential to it: ssh records them into a scratch known_hosts while every
  * authentication method is off, so the connection ends at "Permission
  * denied" and nothing of the person's (no key, no agent, no password) ever
  * reaches a host they have not accepted. ProxyJump hops authenticate as usual.
+ *
+ * Fails closed: `null` unless every key has its computed fingerprint, since
+ * a key the person cannot compare is a key they cannot accept.
  */
 export async function discoverHostKeys(options: {
   readonly target: SshTarget;
@@ -288,6 +361,8 @@ export async function discoverHostKeys(options: {
         "IdentityAgent=none",
         "ForwardAgent=no",
         "ClearAllForwardings=yes",
+        "PermitLocalCommand=no",
+        "ForkAfterAuthentication=no",
         "ControlMaster=no",
         "ControlPath=none",
         "ConnectTimeout=15",
@@ -310,6 +385,15 @@ export async function discoverHostKeys(options: {
       .map((line) => /^\d+\s+(SHA256:\S+)\s+.*\((\S+)\)\s*$/u.exec(line.trim()))
       .filter((match) => match !== null)
       .map((match) => ({ type: match[2]!, fingerprint: match[1]! }));
+    if (listed.code !== 0 || !fingerprintsMatch(entries, fingerprints)) {
+      options.logger.warn("host key fingerprints unavailable", {
+        keys: entries.length,
+        fingerprints: fingerprints.length,
+        code: listed.code,
+        detail: tail(listed.stderr),
+      });
+      return null;
+    }
     options.logger.info("host keys offered", { fingerprints });
     return { entries, fingerprints };
   } finally {

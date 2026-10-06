@@ -1,13 +1,27 @@
+import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import type { HostdArtifact } from "./artifact";
+import {
+  parseHostdReleasePin,
+  resolveArtifact,
+  supportedTargets,
+  type HostdArtifact,
+} from "./artifact";
 import type { HostdManagedStatus } from "./contract";
-import { PROBE_SCRIPT } from "./probe";
+import { parseProbe, PROBE_SCRIPT } from "./probe";
 import {
   advance,
   answer,
@@ -18,8 +32,20 @@ import {
   type ProvisionSecrets,
   type ProvisionState,
 } from "./provision";
-import { modeOf, sshProvider, type SshProviderPorts, type SshStepResults } from "./ssh-provider";
-import type { HostKeyOffer, SshExecOptions, SshExecResult, SshTransport } from "./ssh";
+import {
+  modeOf,
+  sshProvider,
+  type SshProviderPorts,
+  type SshStepResults,
+  type UploadResult,
+} from "./ssh-provider";
+import {
+  runProcess,
+  type HostKeyOffer,
+  type SshExecOptions,
+  type SshExecResult,
+  type SshTransport,
+} from "./ssh";
 import { recordingLogger } from "./testing/fake-process";
 
 const HOST_ID = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
@@ -27,7 +53,8 @@ const DEVICE_ID = "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
 const BYTES = "pretend tarball";
 const SHA = createHash("sha256").update(BYTES).digest("hex");
 const FILE = "volli-hostd-1.1.0-linux-x64.tar.gz";
-const RELEASE = "/home/deploy/.cache/volli-hostd/volli-hostd-1.1.0-linux-x64";
+/** Where the fake box says deliver extracted the tarball afresh. */
+const STAGED = "/home/deploy/.cache/volli-hostd/stage.Ab12Cd";
 const CURRENT = "/opt/volli-hostd/current/bin/volli-hostd";
 
 const FACTS: Record<string, string> = {
@@ -51,10 +78,10 @@ const FACTS: Record<string, string> = {
 
 function probeOutput(overrides: Record<string, string | null> = {}, extra = ""): string {
   const facts = { ...FACTS, ...overrides };
-  return `${Object.entries(facts)
+  const lines = Object.entries(facts)
     .filter(([, value]) => value !== null)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n")}\n${extra}`;
+    .map(([key, value]) => `${key}=${value}`);
+  return `${[...lines, ...(extra === "" ? [] : [extra]), "end=ok"].join("\n")}\n`;
 }
 
 function existing(
@@ -117,13 +144,13 @@ type Handler = (script: string, options: SshExecOptions) => Partial<SshExecResul
  */
 function fakeBox(...overrides: Handler[]) {
   const scripts: { script: string; stdin: string | null }[] = [];
-  const defaults: Handler = (script) => {
+  const defaults: Handler = (script, options) => {
     if (script === "echo volli-ok") return { stdout: "volli-ok\n" };
     if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
-    if (script.startsWith("sha256sum ") && script.includes("--version")) return { stdout: "\n" };
+    if (options.label === "upload: check") return { stdout: "\n" };
     if (script.includes("cat > ")) return {};
     if (script.includes(".part' | cut")) return { stdout: `${SHA}\n` };
-    if (script.includes("tar -xzf")) return { stdout: "1.1.0\n" };
+    if (script.includes("tar -xzf")) return { stdout: `dir=${STAGED}\nversion=1.1.0\n` };
     if (script.includes(" install --"))
       return json(INSTALLED(script.includes("--user") ? "user" : "system"));
     if (script.includes(" start --"))
@@ -250,11 +277,12 @@ describe("adding a fresh box with passwordless sudo", () => {
     expect(modeOf(done)).toBe("system");
     expect(done.results.enroll).toMatchObject({ hostId: HOST_ID, deviceId: DEVICE_ID });
     expect(done.results.link).toEqual({ url: "ws://127.0.0.1:55000" });
-    expect(done.results.deliver).toMatchObject({ releaseDir: RELEASE, reused: false });
+    expect(done.results.deliver).toMatchObject({ releaseDir: STAGED, reused: false });
+    // Every hostd command reads /dev/null; enroll on a system install runs as root (its store is root's).
     expect(box.ran().filter((script) => / (install|start|enroll) --/u.test(script))).toEqual([
-      `sudo -n '${RELEASE}/bin/volli-hostd' install --system --operator 'deploy'`,
-      `sudo -n '${CURRENT}' start --system`,
-      `sudo -n -u volli '${CURRENT}' enroll --system --public-key 'SPKI' --name 'Alice'\\''s Mac'`,
+      `sudo -n '${STAGED}/bin/volli-hostd' install --system --operator 'deploy' </dev/null`,
+      `sudo -n '${CURRENT}' start --system </dev/null`,
+      `sudo -n '${CURRENT}' enroll --system --public-key 'SPKI' --name 'Alice'\\''s Mac' </dev/null`,
     ]);
     expect(box.scripts.find((entry) => entry.script.includes("cat > "))?.stdin).toBe(
       `<${BYTES.length} bytes>`,
@@ -271,15 +299,19 @@ describe("adding a fresh box with passwordless sudo", () => {
     expect(await advanceWith(done, p)).toMatchObject({ status: "done" });
   });
 
-  it("does not send a tarball the box already has unpacked", async () => {
-    const box = fakeBox((script) =>
-      script.startsWith("sha256sum ") && script.includes("--version")
-        ? { stdout: `${SHA}\n1.1.0\n` }
-        : undefined,
+  it("does not send again a tarball the box already has, but still extracts it afresh", async () => {
+    const box = fakeBox((_script, options) =>
+      options.label === "upload: check" ? { stdout: `${SHA}\n` } : undefined,
     );
     const done = await advanceWith(start(), ports(box));
-    expect(done.results.deliver).toMatchObject({ reused: true });
+    expect(done.results.deliver).toMatchObject({ reused: true, releaseDir: STAGED });
     expect(box.ran().some((script) => script.includes("cat > "))).toBe(false);
+    const unpack = box.ran().find((script) => script.includes("tar -xzf"))!;
+    expect(unpack).toContain("mktemp -d");
+    expect(unpack).not.toContain("mv -f");
+    expect(box.ran()).toContain(
+      `sudo -n '${STAGED}/bin/volli-hostd' install --system --operator 'deploy' </dev/null`,
+    );
   });
 });
 
@@ -490,7 +522,7 @@ describe("a Mac", () => {
     expect(done.status).toBe("done");
     expect(modeOf(done)).toBe("user");
     expect(done.results.probe?.artifactTarget).toBe("darwin-arm64");
-    expect(box.ran()).toContain(`'${RELEASE}/bin/volli-hostd' install --user`);
+    expect(box.ran()).toContain(`'${STAGED}/bin/volli-hostd' install --user </dev/null`);
     expect(box.ran().some((script) => script.startsWith("sudo"))).toBe(false);
   });
 
@@ -530,7 +562,7 @@ describe("an existing hostd", () => {
     const done = await advanceWith(answer(asked, { kind: "update" }), ports(box));
     expect(done.status).toBe("done");
     expect(modeOf(done)).toBe("user");
-    expect(box.ran()).toContain(`'${RELEASE}/bin/volli-hostd' install --user`);
+    expect(box.ran()).toContain(`'${STAGED}/bin/volli-hostd' install --user </dev/null`);
   });
 
   it("adopts an older one as it stands: no upload, no install, no restart while it serves", async () => {
@@ -548,7 +580,7 @@ describe("an existing hostd", () => {
     expect(
       box.ran().filter((script) => script !== PROBE_SCRIPT && script.includes(CURRENT)),
     ).toEqual([
-      `sudo -n -u volli '${CURRENT}' enroll --system --public-key 'SPKI' --name 'Alice'\\''s Mac'`,
+      `sudo -n '${CURRENT}' enroll --system --public-key 'SPKI' --name 'Alice'\\''s Mac' </dev/null`,
     ]);
   });
 
@@ -659,11 +691,10 @@ describe("upload", () => {
       fakeBox((script) =>
         script.includes(marker) ? { code: 255, stderr: "Connection reset by peer" } : undefined,
       );
-    for (const marker of ["sha256sum '", "cat > ", "tar -xzf"]) {
-      expect(stoppedWith(await advanceWith(start(), ports(lostAt(marker))))).toMatchObject({
-        code: "connection-lost",
-        step: "deliver",
-      });
+    // At the check, the copy, the verification and the extraction alike.
+    for (const marker of ["2>/dev/null | cut", "cat > ", ".part' | cut", "tar -xzf"]) {
+      const state = await advanceWith(start(), ports(lostAt(marker)));
+      expect(stoppedWith(state)).toMatchObject({ code: "connection-lost", step: "deliver" });
     }
     const full = fakeBox((script) =>
       script.includes("cat > ") ? { code: 1, stderr: "No space left on device" } : undefined,
@@ -675,14 +706,44 @@ describe("upload", () => {
     });
     for (const [result, detail] of [
       [{ code: 2, stderr: "tar: corrupt" }, "tar: corrupt"],
-      [{ stdout: "1.0.0\n" }, "it reports 1.0.0"],
-      [{ stdout: "" }, "it reports no version"],
+      [{ code: 1 }, "exit 1"],
+      [{ stdout: `dir=${STAGED}\nversion=1.0.0\n` }, "it reports 1.0.0"],
+      [{ stdout: `dir=${STAGED}\nversion=\n` }, "it reports no version"],
+      [{ stdout: "dir=/tmp/elsewhere\nversion=1.1.0\n" }, "it unpacked to /tmp/elsewhere"],
+      [{ stdout: "" }, "it unpacked to nowhere"],
     ] as const) {
       const box = fakeBox((script) => (script.includes("tar -xzf") ? result : undefined));
       expect(stoppedWith(await advanceWith(start(), ports(box)))).toEqual({
         code: "unpack-failed",
         step: "deliver",
         detail,
+      });
+    }
+  });
+
+  it("classifies a disconnect during upload verification as connection-lost", async () => {
+    const box = fakeBox((script) =>
+      script.includes(".part' | cut")
+        ? { code: 255, stdout: "", stderr: "Connection reset by peer" }
+        : undefined,
+    );
+    const state = await advanceWith(start(), ports(box));
+    expect(stoppedWith(state)).toMatchObject({ code: "connection-lost", step: "deliver" });
+    expect(box.ran().some((script) => script.startsWith("rm -f "))).toBe(false);
+  });
+
+  it("refuses a tarball that changed on the box between its check and its extraction", async () => {
+    for (const [sum, said] of [
+      ["deadbeef", "is deadbeef"],
+      ["", "is unreadable"],
+    ] as const) {
+      const box = fakeBox((script) =>
+        script.includes("tar -xzf") ? { code: 3, stdout: `checksum=${sum}\n` } : undefined,
+      );
+      expect(stoppedWith(await advanceWith(start(), ports(box)))).toEqual({
+        code: "remote-checksum",
+        step: "deliver",
+        detail: `${FILE} on the box ${said}, not ${SHA}`,
       });
     }
   });
@@ -712,6 +773,12 @@ describe("sudo with a password", () => {
     );
     expect(done.status).toBe("done");
     const sudoed = box.scripts.filter((entry) => entry.script.startsWith("sudo -S -p '' "));
+    // One sudo each, the command under `exec … </dev/null` so it never inherits the password.
+    expect(sudoed.map((entry) => entry.script)).toEqual([
+      `sudo -S -p '' sh -c 'exec '\\''${STAGED}/bin/volli-hostd'\\'' install --system --operator '\\''deploy'\\'' </dev/null'`,
+      `sudo -S -p '' sh -c 'exec '\\''${CURRENT}'\\'' start --system </dev/null'`,
+      expect.stringMatching(/^sudo -S -p '' sh -c 'exec .* enroll --system .* <\/dev\/null'$/u),
+    ]);
     expect(sudoed.map((entry) => entry.stdin)).toEqual(["hunter2\n", "hunter2\n", "hunter2\n"]);
     expect(box.ran().join("\n")).not.toContain("hunter2");
     expect(JSON.stringify(done)).not.toContain("hunter2");
@@ -737,10 +804,7 @@ describe("sudo with a password", () => {
     expect(done.status).toBe("done");
     expect(modeOf(done)).toBe("user");
     expect(box.ran()).toContain(
-      `'${RELEASE}/bin/volli-hostd' enroll --user --public-key 'SPKI' --name 'Alice'\\''s Mac'`.replace(
-        `'${RELEASE}/bin/volli-hostd'`,
-        "'/home/deploy/.local/share/volli-hostd/current/bin/volli-hostd'",
-      ),
+      `'/home/deploy/.local/share/volli-hostd/current/bin/volli-hostd' enroll --user --public-key 'SPKI' --name 'Alice'\\''s Mac' </dev/null`,
     );
     // …but not on a box with no user session to run it in.
     const sessionless = fakeBox((script) =>
@@ -818,7 +882,7 @@ describe("install, start and enroll on the box", () => {
     const done = await advanceWith(retry(stopped), p);
     expect(done.status).toBe("done");
     expect(box.ran().slice(before)).toEqual([
-      `sudo -n '${CURRENT}' start --system`,
+      `sudo -n '${CURRENT}' start --system </dev/null`,
       expect.stringContaining(" enroll --system"),
     ]);
     // Or from an earlier step, by name.
@@ -850,9 +914,10 @@ describe("install, start and enroll on the box", () => {
 });
 
 describe("a user unit's lingering", () => {
-  const userBox = (sudo: string | null, ...overrides: Handler[]) => {
+  /** A box whose `start --user` wants lingering until `loginctl enable-linger` ran. */
+  const userBox = (facts: Record<string, string | null>, ...overrides: Handler[]) => {
     let lingering = false;
-    const box = fakeBox(...overrides, (script) => {
+    return fakeBox(...overrides, (script) => {
       if (script.includes("loginctl enable-linger")) {
         lingering = true;
         return {};
@@ -865,17 +930,20 @@ describe("a user unit's lingering", () => {
           message: "Run: sudo loginctl enable-linger deploy",
         });
       }
-      return script === PROBE_SCRIPT
-        ? { stdout: probeOutput({ sudo, ...(sudo === null ? { groups: "deploy" } : {}) }) }
-        : undefined;
+      return script === PROBE_SCRIPT ? { stdout: probeOutput(facts) } : undefined;
     });
-    return box;
+  };
+  /** sudo with a password: the person settles for a user unit, which then needs lingering. */
+  const PASSWORD = { sudo: null };
+  const asUser = async (box: ReturnType<typeof fakeBox>, secrets?: ProvisionSecrets) => {
+    const asked = await advanceWith(start(), ports(box));
+    expect(stoppedWith(asked)).toMatchObject({ kind: "sudo-password", reason: "install" });
+    return advanceWith(answer(asked, { kind: "user-install" }), ports(box), secrets);
   };
 
-  it("turns it on with sudo when sudo needs no password", async () => {
-    const box = userBox(null);
-    // No sudo at all: the person is asked, since only they can.
-    const asked = await advanceWith(start(), ports(box));
+  it("asks for sudo's password to turn it on, and sends it only to sudo", async () => {
+    const box = userBox(PASSWORD);
+    const asked = await asUser(box);
     expect(stoppedWith(asked)).toEqual({
       kind: "sudo-password",
       step: "start",
@@ -891,17 +959,17 @@ describe("a user unit's lingering", () => {
     );
     expect(done.status).toBe("done");
     expect(box.scripts.find((entry) => entry.script.includes("enable-linger"))).toEqual({
-      script: "sudo -S -p '' loginctl enable-linger 'deploy'",
+      script: `sudo -S -p '' sh -c 'exec loginctl enable-linger '\\''deploy'\\'' </dev/null'`,
       stdin: "pw\n",
     });
   });
 
   it("asks again when sudo refused, and forgets a password it refused", async () => {
-    const box = userBox(null, (script) =>
+    const box = userBox(PASSWORD, (script) =>
       script.includes("enable-linger") ? { code: 1, stderr: "Sorry" } : undefined,
     );
     const secrets = { sudoPassword: "pw" };
-    const asked = await advanceWith(start(), ports(box), secrets);
+    const asked = await asUser(box, secrets);
     expect(stoppedWith(asked)).toMatchObject({
       kind: "sudo-password",
       reason: "linger",
@@ -910,13 +978,33 @@ describe("a user unit's lingering", () => {
     expect(secrets.sudoPassword).toBeNull();
   });
 
+  it("stops for an administrator when this login has no sudo, and asks for no password", async () => {
+    const box = userBox({ sudo: null, groups: "deploy" });
+    const stopped = await advanceWith(start(), ports(box), { sudoPassword: "never-used" });
+    expect(stoppedWith(stopped)).toEqual({
+      code: "linger-needs-admin",
+      step: "start",
+      user: "deploy",
+      command: "sudo loginctl enable-linger 'deploy'",
+    });
+    expect(box.ran().some((script) => script.startsWith("sudo"))).toBe(false);
+    // Once an administrator turned it on, checking again carries on from start.
+    expect(nextStep(retry(stopped))).toBe("start");
+    const lingering = fakeBox((script) =>
+      script === PROBE_SCRIPT
+        ? { stdout: probeOutput({ sudo: null, groups: "deploy" }) }
+        : undefined,
+    );
+    expect((await advanceWith(retry(stopped), ports(lingering))).status).toBe("done");
+  });
+
   it("runs the linger command with sudo -n when that works, for an adopted user unit", async () => {
     const serving: Partial<HostdManagedStatus> = {
       verdict: "not-serving",
       running: null,
       devices: [],
     };
-    const box = userBox("nopasswd", (script) =>
+    const box = userBox({}, (script) =>
       script === PROBE_SCRIPT
         ? { stdout: probeOutput({}, existing("1.0.0", "user", serving)) }
         : undefined,
@@ -924,11 +1012,11 @@ describe("a user unit's lingering", () => {
     const asked = await advanceWith(start(), ports(box));
     const done = await advanceWith(answer(asked, { kind: "adopt" }), ports(box));
     expect(done.status).toBe("done");
-    expect(box.ran()).toContain("sudo -n loginctl enable-linger 'deploy'");
+    expect(box.ran()).toContain("sudo -n loginctl enable-linger 'deploy' </dev/null");
   });
 
   it("keeps a sudo -n refusal from looping", async () => {
-    const box = userBox("nopasswd", (script) =>
+    const box = userBox({}, (script) =>
       script.includes("enable-linger")
         ? { code: 1 }
         : script === PROBE_SCRIPT
@@ -948,6 +1036,16 @@ describe("a user unit's lingering", () => {
     );
     expect(stoppedWith(asked)).toMatchObject({ kind: "sudo-password", retry: true });
     expect(secrets.sudoPassword).toBe("kept");
+  });
+
+  it("says the connection dropped while turning it on", async () => {
+    const box = userBox(PASSWORD, (script) =>
+      script.includes("enable-linger")
+        ? { code: 255, stderr: "Connection closed by 10.0.0.2 port 22" }
+        : undefined,
+    );
+    const stopped = await asUser(box, { sudoPassword: "pw" });
+    expect(stoppedWith(stopped)).toMatchObject({ code: "connection-lost", step: "start" });
   });
 });
 
@@ -985,3 +1083,557 @@ describe("the state's mode", () => {
     expect(modeOf(initialProvisionState<SshStepResults>(REQUEST))).toBeNull();
   });
 });
+
+describe("retrying after the box changed", () => {
+  const PAIRED = existing("1.1.0", "system", {
+    verdict: "serving",
+    running: { state: "serving", version: "1.1.0", pid: 42, hostId: HOST_ID, listen: LISTEN },
+    devices: [
+      {
+        deviceId: DEVICE_ID,
+        name: "mac",
+        fingerprint: REQUEST.device.fingerprint,
+        enrolledAt: "t",
+        via: "ssh",
+        revokedAt: null,
+      },
+    ],
+  });
+
+  it("retry after host reinstall discards prior already-paired decision", async () => {
+    let reinstalled = false;
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({}, reinstalled ? "" : PAIRED) } : undefined,
+    );
+    const p = ports(box, { openTunnel: async () => ({ error: "connection lost" }) });
+    const question = await advanceWith(start(), p);
+    const failed = await advanceWith(answer(question, { kind: "open" }), p);
+    expect(failed.stop).toMatchObject({ kind: "failed", failure: { step: "link" } });
+    // The box was wiped and set up again: no hostd, no pairing.
+    reinstalled = true;
+    const retried = retry(failed, "probe");
+    expect(retried.decisions.alreadyPaired).toBeUndefined();
+    const done = await advanceWith(retried, ports(box));
+    expect(done).toMatchObject({ status: "done", results: { deliver: { reused: false } } });
+    expect(done.results.enroll).toMatchObject({ created: true });
+  });
+
+  it("asks again whether to update or use an older hostd once the box was checked again", async () => {
+    let version = "1.0.0";
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT
+        ? {
+            stdout: probeOutput(
+              {},
+              existing(version, "system", { verdict: "serving", running: null, devices: [] }),
+            ),
+          }
+        : undefined,
+    );
+    const p = ports(box, { openTunnel: async () => ({ error: "no route" }) });
+    const adopted = await advanceWith(answer(await advanceWith(start(), p), { kind: "adopt" }), p);
+    expect(adopted.stop).toMatchObject({ kind: "failed", failure: { step: "link" } });
+    version = "0.9.0";
+    const asked = await advanceWith(retry(adopted, "probe"), p);
+    expect(stoppedWith(asked)).toMatchObject({ kind: "existing-hostd", version: "0.9.0" });
+  });
+});
+
+describe("a state it did not expect", () => {
+  /** A state as a damaged store might hand it back: some results null, decisions at odds. */
+  const damaged = (results: Record<string, unknown>, decisions = {}): State => ({
+    ...start(),
+    results: results as SshStepResults,
+    decisions,
+  });
+  const probed = (overrides: Record<string, string | null> = {}, extra = "") => {
+    const facts = parseProbe(probeOutput(overrides, extra));
+    return { ...facts, artifactTarget: "linux-x64" };
+  };
+
+  it("stops with a typed failure, retried from the probe, never an exception", async () => {
+    const p = ports(fakeBox());
+    for (const [state, step, detail] of [
+      [damaged({ connect: { ok: true }, probe: null }), "deliver", "no probe facts"],
+      [
+        // Already paired, says the decision; no hostd at all, says the probe.
+        damaged({ connect: { ok: true }, probe: probed() }, { alreadyPaired: true }),
+        "install",
+        "no existing hostd to use",
+      ],
+      [
+        damaged({ connect: { ok: true }, probe: probed(), deliver: { skipped: true } }),
+        "install",
+        "no delivered release to install",
+      ],
+      [
+        damaged({ connect: { ok: true }, probe: probed(), deliver: null }),
+        "install",
+        "no delivered release to install",
+      ],
+      [
+        damaged({ connect: { ok: true }, probe: probed(), deliver: {}, install: null }),
+        "start",
+        "no install result",
+      ],
+      [
+        damaged(
+          {
+            connect: { ok: true },
+            probe: probed(),
+            deliver: {},
+            install: INSTALLED("system"),
+            start: null,
+          },
+          { alreadyPaired: true },
+        ),
+        "enroll",
+        "no status of the paired host",
+      ],
+      [
+        damaged({
+          connect: { ok: true },
+          probe: probed(),
+          deliver: {},
+          install: INSTALLED("system"),
+          start: {},
+          enroll: null,
+        }),
+        "link",
+        "no enrollment",
+      ],
+    ] as const) {
+      const stopped = await advanceWith(state, p);
+      expect(stoppedWith(stopped)).toEqual({ code: "unexpected-state", step, detail });
+    }
+  });
+
+  it("names what an already-paired host's status lacks", async () => {
+    const results = (status: Partial<HostdManagedStatus>) => ({
+      connect: { ok: true },
+      probe: probed({}, existing("1.1.0", "system", status)),
+      deliver: { skipped: true },
+      install: { skipped: true, binary: CURRENT, mode: "system" },
+      start: { skipped: true },
+    });
+    const running = { state: "serving", version: "1.1.0", pid: 1, listen: LISTEN } as const;
+    const device = {
+      deviceId: DEVICE_ID,
+      name: "mac",
+      fingerprint: "SHA256:mac",
+      enrolledAt: "t",
+      via: "ssh",
+      revokedAt: null,
+    } as const;
+    for (const [status, detail] of [
+      [{ running: null, devices: [device] }, "no running paired host"],
+      [{ running: { ...running, hostId: HOST_ID } }, "no enrollment of this device"],
+      [
+        { running: { ...running, hostId: HOST_ID }, devices: [{ ...device, revokedAt: "t" }] },
+        "no enrollment of this device",
+      ],
+      [
+        { running: { ...running, hostId: null }, devices: [device] },
+        "no host id of the paired host",
+      ],
+    ] as const) {
+      const stopped = await advanceWith(
+        damaged(results(status as Partial<HostdManagedStatus>), { alreadyPaired: true }),
+        ports(fakeBox()),
+      );
+      expect(stoppedWith(stopped)).toEqual({ code: "unexpected-state", step: "enroll", detail });
+    }
+  });
+
+  it("types a port that threw, too", async () => {
+    const p = ports(fakeBox(), {
+      artifact: async () => {
+        throw new TypeError("Cannot read properties of null (reading 'binary')");
+      },
+    });
+    expect(stoppedWith(await advanceWith(start(), p))).toEqual({
+      code: "unexpected-state",
+      step: "deliver",
+      detail: "Cannot read properties of null (reading 'binary')",
+    });
+  });
+});
+
+describe("host keys that cannot be checked", () => {
+  it("refuses an offer without a fingerprint for each key, and asks nothing", async () => {
+    const box = fakeBox((script) =>
+      script === "echo volli-ok"
+        ? { code: 255, stderr: "Host key verification failed." }
+        : undefined,
+    );
+    for (const [offer, detail] of [
+      [{ entries: ["box ssh-ed25519 AAAA"], fingerprints: [] }, "1 keys, 0 fingerprints"],
+      [
+        {
+          entries: ["box ssh-ed25519 AAAA", "box ssh-rsa BBBB"],
+          fingerprints: OFFER.fingerprints,
+        },
+        "2 keys, 1 fingerprints",
+      ],
+    ] as const) {
+      const p = ports(box, { hostKeys: { discover: async () => offer, accept: async () => {} } });
+      // Even with an empty acceptance on record from before.
+      const state = { ...start(), decisions: { acceptedHostKeys: [] } };
+      expect(stoppedWith(await advanceWith(state, p))).toEqual({
+        code: "host-key-unverifiable",
+        step: "connect",
+        detail,
+      });
+      expect(p.accepted).toEqual([]);
+    }
+  });
+});
+
+describe("a probe cut short", () => {
+  it("fails closed rather than act on part of the facts", async () => {
+    const whole = probeOutput({}, existing("1.0.0", "system", null));
+    const cut = whole.slice(0, whole.indexOf("hostd_path="));
+    for (const [result, expected] of [
+      [{ stdout: cut }, { code: "probe-failed", detail: "The check's answer was incomplete" }],
+      [{ stdout: cut, code: 255, stderr: "Connection reset by peer" }, { code: "connection-lost" }],
+      [
+        { stdout: whole, code: 1, stderr: "killed" },
+        { code: "probe-failed", detail: "killed" },
+      ],
+    ] as const) {
+      const box = fakeBox((script) => (script === PROBE_SCRIPT ? result : undefined));
+      const state = await advanceWith(start(), ports(box));
+      expect(stoppedWith(state)).toMatchObject({ step: "probe", ...expected });
+      expect(state.results.probe).toBeUndefined();
+    }
+  });
+});
+
+/** Runs scripts with this machine's own `/bin/sh`, as the box would, in `cwd`. */
+function localShell(cwd: string, path = process.env["PATH"] ?? "") {
+  return (script: string, options: SshExecOptions = {}) =>
+    runProcess(
+      (command, args) =>
+        nodeSpawn(command, [...args], {
+          cwd,
+          env: { ...process.env, PATH: path },
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      "/bin/sh",
+      ["-c", script],
+      options,
+    );
+}
+
+/** The fake box's transport with the scripts `real` picks run on a real local shell. */
+function partlyReal(
+  box: ReturnType<typeof fakeBox>,
+  real: (script: string, options: SshExecOptions) => boolean,
+  shell: ReturnType<typeof localShell>,
+): SshTransport {
+  return {
+    ...box.ssh,
+    async exec(script, options = {}) {
+      if (!real(script, options)) return box.ssh.exec(script, options);
+      box.scripts.push({ script, stdin: typeof options.stdin === "string" ? options.stdin : null });
+      return shell(script, options);
+    },
+  };
+}
+
+/** Only deliver's own commands. */
+const deliverOnly = (_script: string, options: SshExecOptions) =>
+  options.label?.startsWith("upload") === true;
+
+/** A hostd management command. */
+const hostdVerb = (script: string) => / (install|start|enroll) --/u.test(script);
+
+describe("delivering the pinned release, on a real local shell", { timeout: 30_000 }, () => {
+  /** A real release tarball: `bin/volli-hostd` prints its version. */
+  function buildRelease(file = FILE) {
+    const name = file.replace(/\.tar\.gz$/u, "");
+    const build = join(root, "build");
+    mkdirSync(join(build, name, "bin"), { recursive: true });
+    writeFileSync(join(build, name, "bin/volli-hostd"), "#!/bin/sh\nprintf '1.1.0\\n'\n", {
+      mode: 0o755,
+    });
+    writeFileSync(join(build, name, "MANIFEST.json"), '{"version":"1.1.0"}\n');
+    const path = join(root, "release", file);
+    mkdirSync(join(root, "release"), { recursive: true });
+    execFileSync("tar", ["-czf", path, "-C", build, name], {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    const bytes = readFileSync(path);
+    const artifact: HostdArtifact = {
+      version: "1.1.0",
+      target: "linux-x64",
+      fileName: file,
+      path,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytes: bytes.length,
+      source: "cache",
+    };
+    return { artifact, bytes, binary: readFileSync(join(build, name, "bin/volli-hostd"), "utf8") };
+  }
+
+  /** An unpacked executable that says the right version, and leaves a mark when run. */
+  const tampered = (dir: string) => {
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(
+      join(dir, "bin/volli-hostd"),
+      `#!/bin/sh\nprintf '1.1.0\\n'\ntouch '${join(root, "untrusted-executed")}'\n`,
+      { mode: 0o755 },
+    );
+  };
+
+  it("never runs or installs an unpacked tree it finds, though the pinned tarball is reused", async () => {
+    const { artifact, bytes, binary } = buildRelease();
+    const home = join(root, "remote");
+    const cache = join(home, ".cache/volli-hostd");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, FILE), bytes);
+    // The tree an earlier version unpacked in place, and a staging tree left half-done.
+    const legacy = join(cache, FILE.replace(/\.tar\.gz$/u, ""));
+    tampered(legacy);
+    tampered(join(cache, "stage.OLD123"));
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({ home }) } : undefined,
+    );
+    const ssh = partlyReal(box, deliverOnly, localShell(root));
+    const done = await advanceWith(start(), ports(box, { ssh, artifact: async () => artifact }));
+    expect(done.status).toBe("done");
+    expect(existsSync(join(root, "untrusted-executed"))).toBe(false);
+    const deliver = done.results.deliver as UploadResult;
+    // Reused means the tarball was not sent again, and nothing more.
+    expect(deliver.reused).toBe(true);
+    expect(box.ran().some((script) => script.includes("cat > "))).toBe(false);
+    expect(deliver.releaseDir.startsWith(join(cache, "stage."))).toBe(true);
+    expect(deliver.releaseDir).not.toBe(join(cache, "stage.OLD123"));
+    expect(readFileSync(join(deliver.releaseDir, "bin/volli-hostd"), "utf8")).toBe(binary);
+    expect(statSync(deliver.releaseDir).mode & 0o777).toBe(0o755);
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(join(cache, "stage.OLD123"))).toBe(false);
+    expect(box.ran()).toContain(
+      `sudo -n '${deliver.releaseDir}/bin/volli-hostd' install --system --operator 'deploy' </dev/null`,
+    );
+  });
+
+  it("sends a tarball that differs from the pin, verifies it, and extracts it afresh", async () => {
+    const { artifact, binary } = buildRelease();
+    const home = join(root, "remote");
+    const cache = join(home, ".cache/volli-hostd");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, FILE), "not the pinned bytes");
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({ home }) } : undefined,
+    );
+    const ssh = partlyReal(box, deliverOnly, localShell(root));
+    const p = ports(box, { ssh, artifact: async () => artifact });
+    const done = await advanceWith(start(), p);
+    expect(done.status).toBe("done");
+    const deliver = done.results.deliver as UploadResult;
+    expect(deliver).toMatchObject({ reused: false, sha256: artifact.sha256 });
+    expect(p.progress.at(-1)).toBe(artifact.bytes);
+    expect(
+      createHash("sha256")
+        .update(readFileSync(join(cache, FILE)))
+        .digest("hex"),
+    ).toBe(artifact.sha256);
+    expect(existsSync(join(cache, `${FILE}.part`))).toBe(false);
+    expect(readFileSync(join(deliver.releaseDir, "bin/volli-hostd"), "utf8")).toBe(binary);
+    // Delivering again reuses the tarball, and still extracts it into a new tree.
+    const again = await advanceWith(retry(done, "deliver"), p);
+    const second = again.results.deliver as UploadResult;
+    expect(second.reused).toBe(true);
+    expect(second.releaseDir).not.toBe(deliver.releaseDir);
+    expect(existsSync(deliver.releaseDir)).toBe(false);
+  });
+
+  it("keeps shell metacharacters in a remote home literal, never injected", async () => {
+    const { artifact, bytes } = buildRelease();
+    const home = join(root, "home with space'; touch INJECTED; #");
+    const cache = join(home, ".cache/volli-hostd");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, FILE), bytes);
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({ home }) } : undefined,
+    );
+    const ssh = partlyReal(box, deliverOnly, localShell(root));
+    const done = await advanceWith(start(), ports(box, { ssh, artifact: async () => artifact }));
+    expect(done.status).toBe("done");
+    expect(existsSync(join(root, "INJECTED"))).toBe(false);
+    expect(existsSync(join(cache, "INJECTED"))).toBe(false);
+    expect(
+      (done.results.deliver as UploadResult).releaseDir.startsWith(join(cache, "stage.")),
+    ).toBe(true);
+  });
+
+  it("enables linux-arm64 end to end from a VC-701 release manifest, but dev defaults refuse it", async () => {
+    const armName = "volli-hostd-1.1.0-linux-arm64.tar.gz";
+    const pin = parseHostdReleasePin({
+      schemaVersion: 1,
+      version: "1.1.0",
+      releaseTag: "v1.1.0",
+      assets: [
+        { platform: "linux", arch: "x64", name: FILE, sha256: SHA },
+        { platform: "linux", arch: "arm64", name: armName, sha256: SHA },
+      ],
+    });
+    expect(pin).not.toBeNull();
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput({ arch: "aarch64" }) } : undefined,
+    );
+    const dev = await advanceWith(start(), ports(box));
+    expect(stoppedWith(dev)).toMatchObject({ code: "target-unavailable", target: "linux-arm64" });
+    const p = ports(box, {
+      artifact: (target) =>
+        resolveArtifact({
+          version: "1.1.0",
+          target,
+          pin,
+          cacheDir: join(root, "cache"),
+          logger: recordingLogger().logger,
+          fetch: async () => new Response(BYTES),
+        }),
+    });
+    const release = await advanceWith(start({ supportedTargets: supportedTargets(pin) }), p);
+    expect(release.status).toBe("done");
+    expect(release.results.probe?.artifactTarget).toBe("linux-arm64");
+    expect(box.ran().some((script) => script.includes(armName))).toBe(true);
+  });
+});
+
+describe(
+  "sudo's password and the command's stdin, on real local processes",
+  { timeout: 30_000 },
+  () => {
+    const PASSWORD = "hunter2-real";
+
+    /**
+     * A stand-in `sudo` with sudo's own stdin semantics: `-S` reads a password
+     * line only when it must authenticate (no NOPASSWD, no cached timestamp);
+     * `-n` fails instead. A stand-in hostd records what its stdin held.
+     */
+    function standIns() {
+      const bin = join(root, "bin");
+      const release = join(root, "release-tree");
+      const binary = join(release, "bin/volli-hostd");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(join(release, "bin"), { recursive: true });
+      writeFileSync(
+        join(bin, "sudo"),
+        [
+          "#!/bin/sh",
+          "s=no; n=no",
+          'while [ "$#" -gt 0 ]; do case "$1" in',
+          "  -S) s=yes; shift ;; -n) n=yes; shift ;; -p|-u) shift 2 ;; *) break ;;",
+          "esac; done",
+          `printf '%s\\n' "$*" >> '${root}/sudo.argv'`,
+          `if [ -e '${root}/nopasswd' ] || [ -e '${root}/stamp' ]; then :`,
+          `elif [ "$n" = yes ]; then echo "sudo: a password is required" >&2; exit 1`,
+          `elif [ "$s" = yes ] && IFS= read -r pw && [ "$pw" = '${PASSWORD}' ]; then touch '${root}/stamp'`,
+          'else echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1',
+          "fi",
+          'exec "$@"',
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const answers = {
+        install: JSON.stringify({ ...INSTALLED("system"), binary }),
+        start: JSON.stringify(STARTED("system")),
+        enroll: JSON.stringify(ENROLLED),
+      };
+      writeFileSync(
+        binary,
+        [
+          "#!/bin/sh",
+          `cat > '${root}/'"$1"'.stdin'`,
+          'case "$1" in',
+          ...Object.entries(answers).map(([verb, line]) => `${verb}) printf '%s\\n' '${line}' ;;`),
+          "esac",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      return { bin, release };
+    }
+
+    async function run(sudo: "password" | "nopasswd", secrets: ProvisionSecrets) {
+      const { bin, release } = standIns();
+      const box = fakeBox(
+        (script) =>
+          script === PROBE_SCRIPT
+            ? { stdout: probeOutput(sudo === "nopasswd" ? {} : { sudo: null }) }
+            : undefined,
+        (script) =>
+          script.includes("tar -xzf")
+            ? { stdout: `dir=/home/deploy/.cache/volli-hostd/stage.x\nversion=1.1.0\n` }
+            : undefined,
+      );
+      // The staged tree the fake deliver names is the stand-in release here.
+      const shell = localShell(root, `${bin}:${process.env["PATH"] ?? ""}`);
+      const ssh = partlyReal(box, hostdVerb, (script, options) =>
+        shell(script.replaceAll("/home/deploy/.cache/volli-hostd/stage.x", release), options),
+      );
+      const p = ports(box, { ssh });
+      const state = await advanceWith(start(), p, secrets);
+      const read = (name: string) =>
+        existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8") : null;
+      const everything = [
+        box.ran().join("\n"),
+        JSON.stringify(state),
+        JSON.stringify(p.log.lines),
+        read("sudo.argv") ?? "",
+      ].join("\n");
+      return {
+        state,
+        box,
+        stdin: ["install", "start", "enroll"].map((verb) => read(`${verb}.stdin`)),
+        leaked: everything.includes(PASSWORD),
+      };
+    }
+
+    it("password required on first use: sudo takes it, the commands after read nothing", async () => {
+      const result = await run("password", { sudoPassword: PASSWORD });
+      expect(result.state.status).toBe("done");
+      expect(result.stdin).toEqual(["", "", ""]);
+      expect(result.leaked).toBe(false);
+      expect(existsSync(join(root, "stamp"))).toBe(true);
+    });
+
+    it("cached timestamp: sudo reads nothing, and the command still never sees the password", async () => {
+      writeFileSync(join(root, "stamp"), "");
+      const result = await run("password", { sudoPassword: PASSWORD });
+      expect(result.state.status).toBe("done");
+      expect(result.stdin).toEqual(["", "", ""]);
+      expect(result.leaked).toBe(false);
+      // Each command was still given the password on the script's stdin, for sudo only.
+      expect(result.box.scripts.filter((entry) => hostdVerb(entry.script))).toHaveLength(3);
+    });
+
+    it("NOPASSWD: sudo -n, no password anywhere, stdin empty", async () => {
+      writeFileSync(join(root, "nopasswd"), "");
+      const result = await run("nopasswd", { sudoPassword: PASSWORD });
+      expect(result.state.status).toBe("done");
+      expect(result.stdin).toEqual(["", "", ""]);
+      expect(result.leaked).toBe(false);
+      expect(
+        result.box
+          .ran()
+          .filter(hostdVerb)
+          .every((script) => script.startsWith("sudo -n ")),
+      ).toBe(true);
+    });
+
+    it("a wrong password is asked for again, and nothing ran", async () => {
+      const secrets: ProvisionSecrets = { sudoPassword: "wrong" };
+      const result = await run("password", secrets);
+      expect(stoppedWith(result.state)).toMatchObject({
+        kind: "sudo-password",
+        step: "install",
+        retry: true,
+      });
+      expect(secrets.sudoPassword).toBeNull();
+      expect(result.stdin).toEqual([null, null, null]);
+    });
+  },
+);

@@ -37,6 +37,14 @@ const EVERY: ProvisionFailure[] = [
     detail: [],
   },
   { code: "tunnel-failed", step: "link", detail: "" },
+  { code: "host-key-unverifiable", step: "connect", detail: "1 keys, 0 fingerprints" },
+  {
+    code: "linger-needs-admin",
+    step: "start",
+    user: "deploy",
+    command: "sudo loginctl enable-linger 'deploy'",
+  },
+  { code: "unexpected-state", step: "install", detail: "no delivered release to install" },
 ];
 
 describe("every failure's line and recovery", () => {
@@ -59,6 +67,21 @@ describe("every failure's line and recovery", () => {
       "Apple silicon Mac hosts aren’t supported by this build yet",
     );
     expect(describeFailure(EVERY[13]!, "x").line).toMatch(/^plan9-mips hosts/u);
+  });
+
+  it("hands an administrator's command over, and starts over from the probe when lost", () => {
+    expect(describeFailure(EVERY.at(-3)!, "box")).toEqual({
+      line: "Couldn’t compute box’s host key fingerprints to show you, so they can’t be checked",
+      recovery: { action: "retry", label: "Try again", from: "connect" },
+    });
+    expect(describeFailure(EVERY.at(-2)!, "box")).toEqual({
+      line: "box stops Volli host when deploy logs out. Ask an administrator to run: sudo loginctl enable-linger 'deploy'",
+      recovery: { action: "retry", label: "Check again", from: "start" },
+    });
+    expect(describeFailure(EVERY.at(-1)!, "box")).toEqual({
+      line: "Adding box lost track of where it was",
+      recovery: { action: "retry", label: "Check again", from: "probe" },
+    });
   });
 
   it("maps the lab's five rows onto the steps, each step once", () => {
