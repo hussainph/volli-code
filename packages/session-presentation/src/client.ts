@@ -2,6 +2,7 @@
  * follow-ups and their release, even when no Client is connected. */
 import { isResnapshotRequired } from "@volli/host-protocol";
 import type {
+  SessionLatestReply,
   SessionStreamCompactionProgress,
   SessionStreamOverlay,
   SessionStreamQueue,
@@ -18,7 +19,12 @@ import type {
 import type { UIMessage } from "ai";
 
 import { isUntitledChatSession, type QueuedMessage } from "./session-model";
-import { movesProjection, type ChatSessionFrame, type ChatTranscriptState } from "./transcript";
+import {
+  movesProjection,
+  type ChatSessionFrame,
+  type ChatTranscriptState,
+  type TranscriptWindow,
+} from "./transcript";
 import {
   chatSessionCompactionProgress,
   chatSessionFrame,
@@ -172,6 +178,20 @@ export interface ChatSessionWrites {
     progress?: readonly SessionStreamCompactionProgress[],
     clearLiveCompaction?: boolean,
   ): void;
+  /**
+   * A snapshot: the newest window of frames and the projection checkpoint they
+   * end at, in one write (VC-315).
+   */
+  applySnapshot(
+    sessionId: string,
+    window: TranscriptWindow,
+    projection: ChatSessionProjection,
+  ): void;
+  /**
+   * One older page, put above the transcript — only while the transcript still
+   * holds `requested`, the cursor the page answers.
+   */
+  prependHistory(sessionId: string, requested: number, page: TranscriptWindow): void;
   setProjection(sessionId: string, projection: ChatSessionProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
@@ -253,11 +273,27 @@ export interface ChatCommandRequest {
  */
 export interface ChatSessionRpc {
   session: {
+    /**
+     * The projection checkpoint plus the newest window of frames, bounded by
+     * the host (VC-315). `before` is the cursor for the history above it;
+     * absent from a host that predates the bound, which always sent the whole
+     * log.
+     */
     snapshot: {
       query(input: { sessionId: string }): Promise<{
         projection: ChatSessionProjection;
         frames: readonly unknown[];
         throughSequence: number;
+        before?: number | null;
+        /** The current turn's latest reply; absent from a host that predates it. */
+        latestReply?: unknown;
+      }>;
+    };
+    /** One older window: frames strictly below `before`, and the cursor above them. */
+    history: {
+      query(input: { sessionId: string; before: number }): Promise<{
+        frames: readonly unknown[];
+        before: number | null;
       }>;
     };
     projection: {
@@ -373,13 +409,19 @@ export function racingFlushScheduler(host: FlushHost): FlushScheduler {
  *
  * - `"resume-once"`, the default: the in-process Electron IPC edge, where an
  *   end is a producer's teardown race. A stream that had started resumes once
- *   from its cursor; anything else surfaces. Flag off, this is all there is.
+ *   from its cursor; a `subscription-resnapshot-required` reloads the
+ *   snapshot once (VC-315); anything else surfaces. Flag off, this is all
+ *   there is.
  * - `"host-link"`: the WebSocket edge, behind a client host link
  *   (`@volli/host-protocol/client-link`). The link already resumed every
  *   transport drop from the last tracked id, after the next welcome
  *   validated, so what reaches this client is the host's own answer. A
  *   `subscription-resnapshot-required` reloads the snapshot and subscribes
- *   from its cursor; anything else surfaces. This client retries nothing.
+ *   from its cursor, up to three times in a row; anything else surfaces.
+ *   This client retries nothing else.
+ *
+ * Both count quiet reloads with the one guard, `#silentReloads`, which only
+ * an emission clears — never the transport's `started`.
  */
 export type ChatStreamRecovery = "resume-once" | "host-link";
 
@@ -455,8 +497,19 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 
 export type ProductSessionResult = SessionStartResult;
 
-/** Resnapshot reloads a `"host-link"` stream may make in a row before nothing arrives; see `#silentReloads`. */
-const MAX_SILENT_RELOADS = 3;
+/**
+ * Quiet resnapshot reloads a stream may make in a row before one of them
+ * delivers anything; see `#silentReloads`. One guard, one budget per edge.
+ * Over IPC replay is unbounded, so only retention can refuse a cursor, and a
+ * host that refuses the fresh snapshot's own cursor is broken: one reload,
+ * then the band (VC-315). Behind the host link a resume is bounded and the
+ * link has already resumed every drop it could, so a refusal can recur
+ * honestly while the head races ahead: three, then the band (VC-670).
+ */
+const MAX_SILENT_RELOADS: Readonly<Record<ChatStreamRecovery, number>> = {
+  "resume-once": 1,
+  "host-link": 3,
+};
 
 /** The tone a refusal of each weight is said in. */
 const TONE_OF: Readonly<Record<CommandRefusalSeverity, NotifyTone>> = {
@@ -491,6 +544,8 @@ export class ChatSessionClient {
   #overlays: SessionStreamOverlay[] = [];
   #compactionProgress: SessionStreamCompactionProgress[] = [];
   #lastEventId: string | null = null;
+  /** The one page request in flight, which every caller asking for more shares. */
+  #loadingOlder: Promise<boolean> | null = null;
   /**
    * Which open owns the stream. Bumped by every reconnect and by dispose, so a
    * snapshot that resolves after the surface moved on cannot seed a second
@@ -503,6 +558,12 @@ export class ChatSessionClient {
    * Resnapshot reloads in a row with no emission between them. A host that
    * keeps refusing its own snapshot's cursor would otherwise reload forever,
    * so past {@link MAX_SILENT_RELOADS} the stream surfaces instead.
+   *
+   * Only an emission clears it — the replay or a baseline actually arriving —
+   * never the transport's `started`. tRPC's WebSocket adapter sends `started`
+   * as soon as the subscription's iterator exists, before its first `next()`
+   * runs the replay that may refuse; a guard cleared there is cleared by
+   * every refusal it was meant to count (VC-315 review, B4).
    */
   #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;
@@ -533,6 +594,39 @@ export class ChatSessionClient {
   async connect(): Promise<void> {
     delete this.#reportedLocalFailures.stream;
     await this.#open(null);
+  }
+
+  /**
+  /**
+   * Reads the window of history above the transcript, if the host has any.
+   *
+   * The reader is waiting on this — they scrolled up to read it — so a failure
+   * is told, once per attempt, and leaves the transcript as it was for the
+   * next reveal to ask again. Concurrent asks share one request: the sentinel
+   * and the button can both fire for the same scroll.
+   */
+  loadOlder(): Promise<boolean> {
+    const before = this.#slice()?.transcript.before ?? null;
+    if (before === null) return Promise.resolve(false);
+    this.#loadingOlder ??= this.#readOlder(before).finally(() => {
+      this.#loadingOlder = null;
+    });
+    return this.#loadingOlder;
+  }
+
+  async #readOlder(before: number): Promise<boolean> {
+    try {
+      const page = await this.#rpc.session.history.query({ sessionId: this.sessionId, before });
+      if (this.#retired) return false;
+      this.#writes().prependHistory(this.sessionId, before, {
+        frames: readFrames(page.frames),
+        before: readBefore(page.before),
+      });
+      return true;
+    } catch (failure) {
+      if (!this.#retired) this.#notify(`Earlier messages: ${errorMessage(failure)}`, "error");
+      return false;
+    }
   }
 
   /**
@@ -984,8 +1078,15 @@ export class ChatSessionClient {
       if (cursor === null) {
         const snapshot = await this.#rpc.session.snapshot.query({ sessionId: this.sessionId });
         if (this.#stale(generation)) return false;
-        this.#writes().applyStream(this.sessionId, readFrames(snapshot.frames), []);
-        this.#writes().setProjection(this.sessionId, snapshot.projection);
+        this.#writes().applySnapshot(
+          this.sessionId,
+          {
+            frames: readFrames(snapshot.frames),
+            before: readBefore(snapshot.before),
+            latestReply: readLatestReply(snapshot.latestReply),
+          },
+          snapshot.projection,
+        );
         afterSequence = snapshot.throughSequence;
       }
       const source =
@@ -1040,14 +1141,27 @@ export class ChatSessionClient {
     this.#subscription?.unsubscribe();
     this.#subscription = null;
     this.#streamAlive = false;
-    if (this.#streamRecovery === "host-link") {
-      // The link resumed every drop it could; this is the host's answer.
-      if (isResnapshotRequired(failure) && this.#silentReloads < MAX_SILENT_RELOADS) {
+    // The host could not resume from this cursor — retention moved past it, or
+    // the backlog is beyond its replay bound — and said so instead of leaving a
+    // gap. That is not a broken stream: reading a fresh tail and resuming after
+    // it is the whole recovery, and it needs no one's attention (VC-315). It is
+    // asked before the reconnect budget because a resume refused this way
+    // fails before it delivers anything, whether or not the transport said
+    // `started` first. Past the edge's budget of reloads that delivered
+    // nothing, the host cannot be resumed at all: the band, not a loop.
+    if (isResnapshotRequired(failure)) {
+      this.#reconnectable = false;
+      if (this.#silentReloads < MAX_SILENT_RELOADS[this.#streamRecovery]) {
         this.#silentReloads += 1;
         void this.#open(null);
       } else {
         this.#lost(failure);
       }
+      return;
+    }
+    if (this.#streamRecovery === "host-link") {
+      // The link resumed every drop it could; this is the host's answer.
+      this.#lost(failure);
       return;
     }
     if (!this.#reconnectable) {
@@ -1293,6 +1407,24 @@ function wire(resolution: SessionInteractionResolution): WireResolution {
         }
       : {}),
   };
+}
+
+/**
+ * A window's older cursor. Anything but a positive integer reads as "nothing
+ * above": a host that predates the bound sent no cursor because it sent the
+ * whole log, and a malformed one is not a page worth asking for.
+ */
+function readBefore(before: unknown): number | null {
+  return typeof before === "number" && Number.isSafeInteger(before) && before > 0 ? before : null;
+}
+
+/** A snapshot's reply baseline, read structurally: anything malformed is no baseline. */
+function readLatestReply(value: unknown): SessionLatestReply | null {
+  if (value === null || typeof value !== "object") return null;
+  const { sequence, text } = value as { sequence?: unknown; text?: unknown };
+  return typeof sequence === "number" && Number.isSafeInteger(sequence) && typeof text === "string"
+    ? { sequence, text }
+    : null;
 }
 
 /** A snapshot's frames, with anything malformed dropped rather than drawn. */

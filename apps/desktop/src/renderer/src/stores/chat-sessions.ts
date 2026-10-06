@@ -27,12 +27,14 @@ import { create } from "zustand";
 import {
   applyProjection,
   applyQueue,
+  applySnapshotWindow,
   disposeChatClient,
   foldStreamBatch,
   getOrCreateChatClient,
   getChatClient,
   markAttaching,
   markDelivered,
+  prependSliceHistory,
   retitleSlice,
   seedSlice,
   settleSlice,
@@ -541,6 +543,14 @@ export function createChatSessionsStore(
         update(sessionId, (slice) =>
           foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
         );
+      },
+
+      applySnapshot(sessionId, window, projection) {
+        update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+      },
+
+      prependHistory(sessionId, requested, page) {
+        update(sessionId, (slice) => prependSliceHistory(slice, requested, page));
       },
 
       setProjection(sessionId, projection) {

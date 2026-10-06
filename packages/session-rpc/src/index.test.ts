@@ -227,6 +227,21 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
   ];
 }
 
+/**
+ * A transcript carrying `value` in a message part: the transcript's open JSON,
+ * the one place a value no envelope field names can ride (VC-315).
+ */
+function transcriptWith(value: unknown) {
+  return {
+    version: 1,
+    threadId: "thread",
+    branchId: "branch",
+    attemptId: "attempt",
+    turnId: null,
+    message: { id: "m", role: "assistant", parts: [{ type: "text", text: "", extra: value }] },
+  };
+}
+
 function snapshot(): SessionRuntimeSnapshot {
   return {
     projection: {
@@ -263,7 +278,9 @@ function snapshot(): SessionRuntimeSnapshot {
     },
     throughSequence: 4,
     frames: [frame(4)],
+    before: null,
     transcript: [],
+    latestReply: null,
   };
 }
 
@@ -342,6 +359,10 @@ function runtimeFixture(refusal: CommandRefusalSeverity | null = null): {
       };
     },
     snapshot: async () => snapshot(),
+    history: async ({ before }) => ({
+      frames: [frame(before - 1)],
+      before: before > 2 ? before - 1 : null,
+    }),
     projection: async () => {
       const { projection, throughSequence } = snapshot();
       return { projection, throughSequence };
@@ -744,6 +765,115 @@ describe("Session tRPC router", () => {
     expect(resolved.projection.interactions.active[0]?.native).toEqual({ id: null, detail: null });
     expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
+  });
+
+  it("pages older history with the same scrub as the snapshot, and passes its cursors through (VC-315)", async () => {
+    const fixture = runtimeFixture();
+    const requests: { sessionId: string; before: number }[] = [];
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async () => ({ ...snapshot(), before: 5 }),
+      history: async (input) => {
+        requests.push(input);
+        return { frames: attachmentFrames(), before: 3 };
+      },
+    };
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+
+    await expect(caller.session.snapshot({ sessionId: "session-1" })).resolves.toMatchObject({
+      before: 5,
+      frames: [{ sequence: 4 }],
+    });
+    expect(
+      await caller.session
+        .snapshot({ sessionId: "session-1" })
+        .then((value) => "transcript" in value),
+    ).toBe(false);
+    const page = await caller.session.history({ sessionId: "session-1", before: 5 });
+
+    expect(requests).toEqual([{ sessionId: "session-1", before: 5 }]);
+    expect(page.before).toBe(3);
+    expect(page.frames.map(({ sequence }) => sequence)).toEqual(
+      attachmentFrames().map(({ sequence }) => sequence),
+    );
+    const opened = page.frames[0]?.event.payload;
+    expect(opened?.kind === "attachment.opened" && "native" in opened.attachment).toBe(false);
+    await expect(caller.session.history({ sessionId: "session-1", before: 0 })).rejects.toThrow();
+    await expect(caller.session.history({ sessionId: "session-1", before: 1.5 })).rejects.toThrow();
+  });
+
+  it("hands a surface the plan and the current reply a window cannot hold (VC-315)", async () => {
+    const fixture = runtimeFixture();
+    const todoList = [{ content: "Finish migration", status: "in_progress" as const }];
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async () => ({
+        ...snapshot(),
+        projection: { ...snapshot().projection, todoList },
+        latestReply: { sequence: 2, text: "Current-turn reply" },
+      }),
+    };
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+
+    await expect(caller.session.snapshot({ sessionId: "session-1" })).resolves.toMatchObject({
+      projection: { todoList },
+      latestReply: { sequence: 2, text: "Current-turn reply" },
+    });
+  });
+
+  it("refuses a history page whose frames would not survive a JSON wire (VC-315)", async () => {
+    const fixture = runtimeFixture();
+    const cyclic: Record<string, unknown> = { kind: "cyclic" };
+    cyclic.self = cyclic;
+    const unsafe: unknown[] = [
+      Number.NaN,
+      () => undefined,
+      new Date(0),
+      new Map(),
+      cyclic,
+      [1, Number.POSITIVE_INFINITY],
+    ];
+    const pageWith = (value: unknown) => ({
+      frames: [{ ...frame(2), transcript: transcriptWith(value) }],
+      before: null,
+    });
+    const callerFor = (page: unknown) =>
+      createSessionRouter().createCaller(
+        sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: { ...fixture.runtime, history: async () => page as never },
+          diagnostics: new RpcDiagnosticLog(),
+        }),
+      );
+    for (const value of unsafe) {
+      await expect(
+        callerFor(pageWith(value)).session.history({ sessionId: "session-1", before: 3 }),
+        String(value),
+      ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    }
+    // A cursor that is not one is refused too.
+    await expect(
+      callerFor({ frames: [], before: 0 }).session.history({ sessionId: "session-1", before: 3 }),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    // Plain JSON passes, nested arrays and all.
+    await expect(
+      callerFor(pageWith([1, "two", true, null])).session.history({
+        sessionId: "session-1",
+        before: 3,
+      }),
+    ).resolves.toMatchObject({ frames: [{ sequence: 2, transcript: { message: { id: "m" } } }] });
   });
 
   it("removes runtime identity and recovery locators from snapshot projections and replay frames", async () => {

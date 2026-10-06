@@ -427,9 +427,11 @@ describe("publishable Session procedure schemas", () => {
       projection: {},
       throughSequence: 2,
     });
-    expect(
-      sessionSnapshotOutputSchema.parse({ projection: {}, frames: [], throughSequence: 2 }),
-    ).toEqual({ projection: {}, frames: [], throughSequence: 2 });
+    // A window that reaches the first event, with no reply: what an older host sent.
+    const snapshot = { projection: {}, frames: [], throughSequence: 2 };
+    expect(sessionSnapshotOutputSchema.parse(snapshot)).toEqual(snapshot);
+    const paged = { ...snapshot, before: 2, latestReply: { sequence: 1, text: "Done." } };
+    expect(sessionSnapshotOutputSchema.parse(paged)).toEqual(paged);
   });
 
   it("rejects malformed envelopes, receipt variants and non-JSON transcript payloads", () => {
