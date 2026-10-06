@@ -41,6 +41,7 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readSync,
@@ -64,6 +65,7 @@ import {
   beginDatabaseRecovery,
   finishDatabaseRecovery,
   hasPendingDatabaseRecovery,
+  readDatabaseRecoveryIntent,
   recoveryPendingPath,
   syncRecoveryPath,
 } from "./recovery-pending";
@@ -795,11 +797,11 @@ export interface StagedProfileSwap {
  * Makes a staged database (and its companion entries) the live profile, under
  * the fence, and checks it there before declaring success.
  *
- * Holds the open lock throughout. Writes the intent marker before anything is
- * displaced. Takes SQLite's exclusive ownership of the live file — refusing,
- * with {@link DatabaseFileBusyError}, rather than detaching a live writer —
- * and checkpoints it. Gives the live base a second name in the set-aside
- * directory and moves its sidecars and companions there. Installs the staged
+ * Holds the open lock throughout. Takes and holds SQLite's exclusive ownership
+ * of the live file — refusing with {@link DatabaseFileBusyError} before writing
+ * a new marker, rather than detaching a live writer. Writes the intent marker
+ * before checkpointing or displacing anything. Gives the live base a second name
+ * in the set-aside directory and moves its sidecars and companions there. Installs the staged
  * companions, then renames the staged file over the live path: the commit
  * point, atomic, so the live path is never empty. Re-opens and checks the
  * installed file, fsyncs, and clears the marker.
@@ -811,6 +813,103 @@ export interface StagedProfileSwap {
  * {@link DatabaseSwapFinalizeError}.
  */
 export function swapInStagedProfile(request: StagedProfileSwap): void {
+  swapStagedProfile(request);
+}
+
+/** Internal only: a rollback verifies an exact old schema without ever migrating it. */
+type SwapRequest = StagedProfileSwap & { restoreSchema?: number; restoreSource?: string };
+
+export interface DatabaseFileRestore {
+  dbPath: string;
+  /** A checkpointed, closed source. Copied, never consumed or opened by SQLite. */
+  sourcePath: string;
+  /** The operator's explicit target schema, not this build's head. */
+  schemaVersion: number;
+  /** Crash tests only. */
+  faults?: DatabaseFileFaults;
+}
+
+export interface DatabaseFileRestoreResult {
+  /** The database family displaced by this attempt. */
+  preservedDirectory: string;
+  /** The first interrupted attempt's evidence, which may hold later writes absent from this attempt. */
+  earlierPreservedDirectory?: string;
+}
+
+/**
+ * Restore a cold copy or migration rollback point, keeping its exact schema.
+ * The current build must not migrate the file destined for an older binary.
+ * Stage and fully check a disposable copy, then use the same fenced swap as
+ * recovery. An interrupted attempt is retryable from the unchanged source;
+ * failed attempts retain the marker and evidence, so boot fails closed.
+ * Returns both this attempt's preservation directory and, on retry, the first
+ * interrupted attempt's directory. Keep both: the earlier one may be the only
+ * copy of writes made since the rollback point.
+ */
+export function restoreDatabaseFile(request: DatabaseFileRestore): DatabaseFileRestoreResult {
+  const { dbPath, sourcePath, schemaVersion } = request;
+  if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1 || schemaVersion > SCHEMA_HEAD)
+    throw new Error(`Restore needs a schema between 1 and ${SCHEMA_HEAD}. Nothing was restored.`);
+  regularFile(sourcePath);
+  if (exists(dbPath) && inode(sourcePath) === inode(dbPath))
+    throw new Error("Restore requires a separate source, never the live database.");
+  assertStandalone(sourcePath);
+  const staging = mkdtempSync(join(dirname(dbPath), ".database-restore-"));
+  const stagedPath = join(staging, basename(dbPath));
+  const asideDirectory = join(dirname(dbPath), `rolled-back-${randomUUID()}`);
+  try {
+    copyFileSync(sourcePath, stagedPath, constants.COPYFILE_EXCL);
+    checkExactRestore(stagedPath, schemaVersion);
+    const earlierPreservedDirectory = swapStagedProfile({
+      dbPath,
+      stagedPath,
+      asideDirectory,
+      replacing: "damaged",
+      restoreSchema: schemaVersion,
+      restoreSource: resolve(sourcePath),
+      faults: request.faults,
+    });
+    return {
+      preservedDirectory: asideDirectory,
+      ...(earlierPreservedDirectory === undefined ? {} : { earlierPreservedDirectory }),
+    };
+  } finally {
+    // Source and set-aside evidence stay. A staging cleanup failure must not
+    // turn a verified, durable install into a reported failed restore.
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch (error) {
+      console.error("[database file] staging cleanup failed", { staging, error });
+    }
+  }
+}
+
+function assertStandalone(path: string): void {
+  for (const suffix of SIDECARS) {
+    const sidecar = `${path}${suffix}`;
+    if (!exists(sidecar)) continue;
+    regularFile(sidecar);
+    if (suffix !== "-shm" && lstatSync(sidecar).size !== 0)
+      throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
+  }
+}
+
+/** Writable check includes CHECK constraints; only our disposable copy/live install is opened. */
+function checkExactRestore(path: string, schemaVersion: number): void {
+  if (stagedSchemaVersion(path) !== schemaVersion)
+    throw new Error(`The restore file is not at schema ${schemaVersion}. Nothing was restored.`);
+  const db = new Database(path, { fileMustExist: true });
+  try {
+    const rows = db.pragma("integrity_check") as { integrity_check: string }[];
+    if (rows.length !== 1 || rows[0]?.integrity_check !== "ok")
+      throw new Error("The restore file failed its integrity check.");
+    checkpoint(db);
+  } finally {
+    db.close();
+  }
+}
+
+function swapStagedProfile(request: SwapRequest): string | undefined {
   const { dbPath, stagedPath, asideDirectory } = request;
   if (resolve(dirname(asideDirectory)) !== resolve(dirname(dbPath)))
     throw new Error("A swap sets the live database aside beside it, never elsewhere.");
@@ -818,15 +917,14 @@ export function swapInStagedProfile(request: StagedProfileSwap): void {
     throw new Error("A swap installs a staged copy, never the live database itself.");
   regularFile(stagedPath);
   // A staged WAL with frames would be left behind and its data lost.
-  for (const suffix of SIDECARS) {
-    const sidecar = `${stagedPath}${suffix}`;
-    if (exists(sidecar) && suffix !== "-shm" && lstatSync(sidecar).size !== 0)
-      throw new Error("The staged database still has an unfinished journal. Nothing was swapped.");
-  }
+  assertStandalone(stagedPath);
   // The verification open must never migrate at the live path: that would
   // take a safety copy beside the live profile and could write the reader
   // floor there (VC-602). Callers migrate in staging; refuse anything older.
-  if (stagedSchemaVersion(stagedPath) < SCHEMA_HEAD)
+  if (request.restoreSchema !== undefined) {
+    if (stagedSchemaVersion(stagedPath) !== request.restoreSchema)
+      throw new Error("The staged restore schema changed. Nothing was swapped.");
+  } else if (stagedSchemaVersion(stagedPath) < SCHEMA_HEAD)
     throw new Error(
       `The staged database is not at this build's schema (${SCHEMA_HEAD}). Nothing was swapped.`,
     );
@@ -850,7 +948,13 @@ export function swapInStagedProfile(request: StagedProfileSwap): void {
     // A healthy swap never adopts someone else's interrupted one: its rollback
     // would clear a marker that may be guarding a missing live file.
     if (request.replacing === "healthy") assertNoPendingDatabaseRecovery(dbPath);
+    // Read under the open lock, before the successful swap clears the marker.
+    // A retry never overwrites the first attempt's preservation metadata.
+    const priorIntent = readDatabaseRecoveryIntent(dbPath);
     new Swap(request).run();
+    return priorIntent === undefined
+      ? undefined
+      : join(dirname(dbPath), priorIntent.preservedDirectory);
   } finally {
     lock.close();
   }
@@ -875,7 +979,7 @@ class Swap {
   private published = false;
   private verified = false;
 
-  constructor(private readonly request: StagedProfileSwap) {
+  constructor(private readonly request: SwapRequest) {
     this.faults = request.faults ?? noFaults;
     this.profile = dirname(request.dbPath);
     this.staging = dirname(request.stagedPath);
@@ -896,15 +1000,34 @@ class Swap {
         // Preserve BEFORE ownership and checkpoint: even a failed checkpoint
         // can modify pages. Raw evidence and the post-checkpoint files survive.
         this.faults("swap:preserve-raw");
-        this.preserveRaw();
+        try {
+          this.preserveRaw();
+        } catch (error) {
+          // These are only this attempt's incomplete copies. No SQLite open,
+          // marker or displacement has happened; keep the live family intact.
+          this.removeUnusedAside();
+          throw error;
+        }
       }
-      // Durable intent precedes ANY displacement. An interruption or a failed
-      // rollback now fails boot closed instead of creating an empty profile.
-      this.faults("swap:mark");
-      beginDatabaseRecovery(dbPath, basename(asideDirectory));
-      this.marked = true;
+      // Probe and HOLD exclusivity before marking: a busy refusal must not
+      // create a new recovery intent. Holding ownership avoids a probe/swap
+      // race; the open lock still excludes boots throughout.
       this.faults("swap:own");
       this.owner = this.takeOwnership();
+      // Durable intent precedes checkpoint and ANY displacement. An
+      // interruption or failed rollback now fails boot closed.
+      this.faults("swap:mark");
+      beginDatabaseRecovery(
+        dbPath,
+        basename(asideDirectory),
+        this.request.restoreSource === undefined || this.request.restoreSchema === undefined
+          ? undefined
+          : { sourcePath: this.request.restoreSource, schemaVersion: this.request.restoreSchema },
+      );
+      this.marked = true;
+      // The base must stand alone while its sidecars move; only checkpoint
+      // after the intent is durable, even though ownership was acquired earlier.
+      if (this.owner !== undefined) checkpoint(this.owner);
       this.setLiveAside();
       for (const entry of this.companions) {
         if (!exists(join(this.staging, entry))) continue;
@@ -934,8 +1057,11 @@ class Swap {
       if (!this.marked) {
         // Nothing displaced. A healthy swap leaves no trace; recovery keeps
         // whatever raw evidence it had already copied.
-        if (replacing === "healthy" && this.createdAside)
-          rmSync(asideDirectory, { recursive: true, force: true });
+        if (
+          (replacing === "healthy" || error instanceof DatabaseFileBusyError) &&
+          this.createdAside
+        )
+          this.removeUnusedAside();
         throw error;
       }
       try {
@@ -946,6 +1072,20 @@ class Swap {
       throw error;
     } finally {
       this.owner?.close();
+    }
+  }
+
+  /** Cleanup never hides the original refusal, and never removes an inherited directory. */
+  private removeUnusedAside(): void {
+    if (!this.createdAside) return;
+    try {
+      rmSync(this.request.asideDirectory, { recursive: true, force: true });
+      this.createdAside = false;
+    } catch (error) {
+      console.error("[database file] set-aside cleanup failed", {
+        asideDirectory: this.request.asideDirectory,
+        error,
+      });
     }
   }
 
@@ -986,8 +1126,7 @@ class Swap {
         if (isBusy(error)) throw new DatabaseFileBusyError("in-use", { cause: error });
         throw error;
       }
-      // The base must stand alone: it stays live while its sidecars move.
-      checkpoint(owner);
+      // Checkpoint only AFTER durable intent; retain exclusivity until then.
       return owner;
     } catch (error) {
       owner.close();
@@ -1028,6 +1167,10 @@ class Swap {
    * the current schema, so this runs no migration and writes no floor.
    */
   private verifyInstalled(): void {
+    if (this.request.restoreSchema !== undefined) {
+      checkExactRestore(this.request.dbPath, this.request.restoreSchema);
+      return;
+    }
     const restored = openVolliDb(this.request.dbPath, { allowPendingRecovery: true });
     try {
       if (!checksClean(restored))

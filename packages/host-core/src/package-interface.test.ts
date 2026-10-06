@@ -118,6 +118,50 @@ function withFixtureTree(
   }
 }
 
+// --- Names only the handler map may use (VC-668) ---------------------------
+//
+// The move primitive and the map's seal: a production file that imports either
+// could invoke a command without a door's policy. The module edges name the
+// importers of each module; the name itself must appear in the importer for it
+// to count, so `entries/board.ts` re-exporting the trim from the same module is
+// not an offender.
+
+/** Module (extension-free, under src/) → the names in it only the map may use. */
+const MAP_ONLY_MODULES: Readonly<Record<string, readonly string[]>> = {
+  "ticket-move": ["executeTicketMove"],
+  "handlers/handler-map": ["sealHostHandlers"],
+};
+const MAP_ONLY = new Set(Object.values(MAP_ONLY_MODULES).flat());
+/** Where they belong: the handler map's own constructor. */
+const MAP_ONLY_HOME = [
+  "handlers/host-handlers.ts: executeTicketMove",
+  "handlers/host-handlers.ts: sealHostHandlers",
+];
+
+/** `file: name` for every production file under `root` that imports a map-only name. */
+function mapOnlyImporters(root: string): string[] {
+  const support = new Set(TEST_SUPPORT.flatMap((pattern) => globSync(pattern, { cwd: root })));
+  return globSync("**/*.{ts,tsx,mts}", { cwd: root })
+    .filter((file) => !isTest(file) && !support.has(file))
+    .flatMap((file) => {
+      const source = readFileSync(join(root, file), "utf8");
+      const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "";
+      const targets = moduleEdges(source)
+        .filter((edge) => /^\.{1,2}\//.test(edge.specifier))
+        .map((edge) =>
+          new URL(edge.specifier, `file:///src/${dir}`).pathname
+            .slice("/src/".length)
+            .replace(/\.ts$/, ""),
+        );
+      return [...new Set(targets)].flatMap((target) =>
+        (MAP_ONLY_MODULES[target] ?? [])
+          .filter((name) => new RegExp(`\\b${name}\\b`).test(source))
+          .map((name) => `${file}: ${name}`),
+      );
+    })
+    .toSorted();
+}
+
 // --- A module's exported surface, statically --------------------------------
 //
 // Enough of TypeScript's export syntax to answer "which declared names can a
@@ -442,6 +486,44 @@ describe("host-core's package interface", () => {
     expect(productionExportsMatching(PACKAGE, isWriterConstructor)).toEqual([]);
     const testing = surfaceOf(join(SRC, "testing/index.ts"));
     expect(testing.has("createSqliteSessionLedger")).toBe(true);
+  });
+
+  it("serves the move primitive and the map's seal from no production entry", () => {
+    // A door reaches `ticket.move` only through the sealed handler map, under
+    // its policy (VC-668): neither the primitive nor a way to seal another
+    // map is part of the package's interface.
+    expect(productionExportsMatching(PACKAGE, (name) => MAP_ONLY.has(name))).toEqual([]);
+  });
+
+  it("lets only the handler map import the move primitive or seal a map", () => {
+    expect(mapOnlyImporters(SRC)).toEqual(MAP_ONLY_HOME);
+  });
+
+  it("finds a production importer of a map-only name, however it is imported", () => {
+    withFixtureTree(
+      "host-core-map-only-",
+      {
+        "handlers/host-handlers.ts":
+          'import { executeTicketMove } from "../ticket-move";\nimport { sealHostHandlers } from "./handler-map";',
+        "ticket-move.ts": "export function executeTicketMove() {}",
+        "handlers/handler-map.ts": "export function sealHostHandlers() {}",
+        "entries/board.ts": 'export { trimFinishedTicketInBackground } from "../ticket-move";',
+        "rogue/aliased.ts": 'import { executeTicketMove as move } from "../ticket-move.ts";',
+        "rogue/dynamic.ts":
+          'export const m = () => import("../ticket-move").then((x) => x.executeTicketMove);',
+        "rogue/seal.ts": "import { sealHostHandlers } from '../handlers/handler-map';",
+        "rogue/allowed.test.ts": 'import { executeTicketMove } from "../ticket-move";',
+        "testing/support.ts": 'import { sealHostHandlers } from "../handlers/handler-map";',
+      },
+      (root) => {
+        expect(mapOnlyImporters(root)).toEqual([
+          ...MAP_ONLY_HOME,
+          "rogue/aliased.ts: executeTicketMove",
+          "rogue/dynamic.ts: executeTicketMove",
+          "rogue/seal.ts: sealHostHandlers",
+        ]);
+      },
+    );
   });
 
   it("serves test-only resets from ./testing alone", () => {

@@ -57,6 +57,8 @@ import {
   catalogLookup,
   HOST_ACTOR_POLICY,
   isCommandIntentConflict,
+  isHandlerRefused,
+  isOperationUnavailable,
   isolatePerformanceObserver,
   readOptionalPerformanceClock,
   type CatalogEntry,
@@ -64,6 +66,7 @@ import {
   type CatalogKeyOf,
   type CatalogKeyOfScope,
   type CatalogKeyRefusingIntents,
+  type HandlerCall,
   type HostActorKindName,
   type VerbEntry,
   type VerbRegistryEntry,
@@ -176,6 +179,60 @@ export interface CatalogCallerContext {
   diagnostics: CatalogDiagnostics;
   transport?: "electron-ipc" | "unknown";
   performanceObserver?: RpcProcedurePerformanceObserver;
+}
+
+/**
+ * The context keys an area's router may add to {@link CatalogCallerContext}:
+ * exactly one, `handlers`, the slice of the host's handler map
+ * (`@volli/host-core/handlers`) the area projects, keyed by catalog key. A
+ * router reaches domain behaviour only through it (VC-668): no other port, so
+ * a composition root wires one object, and every door that projects a key
+ * reaches the same function.
+ */
+export type RouterContextPorts<Ctx> = Exclude<keyof Ctx, keyof CatalogCallerContext | "handlers">;
+
+/**
+ * What a procedure's handler is told about the call, from the caller the door
+ * authenticated: the person (the desktop's own window, or a paired device),
+ * or a Session. Never from input.
+ */
+export function handlerCallOf(actor: CallerActor): HandlerCall {
+  if (isLocalDeviceActor(actor)) return { actor: { kind: "user" }, origin: "desktop-window" };
+  switch (actor.kind) {
+    case "device":
+      return { actor: { kind: "user" } };
+    case "session":
+      // A router names the Session, never its ticket: no entry admits a
+      // Session to an attributed write yet. VC-565 resolves the ticket when
+      // the board's `session-own` entries land.
+      return { actor: { kind: "session", sessionId: actor.sessionId, ticketId: null } };
+    case "worker":
+      // HOST_ACTOR_POLICY admits no worker to any entry.
+      throw new HostProcedureError("verb-refused", "No catalog entry is open to a worker.");
+  }
+}
+
+/**
+ * Runs a handler outside the policy middleware (a subscription's body, which
+ * tRPC starts after the chain has returned) and maps its "unavailable" and a
+ * refusal at the map the way the middleware maps a query's or mutation's.
+ */
+export async function hostAnswer<Answer>(run: () => Answer | Promise<Answer>): Promise<Answer> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isHandlerRefused(error)) {
+      throw new HostProcedureError("verb-refused", error.message, error);
+    }
+    if (isOperationUnavailable(error)) {
+      throw new HostProcedureError(
+        "operation-unavailable",
+        error instanceof Error ? error.message : "This operation is unavailable on this host",
+        error,
+      );
+    }
+    throw error;
+  }
 }
 
 /** A refusal the host protocol names: the reason travels to every client as `data.hostError`. */
@@ -488,12 +545,26 @@ export function createCatalogBuilders<
       if (!admitted) {
         throw new HostProcedureError("verb-refused", `${entry.key} is not open to this caller.`);
       }
-      const result = await next();
+      // The handler learns who is calling from the door, never from input.
+      const result = await next({ ctx: { call: handlerCallOf(actor) } });
       // A command id reused for a different intent is the client's conflict,
       // and the one the wire names; every other ledger conflict stays what it
       // was. Any area's ledger opts in by the shared brand.
       if (!result.ok && isCommandIntentConflict(result.error.cause)) {
         throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
+      }
+      // The map judged the call again under the door's policy and refused it
+      // before its handler ran (VC-668): the same refusal this middleware gives.
+      if (!result.ok && isHandlerRefused(result.error.cause)) {
+        throw new HostProcedureError("verb-refused", result.error.message, result.error.cause);
+      }
+      // What this host cannot do now is the handler's answer (VC-668).
+      if (!result.ok && isOperationUnavailable(result.error.cause)) {
+        throw new HostProcedureError(
+          "operation-unavailable",
+          result.error.message,
+          result.error.cause,
+        );
       }
       return result;
     });

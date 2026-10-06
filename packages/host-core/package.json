@@ -21,6 +21,10 @@
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"
     },
+    "./handlers": {
+      "types": "./src/entries/handlers.ts",
+      "import": "./src/entries/handlers.ts"
+    },
     "./browser": {
       "types": "./src/entries/browser.ts",
       "import": "./src/entries/browser.ts"

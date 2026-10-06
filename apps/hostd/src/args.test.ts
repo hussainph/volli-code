@@ -140,9 +140,63 @@ describe("volli-hostd's arguments", () => {
     expect(refusal(["credentials", "reset", "--data-dir", "/d", "--socket", "s"])).toBe(
       "credentials reset takes --data-dir and --yes only.",
     );
-    expect(refusal(["--data-dir", "/d", "--yes"])).toBe("--yes belongs to credentials reset.");
+    expect(refusal(["--data-dir", "/d", "--yes"])).toBe(
+      "--yes belongs to credentials reset or database restore.",
+    );
     expect(refusal(["status", "--data-dir", "/d", "--yes"])).toBe(
-      "--yes belongs to credentials reset.",
+      "--yes belongs to credentials reset or database restore.",
+    );
+  });
+});
+
+describe("database restore arguments", () => {
+  it("resolves the source and requires explicit confirmation", () => {
+    for (const yes of [[], ["--yes"]]) {
+      expect(
+        parseHostdArgs(
+          ["database", "restore", "--data-dir", "d", "--from", "backup", "--schema", "59", ...yes],
+          CWD,
+        ),
+      ).toEqual({
+        kind: "database-restore",
+        dataDir: "/srv/d",
+        sourcePath: "/srv/backup",
+        schemaVersion: 59,
+        confirmed: yes.length > 0,
+      });
+    }
+    expect(USAGE).toContain("volli-hostd database restore");
+  });
+
+  it("refuses incomplete actions, bad schemas and flags belonging elsewhere", () => {
+    expect(refusal(["database"])).toBe("database needs an action: restore.");
+    expect(refusal(["database", "wipe"])).toBe("Unknown argument: wipe");
+    expect(refusal(["database", "restore", "extra"])).toBe("Unknown argument: extra");
+    expect(refusal(["database", "restore"])).toBe("--data-dir <dir> is required.");
+    const base = ["database", "restore", "--data-dir", "d"];
+    for (const from of [[], ["--from", ""]])
+      expect(refusal([...base, ...from])).toBe("database restore requires --from <file>.");
+    for (const schema of [
+      [],
+      ["--schema", "0"],
+      ["--schema=-1"],
+      ["--schema", "x"],
+      ["--schema", "1.5"],
+      ["--schema", "9007199254740992"],
+    ])
+      expect(refusal([...base, "--from", "b", ...schema])).toBe(
+        "database restore requires --schema <N>, a positive integer.",
+      );
+    for (const flag of ["--socket", "--operators"])
+      expect(refusal([...base, flag, "x"])).toBe(
+        "database restore takes --data-dir, --from, --schema and --yes only.",
+      );
+    for (const flag of ["--from", "--schema"])
+      expect(refusal(["status", "--data-dir", "d", flag, "x"])).toBe(
+        "--from and --schema belong to database restore.",
+      );
+    expect(refusal([...base, "--for", "alice"])).toBe(
+      "--for, --revoke and --service-user belong to operator-token.",
     );
   });
 });

@@ -234,7 +234,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
 }));
 
 import { flushDataChangedForTest } from "./broadcast";
-import { registerDataIpcHandlers } from "./data-ipc";
+import { registerDataIpcHandlers } from "./data-ipc.test-support";
 import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
   createTestSessionEngine,
