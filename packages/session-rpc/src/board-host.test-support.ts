@@ -45,7 +45,6 @@ import {
   type BoardRouterHandlers,
 } from "./board-router";
 import type { WorkspaceResource } from "./catalog";
-import { SESSION_RESOURCE } from "./session-catalog";
 
 export const BOARD_WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 export const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
@@ -564,10 +563,9 @@ export function fakeBoard(): FakeBoard {
         }
         case LABEL_RESOURCE:
           return labels.get(resource.id)?.projectId ?? null;
-        case SESSION_RESOURCE:
-          return SESSIONS[resource.id] ?? null;
         default:
-          return null;
+          // A Session; a kind the fake does not know names none of its ids.
+          return SESSIONS[resource.id] ?? null;
       }
     },
   };
