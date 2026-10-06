@@ -495,9 +495,11 @@ describe("start --user on a Mac", () => {
     const error = await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) })));
     expect(error.code).toBe("start-failed");
     expect(statSync(`${mac.logFile!}.1`).size).toBe(AGENT_LOG_MAX_BYTES + 1);
-    expect(existsSync(mac.logFile!)).toBe(false);
-    // Only the end is read: a long file's first, cut line is dropped.
-    writeFileSync(mac.logFile!, `${"y".repeat(100)}\nearly\n${"z".repeat(10)}\nlast line\n`);
+    // Only the end is read: a long file's first, cut line is dropped. Written
+    // exclusively: it succeeds only because the grown log was set aside.
+    writeFileSync(mac.logFile!, `${"y".repeat(100)}\nearly\n${"z".repeat(10)}\nlast line\n`, {
+      flag: "wx",
+    });
     expect(logTail(mac, 22)).toEqual(["zzzzzzzzzz", "last line"]);
     expect(logTail(mac, 20)).toEqual(["last line"]);
     expect(logTail(mac)).toEqual(["y".repeat(100), "early", "z".repeat(10), "last line"]);
