@@ -12,6 +12,7 @@ export {
   BROWSER_MAX_TABS_PER_PROJECT,
   BROWSER_MAX_TABS_PER_SESSION,
   BROWSER_URL_MAX_CHARS,
+  type BrowserBackend,
   type BrowserHoldEvent,
   type BrowserLoadWaitMode,
   browserSessionPartition,
@@ -21,8 +22,15 @@ export {
   isAllowedBrowserUrl,
 } from "../browser/backend";
 export type { CdpTransport, TabCursorDriver, TabCursorGesture } from "../browser/cdp-controller";
+export {
+  ChromiumBrowserBackend,
+  type ChromiumBrowserBackendOptions,
+  type ChromiumBrowserBackendPorts,
+} from "../browser/chromium-backend";
+export { ChromiumLaunchError } from "../browser/chromium-launch";
 export { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 export { type BrowserPictureRecord, BrowserPictureStore } from "../browser/picture-store";
+export type { BrowserScreencastAttachment, BrowserScreencastFrame } from "../browser/screencast";
 export {
   BROWSER_CONSOLE_MAX_CHARS,
   BROWSER_TITLE_MAX_CHARS,

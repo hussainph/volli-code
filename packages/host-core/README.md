@@ -548,10 +548,10 @@ Agent browser tools speak CDP through a `BrowserTabController`
 they need, they ask of a `BrowserBackend` (`browser/backend.ts`), so the engine
 is the one thing that changes between hosts:
 
-| Backend                                               | Engine and CDP wire                                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`) | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`) |
-| Headless host                                         | Standalone Chromium over a CDP pipe (VC-619)                                             |
+| Backend                                                  | Engine and CDP wire                                                                                 |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`)    | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`)            |
+| `ChromiumBrowserBackend` (`browser/chromium-backend.ts`) | Standalone Chromium; one CDP connection over `--remote-debugging-pipe`, flattened sessions (VC-619) |
 
 - **The interface.** Tab lifecycle with the VC-238 ownership fields
   (`BrowserTabState`, now in `@volli/shared`), a `CdpTransport` per tab
@@ -574,6 +574,133 @@ is the one thing that changes between hosts:
 - **The security stance (VC-110).** A backend's CDP wire is private to the
   engine it drives. Never `--remote-debugging-port`: no loopback endpoint
   through which another local process could reach a tab.
+- **The parity suite.** `browser/test-support/backend-suite.ts` drives the real
+  port and the agent-runtime browser tools against a loopback fixture: every
+  verb, its result shape, refusals, holds, caps, cancellation and dispose.
+  A backend passes it unchanged. `chromium-backend.test.ts` runs it against
+  Chromium, in CI's Linux `Test (packages)` lane.
+
+### Chromium
+
+`new ChromiumBrowserBackend(ports, options)` launches its browser on the first
+tab and keeps it until `dispose()`. Every option is the host's to state:
+
+- **`executablePath`.** host-core finds and downloads nothing. The recommended
+  build is Playwright's Chrome for Testing, pinned by the lockfile's
+  `playwright-core` (a devDependency here, never imported at runtime) and
+  installed with `playwright-core install chromium --no-shell`: the full
+  build, which runs new headless. Never `chromium-headless-shell`, the old
+  headless. The same revision runs on dev Macs, CI and a Linux box, where
+  Ubuntu ships Chromium only as a snap.
+- **`profileRoot`.** Each launch makes a private 0700 profile directory under
+  it (`volli-chromium-<host pid>-<random>`) and removes it however the browser
+  ends. Nothing a page stores outlives the browser. A host killed outright
+  leaves its directory; the next backend on the same root sweeps every
+  profile whose host is gone.
+- **`noSandbox`.** `false` everywhere a host can provide user namespaces,
+  which is every host Volli ships for: the hostd systemd unit allows the three
+  Chromium's sandbox makes, and on Ubuntu 23.10+ the binary needs the AppArmor
+  profile in `apps/hostd/packaging/volli-chromium.apparmor`
+  (`apps/hostd/README.md`, "Running under systemd"). `true` only in a
+  container that cannot, and a launch without the sandbox logs a warning
+  every time. CI runs sandboxed.
+
+- **`deviceScaleFactor`**: device pixels per CSS pixel every page is drawn
+  at (`--force-device-scale-factor`). 2 makes a high-DPI viewer's screencast
+  sharp, at four times the pixels for every tab and agent screenshots at 2×
+  (as a Retina desktop's are); 1 on a host no high-DPI viewer looks at.
+- **`screencastQuality`**: the JPEG quality of screencast frames.
+
+What the backend owns, beyond the registry's policy:
+
+- **One shutdown, however the browser ends.** The browser leads its own
+  process group and starts with an allowlisted environment (no host
+  secrets). A close, a failed launch, an exit or crash, and a pipe that fails
+  or overflows all run the same finalization: every waiting command rejects,
+  the streams close, the whole group gets SIGTERM, a grace, then SIGKILL
+  (survivors of the leader included), the child is reaped and the profile
+  removed. The backend forgets the browser's tabs, and the next tab launches
+  another. A host that runs browsers relies on no service manager for this.
+- **A bounded pipe.** Inbound frames, pending commands, unsent output bytes
+  (the writable's own buffer is the only queue) and every command's time are
+  bounded (`CdpPipeLimits`); a withdrawn or timed-out command leaves the
+  pending map at once. An oversized frame is a broken browser: the pipe
+  closes, which finalizes it.
+- **Ids are ours.** `open` returns synchronously; Chromium's target is created
+  behind the entry's `ready` promise, and every engine call waits on it.
+- **Contexts by `browserSessionPartition`.** A Session's tabs share their
+  Ticket's (or Project's) browser context and nobody else's; the person's tabs
+  use the default one. Downloads and every permission are denied per context.
+- **Chrome facts from events.** url, title, loading and history are tracked
+  for the synchronous `liveChrome`; the generation bumps on main-frame
+  navigation start. A read refreshes the title first, because Chromium reports
+  a script's title change late; that read is bounded and follows the caller's
+  withdrawal. An empty title is a real title.
+- **Page-driven navigation is HTTP(S)-only, with one residual.** Every
+  document request and redirect hop is checked before it is sent (`Fetch`),
+  on the page's session and on every out-of-process iframe's, which attaches
+  paused and runs only once its guard is installed. A main frame the page
+  sends anywhere else (its own `blob:`, an external scheme) is refused when
+  it asks (`Page.frameRequestedNavigation`, before commit) and stays put, as
+  desktop's `will-navigate` keeps it; a commit that slips past is sent to
+  `about:blank`. Chromium itself refuses `file:`, `chrome:` and top-level
+  `data:`.
+
+  **The residual (not desktop parity):** same-process `data:`, `blob:` and
+  `srcdoc` iframes make no network request, so no `Fetch` guard sees them,
+  and CDP has no per-frame pre-commit refusal; they run, where desktop's
+  `will-frame-navigate` refuses them. None gains a privilege the page lacks
+  (`blob:` and `srcdoc` share its origin, `data:` is opaque). The candidates
+  were rejected: injecting a `frame-src` CSP through `Fetch` response
+  interception rewrites every document's headers, is visible to the page
+  (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
+  element races the commit and changes the page's DOM. A test pins the
+  behavior (`chromium-backend.test.ts`, "guards frames"). **VC-571 must
+  enforce it, or keep the lent-view fallback, before persons use hostd's
+  browser** (`docs/plans/host-protocol.md`, parity bar).
+
+- **Popups never run.** Every new page is attached paused; one with an opener
+  is closed, and its URL becomes a product tab under the opener's provenance
+  and caps.
+- **Dialogs nobody can answer get the safe answer, said aloud.** An alert is
+  acknowledged; a confirm or prompt is declined (`false`, `null`); a
+  leave-page prompt (`beforeunload`) is declined, so the tab stays, as
+  desktop's does — Volli never approves leaving a page that guards unsaved
+  work. Each is recorded in the console with its outcome, and a refused
+  departure also sets the tab's error, which every agent answer carries.
+  Closing a tab runs no unload veto.
+- **A frame source for viewers** (`attachScreencast`, `browser/screencast.ts`),
+  by host-protocol.md § Binary framing; VC-571 carries it over the binary
+  channel, never the event bus or a tRPC subscription. Per-tab attach and
+  detach; JPEG, with encoding, viewport and device scale factor as attach
+  metadata (re-stated when they change); latest wins, at most one unsent frame
+  per attachment, stale frames dropped whole before they are numbered;
+  Chromium's frames acked on arrival; `next(signal)` cancels, and the tab
+  closing or going headless ends every attachment. A viewer asks for a scale
+  (2 on Retina) and gets the highest any attachment asked for, up to the
+  browser's own. Each tab's cast is reconfigured by one serial, coalescing
+  worker: from a request (attach, detach, resize, scale) no frame is offered
+  until a cast of the new shape has started, and only then do attachments
+  hear the new metadata; every frame's real JPEG size is checked against the
+  live cast, and one from before (or of another scale) is dropped, though
+  every frame is still acked. A zero-viewer stop is always the last word. The
+  person's input arrives through `viewerInput` (pointer with the DOM
+  `buttons` mask, so a drag is a drag; wheel, keys, committed text and IME
+  composition) and closes the transcript camera for desktop's quiet window;
+  it never takes or moves the agent hold. A shown tab's JavaScript dialog,
+  while a viewer is attached, waits for the person: `pendingDialog`,
+  `respondToDialog` and each attachment's `onDialog` carry it, and nobody
+  answering within `CHROMIUM_DIALOG_ANSWER_TIMEOUT_MS` (or the last viewer
+  leaving) gets the safe answer. These are optional `BrowserBackend`
+  members, refused for a headless tab: the seam stays open to capabilities
+  one engine has and another does not.
+- **The parity bench** (`chromium-parity.test.ts`) measures, at 1× and 2×,
+  input-to-frame latency (p50, p95) for a click and for typing and frames per
+  second while scrolling and animating, at the frame-source level on loopback.
+  It always prints `[volli] chromium parity`; `VOLLI_CHROMIUM_PARITY_ASSERT=1`
+  holds it to the bar (p95 ≤ 100 ms, ≥ 30 fps).
+- **No wake policy.** Each tab is its own window, never occluded, and the
+  launch turns background throttling off.
 
 ## Ticket moves
 

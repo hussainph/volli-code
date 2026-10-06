@@ -163,6 +163,17 @@ copyFileSync(
   join(APP, "packaging", "com.volli.hostd.plist"),
   join(stage, "share", "launchd", "com.volli.hostd.plist"),
 );
+// The agent browser's sandbox on Ubuntu 23.10+ (VC-619), and its probe.
+mkdirSync(join(stage, "share", "apparmor"), { recursive: true });
+copyFileSync(
+  join(APP, "packaging", "volli-chromium.apparmor"),
+  join(stage, "share", "apparmor", "volli-chromium"),
+);
+copyFileSync(
+  join(APP, "scripts", "probe-chromium-sandbox.sh"),
+  join(stage, "share", "probe-chromium-sandbox.sh"),
+);
+chmodSync(join(stage, "share", "probe-chromium-sandbox.sh"), 0o755);
 copyFileSync(join(APP, "README.md"), join(stage, "README.md"));
 copyFileSync(join(ROOT, "LICENSE"), join(stage, "LICENSE"));
 
