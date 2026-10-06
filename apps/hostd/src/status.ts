@@ -84,6 +84,12 @@ export interface HostdStatus {
    * in a file written by an older hostd.
    */
   readonly hostProtocol?: HostdHostProtocolStatus | null;
+  /**
+   * This install's host id (VC-550), once boot has read or minted it; what an
+   * enrolled device's credential must name (VC-700). Not a secret. Absent in
+   * a file written by an older hostd.
+   */
+  readonly hostId?: string | null;
 }
 
 /** Where the host protocol listens: loopback only until VC-575. */
