@@ -8,7 +8,7 @@ import {
   operationsGrantedBy,
 } from "./features";
 import { isHostFeature } from "./handshake";
-import { SUBSCRIPTION_REPLAY_BOUNDS } from "./subscriptions";
+import { HOST_PROTOCOL_MAX_FRAME_BYTES, SUBSCRIPTION_REPLAY_BOUNDS } from "./subscriptions";
 
 describe("the v1 feature table", () => {
   // A feature's operation set is fixed once it ships: this snapshot changing
@@ -69,6 +69,10 @@ describe("the WebSocket replay bounds", () => {
   it("are VC-315's 4,096 events and 16 MiB, frozen", () => {
     expect(SUBSCRIPTION_REPLAY_BOUNDS).toStrictEqual({ events: 4096, bytes: 16_777_216 });
     expect(Object.isFrozen(SUBSCRIPTION_REPLAY_BOUNDS)).toBe(true);
+  });
+
+  it("bound one frame at the replay byte bound, so a frame never outweighs a resume", () => {
+    expect(HOST_PROTOCOL_MAX_FRAME_BYTES).toBe(SUBSCRIPTION_REPLAY_BOUNDS.bytes);
   });
 });
 

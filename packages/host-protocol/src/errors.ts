@@ -56,6 +56,14 @@ export const HOST_ERROR_REASON_CODES = {
   "subscription-overflow": "TOO_MANY_REQUESTS",
   "subscription-resnapshot-required": "PRECONDITION_FAILED",
   "subscription-source-failed": "INTERNAL_SERVER_ERROR",
+  /** The connection already holds as many open subscriptions as its door allows. */
+  "subscription-limit": "TOO_MANY_REQUESTS",
+  /**
+   * One answer or stream frame would exceed the door's frame bound
+   * (`HOST_PROTOCOL_MAX_FRAME_BYTES` on the WebSocket). Refused whole, never
+   * truncated; a bounded or paged read is the way to what it held.
+   */
+  "response-too-large": "PAYLOAD_TOO_LARGE",
   "operation-unavailable": "NOT_IMPLEMENTED",
 } as const satisfies Record<string, HostErrorCode>;
 export type HostErrorReason = keyof typeof HOST_ERROR_REASON_CODES;

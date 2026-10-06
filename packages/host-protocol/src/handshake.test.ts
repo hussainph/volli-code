@@ -6,6 +6,7 @@ import {
   createHostNonce,
   encodeHostHello,
   HOST_HELLO_PARAM,
+  HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_VERSIONS,
   isHostFeature,
   isHostHello,
@@ -243,5 +244,20 @@ describe("buildHostHello", () => {
         protocol: range,
       }).protocol,
     ).toBe(range);
+  });
+});
+
+describe("HOST_PROTOCOL_CLOSE_CODES", () => {
+  it("are fixed application codes, distinct, and frozen", () => {
+    expect(HOST_PROTOCOL_CLOSE_CODES).toStrictEqual({
+      handshakeRefused: 4400,
+      credentialInvalid: 4401,
+      helloTimeout: 4408,
+      responseTooLarge: 4413,
+    });
+    const codes = Object.values(HOST_PROTOCOL_CLOSE_CODES);
+    expect(new Set(codes).size).toBe(codes.length);
+    for (const code of codes) expect(code >= 4000 && code <= 4999).toBe(true);
+    expect(Object.isFrozen(HOST_PROTOCOL_CLOSE_CODES)).toBe(true);
   });
 });

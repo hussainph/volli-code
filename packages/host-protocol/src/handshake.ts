@@ -18,6 +18,22 @@ export const HOST_PROTOCOL_VERSIONS: ProtocolVersionRange = {
   max: HOST_PROTOCOL_VERSION,
 };
 
+/**
+ * Close codes a host protocol WebSocket sends, in the 4000–4999 range RFC 6455
+ * leaves to applications. Pure data, so a client link (renderer, mobile) reads
+ * them without loading the Node-only listener.
+ */
+export const HOST_PROTOCOL_CLOSE_CODES = Object.freeze({
+  /** The handshake was refused for any reason but the credential; the close reason names it. */
+  handshakeRefused: 4400,
+  /** The credential was refused, revoked or expired. */
+  credentialInvalid: 4401,
+  /** No hello arrived within the handshake timeout. */
+  helloTimeout: 4408,
+  /** The host would have had to send a frame past `HOST_PROTOCOL_MAX_FRAME_BYTES`. */
+  responseTooLarge: 4413,
+} as const);
+
 /** Additive lowercase dotted feature names; absence means unsupported. */
 export type HostFeature = string;
 const FEATURE = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/u;

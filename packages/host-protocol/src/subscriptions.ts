@@ -22,3 +22,13 @@ export const SUBSCRIPTION_REPLAY_BOUNDS: SubscriptionReplayBounds = Object.freez
   events: 4096,
   bytes: 16 * 1024 * 1024,
 });
+
+/**
+ * The largest single frame, in UTF-8 bytes, a WebSocket host sends: one
+ * answer, or one subscription emission. An answer past it is refused with
+ * `PAYLOAD_TOO_LARGE` / `response-too-large`, never truncated, and an
+ * emission past it ends its stream with the same reason. It equals the replay
+ * byte bound, so one frame alone never outweighs a whole resume; a bounded or
+ * paged read (VC-315's `session.history`) is the way to anything larger.
+ */
+export const HOST_PROTOCOL_MAX_FRAME_BYTES = SUBSCRIPTION_REPLAY_BOUNDS.bytes;
