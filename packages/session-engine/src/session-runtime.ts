@@ -3,6 +3,7 @@ import { canonicalJson } from "./transcript-artifacts";
 import {
   projectSessionFollowUps,
   sessionFollowUpDeliveryCommandId,
+  sessionFollowUpDeliveryEvidence,
   type SessionFollowUpCommand,
   type SessionFollowUpItem,
   type SessionFollowUpLedger,
@@ -1901,17 +1902,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     const { origin: _origin, ...intentRequest } = request;
     const signature = canonicalJson(intentRequest);
     const command = request.command;
-    // A `releasing` row nobody is sending can be withdrawn unless there is proof
-    // it was delivered. Proof is async (the event ledger), so it is read here
-    // and re-checked against the same claim inside the transaction.
-    const orphanedClaim =
-      command.kind === "message.cancel"
-        ? await this.#orphanedFollowUpClaim(request.sessionId, command.messageId)
-        : null;
     const throughSequence = await this.#latestSequence(request.sessionId);
     const now = this.ports.clock.now();
     let withdrewClaim = false;
-    const result = await ledger.transaction(request.sessionId, (state) => {
+    const result = await ledger.transaction(request.sessionId, (state, deliveryProof) => {
       const prior = Object.hasOwn(state.commands, request.commandId)
         ? state.commands[request.commandId]
         : undefined;
@@ -1972,10 +1966,15 @@ class DefaultSessionRuntime implements SessionRuntime {
         if (!entry)
           rejection = { code: "message_not_queued", detail: "This message is no longer queued" };
         else if (entry.state !== "queued") {
+          // Both the claim and its proof are read in the queue transaction.
+          // An async projection read before it can miss a late receipt/turn.
+          const delivered =
+            command.kind === "message.cancel"
+              ? deliveryProof?.(entry.deliveryCommandId)
+              : undefined;
           if (
             command.kind === "message.cancel" &&
-            orphanedClaim?.deliveryCommandId === entry.deliveryCommandId &&
-            !orphanedClaim.delivered &&
+            delivered === false &&
             !this.#followUpBusy(entry.deliveryCommandId)
           ) {
             // Nothing proves it ran: hand it back. It may still have run, which
@@ -1986,12 +1985,13 @@ class DefaultSessionRuntime implements SessionRuntime {
           } else
             rejection = {
               code: "message_releasing",
-              detail: orphanedClaim?.delivered
+              detail: delivered
                 ? "This message was already delivered"
                 : "This message is already being delivered",
             };
         } else if (command.kind === "message.cancel") {
           state.entries.splice(index, 1);
+          if (entry.refusedDetail) withdrewClaim = true;
           if (entry.refused) state.releasedBoundary = null;
         } else if (command.message.id !== command.messageId || command.message.role !== "user")
           rejection = {
@@ -2006,6 +2006,7 @@ class DefaultSessionRuntime implements SessionRuntime {
           );
           if (entry.refused) state.releasedBoundary = null;
           delete entry.refused;
+          delete entry.refusedDetail;
           delete entry.steer;
         }
       }
@@ -2049,25 +2050,6 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   #followUpBusy(deliveryCommandId: string): boolean {
     return this.#inFlight.has(deliveryCommandId) || this.#followUpOwned.has(deliveryCommandId);
-  }
-
-  /** A `releasing` row no sender in this process holds, and whether it is proven delivered. */
-  async #orphanedFollowUpClaim(
-    sessionId: string,
-    messageId: string,
-  ): Promise<{ deliveryCommandId: string; delivered: boolean } | null> {
-    const deliveryCommandId = await this.ports.followUps!.transaction(sessionId, (state) => {
-      const entry = state.entries.find(({ id }) => id === messageId);
-      return entry?.state === "releasing" ? entry.deliveryCommandId : null;
-    });
-    if (deliveryCommandId === null || this.#followUpBusy(deliveryCommandId)) return null;
-    const current = await this.#requireSession(sessionId);
-    const intent = current.commands.find(({ id }) => id === deliveryCommandId);
-    return {
-      deliveryCommandId,
-      delivered:
-        intent !== undefined && (await this.#deliveryEvidence(sessionId, intent, current)) !== null,
-    };
   }
 
   async #withFollowUps(
@@ -2209,8 +2191,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     const ownFailureId = this.#followUpFailureAttentionId(sessionId);
     // Set inside the claim transaction, so no cancel can interleave.
     const hold: { deliveryCommandId: string | null } = { deliveryCommandId: null };
+    let heldDetail: string | undefined;
     try {
       const entry = await ledger.transaction(sessionId, (state) => {
+        heldDetail = state.entries.find((candidate) => candidate.refused)?.refusedDetail;
         const releasing = state.entries.filter((candidate) => candidate.state === "releasing");
         // Recovery assumes one delivery per Session. Two claims is a corrupt
         // ledger, and guessing which one is real could send a prompt twice.
@@ -2251,7 +2235,16 @@ class DefaultSessionRuntime implements SessionRuntime {
         this.#followUpOwned.add(head.deliveryCommandId);
         return head;
       });
-      if (!entry || this.#closed) return;
+      if (this.#closed) return;
+      if (!entry) {
+        if (heldDetail)
+          await this.reportMessageDeliveryFailure({
+            sessionId,
+            commandId: `follow-up:${sessionId}`,
+            detail: heldDetail,
+          });
+        return;
+      }
       // Publish on a separate chain: an unresponsive Client cannot delay release.
       this.#notifyFollowUps(sessionId);
       await this.#releaseFollowUp(sessionId, entry, projection);
@@ -2450,47 +2443,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     command: SessionCommand,
     projection: SessionProjection,
   ): Promise<CommandReceipt | null> {
-    const accepted = projection.receipts.findLast(
-      ({ commandId, status }) =>
-        commandId === command.id && (status === "accepted" || status === "completed"),
+    return sessionFollowUpDeliveryEvidence(
+      sessionId,
+      command,
+      projection.receipts,
+      await this.#listEventsPaged({ sessionId }),
     );
-    if (accepted) return accepted;
-    const events = await this.#listEventsPaged({ sessionId });
-    const recorded = events.findIndex(
-      ({ payload }) => payload.kind === "command.recorded" && payload.command.id === command.id,
-    );
-    /* v8 ignore next -- the projection that named this command was folded from these events. */
-    if (recorded < 0) return null;
-    for (const event of events.slice(recorded + 1)) {
-      const { payload } = event;
-      if (payload.kind === "turn.started") {
-        if (
-          payload.attachmentId !== command.route?.attachmentId ||
-          (event.commandId != null
-            ? event.commandId !== command.id
-            : payload.turnId !== `turn:${command.id}`)
-        )
-          return null;
-        return {
-          id: `${command.id}:turn-evidence`,
-          commandId: command.id,
-          status: "accepted",
-          acceptedAt: event.occurredAt,
-          result: { kind: "message.submitted", sessionId },
-          recordedAt: event.recordedAt,
-          sequence: event.sequence,
-        };
-      }
-      if (
-        payload.kind === "turn.completed" ||
-        payload.kind === "turn.interrupted" ||
-        (payload.kind === "command.recorded" &&
-          (payload.command.intent.kind === "message.submit" ||
-            payload.command.intent.kind === "executor.retry"))
-      )
-        return null;
-    }
-    return null;
   }
 
   /** Give an owned claim back, unsent; it releases again at the next idle boundary. */
@@ -2506,6 +2464,18 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #clearFollowUpFailure(sessionId: string): Promise<void> {
+    const heldDetail = await this.ports.followUps!.transaction(
+      sessionId,
+      (state) => state.entries.find((entry) => entry.refused)?.refusedDetail,
+    );
+    if (heldDetail) {
+      await this.reportMessageDeliveryFailure({
+        sessionId,
+        commandId: `follow-up:${sessionId}`,
+        detail: heldDetail,
+      });
+      return;
+    }
     const projection = await this.#requireSession(sessionId);
     const failureId = this.#followUpFailureAttentionId(sessionId);
     if (!projection.attention.active.some(({ id }) => id === failureId)) return;

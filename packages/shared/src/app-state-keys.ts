@@ -199,6 +199,12 @@ const EXACT = {
     reason:
       "Tombstone for the `volli` CLI shim and agent skills install (main/index.ts). Agents need the install where they run, so the tombstone is the host's; the menu that sets it is a client action.",
   },
+  "volli:follow-up-clean-close": {
+    placement: "host",
+    owner: "stays",
+    reason:
+      "One-shot clean-close Session event watermarks: hold pending follow-ups when another build advanced their history while this host was down.",
+  },
   "volli:min-reader-version": {
     placement: "host",
     owner: "stays",

@@ -31,6 +31,7 @@ import {
 } from "../session-runtime/model-access-preferences";
 import { RETENTION_SETTINGS_KEY } from "../worktree/retention";
 import { TRIM_SETTINGS_KEY } from "../worktree/trim-settings";
+import { FOLLOW_UP_CLEAN_CLOSE_KEY } from "./session-follow-up-repo";
 import { MIN_READER_VERSION_KEY } from "./schema-compatibility";
 import { FIRST_PAINT_APP_STATE_KEY } from "./theme-repo";
 
@@ -42,6 +43,7 @@ const HOST_CORE_KEYS: ReadonlyArray<
   [FIRST_PAINT_APP_STATE_KEY, "client-local", "stays"],
   [MODEL_PICKER_VIEW_APP_STATE_KEY, "client-local", "VC-572"],
   [MIN_READER_VERSION_KEY, "host", "stays"],
+  [FOLLOW_UP_CLEAN_CLOSE_KEY, "host", "stays"],
   [RETENTION_SETTINGS_KEY, "host", "VC-573"],
   [TRIM_SETTINGS_KEY, "host", "VC-566"],
   [AUTO_REAP_SETTINGS_KEY, "host", "VC-573"],
