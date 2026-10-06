@@ -3471,7 +3471,10 @@ async function attachSession(
         if (agent.state.isStreaming) {
           const message = queuedUserMessage(framedText, images);
           const acceptedBoundary =
-            delivery === "steer" && settle === "opened" && commandId !== undefined
+            delivery === "steer" &&
+            settle === "opened" &&
+            commandId !== undefined &&
+            targetTurnId !== undefined
               ? Promise.withResolvers<void>()
               : null;
           const pending = {

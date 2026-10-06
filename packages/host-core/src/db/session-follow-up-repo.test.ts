@@ -141,7 +141,8 @@ describe("durable host follow-up storage", () => {
         id: `message-${index}`,
         commandId: `queued-${index}`,
         deliveryCommandId: `delivery-${index}`,
-        state: "releasing",
+        // One claim only, so the duplicate check is the one that refuses.
+        state: index === 1 ? "releasing" : "queued",
         message: {
           id: `message-${index}`,
           role: "user",
@@ -169,6 +170,40 @@ describe("durable host follow-up storage", () => {
       expect(f.db.inTransaction).toBe(false);
     },
   );
+
+  it("rejects a second releasing claim before recovery can resume either one", async () => {
+    const f = await setup();
+    const state = emptySessionFollowUpState();
+    state.revision = 1;
+    state.entries = [1, 2].map((index) => ({
+      id: `message-${index}`,
+      commandId: `queued-${index}`,
+      deliveryCommandId: `delivery-${index}`,
+      state: "releasing" as const,
+      message: {
+        id: `message-${index}`,
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: `Payload ${index}` }],
+      },
+    }));
+    const encoded = JSON.stringify(state);
+    f.db
+      .prepare("INSERT INTO session_follow_up_queue VALUES (?, ?, ?)")
+      .run(f.sessionId, encoded, 2);
+    let recoveryCalled = false;
+    await expect(
+      f.ledger.transaction(f.sessionId, (stored) => {
+        recoveryCalled = true;
+        stored.entries = [];
+      }),
+    ).rejects.toThrow("More than one releasing follow-up ledger entry");
+    expect(recoveryCalled).toBe(false);
+    expect(f.db.prepare("SELECT state, pending_count FROM session_follow_up_queue").get()).toEqual({
+      state: encoded,
+      pending_count: 2,
+    });
+    expect(f.db.inTransaction).toBe(false);
+  });
 
   it("upgrades a v60 Session history without the new table and leaves the reader floor unchanged", async () => {
     const f = await setup();

@@ -1930,6 +1930,7 @@ describe("Session tRPC router", () => {
         commandId: "cancel",
         sessionId: "session-1",
         messageId: "m",
+        expectedRevision: 3,
       }),
     ).toMatchObject({ sessionId: "session-1", receipt: null });
     await caller.session.editQueued({
@@ -1937,17 +1938,18 @@ describe("Session tRPC router", () => {
       sessionId: "session-1",
       messageId: "m",
       message,
+      expectedRevision: 4,
     });
     expect(fixture.calls.command).toEqual([
       {
         commandId: "cancel",
         sessionId: "session-1",
-        command: { kind: "message.cancel", messageId: "m" },
+        command: { kind: "message.cancel", messageId: "m", expectedRevision: 3 },
       },
       {
         commandId: "edit",
         sessionId: "session-1",
-        command: { kind: "message.edit", messageId: "m", message },
+        command: { kind: "message.edit", messageId: "m", message, expectedRevision: 4 },
       },
     ]);
     for (const command of [
@@ -1957,6 +1959,21 @@ describe("Session tRPC router", () => {
       await expect(
         caller.session.command({ commandId: "bypass", sessionId: "session-1", command }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(fixture.calls.command).toHaveLength(2);
+    for (const expectedRevision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const input = {
+        commandId: "invalid-revision",
+        sessionId: "session-1",
+        messageId: "m",
+        expectedRevision,
+      };
+      await expect(caller.session.cancelQueued(input)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      await expect(caller.session.editQueued({ ...input, message })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
     }
     expect(fixture.calls.command).toHaveLength(2);
   });

@@ -5564,6 +5564,26 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  it("acknowledges supervisor steering immediately without waiting for consumption", async () => {
+    const attachment = fixture();
+    const started = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("active", started.resolve)])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "first");
+    await started.promise;
+    await expect(
+      handle.submitUserMessage("supervisor", "steer", "supervisor-steer", [], [], "opened"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "steer" });
+    expect(
+      (await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId),
+    ).not.toContain("supervisor-steer");
+    await handle.close();
+    await first;
+  });
+
   it("keeps host queued steering pending until Pi has durably consumed it", async () => {
     const attachment = fixture();
     const started = Promise.withResolvers<void>();
@@ -5735,7 +5755,19 @@ describe("startSession", () => {
     const handle = await runtime.startSession(attachment.spec);
     const first = handle.submitUserMessage("first", "queue", "first");
     await started.promise;
-    const steer = handle.submitUserMessage("steer", "steer", "host-steer", [], [], "opened");
+    const activeTurn = attachment.observations.find(
+      (observation) => observation.kind === "turn" && observation.state === "started",
+    );
+    if (activeTurn?.kind !== "turn") throw new Error("No active turn");
+    const steer = handle.submitUserMessage(
+      "steer",
+      "steer",
+      "host-steer",
+      [],
+      [],
+      "opened",
+      activeTurn.turnId,
+    );
     const refused = expect(steer).rejects.toThrow("acceptance is uncertain");
     await Promise.resolve();
     await handle.close();

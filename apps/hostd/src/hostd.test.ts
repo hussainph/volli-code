@@ -1143,7 +1143,7 @@ describe("the host protocol listener (VC-663)", () => {
       const welcome = await trpc.protocol.welcome.query();
       expect(welcome).toMatchObject({
         workspace: { id: WORKSPACE, epoch: 3 },
-        features: ["sessions", "sessions.subscribe", "session.read"],
+        features: ["sessions", "sessions.queue", "sessions.subscribe", "session.read"],
       });
       // The socket's own handler, scoped to this Workspace.
       const listed = await trpc.session.list.query({ projectId: WORKSPACE, all: true });

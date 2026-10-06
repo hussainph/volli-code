@@ -59,6 +59,7 @@ import {
   catalogLookup,
   HOST_ACTOR_POLICY,
   isCommandIntentConflict,
+  isQueueRevisionConflict,
   isHandlerRefused,
   isOperationUnavailable,
   isolatePerformanceObserver,
@@ -764,6 +765,13 @@ export function createCatalogBuilders<
       // A command id reused for a different intent is the client's conflict,
       // and the one the wire names; every other ledger conflict stays what it
       // was. Any area's ledger opts in by the shared brand.
+      if (!result.ok && isQueueRevisionConflict(result.error.cause)) {
+        throw new HostProcedureError(
+          "queue-revision-conflict",
+          result.error.message,
+          result.error.cause,
+        );
+      }
       if (!result.ok && isCommandIntentConflict(result.error.cause)) {
         throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
       }

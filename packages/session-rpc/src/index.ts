@@ -292,11 +292,17 @@ export interface SessionRouterHandlers {
     SessionRuntimeCommandResult
   >;
   readonly "session.cancelQueued": HostHandler<
-    { commandId: string; sessionId: string; messageId: string },
+    { commandId: string; sessionId: string; messageId: string; expectedRevision?: number },
     SessionRuntimeCommandResult
   >;
   readonly "session.editQueued": HostHandler<
-    { commandId: string; sessionId: string; messageId: string; message: RpcUiMessage },
+    {
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+      message: RpcUiMessage;
+      expectedRevision?: number;
+    },
     SessionRuntimeCommandResult
   >;
   readonly "session.cancelInteraction": HostHandler<
@@ -775,11 +781,16 @@ const commandSchema = z.discriminatedUnion("kind", [
     resumeAt: positiveSafeInteger,
   }),
   z.object({ kind: z.literal("resume.cancel"), scheduleId: nonEmptyString }),
-  z.object({ kind: z.literal("message.cancel"), messageId: nonEmptyString }),
+  z.object({
+    kind: z.literal("message.cancel"),
+    messageId: nonEmptyString,
+    expectedRevision: nonNegativeSafeInteger.optional(),
+  }),
   z.object({
     kind: z.literal("message.edit"),
     messageId: nonEmptyString,
     message: uiMessageSchema,
+    expectedRevision: nonNegativeSafeInteger.optional(),
   }),
 ]);
 
@@ -1324,6 +1335,7 @@ export function createSessionRouter() {
           commandId: nonEmptyString,
           sessionId: nonEmptyString,
           messageId: nonEmptyString,
+          expectedRevision: nonNegativeSafeInteger.optional(),
         }),
         sessionResource,
       )
@@ -1338,6 +1350,7 @@ export function createSessionRouter() {
           sessionId: nonEmptyString,
           messageId: nonEmptyString,
           message: uiMessageSchema,
+          expectedRevision: nonNegativeSafeInteger.optional(),
         }),
         sessionResource,
       )

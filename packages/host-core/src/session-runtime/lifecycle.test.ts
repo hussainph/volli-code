@@ -224,6 +224,51 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     expect(f.delivery.recover).not.toHaveBeenCalled();
   });
 
+  it("a hung follow-up release does not hold readiness, and close still waits for it", async () => {
+    const f = fixture();
+    const release = deferred();
+    vi.mocked(f.runtime.recoverFollowUps).mockImplementation(async () => {
+      f.calls.push("follow-ups.recover");
+      // An executor attach that never answers.
+      await release.promise;
+    });
+    const owner = createSessionRuntimeLifecycle({ ...f.options, followUpRecoveryWaitMs: 5 });
+    await owner.ready();
+    expect(f.calls).toEqual(
+      expect.arrayContaining(["follow-ups.recover", "notices.recover", "ready.services"]),
+    );
+    expect(f.calls.indexOf("follow-ups.recover")).toBeLessThan(f.calls.indexOf("notices.recover"));
+    expect(f.options.ports.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("queued follow-up recovery is still running after 5ms"),
+    );
+    let closed = false;
+    const closing = owner.close().then(() => {
+      closed = true;
+    });
+    await vi.waitFor(() => expect(f.calls).toContain("runtime.close"));
+    await Promise.resolve();
+    // The background sweep still writes the queue ledger: the drain waits for it.
+    expect(closed).toBe(false);
+    release.resolve();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("a failed follow-up sweep is reported and recovery continues", async () => {
+    const f = fixture();
+    vi.mocked(f.runtime.recoverFollowUps).mockRejectedValue(new Error("ledger unavailable"));
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith(
+      "[volli] failed to recover queued follow-ups:",
+      "ledger unavailable",
+    );
+    expect(f.options.ports.log.warn).not.toHaveBeenCalled();
+    expect(f.services).toHaveBeenCalledTimes(1);
+    expect(f.delivery.recover).toHaveBeenCalledTimes(1);
+    await owner.close();
+  });
+
   it("the installed one close stops producers/notices, drains both owners, then MCP and observability once", async () => {
     const f = fixture();
     const rpc = deferred();

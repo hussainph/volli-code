@@ -220,6 +220,25 @@ describe("Session commands", () => {
       sessionId: "s",
       command: { kind: "message.edit", messageId: "m", message },
     });
+    // A Client that read the queue at a revision passes it through unchanged.
+    await map["session.cancelQueued"](
+      { commandId: "cancel-at", sessionId: "s", messageId: "m", expectedRevision: 4 },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel-at",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m", expectedRevision: 4 },
+    });
+    await map["session.editQueued"](
+      { commandId: "edit-at", sessionId: "s", messageId: "m", message, expectedRevision: 0 },
+      USER,
+    );
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit-at",
+      sessionId: "s",
+      command: { kind: "message.edit", messageId: "m", message, expectedRevision: 0 },
+    });
     await map["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, USER);
     expect(runtime.cancelInteraction).toHaveBeenCalledWith({
       sessionId: "s",
