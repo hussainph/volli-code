@@ -56,8 +56,6 @@ import {
   startAgentSocket,
   createHostAgentCommands,
 } from "@volli/host-core/agents";
-import { createBoardChangeFeed } from "@volli/host-core/board";
-import { getTicketRow, listProjects } from "@volli/host-core/db";
 import type Database from "better-sqlite3";
 
 import type { HostCredentialVerifier } from "@volli/host-protocol";
@@ -65,7 +63,7 @@ import type { HostProtocolListener } from "@volli/session-rpc/websocket";
 
 import {
   cloudEnabled,
-  servedWorkspace,
+  hostdBoardFeed,
   startHostdProtocolListener,
   type HostProtocolBind,
 } from "./host-protocol";
@@ -292,13 +290,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
      * writer's `data-changed`. The database is read once it is open.
      */
     let boardDb: Database.Database | undefined;
-    const boardFeed = createBoardChangeFeed({
-      epochOf: (workspaceId) =>
-        boardDb === undefined ? 0 : (servedWorkspace(boardDb, workspaceId)?.epoch ?? 0),
-      projectOfTicket: (ticketId) =>
-        boardDb === undefined ? undefined : getTicketRow(boardDb, ticketId)?.project_id,
-      workspaces: () => (boardDb === undefined ? [] : listProjects(boardDb).map(({ id }) => id)),
-    });
+    const boardFeed = hostdBoardFeed(() => boardDb);
 
     /** Settles what every verb answers with, and publishes the state that goes with it. */
     const serve = async (host: HostCore, ports: HostCorePorts): Promise<void> => {

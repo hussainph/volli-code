@@ -22,8 +22,12 @@
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
-import { boardResourceWorkspace } from "@volli/host-core/board";
-import { getProjectById, prepared } from "@volli/host-core/db";
+import {
+  boardResourceWorkspace,
+  createBoardChangeFeed,
+  type BoardChangeFeed,
+} from "@volli/host-core/board";
+import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import {
   REFUSING_CREDENTIAL_VERIFIER,
@@ -129,6 +133,30 @@ export function hostResourceWorkspace(
   const board = boardResourceWorkspace(db);
   return async (resource) =>
     resource.kind === SESSION_RESOURCE ? sessions(resource) : board(resource);
+}
+
+/**
+ * hostd's board change feeds (VC-565), one per Workspace it serves: its
+ * handlers stamp their rows, and its bus feeds every other writer's
+ * `data-changed`. Made before the database opens (the bus exists first), so
+ * it reads the database through `db`, and answers nothing until it is open.
+ * A Workspace's epoch is the one its welcome names.
+ */
+export function hostdBoardFeed(db: () => Database.Database | undefined): BoardChangeFeed {
+  return createBoardChangeFeed({
+    epochOf: (workspaceId) => {
+      const open = db();
+      return open === undefined ? 0 : (servedWorkspace(open, workspaceId)?.epoch ?? 0);
+    },
+    projectOfTicket: (ticketId) => {
+      const open = db();
+      return open === undefined ? undefined : getTicketRow(open, ticketId)?.project_id;
+    },
+    workspaces: () => {
+      const open = db();
+      return open === undefined ? [] : listProjects(open).map(({ id }) => id);
+    },
+  });
 }
 
 /** What the listener needs from the composed host. */

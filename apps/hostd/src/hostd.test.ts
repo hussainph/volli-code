@@ -1087,6 +1087,8 @@ describe("the host protocol listener (VC-663)", () => {
     const { trpc, close } = client(host.status().hostProtocol!.url);
     try {
       const empty = await trpc.board.snapshot.query({ projectId: WORKSPACE });
+      // The sidebar's signals come from this host's Session ledger.
+      expect(await trpc.board.latestSignals.query({ projectId: WORKSPACE })).toEqual([]);
       expect(empty).toMatchObject({ project: { id: WORKSPACE }, tickets: [], labels: [] });
       const feed = recordSubscription((handlers) =>
         trpc.board.changes.subscribe({ projectId: WORKSPACE, lastEventId: empty.cursor }, handlers),
