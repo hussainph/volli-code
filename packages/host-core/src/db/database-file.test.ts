@@ -564,6 +564,9 @@ describe("swapInStagedProfile — refusals", () => {
       expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(inherited);
       if (inherited) expect(readFileSync(recoveryPendingPath(fx.dbPath), "utf8")).toBe(marker);
     },
+    // Copies whole-profile fixtures and durably stages/checks a database even
+    // on refusal; allow the same I/O budget as the covered rollback tests.
+    30_000,
   );
 
   it("refuses a live writer instead of detaching it, and leaves a healthy profile as it was", () => {

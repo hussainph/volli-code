@@ -714,7 +714,19 @@ succeeds does it replace non-database entries, leaving database/fence families
 and preservation directories alone.
 
 For a cold restore error, keep both units stopped and record `D`, `B`, `N`, `S`
-and `R` from the block (subshell variables do not survive):
+and `R` from the block (subshell variables do not survive). Before cases 2 and 3,
+set them in the operator's outer shell. Replace these example `S`, `R` and `N`
+values with the exact printed values; do not create new directories:
+
+```sh
+D=/var/lib/volli-hostd
+S=/var/tmp/volli-hostd-restore.ABC123                 # replace with the printed archive staging path
+R=/var/lib/volli-hostd.before-restore.DEF456          # replace with the printed current cold state path
+B="$S/var/lib/volli-hostd/volli.db"
+N=59                                                # replace with the printed restore schema
+```
+
+The three cases:
 
 1. **Database restore refused, with no pending marker:** nothing else was
    replaced. The current state is untouched and saved in `R`. Fix or replace

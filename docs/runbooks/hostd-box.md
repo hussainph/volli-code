@@ -749,7 +749,20 @@ a retry can create several; the earliest holds the writes made after the
 rollback point. Then remove them by exact name. Do not use wildcard deletion.
 
 **On error, leave both units stopped.** Record the printed `S`, `R`, `B`, `N`
-and `D` (the variables inside the subshell do not survive it). There are three cases:
+and `D` (the variables inside the subshell do not survive it). Before running
+recovery commands or replacement lines in cases 2 and 3, set them in your
+outer shell. Replace the example `S`, `R` and `N` below with the exact values
+printed by the failed block; do not create new staging or safety-copy directories:
+
+```sh
+box$ D=/var/lib/volli-hostd
+box$ S=/var/tmp/volli-hostd-restore.ABC123                 # replace with the printed archive staging path
+box$ R=/var/lib/volli-hostd.before-restore.DEF456          # replace with the printed current cold state path
+box$ B="$S/var/lib/volli-hostd/volli.db"
+box$ N=59                                                # replace with the printed restore schema
+```
+
+There are three cases:
 
 1. **The database restore refused, with no pending marker:** no other state was
    replaced; the current state is untouched and saved in `R`. Fix or replace
