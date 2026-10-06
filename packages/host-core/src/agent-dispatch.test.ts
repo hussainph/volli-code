@@ -43,6 +43,7 @@ import {
   AGENT_COMMANDS,
   DEFAULT_AUTHORITY_POLICY,
   HOST_HANDLER_KEYS,
+  SOCKET_DELEGATED_HANDLER_KEYS,
   OperationUnavailableError,
   VERB_REGISTRY,
 } from "@volli/shared";
@@ -156,10 +157,16 @@ describe("the dispatch table (VC-167)", () => {
 });
 
 describe("a catalog command's socket verb is a projection of the host's map (VC-668)", () => {
-  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE);
+  // The socket's Session reads are delegated the other way round (VC-663, D4):
+  // the map runs the socket verb, so the socket keeps its own binding.
+  const delegated: readonly string[] = SOCKET_DELEGATED_HANDLER_KEYS;
+  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter(
+    (key) => key in AGENT_VERB_TABLE && !delegated.includes(key),
+  );
 
   it("binds exactly the both-door commands as projections, each of its own key", () => {
     expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move"]);
+    for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
       expect(projectedHandlerKey(binding), id).toBe(
         (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : undefined,

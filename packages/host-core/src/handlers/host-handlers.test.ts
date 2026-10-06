@@ -156,6 +156,10 @@ describe("the map", () => {
         empty["ticket.move"]({ projectId: PROJECT, ticketId: "t", toStatus: "done" }, USER),
       ),
     ).toBe("The board is unavailable: the database did not open");
+    // The desktop serves the socket's Session reads over no network door.
+    expect(
+      await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
+    ).toBe("Session reads are unavailable on this transport");
     // A default needs Model Access as well as the database.
     expect(
       await unavailable(() =>
@@ -202,6 +206,39 @@ describe("Session commands", () => {
     });
     await map["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, USER);
     expect(runtime.reconcile).toHaveBeenCalledWith({ sessionId: "s", attachmentId: "a" });
+    // A bounded door's cancellation reaches the runtime with the subscription.
+    const signal = new AbortController().signal;
+    await map["session.subscribe"]({ sessionId: "s", afterSequence: 0, signal }, USER, {
+      emit,
+      fail,
+    });
+    expect(runtime.subscribe).toHaveBeenLastCalledWith(
+      { sessionId: "s", afterSequence: 0, signal },
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("runs the socket's Session reads Workspace-scoped, through the port it was given (VC-663)", async () => {
+    const answer = { v: 1, ok: true, data: { sessions: [], hidden: 0 } } as const;
+    const sessionReads = vi.fn(async () => answer);
+    const map = handlers({ sessionReads });
+    for (const verb of [
+      "session.list",
+      "session.show",
+      "session.peek",
+      "session.answer",
+    ] as const) {
+      await expect(map[verb]({ workspaceId: PROJECT, args: { id: "a1" } }, USER)).resolves.toBe(
+        answer,
+      );
+    }
+    expect(sessionReads.mock.calls).toEqual([
+      ["session.list", PROJECT, { id: "a1" }],
+      ["session.show", PROJECT, { id: "a1" }],
+      ["session.peek", PROJECT, { id: "a1" }],
+      ["session.answer", PROJECT, { id: "a1" }],
+    ]);
   });
 
   it("states the Role a person's choice of ticket implies", async () => {

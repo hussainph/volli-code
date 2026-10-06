@@ -16,7 +16,7 @@ import {
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
-import { createHostHandlers } from "@volli/host-core/handlers";
+import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
@@ -289,8 +289,17 @@ export function createHeadlessSessionRuntime(input: {
         return sites;
       };
       recovered = { busyWorktreeSites, runtime };
+      let sessionReads: SessionReadPort | undefined;
       return {
         ...recoveredSessionCommandPorts(ready),
+        /**
+         * Hands the map its Session reads (VC-663, D4): the agent command
+         * service's Workspace-scoped `executeInWorkspace`, which is built
+         * after this map, so the map forwards to it once served.
+         */
+        serveSessionReads(read: SessionReadPort): void {
+          sessionReads = read;
+        },
         venue: options.venue,
         verifySessionToken: tokens.verify,
         automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
@@ -308,6 +317,9 @@ export function createHeadlessSessionRuntime(input: {
           automations,
           busyWorktreeSites,
           detachedWork: host.detachedWork,
+          // Served before any door opens: hostd hands it over before it
+          // settles the socket or starts the listener.
+          sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
         }),
       };
     },

@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
   DOOR_LOCAL_CATALOG_KEYS,
   HOST_HANDLER_KEYS,
+  SOCKET_DELEGATED_HANDLER_KEYS,
   type HostHandlerKey,
   type HostHandlerKeyOf,
   type SocketHandlerKey,
@@ -29,6 +30,16 @@ describe("the host handler map's keys", () => {
       expect(entry.handler.id, key).toBe(key);
       expect(AGENT_COMMAND_BINDINGS[key as SocketHandlerKey]).toBe(key);
     }
+  });
+
+  it("delegate only the socket's Session reads to the socket's own handler (VC-663, D4)", () => {
+    for (const key of SOCKET_DELEGATED_HANDLER_KEYS) {
+      expect(HOST_HANDLER_KEYS, key).toContain(key);
+      expect(verbEntry(key)!.accessModes, key).toEqual(["cli", "hostApi"]);
+    }
+    expect(Object.isFrozen(SOCKET_DELEGATED_HANDLER_KEYS)).toBe(true);
+    // The handshake's own answer is the door's, never a handler's.
+    expect(HOST_HANDLER_KEYS).not.toContain("protocol.welcome");
   });
 
   it("type each router family by its own rows", () => {

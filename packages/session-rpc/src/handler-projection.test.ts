@@ -70,6 +70,11 @@ const SAMPLE_INPUTS: { readonly [Path in HostRouterPaths]: unknown } = {
   "session.reconcile": { ...SESSION, attachmentId: "attachment-1" },
   "labDiagnostics.list": undefined,
   "labDiagnostics.subscribe": {},
+  "protocol.welcome": undefined,
+  "session.list": { projectId: PROJECT },
+  "session.show": { projectId: PROJECT, session: "s-1" },
+  "session.peek": { projectId: PROJECT, session: "s-1", lines: 5 },
+  "session.answer": { projectId: PROJECT, session: "s-1" },
 };
 
 class Reached extends Error {}

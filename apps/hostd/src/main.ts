@@ -165,6 +165,7 @@ async function serve(
       socketPath,
       listenFd,
       operatorsFile: command.operatorsFile,
+      listen: command.listen,
       version: HOSTD_VERSION,
       env: process.env,
       logger,

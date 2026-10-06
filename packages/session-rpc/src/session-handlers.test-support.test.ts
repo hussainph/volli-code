@@ -112,6 +112,7 @@ describe("sessionHandlersFrom", () => {
       performanceObserver: { record: () => {} },
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
-    expect(Object.keys(context.handlers)).toHaveLength(21);
+    // 21 Session-router handlers, and the four Session reads (VC-663).
+    expect(Object.keys(context.handlers)).toHaveLength(25);
   });
 });

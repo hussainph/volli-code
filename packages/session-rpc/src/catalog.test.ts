@@ -8,15 +8,20 @@ import {
 import {
   createSessionProjectionCheckpoint,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
 import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
 import {
+  createCatalogBuilders,
   hostErrorOf,
   HostProcedureError,
+  jsonByteLength,
   LOCAL_DESKTOP_CALLER,
+  type CatalogCallerContext,
+  type ConnectionAdmission,
   type CatalogMismatch,
   type ProcedurePaths,
   type RouterCaller,
@@ -499,6 +504,21 @@ describe("binding procedures to the catalog (D2)", () => {
     expect(snapshot).not.toHaveBeenCalled();
   });
 
+  // VC-663 B1: the entry's chain alone is not enough; its resolver must answer to the admission.
+  it("refuses a procedure built on its entry's chain but resolved past the admission guard", () => {
+    const resolver = vi.fn();
+    const unguarded = initTRPC
+      .context<SessionRouterContext>()
+      .create()
+      .procedure.concat(hostProcedure("settings.experiments"))
+      .output(z.null())
+      .query(resolver);
+    expect(() => catalogRouter({ settings: { experiments: unguarded } })).toThrow(
+      "Procedure settings.experiments resolves outside its connection's admission",
+    );
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
   it("refuses a chain that runs anything before the entry's policy", () => {
     const resolver = vi.fn();
     const prefixed = initTRPC
@@ -554,5 +574,152 @@ describe("binding procedures to the catalog (D2)", () => {
         settings: { setExperiment: hostProcedure("settings.setExperiment").query(() => null) },
       }),
     ).toThrow("Procedure settings.setExperiment is a query, but its catalog entry writes");
+  });
+});
+
+// ---- A connection's admission (VC-663) ------------------------------------
+
+const PROBE_ENTRIES = [
+  {
+    key: "probe.stream",
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: "probe.stream" },
+    listed: false,
+    group: "Read",
+    summary: "A stream a test drives frame by frame.",
+    options: [],
+    catalog: { actor: "user", scope: "host", idempotency: "read" },
+  },
+  {
+    key: "probe.read",
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: "probe.read" },
+    listed: false,
+    group: "Read",
+    summary: "A read that answers nothing at all.",
+    options: [],
+    catalog: { actor: "user", scope: "host", idempotency: "read" },
+  },
+] as const satisfies readonly VerbEntry[];
+
+/** One connection's admission, with the levers a door pulls. */
+function admission(maxStreams = 1) {
+  const controller = new AbortController();
+  let open = 0;
+  const held: ConnectionAdmission = {
+    signal: controller.signal,
+    openStream: () => (open < maxStreams ? ((open += 1), true) : false),
+    closeStream: () => void (open -= 1),
+  };
+  return {
+    held,
+    end: () => controller.abort(),
+    get open() {
+      return open;
+    },
+  };
+}
+
+/** A router whose stream yields what the test hands its `next`. */
+function probeRouter(next: (signal: AbortSignal | undefined) => Promise<IteratorResult<number>>) {
+  const { hostProcedure: probe, catalogRouter: route } = createCatalogBuilders<
+    CatalogCallerContext,
+    (typeof PROBE_ENTRIES)[number]
+  >({ entries: PROBE_ENTRIES, legacyUnvalidatedOutputs: ["probe.read"] });
+  return route({
+    probe: {
+      stream: probe("probe.stream").subscription(({ signal }) => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => next(signal),
+          // A source whose own cleanup fails: the stream's end must not surface it.
+          return: () => Promise.reject(new Error("cleanup failed")),
+        }),
+      })),
+      read: probe("probe.read").query(() => undefined),
+    },
+  });
+}
+
+function probeCaller(
+  router: ReturnType<typeof probeRouter>,
+  held: ConnectionAdmission,
+  current: () => boolean = () => true,
+) {
+  return router.createCaller({
+    caller: as({ kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE }, current),
+    diagnostics: new RpcDiagnosticLog(),
+    admission: held,
+    maxResponseBytes: 1024,
+  });
+}
+
+describe("a connection's admission (VC-663)", () => {
+  it("ends a stream that resumes after its admission ended, and gives its slot back", async () => {
+    const lever = admission();
+    let seen: AbortSignal | undefined;
+    const router = probeRouter(async (signal) => {
+      seen = signal;
+      return { done: false, value: 1 };
+    });
+    const stream = (await probeCaller(router, lever.held).probe.stream()) as AsyncIterable<number>;
+    const iterator = stream[Symbol.asyncIterator]();
+    expect(await iterator.next()).toStrictEqual({ done: false, value: 1 });
+    expect(lever.open).toBe(1);
+    // The source was handed a signal that aborts with the connection.
+    expect(seen?.aborted).toBe(false);
+    lever.end();
+    expect(seen?.aborted).toBe(true);
+    expect(hostErrorOf(await refusal(iterator.next()))).toMatchObject({
+      reason: "credential-invalid",
+    });
+    expect(lever.open).toBe(0);
+  });
+
+  it("never opens a stream once the admission ended, nor past its budget", async () => {
+    const source = vi.fn(async () => ({ done: true as const, value: undefined }));
+    const router = probeRouter(source);
+    const ended = admission();
+    const late = (await probeCaller(router, ended.held).probe.stream()) as AsyncIterable<number>;
+    ended.end();
+    expect(hostErrorOf(await refusal(late[Symbol.asyncIterator]().next()))).toMatchObject({
+      reason: "credential-invalid",
+    });
+    const full = admission(0);
+    const over = (await probeCaller(router, full.held).probe.stream()) as AsyncIterable<number>;
+    expect(hostErrorOf(await refusal(over[Symbol.asyncIterator]().next()))).toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      reason: "subscription-limit",
+    });
+    expect(source).not.toHaveBeenCalled();
+    expect([ended.open, full.open]).toStrictEqual([0, 0]);
+  });
+
+  it("withholds a frame its source produced in the instant the admission ended", async () => {
+    const lever = admission();
+    const router = probeRouter(() => {
+      const frame = Promise.resolve({ done: false as const, value: 1 });
+      // Ends the admission after the frame resolved, before the stream resumes with it.
+      void frame.then(() => queueMicrotask(lever.end));
+      return frame;
+    });
+    const stream = (await probeCaller(router, lever.held).probe.stream()) as AsyncIterable<number>;
+    expect(hostErrorOf(await refusal(stream[Symbol.asyncIterator]().next()))).toMatchObject({
+      reason: "credential-invalid",
+    });
+    expect(lever.open).toBe(0);
+  });
+
+  it("refuses a call before its resolver once the grant lapsed, and answers nothing at all as empty", async () => {
+    let valid = true;
+    const router = probeRouter(async () => ({ done: true, value: undefined }));
+    const caller = probeCaller(router, admission().held, () => valid);
+    await expect(caller.probe.read()).resolves.toBeUndefined();
+    expect(jsonByteLength(undefined)).toBe(0);
+    valid = false;
+    expect(hostErrorOf(await refusal(caller.probe.read()))).toMatchObject({
+      reason: "credential-invalid",
+    });
   });
 });
