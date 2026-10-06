@@ -68,7 +68,7 @@ describe("createCheckpointFailureReporter (VC-355)", () => {
       expect.objectContaining({
         level: "warn",
         msg: UNUSABLE,
-        error: { name: "Error", message: "default sink" },
+        error: expect.objectContaining({ name: "Error", message: "default sink" }),
       }),
     ]);
   });

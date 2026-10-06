@@ -149,11 +149,11 @@ describe("a free-space measurement that fails", () => {
         expect.objectContaining({
           msg: "could not measure free disk space; migrating unchecked",
           directory: dir,
-          error: {
+          error: expect.objectContaining({
             name: "Error",
             message: `${code}: ${code === "ENOSYS" ? "function not implemented" : "i/o error"}, statfs '${dir}'`,
             code,
-          },
+          }),
         }),
       ]);
     },

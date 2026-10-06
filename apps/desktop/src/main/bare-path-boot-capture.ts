@@ -8,8 +8,15 @@ import type { EventEmitter } from "node:events";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const WRAPPER_FAILURE_MARKER = "[volli] failed to generate harness wrappers";
-export const WRAPPER_READY_MARKER = "[volli] harness runtime ready";
+/**
+ * Main's two boot lines (component `desktop`, VC-699), as the structured log's
+ * terminal sink prints them: `[component] msg`. The capture turns that sink on
+ * in any build (`startDesktopLog`'s `terminal`), so packaged launches print them too.
+ */
+export const WRAPPER_FAILURE_MESSAGE = "failed to generate harness wrappers";
+export const WRAPPER_READY_MESSAGE = "harness runtime ready";
+const WRAPPER_FAILURE_MARKER = `[desktop] ${WRAPPER_FAILURE_MESSAGE}`;
+export const WRAPPER_READY_MARKER = `[desktop] ${WRAPPER_READY_MESSAGE}`;
 
 type CaptureStream = Pick<NodeJS.WritableStream, "write">;
 type WriteCallback = (error?: Error | null) => void;
@@ -62,6 +69,11 @@ export function installBootCapture({
     app.off("browser-window-created", noteWindow);
     for (const restoreStream of restore) restoreStream();
   };
+}
+
+/** Whether this launch is a smoke's captured boot, whose log lines must reach the terminal. */
+export function isSmokeBootCapture(environment: NodeJS.ProcessEnv): boolean {
+  return environment["VOLLI_BARE_PATH_CAPTURE_DIR"] !== undefined;
 }
 
 /** Unset in ordinary launches: no stream patching or filesystem work at all. */

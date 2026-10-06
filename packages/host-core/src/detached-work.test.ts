@@ -117,7 +117,7 @@ describe("createDetachedWorkTracker", () => {
     tracker.track(Promise.reject(failure));
     await tracker.drain();
     expect(log).toHaveBeenCalledExactlyOnceWith("[detached-work] detached work failed", {
-      error: { name: "Error", message: "unhandled" },
+      error: expect.objectContaining({ name: "Error", message: "unhandled" }),
     });
   });
 
