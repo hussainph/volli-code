@@ -272,7 +272,12 @@ export interface ChatSessionRpc {
     // be a promise the transport never made.
     command: { mutate(input: ChatCommandRequest): Promise<{ sessionId: string }> };
     cancelQueued: {
-      mutate(input: { commandId: string; sessionId: string; messageId: string }): Promise<unknown>;
+      mutate(input: {
+        commandId: string;
+        sessionId: string;
+        messageId: string;
+        expectedRevision?: number;
+      }): Promise<unknown>;
     };
     editQueued: {
       mutate(input: {
@@ -280,6 +285,7 @@ export interface ChatSessionRpc {
         sessionId: string;
         messageId: string;
         message: UIMessage;
+        expectedRevision?: number;
       }): Promise<unknown>;
     };
     cancelInteraction: {
@@ -772,7 +778,9 @@ export class ChatSessionClient {
       // the transcript renders the text verbatim with a chip per resource, and
       // the adapter appends the delimited RESOURCE blocks after the text when
       // it composes the delivered prompt.
-      const wireMessage = queuedWireMessage(message);
+      // Link views and the title baseline belong to pending host queue work,
+      // not every immediate transcript message. File/resource parts still travel.
+      const wireMessage = queuedWireMessage(message, delivery === "queue");
       const command: ChatCommand = {
         kind: "message.submit",
         message: wireMessage,
@@ -820,25 +828,33 @@ export class ChatSessionClient {
   }
 
   /** Queue mutations never optimistically remove a row: release may already own it. */
-  async cancelQueued(messageId: string): Promise<boolean> {
+  async cancelQueued(
+    messageId: string,
+    expectedRevision = this.#slice()?.queueRevision,
+  ): Promise<boolean> {
     const accepted = await this.#eventRun("Message not removed", () =>
       this.#rpc.session.cancelQueued.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         messageId,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
       }),
     );
     if (accepted) this.#refreshProjection();
     return accepted;
   }
 
-  async editQueued(message: QueuedMessage): Promise<boolean> {
+  async editQueued(
+    message: QueuedMessage,
+    expectedRevision = this.#slice()?.queueRevision,
+  ): Promise<boolean> {
     const accepted = await this.#eventRun("Message not changed", () =>
       this.#rpc.session.editQueued.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         messageId: message.id,
         message: queuedWireMessage(message),
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
       }),
     );
     if (accepted) this.#refreshProjection();
@@ -1280,11 +1296,12 @@ function readFrames(frames: readonly unknown[]): ChatSessionFrame[] {
 }
 
 /** The host retains the complete message, including the link views needed for editing. */
-export function queuedWireMessage(message: QueuedMessage): UIMessage {
+export function queuedWireMessage(message: QueuedMessage, retainQueueMetadata = true): UIMessage {
   return {
     id: message.id,
     role: "user",
-    ...(message.attachments === undefined && message.autoTitleBaseline === undefined
+    ...(!retainQueueMetadata ||
+    (message.attachments === undefined && message.autoTitleBaseline === undefined)
       ? {}
       : {
           metadata: {

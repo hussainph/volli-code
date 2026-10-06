@@ -101,7 +101,11 @@ describe("the queued message row", () => {
     expect(html).not.toContain('aria-label="Edit queued message"');
   });
 
-  it("keeps host-owned Steer available during a turn and disables mutations while claimed", () => {
+  // A releasing row with no proof of delivery would otherwise be stuck at the
+  // head of the FIFO: the host cancels an unproven release and refuses one in
+  // flight, so Remove and Edit stay offered and the host decides. Steer stays
+  // off — the release already claimed that identity.
+  it("disables only Steer on a releasing host row; Remove and Edit ask the host", () => {
     for (const queueState of ["queued", "releasing"] as const) {
       const tree = composerTree(
         composerProps({
@@ -116,16 +120,61 @@ describe("the queued message row", () => {
         }),
       );
       const buttons = findElements(tree, Button);
-      for (const label of [
-        "Steer queued message: later",
-        "Remove queued message: later",
-        "Queued message actions: later",
-      ]) {
+      const disabled = (label: string) => {
         const button = buttons.find((entry) => entry.props["aria-label"] === label);
         expect(button).toBeDefined();
-        expect(button?.props.disabled).toBe(queueState === "releasing");
-      }
+        return button?.props.disabled;
+      };
+      expect(disabled("Steer queued message: later")).toBe(queueState === "releasing");
+      expect(disabled("Remove queued message: later")).toBeFalsy();
+      expect(disabled("Queued message actions: later")).toBeFalsy();
+      expect(findElements(tree, DropdownMenuItem)).toHaveLength(1);
     }
+  });
+
+  // The host refuses a release already in flight (or proven delivered). The
+  // composer must neither drop the row nor hand its words and files back.
+  it("leaves a releasing row and the draft untouched when the host refuses its cancel", async () => {
+    const attachment = {
+      linkId: "link",
+      blobHash: "ab".repeat(32),
+      label: "shot",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    const queued = [
+      {
+        id: "host-row",
+        commandId: "host-command",
+        queueState: "releasing" as const,
+        text: "in flight",
+        attachments: [attachment],
+      },
+    ];
+    const events: string[] = [];
+    const tree = composerTree(
+      composerProps({
+        value: "typing",
+        queued,
+        onQueuedChange: async (next, options) => {
+          events.push(options?.restoreDraft === undefined ? "remove" : "edit");
+          expect(next).toEqual([]);
+          return false;
+        },
+        onRestoreAttachments: () => events.push("files"),
+        onValueChange: () => events.push("draft"),
+        onComposerFocusRequest: () => events.push("focus"),
+      }),
+    );
+
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    await findElements(tree, Button)
+      .find((button) => button.props["aria-label"] === "Remove queued message: in flight")
+      ?.props.onClick?.();
+    await vi.waitFor(() => expect(events).toEqual(["edit", "remove"]));
+    await Promise.resolve();
+    expect(events).toEqual(["edit", "remove"]);
   });
 
   it("draws the files a queued message is carrying (VC-273)", () => {

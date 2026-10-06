@@ -526,6 +526,8 @@ export const SessionComposer = React.memo(function SessionComposer({
                       size="xs"
                       variant="ghost"
                       aria-label={`Steer queued message: ${entry.text}`}
+                      // A release already claimed this identity; only the
+                      // host's cancel can take it back, so Steer stays off.
                       disabled={entry.queueState === "releasing"}
                       onClick={() => {
                         onSteerQueued(entry.id);
@@ -541,7 +543,9 @@ export const SessionComposer = React.memo(function SessionComposer({
                     size="icon-xs"
                     variant="ghost"
                     aria-label={`Remove queued message: ${entry.text}`}
-                    disabled={entry.queueState === "releasing"}
+                    // Enabled while releasing: the host cancels a release it has
+                    // no proof of delivery for and refuses one in flight. The
+                    // row only leaves once the host accepts.
                     onClick={async () => {
                       if (
                         (await onQueuedChange(queued.filter((item) => item.id !== entry.id))) ===
@@ -560,7 +564,6 @@ export const SessionComposer = React.memo(function SessionComposer({
                         size="icon-xs"
                         variant="ghost"
                         aria-label={`Queued message actions: ${entry.text}`}
-                        disabled={entry.queueState === "releasing"}
                       >
                         <DotsThreeIcon className="size-3" weight="bold" />
                       </Button>

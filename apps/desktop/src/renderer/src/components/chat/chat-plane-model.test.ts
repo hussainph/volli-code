@@ -1433,6 +1433,15 @@ describe("heldStrip", () => {
     ]);
   });
 
+  it("keeps ambiguous releasing work visible even when its intent is in the transcript", () => {
+    const row: QueuedMessage = {
+      id: "m1",
+      text: "check before resending",
+      queueState: "releasing",
+    };
+    expect(heldStrip([], [row], new Set(["m1"]))).toEqual([row]);
+  });
+
   it("draws one row for a message both records name", () => {
     expect(
       heldStrip([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
@@ -1484,7 +1493,7 @@ describe("heldStrip", () => {
     ]);
   });
 
-  // The row is also what `beginQueuedSteer` persists back, so a skill body
+  // The row is also what Edit and Backspace hand back, so a skill body
   // riding the held copy must survive the strip round trip (VC-49).
   it("keeps a held row's skill resources on its strip row", () => {
     const resources = [{ name: "logos", text: "# Logos" }];

@@ -396,6 +396,7 @@ export function ChatPlane({
     messages,
     durableMessages,
     queue,
+    queueRevision,
     working,
     turnActive,
     deliverable,
@@ -986,6 +987,12 @@ export function ChatPlane({
       const entry = removed[0]!;
       if (queuedMutations.current.has(entry.id) || steeringQueued.current.has(entry.id))
         return false;
+      // The revision of the snapshot this strip was drawn from — this render's,
+      // never `getState()` after the durability wait below. Another Client can
+      // edit the row while the recovery copy persists; reading the revision
+      // afterwards would cancel the edited words while restoring the old ones.
+      // A mismatch is a typed conflict and refuses like any other refusal.
+      const expectedRevision = queueRevision;
       queuedMutations.current.add(entry.id);
       try {
         const current = sessionsStore.getState().sessions[sessionId];
@@ -1006,7 +1013,7 @@ export function ChatPlane({
         }
         const gone = await coordinateQueuedMutation({
           queueBacked: hostOwned,
-          cancel: () => cancelQueued(entry.id),
+          cancel: () => cancelQueued(entry.id, expectedRevision),
           localMutable: heldEntry?.state === "unsent",
           dropHeld: () => {
             options?.restoreDraft?.();
@@ -1041,6 +1048,7 @@ export function ChatPlane({
       dropHeld,
       holdMessage,
       markHeld,
+      queueRevision,
       removeAttachment,
       sessionId,
       sessionsStore,

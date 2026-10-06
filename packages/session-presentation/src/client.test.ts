@@ -261,6 +261,8 @@ class FakeRpc implements ChatSessionRpc {
   readonly commands: ChatCommandRequest[] = [];
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
+  readonly queueCancels: Parameters<ChatSessionRpc["session"]["cancelQueued"]["mutate"]>[0][] = [];
+  readonly queueEdits: Parameters<ChatSessionRpc["session"]["editQueued"]["mutate"]>[0][] = [];
   readonly streams: FakeStream[] = [];
   readonly attaches: Array<{ operationId: string; sessionId: string }> = [];
   projectionQueries = 0;
@@ -323,8 +325,18 @@ class FakeRpc implements ChatSessionRpc {
           return this.answer(input);
         },
       },
-      cancelQueued: { mutate: async () => this.answerCancel() },
-      editQueued: { mutate: async () => this.answerCancel() },
+      cancelQueued: {
+        mutate: async (input) => {
+          this.queueCancels.push(input);
+          return this.answerCancel();
+        },
+      },
+      editQueued: {
+        mutate: async (input) => {
+          this.queueEdits.push(input);
+          return this.answerCancel();
+        },
+      },
       cancelInteraction: {
         mutate: async (input) => {
           this.cancels.push(input);
@@ -2460,6 +2472,69 @@ const queued = (id: string) => ({
 });
 
 describe("the host-owned follow-up queue", () => {
+  it("sends observed or explicitly captured revisions, without optimistic mutation", async () => {
+    const { client, rpc, store, sessionId, slice } = await adopted();
+    store.getState().setQueue(sessionId, [queued("q1")], 4);
+    await client.editQueued({ id: "q1", text: "changed" });
+    await client.cancelQueued("q1", 2);
+    await client.editQueued({ id: "q1", text: "changed again" }, 3);
+    await client.cancelQueued("q1");
+    expect(rpc.queueEdits.map(({ expectedRevision }) => expectedRevision)).toEqual([4, 3]);
+    expect(rpc.queueCancels.map(({ expectedRevision }) => expectedRevision)).toEqual([2, 4]);
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+  });
+
+  it("omits revisions if no host queue baseline was observed", async () => {
+    const { client, rpc } = await adopted();
+    await client.cancelQueued("missing");
+    await client.editQueued({ id: "missing", text: "changed" });
+    expect(rpc.queueCancels[0]).not.toHaveProperty("expectedRevision");
+    expect(rpc.queueEdits[0]).not.toHaveProperty("expectedRevision");
+  });
+
+  it("keeps queue-only title metadata out of immediate messages", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+    const attachments = [
+      {
+        linkId: "l1",
+        blobHash: "a".repeat(64),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 12,
+      },
+    ];
+    const resources = [{ name: "logos", text: "# Logos" }];
+    await client.submit({
+      id: "immediate",
+      text: "now",
+      autoTitleBaseline: "Chat",
+      attachments,
+      resources,
+    });
+    await client.submit(
+      { id: "later", text: "later", autoTitleBaseline: "Chat", attachments, resources },
+      "queue",
+    );
+    expect(rpc.submissions()[0]).toMatchObject({
+      command: {
+        message: {
+          parts: [
+            { type: "text", text: "now" },
+            { type: "data-skill-resource" },
+            { type: "file", filename: "shot.png", mediaType: "image/png" },
+          ],
+        },
+      },
+    });
+    expect(rpc.submissions()[0]?.command).not.toHaveProperty("message.metadata");
+    expect(rpc.submissions()[1]).toMatchObject({
+      command: { message: { metadata: { autoTitleBaseline: "Chat", attachments } } },
+    });
+  });
+
   it("accepts while busy without demoting or starting a turn", async () => {
     const { client, slice, stream, scheduler, rpc } = await adopted((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");

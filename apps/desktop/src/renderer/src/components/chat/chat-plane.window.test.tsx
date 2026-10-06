@@ -23,6 +23,9 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  QueueRevisionConflictError,
+  blobUrl,
+  type BlobLinkView,
   type ModelAccessSnapshot,
   type ModelSelection,
 } from "@volli/shared";
@@ -41,7 +44,7 @@ import {
 } from "@renderer/stores/project-sessions";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
-import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { CHAT_DRAFTS_APP_STATE_KEY, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 import { ChatPlane } from "./chat-plane";
 import {
@@ -204,7 +207,44 @@ function chatStore(
 
 const hostStores: ReturnType<typeof createChatSessionsStore>[] = [];
 
-function hostChatStore() {
+interface CancelInput {
+  commandId: string;
+  sessionId: string;
+  messageId: string;
+  expectedRevision?: number;
+}
+
+type HostQueueRow = NonNullable<ChatSessionProjection["queue"]>[number];
+
+function hostRow(
+  text: string,
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+): HostQueueRow {
+  const attachments = options.attachments ?? [];
+  return {
+    id: "q1",
+    commandId: "q1",
+    state: options.state ?? "queued",
+    message: {
+      id: "q1",
+      role: "user",
+      ...(attachments.length === 0 ? {} : { metadata: { attachments } }),
+      parts: [
+        { type: "text", text },
+        ...attachments.map((attachment) => ({
+          type: "file" as const,
+          url: blobUrl(attachment.blobHash),
+          mediaType: attachment.mime,
+          filename: attachment.originalName,
+        })),
+      ],
+    },
+  };
+}
+
+function hostChatStore(
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+) {
   const commands: ChatCommandRequest[] = [];
   let projection: ChatSessionProjection = {
     session: {
@@ -227,17 +267,10 @@ function hostChatStore() {
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     liveExecutor: null,
-    queue: [
-      {
-        id: "q1",
-        commandId: "q1",
-        state: "queued",
-        message: { id: "q1", role: "user", parts: [{ type: "text", text: "host follow-up" }] },
-      },
-    ],
+    queue: [hostRow("host follow-up", options)],
     queueRevision: 1,
   };
-  const cancel = vi.fn(async () => true);
+  const cancel = vi.fn(async (_input: CancelInput): Promise<boolean> => true);
   const store = createChatSessionsStore(() => ({
     rpc: {
       session: {
@@ -251,8 +284,8 @@ function hostChatStore() {
           },
         },
         cancelQueued: {
-          mutate: async () => {
-            const accepted = await cancel();
+          mutate: async (input: CancelInput) => {
+            const accepted = await cancel(input);
             if (accepted) projection = { ...projection, queue: [], queueRevision: 2 };
             return {
               sessionId: SESSION,
@@ -274,7 +307,15 @@ function hostChatStore() {
   }));
   store.getState().adoptChatSession(SESSION);
   hostStores.push(store);
-  return { store, cancel, commands };
+  /** Another Client edits the row: the host's revision moves and the stream says so. */
+  const editElsewhere = (text: string) => {
+    const revision = (projection.queueRevision ?? 0) + 1;
+    projection = { ...projection, queue: [hostRow(text, options)], queueRevision: revision };
+    store.getState().setQueue(SESSION, projection.queue ?? [], revision);
+  };
+  /** A cancel the host judges by its own revision, as the ledger does. */
+  const hostRevision = () => projection.queueRevision ?? 0;
+  return { store, cancel, commands, editElsewhere, hostRevision };
 }
 
 async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
@@ -775,6 +816,125 @@ describe("host-owned rows with cloud off", () => {
     await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
     expect(box.value).toBe("");
     expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+  });
+
+  // An unproven release at the head of the FIFO would otherwise be stuck: the
+  // host now cancels it, and refuses one in flight. Remove is offered; the row
+  // leaves only once the host accepts — never optimistically.
+  it("offers Remove on a releasing row and keeps it until the host accepts", async () => {
+    const { store, cancel } = hostChatStore({ state: "releasing" });
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() =>
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", queueState: "releasing" },
+      ]),
+    );
+    const remove = () =>
+      container?.querySelector<HTMLButtonElement>(
+        '[aria-label="Remove queued message: host follow-up"]',
+      ) ?? null;
+    const actions = container?.querySelector<HTMLButtonElement>(
+      '[aria-label="Queued message actions: host follow-up"]',
+    );
+    expect(remove()?.disabled).toBe(false);
+    expect(actions?.disabled).toBe(false);
+
+    // Refused: an in-flight (or proven) release. Nothing moves.
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    expect(remove()).not.toBeNull();
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
+    expect(composer()?.value).toBe("");
+
+    // Accepted: an unproven release the host withdrew.
+    cancel.mockResolvedValue(true);
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(remove()).toBeNull();
+  });
+
+  // Cross-Client edit safety: cancel-to-composer persists its recovery copy
+  // before asking the host, and that wait is long enough for another Client to
+  // edit the row. The cancel must carry the revision of the strip the person
+  // acted on — not the one observed after the wait — so the host answers with a
+  // typed conflict instead of cancelling words this composer never showed.
+  it("cancels with the rendered revision across the durability wait and keeps everything on conflict", async () => {
+    const attachment: BlobLinkView = {
+      linkId: "link-1",
+      blobHash: "ab".repeat(32),
+      label: "shot.png",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    let gating = false;
+    let persist!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      persist = resolve;
+    });
+    let gatedWrites = 0;
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "appState.set": async (...args: unknown[]) => {
+          if (gating && args[0] === CHAT_DRAFTS_APP_STATE_KEY) {
+            gatedWrites += 1;
+            await persisted;
+          }
+          return { ok: true };
+        },
+      }),
+    );
+    const { store, cancel, editElsewhere, hostRevision } = hostChatStore({
+      attachments: [attachment],
+    });
+    cancel.mockImplementation(async (input) => {
+      if (input.expectedRevision !== undefined && input.expectedRevision !== hostRevision())
+        throw new QueueRevisionConflictError(input.expectedRevision, hostRevision());
+      return true;
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queueRevision).toBe(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+
+    gating = true;
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(gatedWrites).toBeGreaterThan(0));
+    expect(cancel).not.toHaveBeenCalled();
+
+    // Mid-wait: another Client rewrites the row, and this plane re-renders it.
+    await act(async () => editElsewhere("edited elsewhere"));
+    expect(store.getState().sessions[SESSION]?.queueRevision).toBe(2);
+    expect(container?.textContent).toContain("edited elsewhere");
+    await act(async () => type(box, "new typing"));
+
+    await act(async () => persist());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    // The conflict refuses like any refusal: no words or files come back, and
+    // the host's (edited) row is still the one on screen. The recovery copy is
+    // retired only by that positive host ownership, once the mutation is over.
+    await vi.waitFor(() => expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]));
+    expect(box.value).toBe("new typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments ?? []).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+      { id: "q1", text: "edited elsewhere", attachments: [attachment] },
+    ]);
+    expect(
+      container?.querySelectorAll('[aria-label="Queued message: edited elsewhere"]'),
+    ).toHaveLength(1);
+    expect(container?.textContent).not.toContain("host follow-up");
   });
 });
 
