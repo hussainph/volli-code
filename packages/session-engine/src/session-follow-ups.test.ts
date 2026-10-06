@@ -551,6 +551,66 @@ describe("host follow-up commands", () => {
     await runtime.close();
   });
 
+  it("keeps the explanation for remaining held rows after an edit sends and restores a cleared Attention", async () => {
+    const f = fixture();
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const detail = "Held: an older version ran — edit or remove it";
+    await f.followUps.transaction(sessionId, (state) => {
+      state.revision = 1;
+      state.entries = ["first", "second"].map((id) => ({
+        id,
+        commandId: id,
+        deliveryCommandId: deliveryId(sessionId, id),
+        state: "queued",
+        message: message(id),
+        refused: true,
+        refusedDetail: detail,
+      }));
+    });
+    await runtime.recoverFollowUps();
+    expect(f.adapter.commands).toEqual([]);
+    await runtime.command({
+      commandId: "edit-first",
+      sessionId,
+      command: { kind: "message.edit", messageId: "first", message: message("first", "reviewed") },
+    });
+    await runtime.recoverFollowUps();
+    expect(f.adapter.commands.filter((command) => command.kind === "message.submit")).toHaveLength(
+      1,
+    );
+    let projection = (await runtime.projection({ sessionId })).projection;
+    expect(projection.attention.active).toContainEqual(expect.objectContaining({ detail }));
+    const heldAttention = projection.attention.active.find(
+      (attention) => attention.detail === detail,
+    )!;
+    await f.engine.observe({
+      id: "clear-held-explanation",
+      sessionId,
+      occurredAt: 400,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+      kind: "attention.cleared",
+      attentionId: heldAttention.id,
+    });
+    await runtime.recoverFollowUps();
+    projection = (await runtime.projection({ sessionId })).projection;
+    expect(projection.attention.active).toContainEqual(expect.objectContaining({ detail }));
+    expect(f.adapter.commands.filter((command) => command.kind === "message.submit")).toHaveLength(
+      1,
+    );
+    await runtime.command({
+      commandId: "remove-second",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "second" },
+    });
+    expect(
+      (await runtime.projection({ sessionId })).projection.attention.active.some(
+        (attention) => attention.detail === detail,
+      ),
+    ).toBe(false);
+    await runtime.close();
+  });
+
   it("keeps in-memory storage atomic and refuses transactions that escape across an await", async () => {
     const ledger = createInMemorySessionFollowUpLedger();
     expect(await ledger.transaction("session", () => "primitive")).toBe("primitive");

@@ -1811,6 +1811,7 @@ class DefaultSessionRuntime implements SessionRuntime {
             };
         } else if (command.kind === "message.cancel") {
           state.entries.splice(index, 1);
+          if (entry.refusedDetail) withdrewClaim = true;
           if (entry.refused) state.releasedBoundary = null;
         } else if (command.message.id !== command.messageId || command.message.role !== "user")
           rejection = {
@@ -2004,8 +2005,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     const ownFailureId = this.#followUpFailureAttentionId(sessionId);
     // Set inside the claim transaction, so no cancel can interleave.
     const hold: { deliveryCommandId: string | null } = { deliveryCommandId: null };
+    let heldDetail: string | undefined;
     try {
       const entry = await ledger.transaction(sessionId, (state) => {
+        heldDetail = state.entries.find((candidate) => candidate.refused)?.refusedDetail;
         const releasing = state.entries.filter((candidate) => candidate.state === "releasing");
         // Recovery assumes one delivery per Session. Two claims is a corrupt
         // ledger, and guessing which one is real could send a prompt twice.
@@ -2046,7 +2049,16 @@ class DefaultSessionRuntime implements SessionRuntime {
         this.#followUpOwned.add(head.deliveryCommandId);
         return head;
       });
-      if (!entry || this.#closed) return;
+      if (this.#closed) return;
+      if (!entry) {
+        if (heldDetail)
+          await this.reportMessageDeliveryFailure({
+            sessionId,
+            commandId: `follow-up:${sessionId}`,
+            detail: heldDetail,
+          });
+        return;
+      }
       // Publish on a separate chain: an unresponsive Client cannot delay release.
       this.#notifyFollowUps(sessionId);
       await this.#releaseFollowUp(sessionId, entry, projection);
@@ -2266,6 +2278,18 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #clearFollowUpFailure(sessionId: string): Promise<void> {
+    const heldDetail = await this.ports.followUps!.transaction(
+      sessionId,
+      (state) => state.entries.find((entry) => entry.refused)?.refusedDetail,
+    );
+    if (heldDetail) {
+      await this.reportMessageDeliveryFailure({
+        sessionId,
+        commandId: `follow-up:${sessionId}`,
+        detail: heldDetail,
+      });
+      return;
+    }
     const projection = await this.#requireSession(sessionId);
     const failureId = this.#followUpFailureAttentionId(sessionId);
     if (!projection.attention.active.some(({ id }) => id === failureId)) return;

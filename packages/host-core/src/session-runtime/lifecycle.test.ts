@@ -202,6 +202,21 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await owner.close();
   });
 
+  it("logs an unreadable Session queue without denying host readiness", async () => {
+    const f = fixture();
+    vi.mocked(followUps.consumeFollowUpCleanClose).mockImplementationOnce((_db, report) => {
+      report!("session", new Error("queue corrupt"));
+      return [];
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith(
+      "[volli] unreadable follow-up queue for session:",
+      "queue corrupt",
+    );
+    await owner.close();
+  });
+
   it("reports an Attention failure without releasing durable holds or failing readiness", async () => {
     const f = fixture();
     vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValueOnce(["session"]);

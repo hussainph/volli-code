@@ -202,7 +202,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (database.ok && sessionEngine !== null) {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
-      held = consumeFollowUpCleanClose(database.db);
+      held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
+        ports.log.error(
+          `[volli] unreadable follow-up queue for ${sessionId}:`,
+          errorMessage(error),
+        ),
+      );
       try {
         await closeStaleAttachments({
           engine: sessionEngine,

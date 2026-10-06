@@ -38,7 +38,10 @@ export function stampFollowUpCleanClose(db: Database.Database, now: number): voi
 }
 
 /** Before ANY boot event writes; consume and hold atomically, or roll both back. */
-export function consumeFollowUpCleanClose(db: Database.Database): string[] {
+export function consumeFollowUpCleanClose(
+  db: Database.Database,
+  onUnreadable?: (sessionId: string, error: unknown) => void,
+): string[] {
   return withTransaction(db, () => {
     const encoded = getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
     let stamp: unknown;
@@ -60,7 +63,15 @@ export function consumeFollowUpCleanClose(db: Database.Database): string[] {
         db,
         "SELECT state FROM session_follow_up_queue WHERE session_id = ?",
       ).get(session_id)!;
-      const state = readState(stored.state);
+      let state: SessionFollowUpState;
+      try {
+        state = readState(stored.state);
+      } catch (error) {
+        // The drain uses the same validator, so this row cannot send. Do not
+        // let one corrupt Session's queue deny readiness to every Session.
+        onUnreadable?.(session_id, error);
+        continue;
+      }
       let changed = false;
       for (const entry of state.entries) {
         if (!stale) continue;

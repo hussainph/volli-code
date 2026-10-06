@@ -269,6 +269,27 @@ describe("follow-up clean-close round trips", () => {
     },
   );
 
+  it("isolates an unreadable queue without weakening its fail-closed drain", async () => {
+    const { sessionId } = await setup();
+    fixture.db
+      .prepare("UPDATE session_follow_up_queue SET state = ? WHERE session_id = ?")
+      .run('{"version":99}', sessionId);
+    setAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY, '{"v":1,"sessions":{}}', 100);
+    const errors: Array<{ id: string; error: unknown }> = [];
+    expect(
+      consumeFollowUpCleanClose(fixture.db, (id, error) => errors.push({ id, error })),
+    ).toEqual([]);
+    expect(errors).toEqual([{ id: sessionId, error: expect.any(Error) }]);
+    expect(getAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY)).toBeUndefined();
+    await expect(
+      createSqliteSessionFollowUpLedger(fixture.db).transaction(
+        sessionId,
+        (state) => state.entries,
+      ),
+    ).rejects.toThrow("unsupported");
+    expect(fixture.db.inTransaction).toBe(false);
+  });
+
   it("preserves an unconsumed stamp if the host stops before readiness", async () => {
     const { sessionId } = await setup();
     setAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY, '{"v":1,"sessions":{}}', 100);
