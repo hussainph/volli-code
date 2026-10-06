@@ -1005,7 +1005,13 @@ export function ChatPlane({
         if (options?.restoreDraft !== undefined && hostOwned) {
           // Cancel removes the host's last copy. Keep recovery durable before
           // asking, then restore the draft before retiring it after acceptance.
+          // `holdMessage` empties the box (it was built for Send, where the
+          // box IS the message); here the box holds words typed before Edit,
+          // and they must survive the wait and a refusal. Put them back in
+          // the same tick, so no render — and no durable write — sees them gone.
+          const typed = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
           holdMessage(sessionId, entry);
+          if (typed.length > 0) setDraft(sessionId, typed);
           if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) {
             markHeld(sessionId, entry.id, "unsent");
             return false;
@@ -1052,6 +1058,7 @@ export function ChatPlane({
       removeAttachment,
       sessionId,
       sessionsStore,
+      setDraft,
       strip,
     ],
   );

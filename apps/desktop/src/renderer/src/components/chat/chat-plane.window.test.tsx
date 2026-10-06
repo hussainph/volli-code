@@ -936,6 +936,111 @@ describe("host-owned rows with cloud off", () => {
     ).toHaveLength(1);
     expect(container?.textContent).not.toContain("host follow-up");
   });
+
+  // Edit's recovery copy is a hold, and a hold empties the box — right for Send,
+  // wrong here: the box holds words typed BEFORE Edit, and neither the wait for
+  // the host nor its refusal may take them.
+  describe("Edit with words already typed", () => {
+    const staged: BlobLinkView = {
+      linkId: "link-staged",
+      blobHash: "cd".repeat(32),
+      label: "staged.png",
+      originalName: "staged.png",
+      mime: "image/png",
+      sizeBytes: 7,
+    };
+    const rowFile: BlobLinkView = {
+      linkId: "link-row",
+      blobHash: "ef".repeat(32),
+      label: "row.png",
+      originalName: "row.png",
+      mime: "image/png",
+      sizeBytes: 9,
+    };
+
+    /** Opens the row's actions menu the way a keyboard does, and picks Edit. */
+    async function editFromMenu(text: string): Promise<void> {
+      const trigger = container?.querySelector<HTMLButtonElement>(
+        `[aria-label="Queued message actions: ${text}"]`,
+      );
+      if (trigger === null || trigger === undefined) throw new Error("expected row actions");
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+      );
+      const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (node) => node.textContent?.includes("Edit message"),
+      );
+      if (item === undefined) throw new Error("expected Edit message");
+      await act(async () => item.click());
+    }
+
+    async function mountWithTyping(state: HostQueueRow["state"]) {
+      useChatDraftsStore.getState().setDraftAttachments(SESSION, [staged]);
+      const host = hostChatStore({ state, attachments: [rowFile] });
+      let answer!: (accepted: boolean) => void;
+      host.cancel.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      await mountPlane(host.store, modelClient(DEFAULT_SELECTION));
+      await vi.waitFor(() =>
+        expect(host.store.getState().sessions[SESSION]?.queue).toMatchObject([
+          { id: "q1", queueState: state },
+        ]),
+      );
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      await act(async () => type(box, "already typed"));
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      return { ...host, box, answer: (accepted: boolean) => answer(accepted) };
+    }
+
+    it("keeps the typed words and files, and the host row, when the host refuses a releasing row", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("releasing");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      // Mid-wait: the recovery copy is held, and the box still says what it said.
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+        { id: "q1", state: "sending" },
+      ]);
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+
+      await act(async () => answer(false));
+      await vi.waitFor(() =>
+        expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+      );
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged]);
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", text: "host follow-up", queueState: "releasing", attachments: [rowFile] },
+      ]);
+      expect(
+        container?.querySelectorAll('[aria-label="Queued message: host follow-up"]'),
+      ).toHaveLength(1);
+    });
+
+    it("puts the recovered words ahead of the typed ones when the host accepts", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("queued");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      expect(box.value).toBe("already typed");
+
+      await act(async () => answer(true));
+      await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+      expect(box.value).toBe("host follow-up\nalready typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(
+        "host follow-up\nalready typed",
+      );
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged, rowFile]);
+    });
+  });
 });
 
 describe("a chat plane holding a long transcript", () => {

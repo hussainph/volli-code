@@ -15,6 +15,7 @@ import type {
 import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
 import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
+import type { QueuedMessage } from "@volli/session-presentation";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
