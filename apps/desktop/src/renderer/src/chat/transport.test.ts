@@ -14,8 +14,8 @@ describe("browserChatTransport", () => {
     vi.stubGlobal("window", {
       api: {
         sessionRpc: {
-          request: async (request: { procedure: string; input: unknown }) => {
-            procedures.push(request.procedure);
+          request: async (request: { path: string; input: unknown }) => {
+            procedures.push(request.path);
             inputs.push(request.input);
             return { ok: true, data: null };
           },
