@@ -1160,9 +1160,10 @@ describe("the host protocol listener (VC-663)", () => {
         await expectHostError(trpc.session.projection.query({ sessionId: "no-such-session" })),
       ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
       // The window and the history above it (VC-315): a young Session's
-      // window reaches its first event, and a page below it is empty.
+      // window reaches its first event, so it names no cursor above it, and
+      // a page below its first event is empty.
       const opened = await trpc.session.snapshot.query({ sessionId });
-      expect(opened.before).toBeNull();
+      expect(opened).not.toHaveProperty("before");
       expect(await trpc.session.history.query({ sessionId, before: 1 })).toEqual({
         frames: [],
         before: null,
