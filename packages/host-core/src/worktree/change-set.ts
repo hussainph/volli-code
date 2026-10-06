@@ -19,6 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { isAbsolute, join, normalize, sep } from "node:path";
 
 import {
@@ -447,10 +448,12 @@ async function applyUntrackedStats(
  * Counts a new file as a diff against an empty blob, matching numstat's line
  * semantics: LF bytes plus one final line when the file has no trailing LF.
  *
- * Files are streamed instead of loaded whole. `O_NOFOLLOW` prevents a symlink
- * race from turning a repository-relative status path into a read elsewhere on
- * disk; a symlink itself is counted from its link text, which is the blob git
- * would add. Binary detection uses git's own leading 8,000-byte NUL heuristic.
+ * Files are streamed instead of loaded whole. Open without following the final
+ * symlink, then validate and read the same descriptor so a pathname replacement
+ * cannot change the checked file type. `O_NONBLOCK` prevents a planted FIFO
+ * from hanging the open before that check. A symlink itself is counted only
+ * from readlink's metadata, never its target, which is the blob git would add.
+ * Binary detection uses git's own leading 8,000-byte NUL heuristic.
  */
 async function readUntrackedStat(
   worktreePath: string,
@@ -459,14 +462,20 @@ async function readUntrackedStat(
   if (!isSafeRepoRelativePath(path)) return null;
   const absolutePath = join(worktreePath, path);
   try {
-    const entry = await fs.lstat(absolutePath);
-    if (entry.isSymbolicLink()) {
+    let handle: FileHandle;
+    try {
+      handle = await fs.open(
+        absolutePath,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ELOOP") throw error;
+      // readlink does not follow the final component. If the symlink vanishes
+      // or becomes a regular file here, the per-file failure stays unknown.
       return textStat(Buffer.from(await fs.readlink(absolutePath)));
     }
-    if (!entry.isFile()) return null;
-
-    const handle = await fs.open(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
+      if (!(await handle.stat()).isFile()) return null;
       const buffer = Buffer.allocUnsafe(64 * 1024);
       let bytes = 0;
       let lineFeeds = 0;

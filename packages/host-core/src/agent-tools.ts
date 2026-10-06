@@ -267,10 +267,17 @@ export type UserBinPathState =
   /** The user edited the managed block; their version was preserved. */
   | "conflict";
 
+/** Trim only trailing slashes in one pass, even on model-controlled PATH entries. */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end -= 1;
+  return path.slice(0, end);
+}
+
 /** Whether `loginPath` already reaches `<home>/.local/bin`. */
 export function loginPathHasUserBin(loginPath: string, home: string): boolean {
-  const userBin = join(home, ".local", "bin").replace(/\/+$/, "");
-  return loginPath.split(":").some((entry) => entry.replace(/\/+$/, "") === userBin);
+  const userBin = withoutTrailingSlashes(join(home, ".local", "bin"));
+  return loginPath.split(":").some((entry) => withoutTrailingSlashes(entry) === userBin);
 }
 
 /**
