@@ -158,7 +158,8 @@ describe("volli-hostd's arguments", () => {
       "operator-token needs exactly one of --for <login> or --revoke <login>.",
     );
     expect(refusal(["operator-token", "extra", "--for", "a"])).toBe("Unknown argument: extra");
-    expect(refusal(["--port", "80"])).toMatch(/Unknown option '--port'/);
+    expect(refusal(["--bogus", "80"])).toMatch(/Unknown option '--bogus'/);
+    expect(refusal(["--port", "80"])).toMatch(/belong to install, start, enroll and status --json/);
     expect(refusal(["credentials", "--data-dir", "/d"])).toBe(
       "credentials needs an action: reset.",
     );
@@ -227,6 +228,92 @@ describe("database restore arguments", () => {
       );
     expect(refusal([...base, "--for", "alice"])).toBe(
       "--for, --revoke and --service-user belong to operator-token.",
+    );
+  });
+});
+
+// VC-700: the management commands the desktop runs over SSH.
+describe("volli-hostd's management commands", () => {
+  it("installs, starts, enrolls and reports, each with its own options", () => {
+    expect(parseHostdArgs(["install", "--system"], CWD)).toEqual({
+      kind: "install",
+      mode: "system",
+      from: null,
+      port: 7420,
+      operator: null,
+    });
+    expect(
+      parseHostdArgs(
+        ["install", "--system", "--from", "rel", "--port", "7500", "--operator", "alice"],
+        CWD,
+      ),
+    ).toEqual({ kind: "install", mode: "system", from: "/srv/rel", port: 7500, operator: "alice" });
+    expect(parseHostdArgs(["install", "--user"], CWD)).toMatchObject({ mode: "user" });
+    expect(parseHostdArgs(["start", "--user"], CWD)).toEqual({
+      kind: "start",
+      mode: "user",
+      timeoutMs: 60_000,
+    });
+    expect(parseHostdArgs(["start", "--system", "--timeout", "5"], CWD)).toMatchObject({
+      timeoutMs: 5_000,
+    });
+    expect(
+      parseHostdArgs(["enroll", "--system", "--public-key", "KEY", "--name", "Mac"], CWD),
+    ).toEqual({ kind: "enroll", mode: "system", dataDir: null, publicKey: "KEY", name: "Mac" });
+    expect(parseHostdArgs(["enroll", "--data-dir", "d", "--public-key", "KEY"], CWD)).toEqual({
+      kind: "enroll",
+      mode: null,
+      dataDir: "/srv/d",
+      publicKey: "KEY",
+      name: "",
+    });
+    expect(parseHostdArgs(["status", "--json"], CWD)).toEqual({
+      kind: "status-json",
+      mode: null,
+      dataDir: null,
+    });
+    expect(parseHostdArgs(["status", "--json", "--user"], CWD)).toMatchObject({ mode: "user" });
+    expect(parseHostdArgs(["status", "--json", "--data-dir", "/d"], CWD)).toMatchObject({
+      dataDir: "/d",
+    });
+    expect(USAGE).toContain("volli-hostd install --system|--user");
+  });
+
+  it("refuses options that belong elsewhere, and a mode it cannot tell", () => {
+    expect(refusal(["install"])).toBe("install needs --system or --user.");
+    expect(refusal(["install", "--data-dir", "/d"])).toBe("install needs --system or --user.");
+    expect(refusal(["install", "--system", "--user"])).toBe(
+      "Name one of --system, --user or --data-dir.",
+    );
+    expect(refusal(["install", "--system", "extra"])).toBe("Unknown argument: extra");
+    expect(refusal(["install", "--user", "--operator", "a"])).toMatch(
+      /--operator belongs to install --system/u,
+    );
+    expect(refusal(["install", "--system", "--port", "0"])).toBe(
+      "--port takes a whole number from 1 to 65535.",
+    );
+    expect(refusal(["install", "--system", "--port", "70000"])).toBe(
+      "--port takes a whole number from 1 to 65535.",
+    );
+    expect(refusal(["install", "--system", "--timeout", "5"])).toBe(
+      "--timeout does not belong to install.",
+    );
+    expect(refusal(["start", "--system", "--timeout", "x"])).toBe(
+      "--timeout takes a whole number from 1 to 3600.",
+    );
+    expect(refusal(["start", "--system", "--port", "1"])).toBe("--port does not belong to start.");
+    expect(refusal(["enroll", "--public-key", "K"])).toBe(
+      "enroll needs --system, --user or --data-dir <dir>.",
+    );
+    expect(refusal(["enroll", "--user"])).toBe("enroll needs --public-key <base64url SPKI>.");
+    expect(refusal(["enroll", "--user", "--public-key", ""])).toBe(
+      "enroll needs --public-key <base64url SPKI>.",
+    );
+    expect(refusal(["status", "--json", "--name", "x"])).toBe(
+      "--name does not belong to status --json.",
+    );
+    expect(refusal(["status", "--data-dir", "/d", "--system"])).toMatch(
+      /belong to install, start, enroll and status --json/u,
     );
   });
 });

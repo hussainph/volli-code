@@ -3,7 +3,7 @@
  * real host-core and the real agent socket. CI's artifact job drives the
  * built binary the same way from outside (README.md, "CI").
  */
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -20,7 +20,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createTRPCClient, createWSClient, wsLink } from "@trpc/client";
 import {
+  assembleDeviceCredential,
   buildHostHello,
+  bytesToBase64Url,
+  deviceCredentialSigningInput,
   encodeHostHello,
   HOST_V1_FEATURES,
   type HostCredentialVerifier,
@@ -40,7 +43,8 @@ import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
 import type { HostdLogger } from "./log";
 import { startHostd, type HostdOptions, type RunningHostd } from "./hostd";
-import { readStatus, statusFilePath, type HostdState } from "./status";
+import { LIVE_PROBES, readStatus, statusFilePath, type HostdState } from "./status";
+import { runEnroll } from "./enroll";
 
 /** Faults a test can switch on in the modules hostd composes. */
 const faults = vi.hoisted(() => ({
@@ -1113,6 +1117,83 @@ describe("the host protocol listener (VC-663)", () => {
     expect(JSON.stringify(log.info.mock.calls)).not.toContain("device-token");
     await host.stop("test over");
     expect(readStatus(join(root, "data"))).toMatchObject({ state: "stopped", hostProtocol: null });
+  });
+
+  // VC-700's contract: a device enrolled over SSH (`volli-hostd enroll`) is
+  // admitted by the verifier hostd composes, on a credential it signs.
+  it("admits a device enrolled in its data directory, once per credential, until revoked", async () => {
+    const host = await boot({ env: CLOUD, listen: LOOPBACK });
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    const dataDir = join(root, "data");
+    const hostId = readStatus(dataDir) as { hostId: string };
+    expect(hostId.hostId).toMatch(/^[0-9a-f-]{36}$/u);
+    const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const spki = bytesToBase64Url(publicKey.export({ format: "der", type: "spki" }));
+    const enrolled = await runEnroll(
+      { kind: "enroll", mode: null, dataDir, publicKey: spki, name: "Test Mac" },
+      {
+        uid: () => process.getuid!(),
+        layouts: {} as never,
+        probes: LIVE_PROBES,
+        version: "9.9.9-test",
+        now: () => new Date(),
+        newId: randomUUID,
+      },
+    );
+    expect(enrolled).toMatchObject({ ok: true, hostId: hostId.hostId, created: true });
+    const credential = (jti: string, workspaceId = WORKSPACE): string => {
+      const iat = Math.floor(Date.now() / 1000);
+      const input = deviceCredentialSigningInput({
+        hostId: hostId.hostId,
+        deviceId: enrolled.deviceId,
+        workspaceId,
+        iat,
+        exp: iat + 60,
+        jti,
+      });
+      const signature = sign("sha256", Buffer.from(input), {
+        key: privateKey,
+        dsaEncoding: "ieee-p1363",
+      });
+      return assembleDeviceCredential(input, signature);
+    };
+    const url = host.status().hostProtocol!.url;
+    const once = credential("first-credential-jti-0001");
+    const accepted = client(url, once);
+    try {
+      expect(await accepted.trpc.protocol.welcome.query()).toMatchObject({
+        host: { id: hostId.hostId },
+        actor: { kind: "device", deviceId: enrolled.deviceId, workspaceId: WORKSPACE },
+      });
+    } finally {
+      await accepted.close();
+    }
+    for (const refusedCredential of [once, credential("other-workspace-jti-0001", DEVICE)]) {
+      const replayed = client(url, refusedCredential);
+      try {
+        expect(await expectHostError(replayed.trpc.protocol.welcome.query())).toMatchObject({
+          reason: "credential-invalid",
+        });
+      } finally {
+        await replayed.close();
+      }
+    }
+    // Revocation is the entry's: the next handshake is refused.
+    const file = join(dataDir, "enrolled-devices.json");
+    const store = JSON.parse(readFileSync(file, "utf8")) as {
+      devices: { revokedAt: string | null }[];
+    };
+    store.devices[0]!.revokedAt = new Date().toISOString();
+    writeFileSync(file, JSON.stringify(store));
+    const revoked = client(url, credential("after-revocation-jti-001"));
+    try {
+      expect(await expectHostError(revoked.trpc.protocol.welcome.query())).toMatchObject({
+        reason: "credential-invalid",
+      });
+    } finally {
+      await revoked.close();
+    }
   });
 
   it("serves the Session router from the headless runtime to a verified device", async () => {

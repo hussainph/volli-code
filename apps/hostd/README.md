@@ -45,10 +45,43 @@ and ignores it); without `--listen` nothing listens either.
 - **Loopback only** (`127.0.0.1`, `localhost`, `[::1]`) until pairing and TLS
   land (VC-575); `--listen` refuses anything else. Port `0` picks one; the
   status file's `hostProtocol` names it.
-- **Every credential is refused** until VC-575 (pairing) and VC-577 (the
-  same-machine bootstrap) provide verifiers: a hello answers `UNAUTHORIZED` /
-  `credential-invalid`. An operator token is never accepted here.
+- **Devices enrolled over SSH** are admitted (VC-700): `volli-hostd enroll`
+  trusts a device's public key, and the device signs a short-lived `vdc1`
+  credential per handshake. With no device enrolled every hello answers
+  `UNAUTHORIZED` / `credential-invalid`. An operator token is never accepted
+  here. Trust argument and credential: `docs/plans/host-protocol.md`,
+  "Enrollment over SSH".
 - An address it cannot bind refuses boot (`host-protocol`, exit 78).
+
+## Managed install (VC-700)
+
+The desktop's "Add a host…" (and anyone at the box's shell) installs and runs
+hostd with four commands, each printing one line of JSON; a failure is
+`{"ok":false,"code":…,"message":…}`. Their shapes are
+`@volli/host-install/contract`, which hostd and the desktop both compile
+against.
+
+| Command                                                         | As                          | Does                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install --system [--operator <login>] [--port N]`              | root                        | The `volli` account if missing, `/var/lib/volli-hostd` (0700) if missing, the release under `/opt/volli-hostd/releases/<v>` with `current` renamed onto it, `/usr/local/bin` links, the units from the release plus `50-volli-managed.conf` (`VOLLI_EXPERIMENTAL=cloud`, `ExecStart` from `current`, `--listen 127.0.0.1:N`, default 7420), a secret key in `/etc/volli-hostd` with `secret-key.conf` on a fresh box, daemon-reload, enable. |
+| `install --user [--port N]`                                     | you                         | The same under `$XDG_*` (`~/.local/share/volli-hostd`, data in `~/.local/state/volli-hostd`) and a user unit. Agents run as you.                                                                                                                                                                                                                                                                                                             |
+| `start --system\|--user [--timeout S]`                          | root / you                  | Runs what `install` recorded (`managed.json`): when that version is not serving on that port, stops and starts the units and waits for it. A user unit needs lingering: `start` asks logind itself, else answers `linger-required` with the one sudo command.                                                                                                                                                                                |
+| `enroll --system\|--user\|--data-dir D --public-key K --name L` | hostd's account             | Trusts a device key (above).                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `status --json [--system\|--user\|--data-dir D]`                | hostd's account for devices | The install, unit, lingering, running host (version, host id, listener) and enrolled devices (never their keys).                                                                                                                                                                                                                                                                                                                             |
+
+**Idempotent.** Every step looks before it acts; a second `install` answers
+`changed: false`. `install` never starts or restarts anything, so an interrupted
+install is finished by running it again, then `start`.
+
+**Upgrade.** A new release goes beside the old; `current` moves in one rename,
+and the old release stays as the rollback. The data directory is untouched:
+hostd migrates at boot and keeps its safety copy ("Upgrading and rolling back").
+
+**Adopt.** A box set up by hand with docs/runbooks/hostd-box.md is brought under
+management in place: its `volli` account, data directory, secret key (in the
+data directory or by `secret-key.conf`) and every drop-in of yours stay. The
+flat `/opt/volli-hostd/bin` stays beside `releases/` as the rollback. A user
+install refuses to run beside a system unit (`other-mode-installed`).
 
 ## Ports
 

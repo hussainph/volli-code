@@ -60,6 +60,7 @@ import {
 import type { HostCredentialVerifier } from "@volli/host-protocol";
 import type { HostProtocolListener } from "@volli/session-rpc/websocket";
 
+import { createEnrolledDeviceVerifier } from "./enrolled-devices";
 import { cloudEnabled, startHostdProtocolListener, type HostProtocolBind } from "./host-protocol";
 import {
   createHeadlessSessionRuntime,
@@ -114,8 +115,10 @@ export interface HostdOptions {
   readonly listen?: HostProtocolBind | null;
   /**
    * The host protocol's credential verifier. A test seam only, never an
-   * argument or a variable: until VC-575/VC-577 there is no production
-   * verifier, and every handshake is refused (D5).
+   * argument or a variable: production composes the enrolled-device
+   * verifier (VC-700, `enrolled-devices.ts`), which admits only devices
+   * enrolled in this data directory and so refuses every handshake until
+   * one is.
    */
   readonly hostProtocolVerifier?: HostCredentialVerifier;
   readonly runtime?: HeadlessRuntimeOptions;
@@ -160,6 +163,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
   let capabilities = UNAVAILABLE;
   let credentials: HostdStatus["credentials"] = null;
   let hostProtocol: HostdHostProtocolStatus | null = null;
+  let hostId: string | null = null;
   const snapshot = (): HostdStatus => ({
     v: 1,
     state,
@@ -173,6 +177,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     capabilities,
     credentials,
     hostProtocol,
+    hostId,
   });
   const publish = (next: HostdState): void => {
     state = next;
@@ -284,6 +289,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
       if (isLiveHost(host)) {
         database = { ok: true, path: host.dbPath };
         const venue = hostdVenue(host.database.db);
+        hostId = venue.id;
         sessionRuntime = createHeadlessSessionRuntime({
           host,
           ports,
@@ -328,9 +334,10 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
               hostId: venue.id,
               version: options.version,
               bind: listen,
-              ...(options.hostProtocolVerifier === undefined
-                ? {}
-                : { verifier: options.hostProtocolVerifier }),
+              // Devices enrolled over SSH (VC-700); a test may supply its own.
+              verifier:
+                options.hostProtocolVerifier ??
+                createEnrolledDeviceVerifier({ dataDir, hostId: venue.id }),
               handlers,
               sessionEngine: sessionPorts.sessionEngine,
               logger,

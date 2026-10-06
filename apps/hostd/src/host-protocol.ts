@@ -5,12 +5,13 @@
  *
  * - **Loopback only** until VC-575 brings TLS and device keys (Q5); `--listen`
  *   refuses anything else, and so does the listener.
- * - **No production credential exists yet** (D5): with no verifier composed
- *   it serves `REFUSING_CREDENTIAL_VERIFIER`, so every handshake answers
- *   `UNAUTHORIZED` / `credential-invalid`. The operator token (VC-623) is a
- *   long-lived bearer and is never accepted here. VC-575 (pairing), VC-577
- *   (the same-machine bootstrap) and a hosted control plane each plug a
- *   verifier into the one port.
+ * - **Credentials.** hostd composes the enrolled-device verifier (VC-700,
+ *   `enrolled-devices.ts`): a device whose key was enrolled over SSH signs a
+ *   short-lived `vdc1` credential. With no device enrolled every handshake
+ *   answers `UNAUTHORIZED` / `credential-invalid` (D5). The operator token
+ *   (VC-623) is a long-lived bearer and is never accepted here. VC-575
+ *   (pairing), VC-577 (the same-machine bootstrap) and a hosted control
+ *   plane each plug a verifier into the same port.
  * - **What it serves.** The Session router's commands, its stream and the
  *   socket's Session reads, from the host's one handler map (VC-668) under
  *   the router's policy: the same handlers the agent socket answers through.
@@ -22,11 +23,7 @@
  */
 import { getProjectById, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
-import {
-  REFUSING_CREDENTIAL_VERIFIER,
-  type HostCredentialVerifier,
-  type HostV1Feature,
-} from "@volli/host-protocol";
+import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   createSessionRouter,
@@ -115,7 +112,8 @@ export interface HostdProtocolPorts {
   readonly hostId: string;
   readonly version: string;
   readonly bind: HostProtocolBind;
-  readonly verifier?: HostCredentialVerifier;
+  /** Who may connect: the enrolled-device verifier, composed by hostd.ts. */
+  readonly verifier: HostCredentialVerifier;
   /**
    * The host's one handler map (VC-668). The listener projects it through
    * the router's policy, as every router door does: no handler is reachable
@@ -138,7 +136,7 @@ export function startHostdProtocolListener(
     host: { id: ports.hostId, version: ports.version },
     features: HOSTD_FEATURES,
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
-    verifier: ports.verifier ?? REFUSING_CREDENTIAL_VERIFIER,
+    verifier: ports.verifier,
     context: () => ({
       handlers,
       diagnostics,
