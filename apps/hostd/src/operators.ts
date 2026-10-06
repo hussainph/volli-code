@@ -142,15 +142,19 @@ function octal(mode: number): string {
  * REAL path, so a symlink anywhere in the configured one is followed once,
  * here, and never again.
  */
-function untrustedDirectory(realDirectory: string, trusted: ReadonlySet<number>): string | null {
+function untrustedDirectory(
+  realDirectory: string,
+  trusted: ReadonlySet<number>,
+  what: string,
+): string | null {
   let directory = realDirectory;
   for (;;) {
     const stat = statSync(directory);
     if (!trusted.has(stat.uid)) {
-      return `${directory} belongs to uid ${stat.uid}, so its owner could replace the operators file`;
+      return `${directory} belongs to uid ${stat.uid}, so its owner could replace ${what}`;
     }
     if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
-      return `${directory} can be written by its group or other users (mode ${octal(stat.mode)}), so they could replace the operators file`;
+      return `${directory} can be written by its group or other users (mode ${octal(stat.mode)}), so they could replace ${what}`;
     }
     const parent = dirname(directory);
     if (parent === directory) return null;
@@ -158,8 +162,21 @@ function untrustedDirectory(realDirectory: string, trusted: ReadonlySet<number>)
   }
 }
 
+/** A root-owned file, judged before it is believed (`readRootFile`). */
+export type RootFileState =
+  | { readonly state: "absent"; readonly realPath: string }
+  | {
+      readonly state: "ok";
+      readonly realPath: string;
+      readonly text: string;
+      /** Size, mtime and inode: what changes when the file is rewritten or replaced. */
+      readonly stamp: string;
+    }
+  | { readonly state: "unsafe"; readonly reason: string };
+
 /**
- * Reads the operators file, judging it before believing it.
+ * Reads a file only root may write, judging it before believing it: the
+ * operators file (VC-623), and a system install's enrolled devices (VC-700).
  *
  * The directory chain must be one only root (or `trustedOwnerUid`, which is
  * root in production) controls; then the file is opened once, without
@@ -167,8 +184,14 @@ function untrustedDirectory(realDirectory: string, trusted: ReadonlySet<number>)
  * by `trustedOwnerUid`, that neither group nor others can write — and read.
  * Nothing is looked up by name twice, so there is no window in which the
  * name could be pointed at another file between the check and the read.
+ * `what` names the file in a refusal, and `grants` what its owner could do.
  */
-export function inspectOperatorsFile(path: string, trustedOwnerUid: number): OperatorsFileState {
+export function readRootFile(
+  path: string,
+  trustedOwnerUid: number,
+  what: string,
+  grants: string,
+): RootFileState {
   let realDirectory: string;
   try {
     realDirectory = realpathSync(dirname(path));
@@ -179,7 +202,7 @@ export function inspectOperatorsFile(path: string, trustedOwnerUid: number): Ope
     };
   }
   const realPath = join(realDirectory, basename(path));
-  const directoryFault = untrustedDirectory(realDirectory, new Set([0, trustedOwnerUid]));
+  const directoryFault = untrustedDirectory(realDirectory, new Set([0, trustedOwnerUid]), what);
   if (directoryFault !== null) return { state: "unsafe", reason: directoryFault };
   let fd: number;
   try {
@@ -199,7 +222,7 @@ export function inspectOperatorsFile(path: string, trustedOwnerUid: number): Ope
     if (stat.uid !== trustedOwnerUid) {
       return {
         state: "unsafe",
-        reason: `${realPath} belongs to uid ${stat.uid}, not to uid ${trustedOwnerUid}, so its owner could add an operator`,
+        reason: `${realPath} belongs to uid ${stat.uid}, not to uid ${trustedOwnerUid}, so its owner could ${grants}`,
       };
     }
     if ((stat.mode & 0o022) !== 0) {
@@ -208,11 +231,25 @@ export function inspectOperatorsFile(path: string, trustedOwnerUid: number): Ope
         reason: `${realPath} can be written by its group or other users (mode ${octal(stat.mode)})`,
       };
     }
-    return { state: "ok", realPath, entries: parseOperators(readFileSync(fd, "utf8")) };
-  } catch (error) {
-    return { state: "unsafe", reason: `${realPath}: ${(error as Error).message}` };
+    return {
+      state: "ok",
+      realPath,
+      text: readFileSync(fd, "utf8"),
+      stamp: `${stat.size}:${stat.mtimeMs}:${stat.ino}`,
+    };
   } finally {
     closeSync(fd);
+  }
+}
+
+/** Reads the operators file, judging it before believing it (`readRootFile`). */
+export function inspectOperatorsFile(path: string, trustedOwnerUid: number): OperatorsFileState {
+  const read = readRootFile(path, trustedOwnerUid, "the operators file", "add an operator");
+  if (read.state !== "ok") return read;
+  try {
+    return { state: "ok", realPath: read.realPath, entries: parseOperators(read.text) };
+  } catch (error) {
+    return { state: "unsafe", reason: `${read.realPath}: ${(error as Error).message}` };
   }
 }
 

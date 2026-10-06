@@ -5,6 +5,13 @@ demo over SSH with the `volli` CLI: register a small test repository, create a
 Ticket, start a Session with a real model, disconnect while the agent works,
 and come back to a finished Session whose branch was pushed.
 
+> **Being replaced, behind `cloud`, by "Add a host…" (VC-700).** Steps 1–4 and
+> the pairing are now box-side commands, `volli-hostd install`, `start` and
+> `enroll` (apps/hostd/README.md, "Managed install"), which the desktop runs over
+> SSH once its flow lands; they adopt a box set up with this runbook in place.
+> The manual steps stay here for a box set up without the app, and as the
+> reference for what those commands automate.
+
 ## What to have ready
 
 - **The box:** a fresh Hetzner CX (or any) server, Ubuntu 24.04 x86-64, that

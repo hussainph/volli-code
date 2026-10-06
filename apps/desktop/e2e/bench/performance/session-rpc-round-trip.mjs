@@ -4,7 +4,8 @@ export function sessionProjectionRequest(sessionId) {
     throw new Error("Session RPC benchmark requires a non-empty session id");
   }
   const request = {
-    procedure: "session.projection",
+    path: "session.projection",
+    type: "query",
     input: { sessionId },
   };
   // The Electron IPC boundary accepts cloneable JSON-shaped data. Round-trip
@@ -33,7 +34,8 @@ export async function sessionRpcRoundTrip(
   if (
     wireRequest === null ||
     typeof wireRequest !== "object" ||
-    typeof wireRequest.procedure !== "string" ||
+    typeof wireRequest.path !== "string" ||
+    typeof wireRequest.type !== "string" ||
     !("input" in wireRequest)
   ) {
     throw new Error("Session RPC benchmark request must be transport-facing");

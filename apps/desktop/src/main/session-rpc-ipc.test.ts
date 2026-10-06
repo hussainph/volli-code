@@ -38,11 +38,13 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
           },
         } as typeof router;
       }
+      const router = actual.createSessionRouter();
       return {
+        ...router,
         createCaller: () => ({
           session: { subscribe: async () => stream },
         }),
-      } as unknown as ReturnType<typeof actual.createSessionRouter>;
+      } as unknown as typeof router;
     },
   };
 });
@@ -52,10 +54,11 @@ import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  type SessionRpcIpcResponse,
 } from "@volli/shared";
+import type { IpcResponse } from "@volli/host-protocol/ipc";
 
 import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
+import { captureHostLog } from "@volli/host-core/testing";
 
 import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
 
@@ -85,9 +88,16 @@ interface FakeSender {
   readonly send: ReturnType<typeof vi.fn>;
   isDestroyed(): boolean;
   once(event: string, listener: () => void): void;
-  removeListener(event: string, listener: () => void): void;
+  on(event: string, listener: (...args: never[]) => void): void;
+  removeListener(event: string, listener: (...args: never[]) => void): void;
   /** Fires whatever `once("destroyed", …)` registered — the WebContents teardown path. */
   destroy(): void;
+  /** Emits `did-start-navigation` with these details; the WebContents lives on. */
+  navigate(details: { isMainFrame: boolean; isSameDocument: boolean }): void;
+  /** Emits `render-process-gone`; the WebContents lives on. */
+  crash(): void;
+  /** How many navigation and crash listeners are still attached. */
+  liveListeners(): number;
 }
 
 function runtimeFixture(): {
@@ -186,6 +196,8 @@ function frame(sequence: number): SessionStreamFrame {
 
 function sender(id = 1): FakeSender {
   const destroyedListeners: (() => void)[] = [];
+  const attached = new Map<string, Set<(...args: never[]) => void>>();
+  const on = (event: string) => attached.get(event) ?? new Set();
   let destroyed = false;
   return {
     id,
@@ -194,21 +206,35 @@ function sender(id = 1): FakeSender {
     once: vi.fn((event: string, listener: () => void) => {
       if (event === "destroyed") destroyedListeners.push(listener);
     }),
-    removeListener: vi.fn(),
+    on: vi.fn((event: string, listener: (...args: never[]) => void) => {
+      attached.set(event, on(event).add(listener));
+    }),
+    removeListener: vi.fn((event: string, listener: (...args: never[]) => void) => {
+      on(event).delete(listener);
+    }),
     destroy: () => {
       destroyed = true;
       for (const listener of destroyedListeners.splice(0)) listener();
     },
+    navigate: (details) => {
+      for (const listener of on("did-start-navigation")) {
+        (listener as (value: typeof details) => void)(details);
+      }
+    },
+    crash: () => {
+      for (const listener of on("render-process-gone")) (listener as () => void)();
+    },
+    liveListeners: () => on("did-start-navigation").size + on("render-process-gone").size,
   };
 }
 
-function invoke(owner: FakeSender, request: unknown): Promise<SessionRpcIpcResponse> {
+function invoke(owner: FakeSender, request: unknown): Promise<IpcResponse> {
   const handler = handlers.get(SESSION_RPC_IPC_CHANNEL);
   if (!handler) throw new Error("Session RPC handler is not registered");
   return (handler as (...args: unknown[]) => unknown)(
     { sender: owner },
     request,
-  ) as Promise<SessionRpcIpcResponse>;
+  ) as Promise<IpcResponse>;
 }
 
 function cancel(event: { sender: FakeSender }, subscriptionId: unknown): void {
@@ -253,9 +279,13 @@ describe("registerSessionRpcIpcHandlers", () => {
     // A network device with that port would be refused this Session; the
     // desktop skips Workspace resolution and reads it.
     await expect(
-      invoke(owner, { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+      invoke(owner, { path: "session.snapshot", type: "query", input: { sessionId: "session-1" } }),
     ).resolves.toMatchObject({ ok: true });
-    await invoke(owner, { procedure: "session.subscribe", input: { sessionId: "session-1" } });
+    await invoke(owner, {
+      path: "session.subscribe",
+      type: "subscription",
+      input: { sessionId: "session-1" },
+    });
     expect(fixture.calls.snapshot).toEqual(["session-1"]);
     expect(routerCallers).toEqual([LOCAL_DESKTOP_CALLER, LOCAL_DESKTOP_CALLER]);
     expect(routerCallers.every((caller) => caller === LOCAL_DESKTOP_CALLER)).toBe(true);
@@ -267,7 +297,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
     await expect(
-      invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toMatchObject({ ok: true, data: { throughSequence: 0 } });
 
     expect(fixture.calls.snapshot).toEqual(["session-1"]);
@@ -283,6 +317,41 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("handles each request inside the renderer's trace, and mints one for a malformed trace (VC-699)", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const log = captureHostLog();
+    try {
+      const trace = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
+      await invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+        trace,
+      });
+      await invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+        trace: { traceId: "nope", spanId: "nope" },
+      });
+      const rpc = log.of("rpc");
+      expect(rpc.length).toBeGreaterThanOrEqual(2);
+      expect(rpc[0]).toMatchObject({
+        traceId: trace.traceId,
+        spanId: trace.spanId,
+        door: "ipc",
+        operation: "session.snapshot",
+      });
+      const minted = rpc.at(-1)!;
+      expect(minted["traceId"]).toMatch(/^[0-9a-f]{32}$/u);
+      expect(minted["traceId"]).not.toBe(trace.traceId);
+    } finally {
+      log.restore();
+      await registration.close();
+    }
+  });
+
   it("forwards payload-free router timing to the benchmark observer", async () => {
     const fixture = runtimeFixture();
     const samples: unknown[] = [];
@@ -296,7 +365,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await invoke(sender(), {
-      procedure: "session.projection",
+      path: "session.projection",
+      type: "query",
       input: { sessionId: "session-private" },
     });
 
@@ -315,28 +385,35 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
     await expect(
-      invoke(sender(), { procedure: "session.projection", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.projection",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toEqual({
       ok: true,
       data: { projection: {}, throughSequence: 4 },
     });
     await expect(
       invoke(sender(), {
-        procedure: "session.history",
+        path: "session.history",
+        type: "query",
         input: { sessionId: "session-1", before: 7 },
       }),
     ).resolves.toEqual({ ok: true, data: { frames: [], before: null } });
     expect(fixture.calls.history).toEqual([7]);
     await expect(
       invoke(sender(), {
-        procedure: "session.cancelInteraction",
+        path: "session.cancelInteraction",
+        type: "mutation",
         input: { sessionId: "session-1", interactionId: "question-1" },
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
 
     await expect(
       invoke(sender(), {
-        procedure: "session.command",
+        path: "session.command",
+        type: "mutation",
         input: {
           commandId: "command-1",
           sessionId: "session-1",
@@ -356,7 +433,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        procedure: "session.reconcile",
+        path: "session.reconcile",
+        type: "mutation",
         input: { sessionId: "session-1", attachmentId: "attachment-1" },
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
@@ -388,14 +466,14 @@ describe("registerSessionRpcIpcHandlers", () => {
       runtime: { ...fixture.runtime, command },
     });
     const message = { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] };
-    for (const [procedure, input] of [
+    for (const [path, input] of [
       ["session.cancelQueued", { commandId: "cancel", sessionId: "session-1", messageId: "m" }],
       [
         "session.editQueued",
         { commandId: "edit", sessionId: "session-1", messageId: "m", message },
       ],
     ] as const) {
-      await expect(invoke(sender(), { procedure, input })).resolves.toMatchObject({
+      await expect(invoke(sender(), { path, type: "mutation", input })).resolves.toMatchObject({
         ok: true,
         data: { sessionId: "session-1", throughSequence: 1 },
       });
@@ -428,29 +506,46 @@ describe("registerSessionRpcIpcHandlers", () => {
       sessionId: "session-1",
       command: { kind: "executor.retry" },
     };
-    await expect(invoke(sender(), { procedure: "session.command", input })).resolves.toEqual({
+    await expect(
+      invoke(sender(), { path: "session.command", type: "mutation", input }),
+    ).resolves.toEqual({
       ok: true,
       data: malformed,
     });
     await expect(
-      invoke(sender(), { procedure: "session.command", input: { ...input, commandId: "" } }),
+      invoke(sender(), {
+        path: "session.command",
+        type: "mutation",
+        input: { ...input, commandId: "" },
+      }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
     expect(fixture.runtime.command).toHaveBeenCalledTimes(1);
     await registration.close();
   });
 
-  it("rejects unknown procedures and lets tRPC validate known procedure input", async () => {
+  // A path the routers publish but the desktop withholds (`DESKTOP_IPC_EXPOSURE`)
+  // answers exactly as one no router publishes: tRPC's own `NOT_FOUND`, as the
+  // WebSocket adapter answers a path it has no procedure for.
+  it("refuses withheld and unknown procedures and lets tRPC validate known procedure input", async () => {
     const fixture = runtimeFixture();
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
+    for (const [path, type] of [
+      ["labDiagnostics.list", "query"],
+      ["labDiagnostics.subscribe", "subscription"],
+      ["protocol.welcome", "query"],
+      ["session.list", "query"],
+      ["session.nonsense", "query"],
+      // A served path called as another type is not that procedure either.
+      ["session.snapshot", "mutation"],
+    ] as const) {
+      await expect(invoke(sender(), { path, type, input: {} })).resolves.toEqual({
+        ok: false,
+        error: { code: "NOT_FOUND", message: `No "${type}"-procedure on path "${path}"` },
+      });
+    }
     await expect(
-      invoke(sender(), { procedure: "labDiagnostics.list", input: {} }),
-    ).resolves.toEqual({
-      ok: false,
-      error: { code: "BAD_REQUEST", message: "Invalid Session RPC request" },
-    });
-    await expect(
-      invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "" } }),
+      invoke(sender(), { path: "session.snapshot", type: "query", input: { sessionId: "" } }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
 
     await registration.close();
@@ -464,13 +559,17 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const invalid = {
       ok: false,
-      error: { code: "BAD_REQUEST", message: "Invalid Session RPC request" },
+      error: { code: "BAD_REQUEST", message: "Invalid IPC request" },
     };
 
     await expect(invoke(sender(), "session.snapshot")).resolves.toEqual(invalid);
     await expect(invoke(sender(), ["session.snapshot", {}])).resolves.toEqual(invalid);
-    await expect(invoke(sender(), { procedure: "session.snapshot" })).resolves.toEqual(invalid);
-    await expect(invoke(sender(), { procedure: 7, input: {} })).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { path: "session.snapshot" })).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { path: 7, type: "query", input: {} })).resolves.toEqual(invalid);
+    await expect(
+      invoke(sender(), { path: "session.snapshot", type: "fetch", input: {} }),
+    ).resolves.toEqual(invalid);
+    await expect(invoke(sender(), null)).resolves.toEqual(invalid);
 
     await registration.close();
   });
@@ -480,7 +579,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 2 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -514,7 +614,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -531,7 +632,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -545,6 +647,58 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  // The WebContents outlives a reload, a main-frame navigation and a dead
+  // render process: the document that opened the stream is gone all the same,
+  // so its subscription is too, and nothing of it stays attached.
+  it("drops a subscription whose document reloaded, navigated away or crashed", async () => {
+    for (const leave of [
+      (owner: FakeSender) => owner.navigate({ isMainFrame: true, isSameDocument: false }),
+      (owner: FakeSender) => owner.crash(),
+    ]) {
+      const fixture = runtimeFixture();
+      const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+      const owner = sender();
+      await invoke(owner, {
+        path: "session.subscribe",
+        type: "subscription",
+        input: { sessionId: "session-1", afterSequence: 0 },
+      });
+      await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+      expect(owner.liveListeners()).toBe(2);
+
+      leave(owner);
+      await vi.waitFor(() => expect(fixture.isListening()).toBe(false));
+
+      expect(owner.liveListeners()).toBe(0);
+      expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+      expect(owner.send).not.toHaveBeenCalled();
+      await registration.close();
+    }
+  });
+
+  // A fragment change or a subframe navigation leaves the document that
+  // subscribed in place, and its stream with it.
+  it("keeps a subscription across a same-document or subframe navigation", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    await invoke(owner, {
+      path: "session.subscribe",
+      type: "subscription",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.navigate({ isMainFrame: true, isSameDocument: true });
+    owner.navigate({ isMainFrame: false, isSameDocument: false });
+    fixture.emit(frame(1));
+
+    await vi.waitFor(() => expect(owner.send).toHaveBeenCalledTimes(1));
+    expect(fixture.isListening()).toBe(true);
+    await registration.close();
+    expect(owner.liveListeners()).toBe(0);
+  });
+
   // The teardown announcement is an event, so it can still be queued when a
   // frame lands — and `webContents.send` on a destroyed WebContents throws
   // rather than being ignored. The check at the top of the pump loop is already
@@ -554,7 +708,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -575,7 +730,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
     const owner = sender();
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -596,12 +752,13 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(owner, {
-        procedure: "session.subscribe",
+        path: "session.subscribe",
+        type: "subscription",
         input: { sessionId: "session-1", afterSequence: 0 },
       }),
     ).resolves.toEqual({
       ok: false,
-      error: { code: "CLIENT_CLOSED_REQUEST", message: "Renderer closed" },
+      error: { code: "CLIENT_CLOSED_REQUEST", message: "The peer closed" },
     });
     expect(owner.once).not.toHaveBeenCalled();
     await registration.close();
@@ -614,7 +771,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -635,7 +793,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -656,6 +815,8 @@ describe("registerSessionRpcIpcHandlers", () => {
   // A rejection that is not an Error has no message to sanitize and no code to
   // read, so the frame says only what is true rather than stringifying whatever
   // was thrown into the renderer.
+  // tRPC's own reading of a thrown value (`getTRPCErrorFromUnknown`), through
+  // the router's formatter: the envelope the WebSocket sends for it too.
   it("reports a subscription failure that threw something other than an Error", async () => {
     terminalStream.current = failingStream("native stream vanished");
     const fixture = runtimeFixture();
@@ -663,7 +824,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     const owner = sender();
 
     const response = await invoke(owner, {
-      procedure: "session.subscribe",
+      path: "session.subscribe",
+      type: "subscription",
       input: { sessionId: "session-1", afterSequence: 0 },
     });
     if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
@@ -674,7 +836,7 @@ describe("registerSessionRpcIpcHandlers", () => {
         subscriptionId: response.subscriptionId,
         error: {
           code: "INTERNAL_SERVER_ERROR",
-          message: "Session subscription failed",
+          message: "native stream vanished",
         },
       }),
     );
@@ -694,14 +856,15 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "settings.experiments", input: undefined }),
+      invoke(sender(), { path: "settings.experiments", type: "query", input: undefined }),
     ).resolves.toEqual({
       ok: true,
       data: { cloud: { enabled: false, source: "default" } },
     });
     await expect(
       invoke(sender(), {
-        procedure: "settings.setExperiment",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: true },
       }),
     ).resolves.toEqual({
@@ -725,13 +888,15 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        procedure: "settings.setExperiment",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "unknown", enabled: true },
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
     await expect(
       invoke(sender(), {
-        procedure: "settings.setExperiment",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: 1 },
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
@@ -744,7 +909,7 @@ describe("registerSessionRpcIpcHandlers", () => {
     const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
 
     await expect(
-      invoke(sender(), { procedure: "settings.experiments", input: undefined }),
+      invoke(sender(), { path: "settings.experiments", type: "query", input: undefined }),
     ).resolves.toMatchObject({
       ok: false,
       error: {
@@ -754,7 +919,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await expect(
       invoke(sender(), {
-        procedure: "settings.setExperiment",
+        path: "settings.setExperiment",
+        type: "mutation",
         input: { id: "cloud", enabled: true },
       }),
     ).resolves.toMatchObject({
@@ -780,7 +946,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        procedure: "modelAccess.inspect",
+        path: "modelAccess.inspect",
+        type: "query",
         input: { refresh: true },
       }),
     ).resolves.toEqual({
@@ -814,14 +981,15 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.defaults", input: undefined }),
+      invoke(sender(), { path: "modelAccess.defaults", type: "query", input: undefined }),
     ).resolves.toEqual({
       ok: true,
       data: { ...EMPTY_MODEL_ACCESS_DEFAULTS, global },
     });
     await expect(
       invoke(sender(), {
-        procedure: "modelAccess.setDefault",
+        path: "modelAccess.setDefault",
+        type: "mutation",
         input: { purpose: "ticket", selection: ticket },
       }),
     ).resolves.toEqual({
@@ -845,10 +1013,10 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.hiddenModels", input: undefined }),
+      invoke(sender(), { path: "modelAccess.hiddenModels", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: hidden });
     await expect(
-      invoke(sender(), { procedure: "modelAccess.setHiddenModels", input: [] }),
+      invoke(sender(), { path: "modelAccess.setHiddenModels", type: "mutation", input: [] }),
     ).resolves.toEqual({ ok: true, data: [] });
     expect(writes).toEqual([[]]);
     await registration.close();
@@ -868,11 +1036,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.compactionPolicy", input: undefined }),
+      invoke(sender(), { path: "modelAccess.compactionPolicy", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: stored });
     const saved = { autoCompaction: false };
     await expect(
-      invoke(sender(), { procedure: "modelAccess.setCompactionPolicy", input: saved }),
+      invoke(sender(), { path: "modelAccess.setCompactionPolicy", type: "mutation", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });
     expect(writes).toEqual([saved]);
     await registration.close();
@@ -892,11 +1060,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.codeModePolicy", input: undefined }),
+      invoke(sender(), { path: "modelAccess.codeModePolicy", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: stored });
     const saved = { enabled: false, models: { "openai-codex/gpt-5.5": "both" } };
     await expect(
-      invoke(sender(), { procedure: "modelAccess.setCodeModePolicy", input: saved }),
+      invoke(sender(), { path: "modelAccess.setCodeModePolicy", type: "mutation", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });
     expect(writes).toEqual([saved]);
     await registration.close();
@@ -915,10 +1083,10 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
 
     await expect(
-      invoke(sender(), { procedure: "modelAccess.pickerView", input: undefined }),
+      invoke(sender(), { path: "modelAccess.pickerView", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: "all" });
     await expect(
-      invoke(sender(), { procedure: "modelAccess.setPickerView", input: "defaults" }),
+      invoke(sender(), { path: "modelAccess.setPickerView", type: "mutation", input: "defaults" }),
     ).resolves.toEqual({ ok: true, data: "defaults" });
     expect(writes).toEqual(["defaults"]);
     await registration.close();
@@ -941,7 +1109,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        procedure: "sessions.create",
+        path: "sessions.create",
+        type: "mutation",
         input: {
           operationId: "ticket-create",
           projectId: "project-1",
@@ -952,7 +1121,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-1" } });
     await expect(
       invoke(sender(), {
-        procedure: "sessions.create",
+        path: "sessions.create",
+        type: "mutation",
         input: {
           operationId: "project-create",
           projectId: "project-1",
@@ -998,7 +1168,8 @@ describe("registerSessionRpcIpcHandlers", () => {
 
     await expect(
       invoke(sender(), {
-        procedure: "sessions.attach",
+        path: "sessions.attach",
+        type: "mutation",
         input: { operationId: "retry-1", sessionId: "session-1" },
       }),
     ).resolves.toEqual({
@@ -1020,13 +1191,17 @@ describe("registerDegradedSessionRpcIpcHandlers", () => {
     registerDegradedSessionRpcIpcHandlers(reason);
 
     await expect(
-      invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "session-1" } }),
+      invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+      }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "INTERNAL_SERVER_ERROR", message: reason },
     });
     await expect(
-      invoke(sender(), { procedure: "modelAccess.inspect", input: {} }),
+      invoke(sender(), { path: "modelAccess.inspect", type: "query", input: {} }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "INTERNAL_SERVER_ERROR", message: reason },
