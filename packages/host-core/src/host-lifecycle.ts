@@ -23,7 +23,8 @@
  *    outlives the database.
  * 5. **The activity watch** is stopped: its flush timer is the last thing that
  *    reads the database on its own, so it keeps flushing through the drains.
- * 6. **Full drain only:** the WAL checkpoint and database close.
+ * 6. **Clean drain:** stamp pending follow-up event watermarks before process exit.
+ * 7. **Full drain only:** the WAL checkpoint and database close.
  *
  * NO DEADLINE HERE. The deadline stays at the host edge, which wraps `stop()`
  * in `settleShutdownBeforeDeadline` (desktop's quit gate). A bound inside the
@@ -31,6 +32,8 @@
  * still writing and never closing it; at the edge, a host past its deadline
  * exits the process instead.
  */
+import { errorMessage } from "@volli/shared";
+
 import { hostLogger } from "./log/root";
 
 const log = hostLogger("host");
@@ -43,6 +46,7 @@ export type HostLifecycleStep =
   | "close-socket"
   | "drain-detached"
   | "stop-activity"
+  | "stamp-clean-close"
   | "close-database";
 
 /**
@@ -66,8 +70,12 @@ export interface HostLifecyclePorts {
   drainDetached(): Promise<StepResult>;
   /** The activity watch's flush timer. Synchronous. */
   stopActivity(): void;
+  /** Only after a clean drain, for both desktop process exit and full DB close. */
+  stampCleanClose?(): void;
   /** WAL checkpoint and close; see `checkpointAndCloseDatabase`. */
   closeDatabase(): StepResult;
+  /** Warn once if a stop cannot stamp, including a deadline at the host edge. */
+  reportSkippedCleanClose?(reason: string): void;
   /** Called once per failed step, as it fails. */
   reportFailure(step: HostLifecycleStep, error: unknown): void;
 }
@@ -96,6 +104,8 @@ export interface HostLifecycle {
   /** Idempotent: every call answers the first one's promise. Never rejects. */
   stop(reason: string): Promise<HostStopReport>;
   state(): HostLifecycleState;
+  /** Diagnostics only: a deadline must not change the ongoing drain/stamp. */
+  warnIfCleanCloseSkipped(reason: string): void;
 }
 
 /** A start asked of a host that is already stopping. */
@@ -111,6 +121,19 @@ export function createHostLifecycle(
   let starting: Promise<void> | undefined;
   let stopping: Promise<HostStopReport> | undefined;
   let stopRequested = false;
+  let cleanCloseStamped = false;
+  let skippedCloseReported = false;
+
+  function warnIfCleanCloseSkipped(reason: string): void {
+    if (cleanCloseStamped || skippedCloseReported) return;
+    skippedCloseReported = true;
+    try {
+      ports.reportSkippedCleanClose?.(reason);
+    } catch (error) {
+      // Diagnostics must not change whether teardown proceeds or stamps.
+      log.error("failed to report a skipped clean-close watermark", { error });
+    }
+  }
 
   function start(): Promise<void> {
     if (stopRequested && starting === undefined) {
@@ -134,6 +157,7 @@ export function createHostLifecycle(
     let clean = true;
     const fail = (step: HostLifecycleStep, error: unknown): void => {
       clean = false;
+      warnIfCleanCloseSkipped(`${reason}: ${step} failed: ${errorMessage(error)}`);
       try {
         ports.reportFailure(step, error);
       } catch (reportError) {
@@ -141,12 +165,15 @@ export function createHostLifecycle(
         log.error("failed to report a shutdown step failure", { step, error: reportError });
       }
     };
-    const settle = (result: StepResult): void => {
-      if (result === false) clean = false;
+    const settle = (step: HostLifecycleStep, result: StepResult): void => {
+      if (result === false) {
+        clean = false;
+        warnIfCleanCloseSkipped(`${reason}: ${step} reported an unclean stop`);
+      }
     };
     const sync = (step: HostLifecycleStep, run: () => StepResult): void => {
       try {
-        settle(run());
+        settle(step, run());
       } catch (error) {
         fail(step, error);
       }
@@ -154,7 +181,10 @@ export function createHostLifecycle(
     const pending = (step: HostLifecycleStep, run: () => Promise<StepResult>): Promise<void> =>
       Promise.resolve()
         .then(run)
-        .then(settle, (error: unknown) => fail(step, error));
+        .then(
+          (result) => settle(step, result),
+          (error: unknown) => fail(step, error),
+        );
 
     sync("stop-producers", () => ports.stopProducers());
     sync("stop-maintenance", () => ports.stopMaintenance());
@@ -168,6 +198,14 @@ export function createHostLifecycle(
       await pending("drain-detached", () => ports.drainDetached());
     }
     sync("stop-activity", () => ports.stopActivity());
+    const stampCleanClose = ports.stampCleanClose;
+    if (clean && stampCleanClose !== undefined)
+      sync("stamp-clean-close", () => {
+        stampCleanClose();
+        cleanCloseStamped = true;
+      });
+    if (stampCleanClose === undefined)
+      warnIfCleanCloseSkipped(`${reason}: clean-close stamping is unavailable`);
     if (stopPolicy === "drain-and-close") sync("close-database", () => ports.closeDatabase());
     state = "stopped";
     return { reason, clean };
@@ -183,5 +221,6 @@ export function createHostLifecycle(
       return stopping;
     },
     state: () => state,
+    warnIfCleanCloseSkipped,
   };
 }

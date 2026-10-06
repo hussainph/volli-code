@@ -7,6 +7,7 @@
  */
 import type { CatalogMismatch, ProcedurePaths } from "./catalog";
 import type { BoardRouter } from "./board-router";
+import type { DesktopRouter } from "./desktop-router";
 import type { AppRouter } from "./index";
 
 type AssertNever<Type extends never> = Type;
@@ -28,4 +29,12 @@ export type HostRouterPathsDisjoint = AssertNever<
     ProcedurePaths<AppRouter["_def"]["record"]>,
     ProcedurePaths<BoardRouter["_def"]["record"]>
   >
+>;
+
+/**
+ * The desktop-only tier's paths are no public router's (VC-608): a key is
+ * public or desktop-only, never both, so promoting one moves its procedure.
+ */
+export type DesktopRouterPathsDisjoint = AssertNever<
+  Extract<ProcedurePaths<DesktopRouter["_def"]["record"]>, HostRouterPaths>
 >;

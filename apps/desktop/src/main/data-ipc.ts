@@ -25,7 +25,6 @@ import {
   getProjectById,
   insertProject,
   listProjects,
-  reorderProjects,
   updateProjectAuthorityPolicy,
   updateProjectBaseBranch,
   updateProjectSessionDefaults,
@@ -232,7 +231,6 @@ import {
   readWorktreeDiff,
   readWorktreeStatus,
   resolveWorktreeTarget,
-  getTrimSettings,
   remove as removeWorktree,
   runNet,
   scanTrimTargets,
@@ -854,11 +852,6 @@ export function registerDataIpcHandlers(
     "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
     "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
     "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
-
-    "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
-      reorderProjects(db, orderedIds, Date.now());
-      return { ok: true };
-    },
 
     // Every ticket write below announces what it committed on the ticket wake
     // bus (VC-85). The renderer door has to feed it for the same reason the
@@ -1661,10 +1654,6 @@ export function registerDataIpcHandlers(
         broadcastDataChanged({ kind: "worktree" });
       }
       return { ok: true, report };
-    },
-
-    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
-      return { ok: true, settings: getTrimSettings(db) };
     },
 
     "volli:worktree-trim-settings-set": (

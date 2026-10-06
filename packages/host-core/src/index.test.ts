@@ -498,6 +498,7 @@ describe("createHostCore", () => {
       "kind",
       "start",
       "stop",
+      "warnIfFollowUpCleanCloseSkipped",
     ]);
     for (const field of [
       "sessionEngine",
@@ -656,6 +657,42 @@ describe("createHostCore composition", () => {
 });
 
 describe("createHostCore lifecycle", () => {
+  it("uses the host warning logger once for an unstamped stop, including a deadline", async () => {
+    const log = { error: vi.fn(), warn: vi.fn() };
+    const close = Promise.withResolvers<void>();
+    const core = live(
+      compose({ log }, { ...headlessOptions(dataDir()), stopPolicy: "desktop-quit" }),
+    );
+    await core.start(recordingRuntime({ close: () => close.promise }));
+    const stopped = core.stop("quit");
+    core.warnIfFollowUpCleanCloseSkipped("quit: shutdown deadline expired after 15000ms");
+    core.warnIfFollowUpCleanCloseSkipped("repeat deadline");
+    close.reject(new Error("late close failure"));
+    expect((await stopped).clean).toBe(false);
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+      "follow-up clean-close watermark was not stamped",
+      { reason: "quit: shutdown deadline expired after 15000ms" },
+    );
+  });
+
+  it("warns through the host logger for an unclean stop even without a deadline", async () => {
+    const log = { error: vi.fn(), warn: vi.fn() };
+    const core = live(compose({ log }, headlessOptions(dataDir())));
+    await core.start(
+      recordingRuntime({
+        close: async () => {
+          throw new Error("runtime refused close");
+        },
+      }),
+    );
+    expect((await core.stop("SIGTERM")).clean).toBe(false);
+    core.warnIfFollowUpCleanCloseSkipped("late deadline");
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+      "follow-up clean-close watermark was not stamped",
+      { reason: "SIGTERM: close-runtime failed: runtime refused close" },
+    );
+  });
+
   it("desktop policy skips detached and maintenance joins and leaves SQLite open", async () => {
     const core = live(
       compose(
