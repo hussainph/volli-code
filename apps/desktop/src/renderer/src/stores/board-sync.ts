@@ -242,6 +242,13 @@ export function isAmbiguousBoardFailure(error: unknown): boolean {
   );
 }
 
+/** Whether a host answered that the resource does not exist (in this Workspace). */
+export function isNotFound(error: unknown): boolean {
+  const hostError = (error as { data?: { hostError?: { code?: unknown } } } | null)?.data
+    ?.hostError;
+  return hostError?.code === "NOT_FOUND";
+}
+
 function failureMessage(error: unknown): string {
   const hostError = (error as { data?: { hostError?: { message?: unknown } } } | null)?.data
     ?.hostError;
@@ -507,6 +514,8 @@ export class BoardSync {
       "delete ticket",
       () => ({}),
       (commandId) => this.#transport.deleteTicket({ commandId, ticketId }),
+      undefined,
+      true,
     );
     return answer !== null;
   }
@@ -533,6 +542,12 @@ export class BoardSync {
     edit: (commandId: string) => Pick<Pending, "tickets" | "labels">,
     send: (commandId: string) => Promise<Answer>,
     held: (answer: Answer, workspace: Workspace) => boolean = () => false,
+    /**
+     * A retry that finds its resource gone was the removal itself, already
+     * applied: the first attempt's answer was lost, and a host refuses a
+     * resource that no longer exists before any receipt can answer.
+     */
+    goneMeansDone = false,
   ): Promise<Answer | null> {
     const commandId = this.#mint();
     const pending: Pending = { projectId, ...edit(commandId) };
@@ -573,6 +588,12 @@ export class BoardSync {
           continue;
         }
         if (this.#pending.delete(commandId)) this.#paint(projectId);
+        if (goneMeansDone && attempt > 1 && isNotFound(error)) {
+          return {
+            receipt: { commandId, status: "completed", replayed: true },
+            throughCursor: "",
+          } as Answer;
+        }
         this.#view.failed(`Couldn't ${verb}: ${failureMessage(error)}`);
         return null;
       }

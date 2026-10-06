@@ -110,6 +110,9 @@ const unreachable = {
   data: { hostError: { code: "SERVICE_UNAVAILABLE", message: "host-unreachable" } },
 };
 const conflict = { data: { hostError: { code: "CONFLICT", message: "stale board" } } };
+const notFound = {
+  data: { hostError: { code: "NOT_FOUND", message: "Not found in this Workspace." } },
+};
 
 const sleep = (ms: number): Promise<void> =>
   ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
@@ -1199,6 +1202,27 @@ describe("each write", () => {
     host.fail("deleteTicket", conflict);
     expect(await sync.deleteTicket("p1", "Q")).toBe(false);
     expect(view.failed).toHaveBeenCalledWith("Couldn't delete ticket: stale board");
+  });
+
+  it("counts a retried delete the host no longer finds as done: its first answer was lost", async () => {
+    const { host, sync, view } = harness();
+    await sync.open("p1");
+    host.archived = [{ ...ticket("Q", "done", 0), archivedAt: 1 }];
+    // The delete lands, its answer is lost, and the retry names a ticket that
+    // is gone (a WebSocket host refuses an absent resource before any receipt).
+    host.fail("deleteTicket", unreachable, { applied: true });
+    host.fail("deleteTicket", notFound);
+    const deleting = sync.deleteTicket("p1", "Q");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(await deleting).toBe(true);
+    expect(host.archived).toEqual([]);
+    expect(view.failed).not.toHaveBeenCalled();
+
+    // A first attempt that finds nothing is a refusal, as it always was.
+    host.fail("deleteTicket", notFound);
+    expect(await sync.deleteTicket("p1", "Q")).toBe(false);
+    expect(view.failed).toHaveBeenCalledWith("Couldn't delete ticket: Not found in this Workspace.");
   });
 
   it("reads the archive, and says so when the read fails", async () => {

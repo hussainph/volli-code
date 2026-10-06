@@ -628,6 +628,22 @@ describe("boardApi with the protocol on", () => {
     expect(calls.filter(({ path }) => path === "board.removeComment")).toHaveLength(1);
   });
 
+  it("counts a retried comment removal the host no longer finds as done", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const { client } = fakeBoard({
+      "board.removeComment": () => {
+        attempts += 1;
+        // The first removal lands but its answer is lost; the retry finds nothing.
+        throw attempts === 1 ? unavailable() : hostError("NOT_FOUND", "Not found");
+      },
+    });
+    const removing = protocolBoardApi(client).comments.remove({ commentId: "c1" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await removing).toEqual({ ok: true });
+    expect(attempts).toBe(2);
+  });
+
   it("says what a client that threw a bare value threw", async () => {
     // A structural client: a real one wraps every throw in a TRPCClientError.
     const client = {

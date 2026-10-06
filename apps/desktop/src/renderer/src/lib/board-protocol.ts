@@ -37,6 +37,7 @@ import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   BoardSync,
   isAmbiguousBoardFailure,
+  isNotFound,
   type BoardSyncTransport,
   type BoardSyncView,
 } from "../stores/board-sync";
@@ -138,6 +139,7 @@ const RETRIES = [250, 1_000, 4_000];
  */
 async function command<Answer>(
   send: (commandId: string) => Promise<Answer>,
+  gone?: Answer,
 ): Promise<{ ok: true; answer: Answer } | { ok: false; error: string }> {
   const commandId = crypto.randomUUID();
   for (let attempt = 0; ; attempt++) {
@@ -148,6 +150,8 @@ async function command<Answer>(
         await new Promise((resolve) => setTimeout(resolve, RETRIES[attempt]));
         continue;
       }
+      // A retried removal that finds its resource gone was the removal itself.
+      if (gone !== undefined && attempt > 0 && isNotFound(error)) return { ok: true, answer: gone };
       return { ok: false, error: messageOf(error) };
     }
   }
@@ -271,8 +275,9 @@ export function protocolBoardApi(client: BoardClient): BoardApi {
         return result.ok ? { ok: true, comment: result.answer.comment } : result;
       },
       remove: async (input) => {
-        const result = await command((commandId) =>
-          board.removeComment.mutate({ commandId, ...input }),
+        const result = await command(
+          (commandId) => board.removeComment.mutate({ commandId, ...input }),
+          { receipt: null as never, throughCursor: "" },
         );
         return result.ok ? { ok: true } : result;
       },
