@@ -27,6 +27,7 @@ export {
   listMaterializableLinks,
 } from "../db/blobs-repo";
 export { CLOUD_IDENTITY_MIGRATION } from "../db/cloud-identity-migration";
+export { restoreDatabaseFile, type DatabaseFileRestore } from "../db/database-file";
 export { deleteComment, getComment, listComments, updateComment } from "../db/comments-repo";
 export {
   listTicketEvents,
