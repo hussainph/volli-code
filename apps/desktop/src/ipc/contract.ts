@@ -1,3 +1,4 @@
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
   FileReadResult,
@@ -181,8 +182,6 @@ import type {
   SessionListingRow,
   SessionPeekContent,
   SessionReadState,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   SessionUsageGrouping,
   SessionUsageReport,
   SessionUsageScope,
@@ -2503,6 +2502,11 @@ export type UpdateLiveWorkResult = Result<{
   busyCommands: string[];
   /** Open structured agent Sessions — turns open right now, a plane that outlives any one PTY. */
   openAgentSessions: number;
+  /**
+   * Running background shells (VC-577) — a dev server a turn started. Counted
+   * only with the `cloud` flag on, from the host's live work; 0 otherwise.
+   */
+  backgroundShells: number;
   /** Display names of editor tabs holding unsaved drafts — the one thing a restart destroys unrecoverably. */
   unsavedDrafts: string[];
 }>;
@@ -2539,16 +2543,17 @@ export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
  * contract — is where a Session procedure's input and output are declared.
- * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
- * tRPC link is the only thing that should ever speak them directly.
+ * The wire shapes are the router-generic bridge's (`@volli/host-protocol/ipc`,
+ * VC-608); the renderer's terminating tRPC link is the only thing that should
+ * ever speak them directly.
  */
 export interface VolliSessionRpcIpcContract {
-  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
-  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+  /** Runs one served procedure; a subscription acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: IpcRequest]; result: IpcResponse };
 }
 
 /**
- * The 4 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -2578,6 +2583,11 @@ export interface VolliSendContract {
   // stopping the frames, which the renderer is already listening for — an ack
   // would only be a second way to learn the same thing, later.
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
+  // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
+  // `volli:client-state-flush` push (VC-577) — every pending client-local
+  // write it held has been acknowledged by main. Main asked, so main is the
+  // one waiting; an invoke from the renderer would have no question to answer.
+  "volli:client-state-flushed": { args: [requestId: string] };
 }
 
 /**
@@ -2690,6 +2700,12 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  // Main is about to destroy this window without an unload (VC-577: menu-bar
+  // mode, after the quit's confirms already answered), so `beforeunload` will
+  // not flush the debounced client-local writes. The renderer sends them now
+  // and answers `volli:client-state-flushed` with the request id once main
+  // has acknowledged every one; main waits for that, bounded, then destroys.
+  | "volli:client-state-flush"
   | "volli:browser-tab-state"
   // A background shell started, exited, or was forgotten with its Session's
   // attachment (VC-270): one push, one store, the island's shell feed.
@@ -2783,7 +2799,7 @@ export type VolliIpcEvent =
   // them, instead of within ten seconds of it.
   | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
-  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // `IpcEvent` (`@volli/host-protocol/ipc`). Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
   // The updater's user-facing state changed (VC-59) — one full {@link

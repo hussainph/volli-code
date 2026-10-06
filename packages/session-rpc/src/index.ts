@@ -117,6 +117,7 @@ export {
   type LocalRouterCaller,
   type NetworkRouterCaller,
   type ProcedurePaths,
+  type RouterProcedurePaths,
   type RouterCaller,
   type RouterContextPorts,
   type WorkspaceResource,
@@ -141,6 +142,16 @@ export {
   type HostRouterFeatureBinding,
   type HostRouterPaths,
 } from "./host-router";
+export {
+  DESKTOP_IPC_EXPOSURE,
+  DESKTOP_IPC_PATHS,
+  type DesktopIpcExposure,
+  type DesktopIpcPath,
+  type DesktopIpcRouter,
+  type DesktopIpcRouterPath,
+  type DesktopIpcRouters,
+  type IpcExposureTable,
+} from "./desktop-ipc";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 export { AsyncQueue } from "./async-queue";
 
