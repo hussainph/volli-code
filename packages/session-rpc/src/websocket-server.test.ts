@@ -7,8 +7,10 @@ import { createTRPCClient, createWSClient, wsLink, type TRPCClient } from "@trpc
 import {
   buildHostHello,
   encodeHostHello,
+  HOST_V1_FEATURES,
   isResnapshotRequired,
   LOCAL_DEVICE_ID,
+  SUBSCRIPTION_REPLAY_BOUNDS,
   validateWelcome,
   type HostActor,
   type HostCredentialGrant,
@@ -23,14 +25,23 @@ import type {
   SessionStreamFrame,
 } from "@volli/session-engine";
 import { createSessionProjectionCheckpoint } from "@volli/shared";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket } from "ws";
 
-import { createSessionRouter, RpcDiagnosticLog, type AppRouter } from "./index";
+import {
+  createSessionRouter,
+  RpcDiagnosticLog,
+  type AppRouter,
+  type SessionRouterContext,
+} from "./index";
 import {
   HOST_PROTOCOL_CLOSE_CODES,
+  boundOutboundSends,
+  DEFAULT_LISTENER_LIMITS,
   isLoopbackHost,
   startHostProtocolListener,
+  validateListenerLimits,
+  type BoundedSocket,
   type HostProtocolListenerEvent,
   type HostProtocolListenerLimits,
 } from "./websocket-server";
@@ -74,10 +85,12 @@ function frame(sequence: number, padding = 0): SessionStreamFrame {
 }
 
 /** A Session ledger behind a runtime: replays strictly after a cursor, then goes live. */
-function ledger() {
+function ledger(options: { ignoresCancel?: boolean } = {}) {
   const frames: SessionStreamFrame[] = [];
   const listeners = new Set<(emission: SessionStreamEmission) => void | Promise<void>>();
   const reads: string[] = [];
+  /** Replayed frames the source handed to a subscription's listener. */
+  const handed = { count: 0 };
   const projection = createSessionProjectionCheckpoint(session, []).projection;
   const runtime: SessionRuntime = {
     snapshot: async () => {
@@ -88,10 +101,17 @@ function ledger() {
       reads.push("projection");
       return { projection, throughSequence: frames.length };
     },
-    subscribe: async ({ afterSequence }, listener) => {
+    // Like the real runtime, an aborted signal stops the replay at the next frame.
+    subscribe: async ({ afterSequence, signal }, listener) => {
       reads.push(`subscribe:${afterSequence}`);
-      for (const replayed of frames.slice(afterSequence)) await listener(replayed);
+      for (const replayed of frames.slice(afterSequence)) {
+        if (signal?.aborted === true && options.ignoresCancel !== true) return () => {};
+        handed.count += 1;
+        await listener(replayed);
+      }
+      if (signal?.aborted === true) return () => {};
       listeners.add(listener);
+      signal?.addEventListener("abort", () => listeners.delete(listener));
       return () => listeners.delete(listener);
     },
     command: async () => {
@@ -109,7 +129,7 @@ function ledger() {
       for (const listener of listeners) await listener(next);
     }
   };
-  return { runtime, frames, listeners, reads, append };
+  return { runtime, frames, listeners, reads, append, handed };
 }
 
 /** One credential the test verifier knows, and the levers that withdraw it. */
@@ -154,16 +174,21 @@ async function serve(
     grants?: Record<string, HostCredentialGrant>;
     verifier?: HostCredentialVerifier;
     limits?: Partial<HostProtocolListenerLimits>;
+    /** What a test changes about the connection's context, given the ledger behind it. */
+    context?: (source: ReturnType<typeof ledger>) => Partial<Omit<SessionRouterContext, "caller">>;
+    /** A source that keeps replaying after it was cancelled. */
+    ignoresCancel?: boolean;
   } = {},
 ) {
   const limits = { refusedCloseMs: 20, ...options.limits };
   const events: HostProtocolListenerEvent[] = [];
-  const source = ledger();
+  const source = ledger({ ignoresCancel: options.ignoresCancel === true });
   const grants = options.grants ?? { "device-token": credential(device).grant };
   const listener = await startHostProtocolListener({
     router: createSessionRouter(),
     bind: { host: "127.0.0.1", port: 0 },
     host: { id: HOST, version: "test" },
+    features: HOST_V1_FEATURES,
     workspace: async (id) => (id === WORKSPACE ? { id, epoch: 2 } : null),
     verifier: options.verifier ?? {
       verify: ({ credential: presented }) => grants[presented] ?? null,
@@ -172,6 +197,7 @@ async function serve(
       runtime: source.runtime,
       diagnostics: new RpcDiagnosticLog(),
       resourceWorkspace: ({ id }) => (id === SESSION ? WORKSPACE : null),
+      ...options.context?.(source),
     }),
     limits,
     log: (event) => events.push(event),
@@ -217,6 +243,8 @@ function connect(url: string, hello: Partial<HostHelloInput> | null = {}) {
 async function raw(url: string, hello: HostHello | null) {
   const socket = new WebSocket(`${url}?connectionParams=1`);
   cleanups.push(() => socket.terminate());
+  // Listened for from the start, so a close that comes early is never missed.
+  const closed = once(socket, "close") as Promise<[number, Buffer]>;
   const messages: unknown[] = [];
   socket.on("message", (data) => {
     const text = data.toString();
@@ -226,7 +254,7 @@ async function raw(url: string, hello: HostHello | null) {
   if (hello !== null) {
     socket.send(JSON.stringify({ method: "connectionParams", data: encodeHostHello(hello) }));
   }
-  return { socket, messages };
+  return { socket, messages, closed };
 }
 
 async function until(condition: () => boolean, what: string): Promise<void> {
@@ -352,8 +380,8 @@ describe("the handshake, before any procedure", () => {
 
   it("closes a connection that never says hello", async () => {
     const { listener, events } = await serve({ limits: { handshakeTimeoutMs: 30 } });
-    const { socket } = await raw(listener.url, null);
-    const [code] = (await once(socket, "close")) as [number];
+    const { closed } = await raw(listener.url, null);
+    const [code] = await closed;
     expect(code).toBe(HOST_PROTOCOL_CLOSE_CODES.helloTimeout);
     expect(events).toContainEqual(expect.objectContaining({ kind: "hello-timeout" }));
   });
@@ -395,7 +423,7 @@ describe("the handshake, before any procedure", () => {
       error: { data: { hostError: { code: "INTERNAL_SERVER_ERROR", message: "not reached" } } },
     });
     // The refused connection is closed once it has had its answer.
-    const [code, reason] = (await once(refused.socket, "close")) as [number, Buffer];
+    const [code, reason] = await refused.closed;
     expect([code, reason.toString()]).toStrictEqual([
       HOST_PROTOCOL_CLOSE_CODES.credentialInvalid,
       "credential-invalid",
@@ -543,7 +571,9 @@ describe("resumable subscriptions", () => {
 
   it("terminates a peer that stops reading instead of buffering for it", async () => {
     const maxOutboundBytes = 512 * 1024;
-    const { listener, append, listeners, events } = await serve({ limits: { maxOutboundBytes } });
+    const { listener, append, listeners, events } = await serve({
+      limits: { maxOutboundBytes, maxFrameBytes: 128 * 1024 },
+    });
     const { socket } = await raw(listener.url, buildHostHello(HELLO));
     socket.send(
       JSON.stringify({
@@ -563,10 +593,8 @@ describe("resumable subscriptions", () => {
     }
     const shed = events.find((event) => event.kind === "slow-peer");
     expect(shed).toBeDefined();
-    // Judged before each send: never more than one frame past the bound.
-    expect(shed!.kind === "slow-peer" && shed!.unsentBytes).toBeLessThan(
-      maxOutboundBytes + 2 * frameBytes,
-    );
+    // Judged before each send, counting the frame: never past the bound.
+    expect(shed!.kind === "slow-peer" && shed!.unsentBytes).toBeLessThanOrEqual(maxOutboundBytes);
     expect(listeners.size).toBe(0);
     await until(() => listener.connections === 0, "the peer to be gone");
   });
@@ -647,6 +675,7 @@ describe("the listener's own lifetime", () => {
       router: createSessionRouter(),
       bind: { host: "::1", port: 0 },
       host: { id: HOST, version: "test" },
+      features: HOST_V1_FEATURES,
       workspace: () => null,
       verifier: { verify: () => null },
       context: () => ({ runtime: ledger().runtime, diagnostics: new RpcDiagnosticLog() }),
@@ -704,10 +733,531 @@ describe("isLoopbackHost", () => {
         router: createSessionRouter(),
         bind: { host: "0.0.0.0", port: 0 },
         host: { id: HOST, version: "test" },
+        features: HOST_V1_FEATURES,
         workspace: () => null,
         verifier: { verify: () => null },
         context: () => ({ runtime: ledger().runtime, diagnostics: new RpcDiagnosticLog() }),
       }),
     ).rejects.toThrow("binds loopback only until VC-575; refusing 0.0.0.0");
+  });
+});
+
+/** A port a test parks a call on, and lets go of. */
+function barrier() {
+  let release!: () => void;
+  let entered = false;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  return {
+    get entered() {
+      return entered;
+    },
+    async wait(): Promise<void> {
+      entered = true;
+      await held;
+    },
+    release: () => release(),
+  };
+}
+
+function request(id: number | string, method: string, path: string, input: unknown): string {
+  return JSON.stringify({ id, method, params: { path, input } });
+}
+
+const subscribeTo = (id: number | string, input: unknown = { sessionId: SESSION }): string =>
+  request(id, "subscription", "session.subscribe", input);
+
+/** The reason a raw answer carries, if it is a refusal. */
+function reasonOf(message: unknown): string | undefined {
+  return (message as { error?: { data?: { hostError?: { reason?: string } } } }).error?.data
+    ?.hostError?.reason;
+}
+
+const settle = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** What a socket over budget is answered: an HTTP status, before any WebSocket exists. */
+async function refusedStatus(url: string): Promise<number> {
+  const socket = new WebSocket(url);
+  socket.on("error", () => {});
+  const [, response] = (await once(socket, "unexpected-response")) as [
+    unknown,
+    { statusCode: number },
+  ];
+  socket.terminate();
+  return response.statusCode;
+}
+
+describe("revocation wins over a call still being authorized (B1)", () => {
+  it("never runs a query whose authorization was parked when the grant was revoked", async () => {
+    const lever = credential(device);
+    const gate = barrier();
+    const { listener, reads } = await serve({
+      grants: { "device-token": lever.grant },
+      context: () => ({
+        resourceWorkspace: async () => {
+          await gate.wait();
+          return WORKSPACE;
+        },
+      }),
+    });
+    const { socket, closed } = await raw(listener.url, buildHostHello(HELLO));
+    socket.send(request(1, "query", "session.projection", { sessionId: SESSION }));
+    await until(() => gate.entered, "authorization to park");
+    lever.revoke();
+    gate.release();
+    await closed;
+    await settle();
+    expect(reads).toStrictEqual([]);
+  });
+
+  it("refuses a query whose grant lapsed silently while it was authorized", async () => {
+    const lever = credential(device, { watch: false });
+    const gate = barrier();
+    const { listener, reads } = await serve({
+      grants: { "device-token": lever.grant },
+      context: () => ({
+        resourceWorkspace: async () => {
+          await gate.wait();
+          return WORKSPACE;
+        },
+      }),
+    });
+    const { client } = connect(listener.url);
+    const answer = expectHostError(client.session.projection.query({ sessionId: SESSION }));
+    await until(() => gate.entered, "authorization to park");
+    lever.expire();
+    gate.release();
+    expect(await answer).toMatchObject({ code: "UNAUTHORIZED", reason: "credential-invalid" });
+    expect(reads).toStrictEqual([]);
+  });
+
+  it("never accepts a mutation parked in authorization when the socket was revoked and closed", async () => {
+    const lever = credential(device);
+    const gate = barrier();
+    const { listener, reads } = await serve({
+      grants: { "device-token": lever.grant },
+      context: () => ({
+        resourceWorkspace: async () => {
+          await gate.wait();
+          return WORKSPACE;
+        },
+      }),
+    });
+    const { socket, closed } = await raw(listener.url, buildHostHello(HELLO));
+    socket.send(
+      request(1, "mutation", "session.command", {
+        sessionId: SESSION,
+        commandId: "c",
+        command: { kind: "executor.interrupt" },
+      }),
+    );
+    await until(() => gate.entered, "authorization to park");
+    lever.revoke();
+    await closed;
+    await until(() => listener.connections === 0, "the socket to be gone");
+    // The parked call resumes only after its connection is gone.
+    gate.release();
+    await settle();
+    expect(reads).toStrictEqual([]);
+  });
+
+  it("withholds the answer of a call whose grant lapsed while its handler ran", async () => {
+    const lever = credential(device, { watch: false });
+    const gate = barrier();
+    const { listener, reads } = await serve({
+      grants: { "device-token": lever.grant },
+      context: (source) => ({
+        runtime: {
+          ...source.runtime,
+          projection: async (input) => {
+            await gate.wait();
+            return source.runtime.projection(input);
+          },
+        },
+      }),
+    });
+    const { client } = connect(listener.url);
+    const answer = expectHostError(client.session.projection.query({ sessionId: SESSION }));
+    await until(() => gate.entered, "the handler to park");
+    lever.expire();
+    gate.release();
+    expect(await answer).toMatchObject({ code: "UNAUTHORIZED", reason: "credential-invalid" });
+    // It ran (it was admitted when it started); what it read never left.
+    expect(reads).toStrictEqual(["projection"]);
+  });
+});
+
+describe("the connection budget (B2)", () => {
+  it("answers limit+1 unauthenticated peers 503 before any handshake, and frees a slot on close", async () => {
+    const { listener, events } = await serve({ limits: { maxConnections: 3 } });
+    const peers = [];
+    for (let index = 0; index < 3; index++) peers.push(await raw(listener.url, null));
+    expect(listener.connections).toBe(3);
+    expect(await refusedStatus(listener.url)).toBe(503);
+    expect(events).toContainEqual({ kind: "connection-refused", reason: "connection-limit" });
+    // Nothing was allocated for it: no connection was ever opened or closed.
+    expect(events.filter(({ kind }) => kind === "closed")).toHaveLength(0);
+    expect(listener.connections).toBe(3);
+    peers[0]!.socket.close();
+    await until(() => listener.connections === 2, "the slot to free");
+    const { client } = connect(listener.url);
+    expect((await client.protocol.welcome.query()).workspace.id).toBe(WORKSPACE);
+  });
+
+  it("holds a slot for a stalled peer only until the handshake deadline", async () => {
+    const { listener } = await serve({ limits: { maxConnections: 2, handshakeTimeoutMs: 60 } });
+    // One never speaks HTTP; one upgrades and never says hello.
+    const silent = connectTcp(listener.address.port, "127.0.0.1");
+    silent.on("error", () => {});
+    cleanups.push(() => silent.destroy());
+    await once(silent, "connect");
+    await raw(listener.url, null);
+    await until(() => listener.connections === 2, "both to hold a slot");
+    expect(await refusedStatus(listener.url)).toBe(503);
+    await until(() => listener.connections === 0, "both stalled peers to be dropped");
+    const { client } = connect(listener.url);
+    expect((await client.protocol.welcome.query()).workspace.id).toBe(WORKSPACE);
+  });
+
+  it("rate-limits accepts, and admits again once the bucket refills", async () => {
+    const { listener, events } = await serve({
+      limits: { handshakeBurst: 2, handshakesPerSecond: 20 },
+    });
+    await raw(listener.url, null);
+    await raw(listener.url, null);
+    expect(await refusedStatus(listener.url)).toBe(503);
+    expect(events).toContainEqual({ kind: "connection-refused", reason: "handshake-rate" });
+    await settle(120);
+    await raw(listener.url, null);
+    expect(listener.connections).toBe(3);
+  });
+
+  it("answers a request that is not an upgrade 426, and nothing else", async () => {
+    const { listener } = await serve();
+    const response = await fetch(`http://127.0.0.1:${listener.address.port}/`);
+    expect(response.status).toBe(426);
+  });
+
+  it("refuses limits that are not finite positive integers, or a frame bound outside its bounds", async () => {
+    expect(() => validateListenerLimits(DEFAULT_LISTENER_LIMITS)).not.toThrow();
+    for (const [limit, value] of [
+      ["maxConnections", 0],
+      ["maxSubscriptions", 1.5],
+      ["pingMs", Number.POSITIVE_INFINITY],
+      ["handshakesPerSecond", Number.NaN],
+    ] as const) {
+      expect(() => validateListenerLimits({ ...DEFAULT_LISTENER_LIMITS, [limit]: value })).toThrow(
+        `limit ${limit} must be a positive integer`,
+      );
+    }
+    expect(() =>
+      validateListenerLimits({ ...DEFAULT_LISTENER_LIMITS, maxFrameBytes: 4096 }),
+    ).toThrow("must exceed the 4096-byte frame envelope");
+    expect(() =>
+      validateListenerLimits({
+        ...DEFAULT_LISTENER_LIMITS,
+        maxOutboundBytes: DEFAULT_LISTENER_LIMITS.maxFrameBytes - 1,
+      }),
+    ).toThrow("maxFrameBytes must not exceed maxOutboundBytes");
+    await expect(serve({ limits: { maxConnections: 0 } })).rejects.toThrow("maxConnections");
+  });
+});
+
+describe("one frame is bounded (B3)", () => {
+  it("refuses a live frame past the frame bound, and holds nothing for a paused peer", async () => {
+    const send = WebSocket.prototype.send;
+    let largestSent = 0;
+    let largestBacklog = 0;
+    const spy = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
+      this: WebSocket,
+      ...args: Parameters<WebSocket["send"]>
+    ) {
+      const [data] = args;
+      largestSent = Math.max(largestSent, typeof data === "string" ? data.length : 0);
+      send.apply(this, args);
+      largestBacklog = Math.max(largestBacklog, this.bufferedAmount);
+    });
+    cleanups.push(() => spy.mockRestore());
+    const maxOutboundBytes = 128 * 1024;
+    const { listener, append, listeners } = await serve({
+      limits: { maxFrameBytes: 64 * 1024, maxOutboundBytes },
+    });
+    const { socket, messages } = await raw(listener.url, buildHostHello(HELLO));
+    socket.send(subscribeTo(1));
+    await until(() => listeners.size === 1, "the subscription to open");
+    // oxlint-disable-next-line no-underscore-dangle -- ws keeps its TCP socket here.
+    const tcp = (socket as unknown as { _socket: Socket })._socket;
+    tcp.pause();
+    await append(1, 8 * 1024 * 1024);
+    // Then silence: the stream ended on its own, and nothing near it was enqueued.
+    await until(() => listeners.size === 0 && listener.streams === 0, "the stream to end");
+    expect(largestSent).toBeLessThan(64 * 1024);
+    expect(largestBacklog).toBeLessThanOrEqual(maxOutboundBytes);
+    expect(listener.connections).toBe(1);
+    tcp.resume();
+    await until(() => messages.some((message) => reasonOf(message) !== undefined), "the refusal");
+    expect(messages.find((message) => reasonOf(message) !== undefined)).toMatchObject({
+      id: 1,
+      error: { data: { hostError: { code: "PAYLOAD_TOO_LARGE", reason: "response-too-large" } } },
+    });
+  });
+
+  it("refuses an answer past the frame bound, and the connection carries on", async () => {
+    const { listener, append } = await serve({ limits: { maxFrameBytes: 64 * 1024 } });
+    await append(3, 40 * 1024);
+    const { client } = connect(listener.url);
+    expect(
+      await expectHostError(client.session.snapshot.query({ sessionId: SESSION })),
+    ).toMatchObject({ code: "PAYLOAD_TOO_LARGE", reason: "response-too-large" });
+    await expect(client.session.projection.query({ sessionId: SESSION })).resolves.toBeDefined();
+  });
+
+  it("refuses a replay holding one frame past the frame bound, having read no further", async () => {
+    const { listener, append, listeners, handed } = await serve({
+      limits: { maxFrameBytes: 64 * 1024 },
+    });
+    await append(1, 100 * 1024);
+    await append(2);
+    const { client } = connect(listener.url);
+    const stream = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION }, handlers),
+    );
+    expect(await stream.ended).toMatchObject({
+      kind: "error",
+      error: { code: "PAYLOAD_TOO_LARGE", reason: "response-too-large" },
+    });
+    expect(stream.frames).toHaveLength(0);
+    expect(handed.count).toBe(1);
+    expect(listeners.size).toBe(0);
+  });
+
+  it("closes 4413, unsent, a frame the catalog could not see coming", async () => {
+    const { listener, events } = await serve({ limits: { maxFrameBytes: 8 * 1024 } });
+    const { socket, closed } = await raw(listener.url, buildHostHello(HELLO));
+    // The client's own request id comes back in the envelope.
+    socket.send(request("x".repeat(9000), "query", "protocol.welcome", null));
+    const [code, reason] = await closed;
+    expect([code, reason.toString()]).toStrictEqual([
+      HOST_PROTOCOL_CLOSE_CODES.responseTooLarge,
+      "response-too-large",
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ kind: "oversized-frame" }));
+  });
+
+  it("judges the backlog before a send and again after it", () => {
+    const sent: unknown[] = [];
+    const reports: string[] = [];
+    const socket: { -readonly [Key in keyof BoundedSocket]: BoundedSocket[Key] } & {
+      closed: number | null;
+      terminated: boolean;
+    } = {
+      bufferedAmount: 0,
+      closed: null,
+      terminated: false,
+      send(data) {
+        sent.push(data);
+        // The frame's header tips the backlog past what its payload alone would.
+        this.bufferedAmount += (data as { length: number }).length + 4;
+      },
+      terminate() {
+        this.terminated = true;
+      },
+      close(code) {
+        this.closed = code;
+      },
+    };
+    boundOutboundSends(
+      socket,
+      { maxFrameBytes: 32, maxOutboundBytes: 40 },
+      {
+        shed: (unsent) => reports.push(`shed ${unsent}`),
+        oversized: (bytes) => reports.push(`oversized ${bytes}`),
+      },
+    );
+    socket.send(new Uint8Array(40));
+    expect([socket.closed, sent]).toStrictEqual([HOST_PROTOCOL_CLOSE_CODES.responseTooLarge, []]);
+    socket.send("x".repeat(30));
+    expect(socket.terminated).toBe(false);
+    // 34 held, 6 more fit by payload; the header takes it to 44, past 40.
+    socket.send(Buffer.alloc(6));
+    expect(socket.terminated).toBe(true);
+    socket.terminated = false;
+    // Past the bound before it is sent: never sent at all.
+    socket.send("y");
+    expect(socket.terminated).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(reports).toStrictEqual(["oversized 40", "shed 44", "shed 44"]);
+  });
+});
+
+describe("subscription bookkeeping is bounded (B4)", () => {
+  it("retains nothing for thousands of forbidden or completed subscriptions", async () => {
+    // One credential, two connections: each watches it.
+    let valid = true;
+    const watchers = new Set<() => void>();
+    const { listener, append, listeners, events } = await serve({
+      verifier: {
+        verify: () => ({
+          actor: device,
+          current: () => valid,
+          watch: (revoked) => {
+            watchers.add(revoked);
+            return () => watchers.delete(revoked);
+          },
+        }),
+      },
+    });
+    const forbidden = await raw(listener.url, buildHostHello({ ...HELLO, features: ["sessions"] }));
+    for (let id = 1; id <= 2000; id++) forbidden.socket.send(subscribeTo(id));
+    await until(() => forbidden.messages.length >= 2000, "2,000 refusals");
+    expect(forbidden.messages.every((message) => reasonOf(message) === "verb-refused")).toBe(true);
+    expect(listener.streams).toBe(0);
+
+    // Completed with an error: refused past the replay bound.
+    await append(SUBSCRIPTION_REPLAY_BOUNDS.events + 1);
+    const resumed = await raw(listener.url, buildHostHello(HELLO));
+    for (let id = 1; id <= 300; id++) resumed.socket.send(subscribeTo(id));
+    await until(
+      () => resumed.messages.filter((message) => reasonOf(message) !== undefined).length >= 300,
+      "300 resnapshot refusals",
+    );
+    // Completed by the client: opened and stopped, in batches under the budget.
+    for (let batch = 0; batch < 5; batch++) {
+      const ids = Array.from({ length: 50 }, (_, index) => `stop-${batch}-${index}`);
+      const before = resumed.messages.length;
+      for (const id of ids)
+        resumed.socket.send(subscribeTo(id, { sessionId: SESSION, afterSequence: 4097 }));
+      await until(() => resumed.messages.length >= before + 50, "the batch to start");
+      for (const id of ids)
+        resumed.socket.send(JSON.stringify({ id, method: "subscription.stop" }));
+      await until(() => resumed.messages.length >= before + 100, "the batch to stop");
+    }
+    await until(() => listener.streams === 0 && listeners.size === 0, "nothing retained");
+    valid = false;
+    for (const revoke of watchers) revoke();
+    await until(() => listener.connections === 0, "both closed");
+    expect(events.filter(({ kind }) => kind === "revoked")).toStrictEqual([
+      expect.objectContaining({ streams: 0 }),
+      expect.objectContaining({ streams: 0 }),
+    ]);
+  });
+
+  it("refuses the subscription past the budget, frees its slot on stop, and revocation ends them all", async () => {
+    const lever = credential(device);
+    const { listener, listeners } = await serve({
+      grants: { "device-token": lever.grant },
+      limits: { maxSubscriptions: 3 },
+    });
+    const { client } = connect(listener.url);
+    const subscribe = () =>
+      recordSubscription((handlers) =>
+        client.session.subscribe.subscribe({ sessionId: SESSION }, handlers),
+      );
+    const open = [subscribe(), subscribe(), subscribe()];
+    for (const stream of open) await stream.started;
+    expect(await subscribe().ended).toMatchObject({
+      kind: "error",
+      error: { code: "TOO_MANY_REQUESTS", reason: "subscription-limit" },
+    });
+    expect([listener.streams, listeners.size]).toStrictEqual([3, 3]);
+    open[0]!.unsubscribe();
+    await until(() => listener.streams === 2, "the slot to free");
+    const again = subscribe();
+    await again.started;
+    lever.revoke();
+    for (const stream of [...open.slice(1), again]) {
+      expect(await stream.ended).toMatchObject({
+        kind: "error",
+        error: { code: "UNAUTHORIZED", reason: "credential-invalid" },
+      });
+    }
+    await until(() => listener.streams === 0 && listeners.size === 0, "everything released");
+  });
+
+  it("answers a subscription sent while the credential was still being verified, on revocation", async () => {
+    const lever = credential(device);
+    const gate = barrier();
+    const { listener, listeners } = await serve({
+      verifier: {
+        verify: async () => {
+          await gate.wait();
+          return lever.grant;
+        },
+      },
+    });
+    const { client } = connect(listener.url);
+    const stream = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION }, handlers),
+    );
+    await until(() => gate.entered, "verification to park");
+    gate.release();
+    await stream.started;
+    lever.revoke();
+    expect(await stream.ended).toMatchObject({
+      kind: "error",
+      error: { code: "UNAUTHORIZED", reason: "credential-invalid" },
+    });
+    await until(() => listeners.size === 0, "the runtime listener to go");
+  });
+});
+
+describe("a refused replay is never buffered (B5)", () => {
+  it("stops consuming at the first frame past the byte bound, having staged no more than it", async () => {
+    const { listener, append, listeners, handed } = await serve();
+    const padding = 512 * 1024;
+    await append(40, padding);
+    const { client } = connect(listener.url);
+    const stream = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION }, handlers),
+    );
+    expect(await stream.ended).toMatchObject({
+      kind: "error",
+      error: { code: "PRECONDITION_FAILED", reason: "subscription-resnapshot-required" },
+    });
+    expect(stream.frames).toHaveLength(0);
+    // 31 frames of a little over 512 KiB fit 16 MiB; the 32nd is refused, and
+    // the source hands over nothing after it.
+    const admitted = Math.floor(SUBSCRIPTION_REPLAY_BOUNDS.bytes / (padding + 1024));
+    expect(handed.count).toBe(admitted + 1);
+    expect(handed.count).toBeLessThan(40);
+    await until(() => listeners.size === 0 && listener.streams === 0, "nothing left behind");
+  });
+
+  it("stages nothing past the refusal even from a source that ignores its cancellation", async () => {
+    const { listener, append, listeners, handed } = await serve({
+      ignoresCancel: true,
+      limits: { maxFrameBytes: 64 * 1024 },
+    });
+    await append(1, 100 * 1024);
+    await append(3);
+    const { client } = connect(listener.url);
+    const stream = recordSubscription((handlers) =>
+      client.session.subscribe.subscribe({ sessionId: SESSION }, handlers),
+    );
+    expect(await stream.ended).toMatchObject({
+      kind: "error",
+      error: { reason: "response-too-large" },
+    });
+    // Handed every frame, sent none of them.
+    expect(handed.count).toBe(4);
+    expect(stream.frames).toHaveLength(0);
+    await until(() => listeners.size === 0, "the listener to go");
+  });
+});
+
+describe("features advertise; actor policy enforces (security N1)", () => {
+  it("never lets a granted feature reach an operation the actor's policy refuses", async () => {
+    const sessionActor: HostActor = { kind: "session", sessionId: SESSION, workspaceId: WORKSPACE };
+    const { listener, reads } = await serve({
+      grants: { "session-token": credential(sessionActor).grant },
+    });
+    const { client } = connect(listener.url, {
+      credential: "session-token",
+      features: ["session.read"],
+    });
+    expect((await client.protocol.welcome.query()).features).toStrictEqual(["session.read"]);
+    expect(
+      await expectHostError(client.session.list.query({ projectId: WORKSPACE })),
+    ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+    expect(reads).toStrictEqual([]);
   });
 });

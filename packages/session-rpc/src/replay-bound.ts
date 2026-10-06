@@ -31,14 +31,16 @@ export function replayExceedsEvents(
 }
 
 /**
- * Counts what a source delivers while it replays (every durable frame handed
+ * Admits what a source delivers while it replays (every durable frame handed
  * over before its subscribe call returns), in events and in UTF-8 bytes of
- * the JSON the wire will carry. Transient emissions are not history and are
- * not counted.
+ * the JSON the wire will carry, BEFORE the frame is staged anywhere: the
+ * first frame that would take either past its bound is refused, and the
+ * caller stops staging, discards what it staged and cancels the source. So
+ * no more than the bounds is ever held for one resume. Transient emissions
+ * are not history and are not counted.
  */
 export class ReplayMeter {
   readonly #bounds: SubscriptionReplayBounds;
-  readonly #encoder = new TextEncoder();
   #events = 0;
   #bytes = 0;
   #replaying = true;
@@ -47,19 +49,27 @@ export class ReplayMeter {
     this.#bounds = bounds;
   }
 
-  /** One emission the source delivered; `durable` is whether it is a history frame. */
-  measure(emission: unknown, durable: boolean): void {
-    if (!this.#replaying || !durable) return;
+  /**
+   * Whether one more emission of `bytes` may be staged; `durable` is whether
+   * it is a history frame. Counted only when admitted.
+   */
+  admit(bytes: number, durable: boolean): boolean {
+    if (!this.#replaying || !durable) return true;
+    if (this.#events + 1 > this.#bounds.events || this.#bytes + bytes > this.#bounds.bytes) {
+      return false;
+    }
     this.#events += 1;
-    this.#bytes += this.#encoder.encode(JSON.stringify(emission)).byteLength;
+    this.#bytes += bytes;
+    return true;
+  }
+
+  /** Whether the replay is still being delivered. */
+  get replaying(): boolean {
+    return this.#replaying;
   }
 
   /** The replay is over: what arrives from now on is live. */
   end(): void {
     this.#replaying = false;
-  }
-
-  get exceeded(): boolean {
-    return this.#events > this.#bounds.events || this.#bytes > this.#bounds.bytes;
   }
 }

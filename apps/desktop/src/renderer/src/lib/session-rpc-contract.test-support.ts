@@ -152,6 +152,7 @@ export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRoute
         router: createSessionRouter(),
         bind: { host: "127.0.0.1", port: 0 },
         host: { id: HARNESS_HOST, version: "contract" },
+        features: HOST_V1_FEATURES,
         workspace: (id) => (id === actor.workspaceId ? { id, epoch: 1 } : null),
         verifier,
         context: () => ({

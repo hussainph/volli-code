@@ -166,7 +166,13 @@ export function startHostdProtocolListener(
 function logListenerEvent(logger: HostdLogger, event: HostProtocolListenerEvent): void {
   const { kind, ...fields } = event;
   const line = `host protocol: ${kind}`;
-  if (kind === "slow-peer" || kind === "revoked") logger.warn(line, fields);
-  else if (kind === "handshake-refused" || kind === "hello-timeout") logger.info(line, fields);
+  if (
+    kind === "slow-peer" ||
+    kind === "revoked" ||
+    kind === "oversized-frame" ||
+    kind === "connection-refused"
+  ) {
+    logger.warn(line, fields);
+  } else if (kind === "handshake-refused" || kind === "hello-timeout") logger.info(line, fields);
   else logger.debug(line, fields);
 }

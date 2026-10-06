@@ -49,6 +49,7 @@ import { z } from "zod";
 
 import {
   HostProcedureError,
+  jsonByteLength,
   PROJECT_RESOURCE,
   type CatalogCallerContext,
   type CatalogMismatch,
@@ -756,6 +757,10 @@ const SESSION_SOURCE_FAILURE_MESSAGE =
  * because resuming from the last event id is the only thing the caller can do.
  */
 const SESSION_OVERFLOW_MESSAGE = "Session subscription fell behind; resume from the last event id";
+const SESSION_FRAME_TOO_LARGE_MESSAGE =
+  "A Session stream frame is larger than this connection's frame bound; read the Session in bounded pages instead";
+/** Frames one Session stream may hold unsent to its consumer, on every door. */
+const SESSION_STREAM_QUEUE_CAPACITY = 4_096;
 const DIAGNOSTICS_OVERFLOW_MESSAGE =
   "Diagnostics subscription fell behind; resume from the last event id";
 
@@ -1055,20 +1060,62 @@ export function createSessionRouter() {
           throw resnapshotRequired();
         }
         const replay = bounds === undefined ? null : new ReplayMeter(bounds);
-        const queue = new AsyncQueue<RendererSessionStreamEmission>();
+        const frameBound = ctx.maxResponseBytes;
+        // Bounded in bytes too on a bounded door: twice the replay bound holds a
+        // whole admitted replay and the live frames that arrive behind it.
+        const queue = new AsyncQueue<RendererSessionStreamEmission>(
+          SESSION_STREAM_QUEUE_CAPACITY,
+          bounds === undefined ? undefined : 2 * bounds.bytes,
+        );
         const sourceFailure: { current: { error: unknown } | null } = { current: null };
+        // What this stream ends with instead of a frame it refused to stage:
+        // resnapshot past the replay bounds, response-too-large past the frame
+        // bound. Set once; the source is cancelled with it.
+        const refused: { current: HostProcedureError | null } = { current: null };
+        // Cancels the runtime's side even while its subscribe call is still
+        // replaying: a refused replay is not read any further.
+        const source = new AbortController();
+        const abort = (): void => {
+          source.abort();
+          queue.close();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
         const unsubscribe = await ctx.runtime.subscribe(
-          { sessionId: input.sessionId, afterSequence },
+          {
+            sessionId: input.sessionId,
+            afterSequence,
+            ...(replay === null ? {} : { signal: source.signal }),
+          },
           // Live emissions pass through untouched: `rendererFrame` exists to
           // keep runtime identity and recovery locators behind the server
           // boundary, and no transient arm carries either. Asked as the
           // negation of the durable arm so a third transient arm needs no
           // edit here.
           (emission) => {
+            if (refused.current !== null) return;
             const durable = isSessionStreamFrame(emission);
             const sent = durable ? rendererFrame(emission) : emission;
-            replay?.measure(sent, durable);
-            queue.push(sent);
+            if (replay === null) {
+              queue.push(sent);
+              return;
+            }
+            // Judged before it is staged: nothing past a bound is ever held.
+            const bytes = jsonByteLength(sent);
+            if (frameBound !== undefined && bytes > frameBound) {
+              refused.current = new HostProcedureError(
+                "response-too-large",
+                SESSION_FRAME_TOO_LARGE_MESSAGE,
+              );
+            } else if (!replay.admit(bytes, durable)) {
+              refused.current = resnapshotRequired();
+            } else {
+              queue.push(sent, bytes);
+              return;
+            }
+            // A refused replay sends nothing of itself; a live refusal still
+            // drains what came before it.
+            queue.close(replay.replaying);
+            source.abort();
           },
           // The runtime's drain died behind this subscription. Ended like an
           // overflow — buffered contiguous frames still drain, then the
@@ -1082,19 +1129,17 @@ export function createSessionRouter() {
           },
         );
         // The runtime replays history before its subscribe call returns, so
-        // everything measured so far was replay: past the bounds, nothing of
-        // it is sent.
+        // a refusal so far was a replay's: nothing of it is sent.
         replay?.end();
-        if (replay?.exceeded === true) {
+        if (refused.current !== null) {
+          signal?.removeEventListener("abort", abort);
           unsubscribe();
-          throw resnapshotRequired();
+          throw refused.current;
         }
         if (signal?.aborted) {
           unsubscribe();
           return;
         }
-        const abort = () => queue.close();
-        signal?.addEventListener("abort", abort, { once: true });
         try {
           // A transient emission is tracked by the durable sequence it was
           // emitted beside, never by a suffixed id: `sseCursor` rejects one on
@@ -1114,6 +1159,9 @@ export function createSessionRouter() {
           // A consumer that tears the iterator down instead resumes at the
           // `yield` with a return completion and never reaches this line —
           // an overflow the client already walked away from stays a diagnostic.
+          // A frame refused after the replay ended the stream, once what
+          // came before it drained.
+          if (refused.current !== null) throw refused.current;
           if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
           // A source failure ends the same way an overflow does, and for the
           // same reason: whatever this stream still owed its consumer is now
@@ -1362,16 +1410,26 @@ export type SessionRouterJsonSafety = AssertNever<JsonUnsafeProcedures<AppRouter
 
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];
+  /** Each held value's size, beside it, when the queue is bounded in bytes. */
+  readonly #sizes: number[] = [];
   readonly #waiters: ((result: IteratorResult<T>) => void)[] = [];
   readonly #capacity: number;
+  readonly #maxBytes: number;
+  #bytes = 0;
   #closed = false;
   #overflowed = false;
 
-  constructor(capacity = 4_096) {
+  /**
+   * `capacity` bounds the values held; `maxBytes`, when given, bounds the
+   * sizes their pushes declared too, so a few huge values overflow it as
+   * surely as many small ones.
+   */
+  constructor(capacity = 4_096, maxBytes = Number.POSITIVE_INFINITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new Error("AsyncQueue capacity must be a positive integer");
     }
     this.#capacity = capacity;
+    this.#maxBytes = maxBytes;
   }
 
   /**
@@ -1386,12 +1444,16 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     return this.#overflowed;
   }
 
-  push(value: T): void {
+  /** `bytes` is what this value counts against `maxBytes`. */
+  push(value: T, bytes = 0): void {
     if (this.#closed) return;
     const waiter = this.#waiters.shift();
     if (waiter) waiter({ done: false, value });
-    else if (this.#values.length < this.#capacity) this.#values.push(value);
-    else {
+    else if (this.#values.length < this.#capacity && this.#bytes + bytes <= this.#maxBytes) {
+      this.#values.push(value);
+      this.#sizes.push(bytes);
+      this.#bytes += bytes;
+    } else {
       // Closed without discarding: what the queue did hold is still contiguous
       // history the consumer can use, and the gap only starts after it. Dropping
       // it would widen the hole the consumer then has to resume across.
@@ -1403,12 +1465,19 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   close(discard = true): void {
     if (this.#closed) return;
     this.#closed = true;
-    if (discard) this.#values.length = 0;
+    if (discard) {
+      this.#values.length = 0;
+      this.#sizes.length = 0;
+      this.#bytes = 0;
+    }
     for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
   }
 
   async next(): Promise<IteratorResult<T>> {
-    if (this.#values.length > 0) return { done: false, value: this.#values.shift()! };
+    if (this.#values.length > 0) {
+      this.#bytes -= this.#sizes.shift()!;
+      return { done: false, value: this.#values.shift()! };
+    }
     if (this.#closed) return { done: true, value: undefined };
     return new Promise((resolve) => this.#waiters.push(resolve));
   }
