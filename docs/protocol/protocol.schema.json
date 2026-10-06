@@ -124,10 +124,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
-            "receipt"
+            "receipt",
+            "throughCursor"
           ],
           "type": "object"
         },
@@ -1159,10 +1163,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "comment"
           ],
           "type": "object"
@@ -1272,6 +1280,9 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             },
             "ticket": {
               "additionalProperties": false,
@@ -1401,6 +1412,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "ticket"
           ],
           "type": "object"
@@ -1455,10 +1467,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
-            "receipt"
+            "receipt",
+            "throughCursor"
           ],
           "type": "object"
         },
@@ -1647,6 +1663,9 @@
               ],
               "type": "object"
             },
+            "throughCursor": {
+              "type": "string"
+            },
             "tickets": {
               "items": {
                 "additionalProperties": false,
@@ -1774,6 +1793,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "tickets"
           ],
           "type": "object"
@@ -1870,10 +1890,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
-            "receipt"
+            "receipt",
+            "throughCursor"
           ],
           "type": "object"
         },
@@ -2164,10 +2188,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "label"
           ],
           "type": "object"
@@ -2233,6 +2261,9 @@
               ],
               "type": "object"
             },
+            "throughCursor": {
+              "type": "string"
+            },
             "ticket": {
               "additionalProperties": false,
               "properties": {
@@ -2361,6 +2392,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "ticket"
           ],
           "type": "object"
@@ -2425,6 +2457,9 @@
               ],
               "type": "object"
             },
+            "throughCursor": {
+              "type": "string"
+            },
             "ticket": {
               "additionalProperties": false,
               "properties": {
@@ -2553,6 +2588,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "ticket"
           ],
           "type": "object"
@@ -2914,10 +2950,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "project"
           ],
           "type": "object"
@@ -3260,10 +3300,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "project"
           ],
           "type": "object"
@@ -4008,6 +4052,9 @@
               ],
               "type": "object"
             },
+            "throughCursor": {
+              "type": "string"
+            },
             "ticket": {
               "additionalProperties": false,
               "properties": {
@@ -4136,6 +4183,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "ticket"
           ],
           "type": "object"
@@ -4242,10 +4290,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "comment"
           ],
           "type": "object"
@@ -4595,10 +4647,14 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             }
           },
           "required": [
             "receipt",
+            "throughCursor",
             "project"
           ],
           "type": "object"
@@ -4687,6 +4743,9 @@
                 "replayed"
               ],
               "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
             },
             "ticket": {
               "additionalProperties": false,
@@ -4816,6 +4875,7 @@
           },
           "required": [
             "receipt",
+            "throughCursor",
             "ticket"
           ],
           "type": "object"

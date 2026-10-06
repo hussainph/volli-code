@@ -69,6 +69,27 @@ export function replayBoardCommand(
 }
 
 /**
+ * The recorded answer of a command whose resource is gone, so its Workspace
+ * can no longer be read off it: a repeated delete. Looked up by its id and
+ * operation in whichever Workspace recorded it; the intent must still match.
+ * Only the desktop's own window reaches this (it owns every Workspace): a
+ * network caller naming a resource that is gone is refused by the router
+ * before any handler runs.
+ */
+export function replayOrphanedBoardCommand(
+  db: Database.Database,
+  key: Omit<BoardCommandKey, "workspaceId">,
+): { readonly reply: unknown; readonly workspaceId: string } | undefined {
+  const row = prepared<[string, string], { workspace_id: string }>(
+    db,
+    "SELECT workspace_id FROM board_command_receipts WHERE command_id = ? AND operation = ? LIMIT 1",
+  ).get(key.commandId, key.operation);
+  if (row === undefined) return undefined;
+  const { reply } = replayBoardCommand(db, { ...key, workspaceId: row.workspace_id })!;
+  return { reply, workspaceId: row.workspace_id };
+}
+
+/**
  * Records an accepted command's answer. Call it inside the transaction that
  * committed the effect, so the two are durable together; it also drops
  * receipts past retention, an indexed range delete.

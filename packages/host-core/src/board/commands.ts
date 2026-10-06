@@ -90,16 +90,22 @@ import type { BusyWorktreeSites } from "../worktree/activity";
 import { getWorktreeSnapshots } from "../worktree/snapshot";
 import type { WorktreePorts } from "../worktree/types";
 import type { BoardChangeFeed, BoardFeedBatch } from "./change-feed";
-import { recordBoardCommand, replayBoardCommand, type BoardCommandKey } from "./receipts";
+import { recordBoardCommand, replayBoardCommand, replayOrphanedBoardCommand } from "./receipts";
 
 /** A write's optional idempotency key: the board router always sends one, legacy IPC never. */
 export interface BoardCommandId {
   readonly commandId?: string;
 }
 
-/** What every board write answers besides its row: its receipt, when it carried a `commandId`. */
+/**
+ * What every board write answers besides its row: its receipt, when it
+ * carried a `commandId`, and the Workspace feed's cursor through which its
+ * effect is stamped (as `throughSequence` is a Session's, HP § Commands): a
+ * Client that has applied the feed through it holds the write (T5).
+ */
 export interface BoardWriteResult {
   readonly receipt: BoardCommandReceipt | null;
+  readonly throughCursor: string;
 }
 
 export interface BoardProjectInput {
@@ -275,6 +281,29 @@ const SIGNALS_UNAVAILABLE = "Ticket signals are unavailable on this host";
  */
 const materializingWorktrees = new Set<string>();
 
+function withWorkspace(
+  prior: { readonly reply: unknown } | undefined,
+  workspaceId: string,
+): { readonly reply: unknown; readonly workspaceId: string } | undefined {
+  return prior === undefined ? undefined : { reply: prior.reply, workspaceId };
+}
+
+function receiptOf(commandId: string | undefined, replayed: boolean): BoardCommandReceipt | null {
+  return commandId === undefined ? null : { commandId, status: "completed", replayed };
+}
+
+/** The labels a ticket names, as rows: a write that named a new label created it. */
+function labelChanges(db: Database.Database, ticket: Ticket, commandId?: string): BoardChange[] {
+  return listTicketLabels(db, ticket.id).map((label): BoardChange => ({
+    kind: "label",
+    op: "upsert",
+    id: label.id,
+    projectId: label.projectId,
+    label,
+    commandId,
+  }));
+}
+
 /** A roster row: the ticket without its body (VC-387). */
 export function ticketSummary(ticket: Ticket): TicketSummary {
   const { body: _body, ...summary } = ticket;
@@ -299,40 +328,60 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     feed.untapped(() => options.events.publish("data-changed", change));
   };
 
-  const receiptOf = (commandId: string | undefined, replayed: boolean) =>
-    commandId === undefined ? null : ({ commandId, status: "completed", replayed } as const);
-
   /**
    * One recorded write. A repeated `commandId` with the same intent answers
    * its recorded value and runs nothing; otherwise `write` runs in one
    * transaction with the receipt, inside the ticket's wake when it names one,
-   * and `committed` publishes after COMMIT.
+   * and `committed` publishes after COMMIT. `workspaceId` null means the
+   * resource is gone: only a repeat of the command that removed it can still
+   * answer, from its receipt; anything else runs `write`, which refuses.
    */
   function recorded<Value>(
     spec: {
       readonly operation: string;
-      readonly workspaceId: string;
+      readonly workspaceId: string | null;
       readonly input: BoardCommandId;
       readonly wakeTicketId?: string;
     },
     write: (db: Database.Database) => Value,
-    committed: (value: Value) => void,
-  ): { receipt: BoardCommandReceipt | null; value: Value } {
+    committed: (value: Value, workspaceId: string) => void,
+  ): { receipt: BoardCommandReceipt | null; value: Value; throughCursor: string } {
     const db = board();
     const { commandId, ...intent } = spec.input;
-    const key: BoardCommandKey | null =
-      commandId === undefined
-        ? null
-        : { workspaceId: spec.workspaceId, commandId, operation: spec.operation, intent };
-    if (key !== null) {
-      const prior = replayBoardCommand(db, key);
-      if (prior !== undefined)
-        return { receipt: receiptOf(commandId, true), value: prior.reply as Value };
+    if (commandId !== undefined) {
+      const prior: { readonly reply: unknown; readonly workspaceId: string } | undefined =
+        spec.workspaceId === null
+          ? replayOrphanedBoardCommand(db, { commandId, operation: spec.operation, intent })
+          : withWorkspace(
+              replayBoardCommand(db, {
+                workspaceId: spec.workspaceId,
+                commandId,
+                operation: spec.operation,
+                intent,
+              }),
+              spec.workspaceId,
+            );
+      if (prior !== undefined) {
+        return {
+          receipt: receiptOf(commandId, true),
+          value: prior.reply as Value,
+          throughCursor: feed.cursor(prior.workspaceId),
+        };
+      }
     }
+    // A resource that is gone refuses inside `write`, with today's message.
+    const workspaceId = spec.workspaceId ?? "";
     const transact = (): Value =>
       withTransaction(db, () => {
         const value = write(db);
-        if (key !== null) recordBoardCommand(db, key, value, now());
+        if (commandId !== undefined) {
+          recordBoardCommand(
+            db,
+            { workspaceId, commandId, operation: spec.operation, intent },
+            value,
+            now(),
+          );
+        }
         // Every board write is a synchronous repository write (VC-551).
         return value as Synchronous<Value>;
       });
@@ -340,13 +389,18 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       spec.wakeTicketId === undefined
         ? transact()
         : withTicketWake(db, spec.wakeTicketId, transact);
-    committed(value);
-    return { receipt: receiptOf(commandId, false), value };
+    committed(value, workspaceId);
+    return {
+      receipt: receiptOf(commandId, false),
+      value,
+      throughCursor: feed.cursor(workspaceId),
+    };
   }
 
   /** The Workspace a ticket belongs to, for its receipt key; "" when it is not there (the write refuses). */
-  const workspaceOfTicket = (ticketId: string): string =>
-    getTicketRow(board(), ticketId)?.project_id ?? "";
+  /** The Workspace a ticket belongs to, for its receipt key; null when it is gone. */
+  const workspaceOfTicket = (ticketId: string): string | null =>
+    getTicketRow(board(), ticketId)?.project_id ?? null;
 
   const ticketChanges = (
     ticket: Ticket,
@@ -372,24 +426,17 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     },
   ];
 
-  /** The labels a ticket names, as rows: a write that named a new label created it. */
-  const labelChanges = (db: Database.Database, ticket: Ticket, commandId?: string): BoardChange[] =>
-    listTicketLabels(db, ticket.id).map((label) => ({
-      kind: "label",
-      op: "upsert",
-      id: label.id,
-      projectId: label.projectId,
-      label,
-      ...(commandId === undefined ? {} : { commandId }),
-    }));
-
   const projectWrite = (
     operation: string,
     input: BoardProjectInput & BoardCommandId,
     call: HandlerCall,
     write: (db: Database.Database) => Project | undefined,
   ) => {
-    const { receipt, value: project } = recorded(
+    const {
+      receipt,
+      throughCursor,
+      value: project,
+    } = recorded(
       { operation, workspaceId: input.projectId, input },
       (db) => {
         const updated = write(db);
@@ -410,7 +457,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
         announce(call, { projectId: updated.id });
       },
     );
-    return { receipt, project };
+    return { receipt, throughCursor, project };
   };
 
   const ticketWrite = (
@@ -420,7 +467,11 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     write: (db: Database.Database) => Ticket,
     withLabels = false,
   ) => {
-    const { receipt, value: ticket } = recorded(
+    const {
+      receipt,
+      throughCursor,
+      value: ticket,
+    } = recorded(
       {
         operation,
         workspaceId: workspaceOfTicket(input.ticketId),
@@ -436,7 +487,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
         announce(call, { ticketId: written.id, projectId: written.projectId, kind: "ticket" });
       },
     );
-    return { receipt, ticket };
+    return { receipt, throughCursor, ticket };
   };
 
   /** Drops a finished ticket's saved tool output (VC-469); nobody asked, so a failure is logged. */
@@ -449,9 +500,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     }
   };
 
-  const commentWorkspace = (commentId: string): string => {
+  const commentWorkspace = (commentId: string): string | null => {
     const comment = getComment(board(), commentId);
-    return comment === undefined ? "" : workspaceOfTicket(comment.ticketId);
+    return comment === undefined ? null : workspaceOfTicket(comment.ticketId);
   };
 
   return {
@@ -541,7 +592,11 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
 
     "board.createTicket": (input, call) => {
       const ticketId = randomUUID();
-      const { receipt, value: ticket } = recorded(
+      const {
+        receipt,
+        throughCursor,
+        value: ticket,
+      } = recorded(
         {
           operation: "board.createTicket",
           workspaceId: input.projectId,
@@ -573,44 +628,36 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           announce(call, { ticketId: created.id, projectId: created.projectId, kind: "ticket" });
         },
       );
-      return { receipt, ticket };
+      return { receipt, throughCursor, ticket };
     },
 
     "board.moveTickets": (input, call) => {
       const db = board();
       const { commandId, ...move } = input;
-      if (commandId !== undefined) {
-        const prior = replayBoardCommand(db, {
-          workspaceId: input.projectId,
-          commandId,
-          operation: "board.moveTickets",
-          intent: move,
-        });
-        // A repeated move changes nothing: it answers the board as it stands.
-        if (prior !== undefined) {
-          return {
-            receipt: receiptOf(commandId, true),
-            tickets: listTicketsByProject(db, input.projectId),
-          };
-        }
+      const key = (id: string) => ({
+        workspaceId: input.projectId,
+        commandId: id,
+        operation: "board.moveTickets",
+        intent: move,
+      });
+      // A repeated move changes nothing: it answers the board as it stands.
+      if (commandId !== undefined && replayBoardCommand(db, key(commandId)) !== undefined) {
+        return {
+          receipt: receiptOf(commandId, true),
+          throughCursor: feed.cursor(input.projectId),
+          tickets: listTicketsByProject(db, input.projectId),
+        };
       }
-      const answer = (tickets: Ticket[]) => {
-        if (commandId !== undefined) {
-          recordBoardCommand(
-            db,
-            {
-              workspaceId: input.projectId,
-              commandId,
-              operation: "board.moveTickets",
-              intent: move,
-            },
-            null,
-            now(),
-          );
-        }
-        return { receipt: receiptOf(commandId, false), tickets };
-      };
       const moved = movedWithFeed(db, move, call, commandId);
+      // The move committed in this turn, before any interrupt it awaits: its
+      // receipt is recorded now, so a retry arriving during that wait replays.
+      if (commandId !== undefined) recordBoardCommand(db, key(commandId), null, now());
+      const throughCursor = feed.cursor(input.projectId);
+      const answer = (tickets: Ticket[]) => ({
+        receipt: receiptOf(commandId, false),
+        throughCursor,
+        tickets,
+      });
       return moved instanceof Promise ? moved.then(answer) : answer(moved);
     },
 
@@ -641,6 +688,8 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       if (switchedOn && result.receipt?.replayed !== true) {
         return materialize(db, ticket, call, input.commandId).then((materialized) => ({
           receipt: result.receipt,
+          // Through the materialization's own stamp, not just the field write's.
+          throughCursor: feed.cursor(materialized.projectId),
           ticket: materialized,
         }));
       }
@@ -658,6 +707,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           { ticketId: ticket.id, projectId: ticket.projectId, kind: "worktree" },
           true,
         );
+        return { ...result, throughCursor: feed.cursor(ticket.projectId) };
       }
       return result;
     },
@@ -674,10 +724,13 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     "board.archiveTicket": (input, call) => {
       const db = board();
       const row = getTicketRow(db, input.ticketId);
-      const { receipt } = recorded(
+      // Today's refusal, before anything is read for the receipt.
+      if (row === undefined) throw new Error("Unknown ticket");
+      const projectId = row.project_id;
+      const { receipt, throughCursor } = recorded(
         {
           operation: "board.archiveTicket",
-          workspaceId: row?.project_id ?? "",
+          workspaceId: projectId,
           input,
           wakeTicketId: input.ticketId,
         },
@@ -696,13 +749,12 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
               detachedWork: options.detachedWork,
               busySites: options.busyWorktreeSites,
               onMutation: (change) => {
-                if (change.ticketId === undefined || change.projectId === undefined) return;
-                feed.stamp(change.projectId, [
+                feed.stamp(projectId, [
                   {
                     kind: "ticket",
                     op: "upsert",
-                    id: change.ticketId,
-                    projectId: change.projectId,
+                    id: input.ticketId,
+                    projectId,
                     checkoutMoved: true,
                   },
                 ]);
@@ -710,22 +762,21 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
               },
             },
             input.ticketId,
-            row?.project_id,
+            projectId,
           );
-          if (row === undefined) return;
-          feed.stamp(row.project_id, [
+          feed.stamp(projectId, [
             {
               kind: "ticket",
               op: "delete",
               id: input.ticketId,
-              projectId: row.project_id,
+              projectId,
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             },
           ]);
-          announce(call, { ticketId: input.ticketId, projectId: row.project_id, kind: "ticket" });
+          announce(call, { ticketId: input.ticketId, projectId, kind: "ticket" });
         },
       );
-      return { receipt };
+      return { receipt, throughCursor };
     },
 
     "board.unarchiveTicket": (input, call) =>
@@ -733,38 +784,44 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
         unarchiveTicketCommand(db, input.ticketId, { now: now(), actor: call.actor }),
       ),
 
+    // A repeat of a delete finds its ticket gone: it answers from its receipt
+    // (`recorded`, with no Workspace), and anything else refuses as today.
     "board.deleteTicket": (input, call) => {
       const db = board();
       const row = getTicketRow(db, input.ticketId);
-      const { receipt } = recorded(
-        { operation: "board.deleteTicket", workspaceId: row?.project_id ?? "", input },
+      const { receipt, throughCursor } = recorded(
+        { operation: "board.deleteTicket", workspaceId: row?.project_id ?? null, input },
         (database) => {
+          if (row === undefined) throw new Error("Unknown ticket");
           // Before the delete, which detaches the Sessions from the ticket, and
           // only for an archived ticket: the one kind the delete accepts.
-          if (row?.archived_at != null) releaseToolOutput(database, input.ticketId);
+          if (row.archived_at !== null) releaseToolOutput(database, input.ticketId);
           deleteTicketCommand(database, input.ticketId);
           return null;
         },
-        () => {
-          if (row === undefined) return;
-          feed.stamp(row.project_id, [
+        (_value, projectId) => {
+          feed.stamp(projectId, [
             {
               kind: "ticket",
               op: "delete",
               id: input.ticketId,
-              projectId: row.project_id,
+              projectId,
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             },
           ]);
-          announce(call, { ticketId: input.ticketId, projectId: row.project_id, kind: "ticket" });
+          announce(call, { ticketId: input.ticketId, projectId, kind: "ticket" });
         },
       );
-      return { receipt };
+      return { receipt, throughCursor };
     },
 
     // The person's comment: the caller is the author, never an input field.
     "board.createComment": (input, call) => {
-      const { receipt, value: comment } = recorded(
+      const {
+        receipt,
+        throughCursor,
+        value: comment,
+      } = recorded(
         {
           operation: "board.createComment",
           workspaceId: workspaceOfTicket(input.ticketId),
@@ -782,14 +839,18 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
             },
             { now: now(), actor: call.actor },
           ),
-        (created) => stampComment(created, "upsert", call, input.commandId),
+        (created, projectId) => stampComment(projectId, created, "upsert", call, input.commandId),
       );
-      return { receipt, comment };
+      return { receipt, throughCursor, comment };
     },
 
     // An edit touches `updatedAt` only and records no event.
     "board.updateComment": (input, call) => {
-      const { receipt, value: comment } = recorded(
+      const {
+        receipt,
+        throughCursor,
+        value: comment,
+      } = recorded(
         { operation: "board.updateComment", workspaceId: commentWorkspace(input.commentId), input },
         (db) => {
           const updated = updateComment(
@@ -800,30 +861,34 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           if (updated === undefined) throw new Error("Unknown comment");
           return updated;
         },
-        (updated) => stampComment(updated, "upsert", call, input.commandId),
+        (updated, projectId) => stampComment(projectId, updated, "upsert", call, input.commandId),
       );
-      return { receipt, comment };
+      return { receipt, throughCursor, comment };
     },
 
     // A hard delete; no event.
     "board.removeComment": (input, call) => {
       const existing = getComment(board(), input.commentId);
-      const { receipt } = recorded(
+      const { receipt, throughCursor } = recorded(
         { operation: "board.removeComment", workspaceId: commentWorkspace(input.commentId), input },
         (db) => {
           if (existing === undefined) throw new Error("Unknown comment");
           deleteComment(db, input.commentId);
           return null;
         },
-        () => stampComment(existing!, "delete", call, input.commandId),
+        (_value, projectId) => stampComment(projectId, existing!, "delete", call, input.commandId),
       );
-      return { receipt };
+      return { receipt, throughCursor };
     },
 
     "board.setLabelColor": (input, call) => {
       const existing = getLabel(board(), input.labelId);
-      const { receipt, value: label } = recorded(
-        { operation: "board.setLabelColor", workspaceId: existing?.projectId ?? "", input },
+      const {
+        receipt,
+        throughCursor,
+        value: label,
+      } = recorded(
+        { operation: "board.setLabelColor", workspaceId: existing?.projectId ?? null, input },
         (db) => {
           const updated = setLabelColor(db, input.labelId, input.color, now());
           if (updated === undefined) throw new Error("Unknown label");
@@ -843,18 +908,17 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           announce(call, { projectId: updated.projectId });
         },
       );
-      return { receipt, label };
+      return { receipt, throughCursor, label };
     },
   };
 
   function stampComment(
+    projectId: string,
     comment: TicketComment,
     op: "upsert" | "delete",
     call: HandlerCall,
     commandId: string | undefined,
   ): void {
-    const projectId = workspaceOfTicket(comment.ticketId);
-    if (projectId === "") return;
     const by = commandId === undefined ? {} : { commandId };
     feed.stamp(projectId, [
       {

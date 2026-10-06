@@ -103,6 +103,8 @@ export type BoardMoveTicketsInput = {
 
 interface Receipted {
   readonly receipt: BoardCommandReceipt | null;
+  /** The Workspace feed's cursor through which the write is stamped (T5). */
+  readonly throughCursor: string;
 }
 
 type ProjectRef = { projectId: string };
@@ -262,8 +264,13 @@ const projectInput = z.object({ projectId: boardId });
 const ticketInput = z.object({ ticketId: boardId });
 const branchName = z.string().min(1).max(256);
 
+/**
+ * A write's answer: its receipt, the feed cursor its effect is stamped
+ * through (a Client that has applied the feed through it holds the write, as
+ * `throughSequence` says for a Session), and its row.
+ */
 const receipted = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  z.object({ receipt: receiptSchema, ...shape });
+  z.object({ receipt: receiptSchema, throughCursor: z.string(), ...shape });
 
 /** A write's answer always carries its receipt: the router's input demands a `commandId`. */
 function withReceipt<Answer extends Receipted>(
@@ -516,7 +523,11 @@ export function createBoardRouter() {
               ctx.call,
             ),
           );
-          return { receipt: answer.receipt, tickets: roster(answer.tickets) };
+          return {
+            receipt: answer.receipt,
+            throughCursor: answer.throughCursor,
+            tickets: roster(answer.tickets),
+          };
         }),
       setPriority: workspaceProcedure(
         "board.setPriority",

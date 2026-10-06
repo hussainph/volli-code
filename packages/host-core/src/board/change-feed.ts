@@ -117,6 +117,8 @@ export class BoardChangeFeed {
       cursor: this.cursor(workspaceId),
       changes,
     };
+    // A copy: a listener may unsubscribe while the batch is delivered.
+    // oxlint-disable-next-line unicorn/no-useless-spread
     for (const listener of [...feed.listeners]) listener(batch);
   }
 
