@@ -336,6 +336,12 @@ export default defineConfig(({ mode }) => ({
         // A state that silently says nothing is a read-only board with no
         // explanation, and no screenshot of one state shows another's words.
         "src/components/hosts/host-surface-model.ts",
+        // Whether a project can be written to (VC-576): the per-project link
+        // merge, the host aggregate, and the outage mapping that must keep an
+        // offline host offline through every retry. A branch missed here is a
+        // board that invites writes a dead link will refuse.
+        "src/stores/host-connection.ts",
+        "src/stores/host-sources.ts",
         // Home's tab resolution: which tab is in front AND what the persisted
         // record owes a tab that names nothing on screen (VC-54). The ticket's
         // highest correctness risk, so it is a pure module precisely so the
