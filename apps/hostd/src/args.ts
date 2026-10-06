@@ -6,6 +6,13 @@ import { HostdBootError } from "./boot-error";
 import type { CredentialsResetCommand } from "./credentials";
 import { parseListen, type HostProtocolBind } from "./host-protocol";
 import type { DatabaseRestoreCommand } from "./database";
+import type { DevicesCommand } from "./devices";
+import type { EnrollCommand } from "./enroll";
+import type { InstallCommand } from "./install";
+import type { ManagedStatusCommand } from "./manage-status";
+import type { StartCommand } from "./start";
+import { DEFAULT_START_TIMEOUT_MS } from "./start";
+import { DEFAULT_HOST_PROTOCOL_PORT, type InstallMode } from "@volli/host-install/contract";
 import type { OperatorTokenCommand } from "./operator-token";
 import { DEFAULT_OPERATORS_FILE } from "./operators";
 
@@ -14,7 +21,8 @@ export const DEFAULT_SERVICE_USER = "volli";
 
 export const USAGE = `Usage:
   volli-hostd --data-dir <dir> [--socket <path>] [--operators <file>]
-              [--listen <host>:<port>]             Serve this data directory.
+              [--listen <host>:<port>] [--devices <file>]
+                                                   Serve this data directory.
   volli-hostd status --data-dir <dir>              Report health; exit 0 serving,
                                                    1 refusing, 3 not serving.
   volli-hostd credentials reset --data-dir <dir> [--yes]
@@ -28,6 +36,24 @@ export const USAGE = `Usage:
   volli-hostd operator-token --for <login>         As root: issue <login> an operator
   volli-hostd operator-token --revoke <login>      token, or revoke it. [--operators
                                                    <file>] [--service-user <name>]
+  volli-hostd install --system|--user [--from <release>] [--port <n>] [--operator <login>]
+                                                   Put this release in place under systemd:
+                                                   a system unit as volli (root), or a
+                                                   user unit as you. Idempotent; upgrades
+                                                   and adopts. Does not start it.
+  volli-hostd start --system|--user [--timeout <s>]
+                                                   Run what install recorded; wait until
+                                                   it serves.
+  volli-hostd enroll --system|--user|--data-dir <dir> --public-key <spki> --name <label>
+                                                   Trust a device key (enrollment over
+                                                   SSH): --system as root, else as
+                                                   hostd's account.
+  volli-hostd devices list --system|--user|--data-dir <dir>
+  volli-hostd devices revoke <deviceId> --system|--user|--data-dir <dir>
+                                                   The enrolled devices; revoke one
+                                                   (--system as root).
+  volli-hostd status --json [--system|--user|--data-dir <dir>]
+                                                   The install, unit, host and devices.
   volli-hostd --version | --help
 
 The agent socket defaults to <dir>/volli.sock, mode 600. Under systemd socket
@@ -37,9 +63,14 @@ and must be root's; the service user defaults to ${DEFAULT_SERVICE_USER}.
 VOLLI_SECRET_KEY_FILE names an absolute key file; VOLLI_HOSTD_LOG_LEVEL is
 debug, info (default), warn or error.
 
+install, start, enroll and status --json print one line of JSON; a failure
+is {"ok":false,"code":…,"message":…}. Their contract: @volli/host-install.
+
 With VOLLI_EXPERIMENTAL=cloud, --listen serves the host protocol's WebSocket
 on a loopback address (127.0.0.1:<port>, [::1]:<port>); port 0 picks one, and
-the status file names it. Until pairing lands it refuses every credential.
+the status file names it. It admits devices enrolled with this host: those in
+--devices <file> (root's, as a system install has: /etc/volli-hostd-devices),
+or else the data directory's own enrolled-devices.json.
 `;
 
 export type HostdCommand =
@@ -50,11 +81,21 @@ export type HostdCommand =
       operatorsFile: string;
       /** `--listen`: the host protocol's loopback address, or `null`. */
       listen: HostProtocolBind | null;
+      /**
+       * `--devices`: a root-owned enrolled-devices file (a system install's);
+       * `null`: the data directory's own.
+       */
+      devicesFile: string | null;
     }
   | { kind: "status"; dataDir: string }
   | CredentialsResetCommand
   | DatabaseRestoreCommand
   | OperatorTokenCommand
+  | InstallCommand
+  | StartCommand
+  | EnrollCommand
+  | DevicesCommand
+  | ManagedStatusCommand
   | { kind: "help" }
   | { kind: "version" };
 
@@ -75,6 +116,14 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   if (values.help === true) return { kind: "help" };
   if (values.version === true) return { kind: "version" };
   const [verb, ...rest] = positionals;
+  const managed = managementCommand(verb, rest, values, cwd);
+  if (managed !== null) return managed;
+  if (MANAGEMENT_OPTIONS.some((name) => values[name] !== undefined)) {
+    throw new HostdBootError(
+      "usage",
+      "--system, --user, --json, --port, --operator, --public-key, --name and --timeout belong to install, start, enroll and status --json.",
+    );
+  }
   const known =
     verb === "status" || verb === "operator-token" || verb === "credentials" || verb === "database";
   // Maintenance commands take one action word.
@@ -99,6 +148,9 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   }
   if (verb !== undefined && values.listen !== undefined) {
     throw new HostdBootError("usage", `--listen belongs to serving, not to ${verb}.`);
+  }
+  if (verb !== undefined && values.devices !== undefined) {
+    throw new HostdBootError("usage", `--devices belongs to serving, not to ${verb}.`);
   }
   if (verb !== "database" && (values.from !== undefined || values.schema !== undefined))
     throw new HostdBootError("usage", "--from and --schema belong to database restore.");
@@ -163,12 +215,16 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
       : resolve(cwd, values.socket);
   const listen = values.listen === undefined ? null : parseListen(values.listen);
   if (typeof listen === "string") throw new HostdBootError("usage", listen);
+  if (values.devices !== undefined && values.devices.length === 0) {
+    throw new HostdBootError("usage", "--devices takes a file.");
+  }
   return {
     kind: "serve",
     dataDir,
     socketPath,
     operatorsFile: operatorsFileFrom(values.operators, cwd),
     listen,
+    devicesFile: values.devices === undefined ? null : resolve(cwd, values.devices),
   };
 }
 
@@ -203,6 +259,152 @@ function operatorTokenCommand(
   };
 }
 
+const MANAGEMENT_OPTIONS = [
+  "system",
+  "user",
+  "json",
+  "port",
+  "operator",
+  "public-key",
+  "name",
+  "timeout",
+] as const;
+
+type ParsedValues = ReturnType<typeof parse>["values"];
+
+/** Which of `--system`, `--user` and `--data-dir` named where; refuses two. */
+function where(
+  values: ParsedValues,
+  cwd: string,
+): { mode: InstallMode | null; dataDir: string | null } {
+  const dataDir = values["data-dir"] === undefined ? null : resolve(cwd, values["data-dir"]);
+  const named = [values.system === true, values.user === true, dataDir !== null].filter(Boolean);
+  if (named.length > 1) {
+    throw new HostdBootError("usage", "Name one of --system, --user or --data-dir.");
+  }
+  return {
+    mode: values.system === true ? "system" : values.user === true ? "user" : null,
+    dataDir,
+  };
+}
+
+/** Only the options `allowed` may be present, beyond the mode. */
+function only(verb: string, values: ParsedValues, allowed: readonly string[]): void {
+  const extra = Object.keys(values).find(
+    (name) => !allowed.includes(name) && !["system", "user", "data-dir"].includes(name),
+  );
+  if (extra !== undefined)
+    throw new HostdBootError("usage", `--${extra} does not belong to ${verb}.`);
+}
+
+function positiveInteger(value: string, flag: string, max: number): number {
+  if (!/^[0-9]+$/u.test(value) || Number(value) < 1 || Number(value) > max) {
+    throw new HostdBootError("usage", `${flag} takes a whole number from 1 to ${max}.`);
+  }
+  return Number(value);
+}
+
+/** install, start, enroll and `status --json`; `null` for any other verb. */
+function managementCommand(
+  verb: string | undefined,
+  rest: readonly string[],
+  values: ParsedValues,
+  cwd: string,
+): InstallCommand | StartCommand | EnrollCommand | DevicesCommand | ManagedStatusCommand | null {
+  const json = verb === "status" && values.json === true;
+  if (verb === "devices") return devicesCommand(rest, values, cwd);
+  if (verb !== "install" && verb !== "start" && verb !== "enroll" && !json) return null;
+  if (rest.length > 0) throw new HostdBootError("usage", `Unknown argument: ${rest[0]}`);
+  const { mode, dataDir } = where(values, cwd);
+  if (json) {
+    only("status --json", values, ["json"]);
+    return { kind: "status-json", mode, dataDir };
+  }
+  if (verb === "enroll") {
+    only("enroll", values, ["public-key", "name"]);
+    if (mode === null && dataDir === null) {
+      throw new HostdBootError("usage", "enroll needs --system, --user or --data-dir <dir>.");
+    }
+    if (values["public-key"] === undefined || values["public-key"].length === 0) {
+      throw new HostdBootError("usage", "enroll needs --public-key <base64url SPKI>.");
+    }
+    return {
+      kind: "enroll",
+      mode,
+      dataDir,
+      publicKey: values["public-key"],
+      name: values.name ?? "",
+    };
+  }
+  if (dataDir !== null || mode === null) {
+    throw new HostdBootError("usage", `${verb} needs --system or --user.`);
+  }
+  if (verb === "start") {
+    only("start", values, ["timeout"]);
+    return {
+      kind: "start",
+      mode,
+      timeoutMs:
+        values.timeout === undefined
+          ? DEFAULT_START_TIMEOUT_MS
+          : positiveInteger(values.timeout, "--timeout", 3600) * 1000,
+    };
+  }
+  only("install", values, ["from", "port", "operator"]);
+  if (mode === "user" && values.operator !== undefined) {
+    throw new HostdBootError(
+      "usage",
+      "--operator belongs to install --system: a user unit is yours.",
+    );
+  }
+  return {
+    kind: "install",
+    mode,
+    from: values.from === undefined ? null : resolve(cwd, values.from),
+    port:
+      values.port === undefined
+        ? DEFAULT_HOST_PROTOCOL_PORT
+        : positiveInteger(values.port, "--port", 65_535),
+    operator: values.operator ?? null,
+  };
+}
+
+const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+/** `devices list` and `devices revoke <deviceId>`, each naming one store. */
+function devicesCommand(
+  rest: readonly string[],
+  values: ParsedValues,
+  cwd: string,
+): DevicesCommand {
+  const [action, deviceId, ...extra] = rest;
+  if (action !== "list" && action !== "revoke") {
+    throw new HostdBootError(
+      "usage",
+      action === undefined
+        ? "devices needs an action: list or revoke."
+        : `Unknown argument: ${action}`,
+    );
+  }
+  only(`devices ${action}`, values, []);
+  const { mode, dataDir } = where(values, cwd);
+  if (mode === null && dataDir === null) {
+    throw new HostdBootError(
+      "usage",
+      `devices ${action} needs --system, --user or --data-dir <dir>.`,
+    );
+  }
+  if (action === "list") {
+    if (deviceId !== undefined) throw new HostdBootError("usage", `Unknown argument: ${deviceId}`);
+    return { kind: "devices", action, mode, dataDir, deviceId: null };
+  }
+  if (deviceId === undefined || !DEVICE_ID.test(deviceId)) {
+    throw new HostdBootError("usage", "devices revoke needs a device id (a UUID).");
+  }
+  if (extra.length > 0) throw new HostdBootError("usage", `Unknown argument: ${extra[0]}`);
+  return { kind: "devices", action, mode, dataDir, deviceId };
+}
+
 function parse(argv: readonly string[]) {
   return parseArgs({
     args: [...argv],
@@ -213,12 +415,21 @@ function parse(argv: readonly string[]) {
       socket: { type: "string" },
       operators: { type: "string" },
       listen: { type: "string" },
+      devices: { type: "string" },
       for: { type: "string" },
       revoke: { type: "string" },
       "service-user": { type: "string" },
       yes: { type: "boolean" },
       from: { type: "string" },
       schema: { type: "string" },
+      system: { type: "boolean" },
+      user: { type: "boolean" },
+      json: { type: "boolean" },
+      port: { type: "string" },
+      operator: { type: "string" },
+      "public-key": { type: "string" },
+      name: { type: "string" },
+      timeout: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },

@@ -1,376 +1,49 @@
 /**
- * The renderer's terminating tRPC link over the native Session IPC edge.
+ * The renderer's Session RPC client: a tRPC client over the router-generic
+ * IPC bridge's link (`@volli/host-protocol/ipc`, VC-608).
  *
- * Electron ships no tRPC link, so this is the counterpart to
- * `src/main/session-rpc-ipc.ts`: queries and mutations are one invoke each,
- * subscriptions acknowledge with an id and then arrive as ordered frames on a
- * single push channel.
- *
- * Every request carries a trace (VC-699): the operation's, when a caller
- * names it in tRPC's operation context (`{ context: { trace: { traceId } } }`),
- * or a fresh one. Main handles the request inside it.
- *
- * DELIBERATE ELECTRON DETAIL. This link carries values by structured clone;
- * a future network transport will carry JSON text. Structured clone accepts
- * things JSON silently drops or mangles (`Date`, `Map`, `undefined` in a
- * property position), so `@volli/session-rpc` checks every procedure payload
- * with `SessionRouterJsonSafety` before either transport can expose it.
+ * The link is the bridge's client half, the same one the contract harness
+ * runs every M2 area's cases over; this module only types it and owns the
+ * app's one instance. The client's type is derived from the routers main
+ * serves (`DesktopIpcRouter`, `@volli/session-rpc`): the paths
+ * `DESKTOP_IPC_PATHS` lets cross, with each procedure's own input and output
+ * types. Nothing is cast: structured clone carries the router's values
+ * unchanged, and every router seam proves them JSON-safe, so the view's
+ * untransformed types are the honest ones.
  */
-import { createTRPCClient, TRPCClientError, type TRPCClient, type TRPCLink } from "@trpc/client";
-import type { inferRouterError } from "@trpc/server";
-import { observable } from "@trpc/server/observable";
-import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
-// The same module tRPC's own first-party links read their status mapping from;
-// a hand-copied table would be a second answer to a question that already has
-// one.
-import { getStatusCodeFromKey } from "@trpc/server/unstable-core-do-not-import";
-import type {
-  AppRouter,
-  RendererSessionCommandRequest,
-  RendererSessionCommandResult,
-  RendererSessionStreamEmission,
-} from "@volli/session-rpc";
+import { createTRPCClient, type TRPCClient } from "@trpc/client";
 import {
-  isolatePerformanceObserver,
-  readOptionalPerformanceClock,
-  SESSION_RPC_IPC_PROCEDURES,
-  type SessionPresentationProjection,
-} from "@volli/shared";
-import type {
-  SessionRpcIpcError,
-  SessionRpcIpcEvent,
-  SessionRpcIpcProcedure,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
-  TraceContext,
-} from "@volli/shared";
+  ipcLink,
+  type IpcBridge,
+  type IpcPerformanceObserver,
+  type IpcPerformanceSample,
+} from "@volli/host-protocol/ipc";
+import type { DesktopIpcRouter } from "@volli/session-rpc";
 
-import { contextTraceId, traceFor } from "./trace";
-
-/** The preload door this link speaks through — `window.api.sessionRpc`. */
-export interface SessionRpcBridge {
-  request(request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse>;
-  onEvent(listener: (event: SessionRpcIpcEvent) => void): () => void;
-  cancel(subscriptionId: string): void;
-}
+/** The preload door this client speaks through — `window.api.sessionRpc`. */
+export type SessionRpcBridge = IpcBridge;
 
 /** One payload-free observation from the renderer side of the Session RPC edge. */
-export type SessionRpcPerformanceSample =
-  | {
-      kind: "round-trip";
-      procedure: SessionRpcIpcProcedure;
-      durationMs: number;
-      requestBytes: number;
-      responseBytes: number;
-      outcome: "ok" | "rpc-error" | "transport-error";
-    }
-  | {
-      kind: "push";
-      procedure: "session.subscribe";
-      eventKind: SessionRpcIpcEvent["kind"];
-      durationMs: number;
-      eventBytes: number;
-      disposition: "delivered" | "buffered-before-ack" | "discarded";
-      awaitingAck: number;
-      bufferedFrames: number;
-    };
+export type SessionRpcPerformanceSample = IpcPerformanceSample;
 
 /**
  * Optional benchmark tap. It receives only names, counts, sizes, and timings;
  * request and response values never enter it. A throwing tap is ignored so
  * diagnostics cannot alter the transport they are measuring.
  */
-export interface SessionRpcPerformanceObserver {
-  now?(): number;
-  record(sample: SessionRpcPerformanceSample): void;
-}
+export type SessionRpcPerformanceObserver = IpcPerformanceObserver;
 
-type AppSessionRpcClient = TRPCClient<AppRouter>;
-/** The envelope the router's error formatter attaches as `data.hostError` (VC-564). */
-type RouterHostError = inferRouterError<AppRouter>["data"]["hostError"];
-type AppSessionProcedures = AppSessionRpcClient["session"];
-type AppSessionSubscribeParameters = Parameters<AppSessionProcedures["subscribe"]["subscribe"]>;
-type AppSessionSubscribeOptions = NonNullable<AppSessionSubscribeParameters[1]>;
-
-export type SessionRpcClient = Omit<AppSessionRpcClient, "session"> & {
-  session: Omit<AppSessionProcedures, "snapshot" | "projection" | "subscribe" | "command"> & {
-    snapshot: {
-      query(
-        input: { sessionId: string },
-        options?: Parameters<AppSessionProcedures["snapshot"]["query"]>[1],
-      ): Promise<{
-        projection: SessionPresentationProjection;
-        frames: readonly unknown[];
-        throughSequence: number;
-      }>;
-    };
-    projection: {
-      query(
-        input: { sessionId: string },
-        options?: Parameters<AppSessionProcedures["projection"]["query"]>[1],
-      ): Promise<{
-        projection: SessionPresentationProjection;
-        throughSequence: number;
-      }>;
-    };
-    subscribe: {
-      subscribe(
-        input: AppSessionSubscribeParameters[0],
-        options: Omit<AppSessionSubscribeOptions, "onData"> & {
-          onData?(emission: { id: string; data: RendererSessionStreamEmission }): void;
-        },
-      ): ReturnType<AppSessionProcedures["subscribe"]["subscribe"]>;
-    };
-    command: {
-      mutate(input: RendererSessionCommandRequest): Promise<RendererSessionCommandResult>;
-    };
-  };
-};
-
-/**
- * Builds the terminating link over one bridge.
- *
- * The event listener is registered here, once, and multiplexes every
- * subscription: main mints the id AFTER it starts pumping, so frames routinely
- * arrive before the renderer knows what to call them. A per-subscription
- * listener could not exist early enough to catch them.
- */
-export function sessionRpcIpcLink(
-  bridge: SessionRpcBridge,
-  performanceObserver?: SessionRpcPerformanceObserver,
-): TRPCLink<AppRouter> {
-  const consumers = new Map<string, (event: SessionRpcIpcEvent) => void>();
-  const unclaimed = new Map<string, SessionRpcIpcEvent[]>();
-  let awaitingAck = 0;
-
-  const bufferedFrameCount = () => {
-    let count = 0;
-    for (const frames of unclaimed.values()) count += frames.length;
-    return count;
-  };
-  const record = (sample: SessionRpcPerformanceSample): void => {
-    isolatePerformanceObserver(() => {
-      performanceObserver?.record(sample);
-    });
-  };
-  const measuredRequest = async (value: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> => {
-    if (!performanceObserver) return bridge.request(value);
-    const startedAt = readOptionalPerformanceClock(performanceObserver);
-    try {
-      const response = await bridge.request(value);
-      const endedAt = readOptionalPerformanceClock(performanceObserver);
-      if (startedAt !== null && endedAt !== null) {
-        record({
-          kind: "round-trip",
-          procedure: value.procedure,
-          durationMs: Math.max(0, endedAt - startedAt),
-          requestBytes: jsonBytes(value),
-          responseBytes: jsonBytes(response),
-          outcome: response.ok ? "ok" : "rpc-error",
-        });
-      }
-      return response;
-    } catch (error) {
-      const endedAt = readOptionalPerformanceClock(performanceObserver);
-      if (startedAt !== null && endedAt !== null) {
-        record({
-          kind: "round-trip",
-          procedure: value.procedure,
-          durationMs: Math.max(0, endedAt - startedAt),
-          requestBytes: jsonBytes(value),
-          responseBytes: 0,
-          outcome: "transport-error",
-        });
-      }
-      throw error;
-    }
-  };
-
-  bridge.onEvent((event) => {
-    const startedAt = readOptionalPerformanceClock(performanceObserver);
-    let disposition: Extract<SessionRpcPerformanceSample, { kind: "push" }>["disposition"];
-    const consumer = consumers.get(event.subscriptionId);
-    if (consumer) {
-      consumer(event);
-      disposition = "delivered";
-    } else if (awaitingAck === 0) {
-      // No acknowledgement can claim this late frame.
-      disposition = "discarded";
-    } else {
-      // A frame for an unknown id is either an in-flight subscription's head
-      // start — hold it until the ack names it — or a straggler for one that
-      // already ended, which nobody will ever claim. `awaitingAck` is exactly
-      // that distinction, and draining to zero retires whatever is left over.
-      const buffered = unclaimed.get(event.subscriptionId);
-      if (buffered) buffered.push(event);
-      else unclaimed.set(event.subscriptionId, [event]);
-      disposition = "buffered-before-ack";
-    }
-    const endedAt = readOptionalPerformanceClock(performanceObserver);
-    if (performanceObserver && startedAt !== null && endedAt !== null) {
-      record({
-        kind: "push",
-        procedure: "session.subscribe",
-        eventKind: event.kind,
-        durationMs: Math.max(0, endedAt - startedAt),
-        eventBytes: jsonBytes(event),
-        disposition,
-        awaitingAck,
-        bufferedFrames: bufferedFrameCount(),
-      });
-    }
-  });
-
-  const settleAck = (): void => {
-    awaitingAck -= 1;
-    if (awaitingAck === 0) unclaimed.clear();
-  };
-
-  return () =>
-    ({ op }) =>
-      observable((observer) => {
-        const request = routedRequest(op.path, op.input, traceFor(contextTraceId(op.context)));
-        if (request === null) {
-          observer.error(
-            failure("NOT_FOUND", `${op.path} is not routed over Session IPC`, op.path),
-          );
-          return;
-        }
-
-        if (op.type !== "subscription") {
-          void (async () => {
-            try {
-              const reply = await measuredRequest(request);
-              // A caller's `signal` is the only handle it has on a call, so
-              // this path honors it — after the fact. Main answers every
-              // request it accepted, and there is nothing on the far side to
-              // cut short, so an abandoned call is observed when the reply
-              // lands rather than pre-empted.
-              if (op.signal?.aborted === true) {
-                observer.error(failure("CLIENT_CLOSED_REQUEST", abandoned(op.path), op.path));
-                return;
-              }
-              if (!reply.ok) {
-                observer.error(
-                  failure(reply.error.code, reply.error.message, op.path, reply.error),
-                );
-                return;
-              }
-              if ("subscriptionId" in reply) {
-                observer.error(failure("INTERNAL_SERVER_ERROR", ackForACall(op.path), op.path));
-                return;
-              }
-              observer.next({ result: { data: reply.data } });
-              observer.complete();
-            } catch (cause) {
-              // A boot whose database failed now claims the channel with a
-              // degraded handler that answers `{ ok: false }` naming the
-              // reason (VC-76) — this rejection path is for a bridge that is
-              // genuinely gone (a preload/main channel mismatch). It reaches
-              // a caller as a plain TRPCClientError either way.
-              observer.error(unreachable(cause, op.path));
-            }
-          })();
-          return;
-        }
-
-        // A subscriber holds an `Unsubscribable`, so teardown — not the
-        // operation signal — is how it says it has stopped listening; that is
-        // also what a React effect's cleanup calls.
-        let claimed: string | null = null;
-        let left = false;
-        const retire = (subscriptionId: string): void => {
-          consumers.delete(subscriptionId);
-          unclaimed.delete(subscriptionId);
-        };
-        const onFrame = (event: SessionRpcIpcEvent): void => {
-          if (event.kind === "done") {
-            retire(event.subscriptionId);
-            observer.complete();
-            return;
-          }
-          if (event.kind === "error") {
-            retire(event.subscriptionId);
-            observer.error(failure(event.error.code, event.error.message, op.path, event.error));
-            return;
-          }
-          // The router mints these ids with `tracked()`. They ride out as the
-          // result id so a consumer can hand the last one back as
-          // `input.lastEventId` when it re-subscribes — this link deliberately
-          // has no reconnect loop of its own. When to retry, how long to wait,
-          // and whether to tell the user are product decisions that belong to
-          // the chat controller above, not to a transport.
-          observer.next({
-            result: { id: event.eventId, data: { id: event.eventId, data: event.data } },
-          });
-        };
-
-        awaitingAck += 1;
-        void (async () => {
-          try {
-            const reply = await measuredRequest(request);
-            if (!reply.ok) {
-              observer.error(failure(reply.error.code, reply.error.message, op.path, reply.error));
-              return;
-            }
-            if (!("subscriptionId" in reply)) {
-              observer.error(failure("INTERNAL_SERVER_ERROR", callForAnAck(op.path), op.path));
-              return;
-            }
-            if (left) {
-              bridge.cancel(reply.subscriptionId);
-              unclaimed.delete(reply.subscriptionId);
-              return;
-            }
-            claimed = reply.subscriptionId;
-            consumers.set(claimed, onFrame);
-            // `onStarted` never fires without this, and it has to precede the
-            // frames the ack raced.
-            observer.next({ result: { type: "started" } });
-            const buffered = unclaimed.get(claimed) ?? [];
-            unclaimed.delete(claimed);
-            for (const event of buffered) onFrame(event);
-          } catch (cause) {
-            // Reaching an observer whose subscriber already tore down is safe
-            // for a reason that lives outside this file: tRPC's client pipes
-            // every operation through `share()`, which drops the observer on
-            // unsubscribe, so a post-teardown error lands on nobody. If that
-            // upstream property ever changes, this call needs a `left` guard.
-            observer.error(unreachable(cause, op.path));
-          } finally {
-            settleAck();
-          }
-        })();
-
-        return () => {
-          left = true;
-          if (claimed === null) return;
-          bridge.cancel(claimed);
-          retire(claimed);
-        };
-      });
-}
+/** The renderer's Session RPC client, typed from the routers main serves over IPC. */
+export type SessionRpcClient = TRPCClient<DesktopIpcRouter>;
 
 /** Creates a Session RPC client over one bridge. */
 export function createSessionRpcClient(
   bridge: SessionRpcBridge,
   performanceObserver?: SessionRpcPerformanceObserver,
 ): SessionRpcClient {
-  // tRPC's untransformed client types model JSON damage; the router's
-  // SessionRouterJsonSafety proof makes these raw payload types stable on every
-  // transport, so the Electron client can expose them without that rewrite.
-  return createTRPCClient<AppRouter>({
-    links: [sessionRpcIpcLink(bridge, performanceObserver)],
-  }) as unknown as SessionRpcClient;
-}
-
-function jsonBytes(value: unknown): number {
-  try {
-    const json = JSON.stringify(value);
-    return json === undefined ? 0 : new TextEncoder().encode(json).byteLength;
-  } catch {
-    return 0;
-  }
+  return createTRPCClient<DesktopIpcRouter>({
+    links: [ipcLink<DesktopIpcRouter>(bridge, performanceObserver)],
+  });
 }
 
 let client: SessionRpcClient | null = null;
@@ -429,87 +102,6 @@ function windowPerformanceObserver(): SessionRpcPerformanceObserver | undefined 
     record: (sample) => record.call(candidate, sample),
     ...(typeof now === "function" ? { now: () => now.call(candidate) } : {}),
   };
-}
-
-/**
- * The request for `path`, or `null` when this transport has no route for it.
- *
- * The envelope is a union of one member per procedure — main narrows on it to
- * reach the right caller, and its `never` arm is what makes a forgotten
- * procedure a compile error. A union cannot be built from a variable
- * discriminant, so the assertion lands here, once, immediately after membership
- * has been checked.
- */
-function routedRequest(
-  path: string,
-  input: unknown,
-  trace: TraceContext,
-): SessionRpcIpcRequest | null {
-  return (SESSION_RPC_IPC_PROCEDURES as readonly string[]).includes(path)
-    ? ({ procedure: path as SessionRpcIpcProcedure, input, trace } as SessionRpcIpcRequest)
-    : null;
-}
-
-/**
- * Builds the client error for a code main reported.
- *
- * Directly, not through `TRPCClientError.from`: that helper only recognizes an
- * error response whose `code` is the NUMERIC JSON-RPC one, and this wire
- * carries the string key. A string falls to its generic branch, which drops
- * `data` — taking the code a caller branches on with it.
- *
- * `wire` is main's envelope when main sent one. Its `reason` rides on
- * `data.hostError`, exactly where the WebSocket link's error formatter puts it,
- * so one `readHostError` reads both links alike (VC-564). A failure this link
- * raises itself has no reason, and carries the code alone.
- */
-function failure(
-  code: string,
-  message: string,
-  path: string,
-  wire?: SessionRpcIpcError,
-): TRPCClientError<AppRouter> {
-  const key = isErrorCode(code) ? code : "INTERNAL_SERVER_ERROR";
-  // Forwarded, not judged: `readHostError` checks a reason against its code
-  // and drops one that does not belong to it, on this link as on the other.
-  const hostError: RouterHostError =
-    wire?.reason === undefined
-      ? { code: key, message }
-      : { code: key, message, reason: wire.reason as NonNullable<RouterHostError["reason"]> };
-  return new TRPCClientError(message, {
-    result: {
-      error: {
-        code: TRPC_ERROR_CODES_BY_KEY[key],
-        message,
-        data: { code: key, httpStatus: getStatusCodeFromKey(key), path, hostError },
-      },
-    },
-  });
-}
-
-/** The bridge itself failed — no handler is registered, or the door is gone. */
-function unreachable(cause: unknown, path: string): TRPCClientError<AppRouter> {
-  return failure(
-    "INTERNAL_SERVER_ERROR",
-    cause instanceof Error ? cause.message : "Session RPC is unreachable",
-    path,
-  );
-}
-
-function isErrorCode(code: string): code is TRPC_ERROR_CODE_KEY {
-  return code in TRPC_ERROR_CODES_BY_KEY;
-}
-
-function abandoned(path: string): string {
-  return `${path} was abandoned before it answered`;
-}
-
-function ackForACall(path: string): string {
-  return `${path} answered with a subscription id`;
-}
-
-function callForAnAck(path: string): string {
-  return `${path} answered without a subscription id`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

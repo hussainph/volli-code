@@ -1,4 +1,5 @@
 import type { RendererLogEntry } from "@volli/shared";
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
   FileReadResult,
@@ -182,8 +183,6 @@ import type {
   SessionListingRow,
   SessionPeekContent,
   SessionReadState,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   SessionUsageGrouping,
   SessionUsageReport,
   SessionUsageScope,
@@ -2545,12 +2544,13 @@ export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
  * contract — is where a Session procedure's input and output are declared.
- * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
- * tRPC link is the only thing that should ever speak them directly.
+ * The wire shapes are the router-generic bridge's (`@volli/host-protocol/ipc`,
+ * VC-608); the renderer's terminating tRPC link is the only thing that should
+ * ever speak them directly.
  */
 export interface VolliSessionRpcIpcContract {
-  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
-  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+  /** Runs one served procedure; a subscription acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: IpcRequest]; result: IpcResponse };
 }
 
 /**
@@ -2804,7 +2804,7 @@ export type VolliIpcEvent =
   // them, instead of within ten seconds of it.
   | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
-  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // `IpcEvent` (`@volli/host-protocol/ipc`). Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
   // The updater's user-facing state changed (VC-59) — one full {@link
