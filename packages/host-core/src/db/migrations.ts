@@ -14,6 +14,7 @@
  * pending. Read "Breaking an older reader" above {@link MIGRATIONS} before
  * adding a migration.
  */
+import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
@@ -2795,6 +2796,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 61,
     name: "session follow-up queue — host-owned commands and release evidence (VC-675)",
     sql: SESSION_FOLLOW_UP_MIGRATION,
+  },
+  {
+    version: 62,
+    name: "board command receipts — idempotent board commands by command id (VC-565)",
+    sql: BOARD_COMMAND_RECEIPTS_MIGRATION,
   },
 ];
 

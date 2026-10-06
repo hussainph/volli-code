@@ -43,6 +43,15 @@ const MANIFEST = {
 };
 const PIN = parseHostdReleasePin(MANIFEST)!;
 
+/** One VC-701 manifest asset of version 1.1.0. */
+const asset = (platform: string, arch: string) => ({
+  platform,
+  arch,
+  name: `volli-hostd-1.1.0-${platform}-${arch}.tar.gz`,
+  sha256: "b".repeat(64),
+  size: 1,
+});
+
 function request(overrides: Partial<ArtifactRequest> = {}): ArtifactRequest {
   return {
     version: "1.1.0",
@@ -112,6 +121,42 @@ describe("the signed app's hostd pin", () => {
     expect(supportedTargets(null)).toEqual(["linux-x64"]);
     expect(supportedTargets({ ...PIN, assets: [] })).toEqual(["linux-x64"]);
   });
+
+  // VC-700 PR 1c: the release manifest carries darwin too, and so does what it supports.
+  it("derives every target from a four-asset manifest, darwin included", () => {
+    const pin = parseHostdReleasePin({
+      ...MANIFEST,
+      assets: [
+        asset("linux", "x64"),
+        asset("linux", "arm64"),
+        asset("darwin", "arm64"),
+        asset("darwin", "x64"),
+      ],
+    });
+    expect(supportedTargets(pin)).toEqual([
+      "linux-x64",
+      "linux-arm64",
+      "darwin-arm64",
+      "darwin-x64",
+    ]);
+  });
+
+  it("derives a dev build's targets from the tarballs it was given", () => {
+    expect(
+      supportedTargets(null, [
+        "/tmp/volli-hostd-1.1.0-darwin-arm64.tar.gz",
+        "/x/volli-hostd-1.1.0-linux-x64.tar.gz",
+        "/y/volli-hostd-1.1.0-darwin-arm64.tar.gz",
+        "/z/not-a-hostd.tar.gz",
+      ]),
+    ).toEqual(["darwin-arm64", "linux-x64"]);
+    expect(supportedTargets(null, ["/z/not-a-hostd.tar.gz"])).toEqual(["linux-x64"]);
+    // A pin with assets always wins over dev tarballs.
+    expect(supportedTargets(PIN, ["/tmp/volli-hostd-1.1.0-darwin-arm64.tar.gz"])).toEqual([
+      "linux-x64",
+      "linux-arm64",
+    ]);
+  });
 });
 
 describe("resolving the tarball", () => {
@@ -179,29 +224,34 @@ describe("resolving the tarball", () => {
     writeFileSync(tarball, BYTES);
     writeFileSync(`${tarball}.sha256`, `${SHA}  ${NAME}\n`);
     for (const pin of [null, { ...PIN, assets: [] }]) {
-      expect(await resolveArtifact(request({ pin, devTarball: tarball }))).toMatchObject({
+      expect(await resolveArtifact(request({ pin, devTarballs: [tarball] }))).toMatchObject({
         source: "dev",
         sha256: SHA,
       });
       expect(await resolveArtifact(request({ pin }))).toMatchObject({
         kind: "artifact-unavailable",
+        detail: `This build carries no hostd release assets; give it a local ${NAME} (dev builds only).`,
       });
+      // Only the tarball named for the box's target is used.
+      expect(
+        await resolveArtifact(request({ pin, target: "darwin-arm64", devTarballs: [tarball] })),
+      ).toMatchObject({ kind: "artifact-unavailable" });
     }
     writeFileSync(`${tarball}.sha256`, `${"0".repeat(64)}  ${NAME}\n`);
-    expect(await resolveArtifact(request({ pin: null, devTarball: tarball }))).toMatchObject({
+    expect(await resolveArtifact(request({ pin: null, devTarballs: [tarball] }))).toMatchObject({
       kind: "artifact-checksum",
     });
     writeFileSync(`${tarball}.sha256`, "not a digest");
-    expect(await resolveArtifact(request({ pin: null, devTarball: tarball }))).toMatchObject({
+    expect(await resolveArtifact(request({ pin: null, devTarballs: [tarball] }))).toMatchObject({
       kind: "artifact-checksum",
     });
     rmSync(`${tarball}.sha256`);
-    expect(await resolveArtifact(request({ pin: null, devTarball: tarball }))).toMatchObject({
+    expect(await resolveArtifact(request({ pin: null, devTarballs: [tarball] }))).toMatchObject({
       detail: `${tarball}.sha256 is missing.`,
     });
     writeFileSync(`${tarball}.sha256`, SHA);
     rmSync(tarball);
-    expect(await resolveArtifact(request({ pin: null, devTarball: tarball }))).toMatchObject({
+    expect(await resolveArtifact(request({ pin: null, devTarballs: [tarball] }))).toMatchObject({
       detail: `${tarball} is missing.`,
     });
   });

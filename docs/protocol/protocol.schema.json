@@ -6,6 +6,36 @@
     "auth.callback": [
       "auth.callback.deliver"
     ],
+    "board.read": [
+      "board.snapshot",
+      "board.roster",
+      "board.changes",
+      "board.projectFolder",
+      "board.ticketBody",
+      "board.archivedTickets",
+      "board.ticketEvents",
+      "board.latestSignals",
+      "board.statusEntries",
+      "board.comments"
+    ],
+    "board.write": [
+      "ticket.move",
+      "board.updateProject",
+      "board.setSkillModes",
+      "board.setSessionDefaults",
+      "board.createTicket",
+      "board.moveTickets",
+      "board.setPriority",
+      "board.updateTicket",
+      "board.setLabels",
+      "board.archiveTicket",
+      "board.unarchiveTicket",
+      "board.deleteTicket",
+      "board.createComment",
+      "board.updateComment",
+      "board.removeComment",
+      "board.setLabelColor"
+    ],
     "model-access": [
       "modelAccess.inspect",
       "modelAccess.defaults",
@@ -153,6 +183,4812 @@
           },
           "required": [
             "status"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.archiveTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.archivedTickets": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "archivedAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "baseBranch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "body": {
+                "type": "string"
+              },
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "labels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "order": {
+                "type": "number"
+              },
+              "prUrl": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "preferredHarnessId": {
+                "type": "string"
+              },
+              "priority": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "backlog",
+                  "todo",
+                  "doing",
+                  "needs_review",
+                  "done"
+                ],
+                "type": "string"
+              },
+              "ticketNumber": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "usesWorktree": {
+                "type": "boolean"
+              },
+              "worktreePath": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "ticketNumber",
+              "title",
+              "status",
+              "priority",
+              "labels",
+              "usesWorktree",
+              "preferredHarnessId",
+              "order",
+              "worktreePath",
+              "branch",
+              "baseBranch",
+              "prUrl",
+              "createdAt",
+              "updatedAt",
+              "body",
+              "archivedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.changes": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "lastEventId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "changes": {
+              "items": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commandId": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "project",
+                        "type": "string"
+                      },
+                      "op": {
+                        "enum": [
+                          "upsert",
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "project": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "authorityPolicy": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "baseBranch": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "colorIndex": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "decisionModel": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "sessionModel": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "modelId": {
+                                    "type": "string"
+                                  },
+                                  "providerId": {
+                                    "type": "string"
+                                  },
+                                  "reasoningLevel": {
+                                    "enum": [
+                                      "off",
+                                      "minimal",
+                                      "low",
+                                      "medium",
+                                      "high",
+                                      "xhigh",
+                                      "max"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "providerId",
+                                  "modelId",
+                                  "reasoningLevel"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "setupCommand": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "skillModes": {
+                            "additionalProperties": {
+                              "enum": [
+                                "auto",
+                                "manual",
+                                "off"
+                              ],
+                              "type": "string"
+                            },
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "sortOrder": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "themeAppearance": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "light",
+                                  "dark",
+                                  "auto"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "themeCanvas": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "themeOverride": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "ticketPrefix": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "path",
+                          "ticketPrefix",
+                          "colorIndex",
+                          "sortOrder",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "op",
+                      "id",
+                      "projectId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "checkoutMoved": {
+                        "type": "boolean"
+                      },
+                      "commandId": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "ticket",
+                        "type": "string"
+                      },
+                      "op": {
+                        "enum": [
+                          "upsert",
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "ticket": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "baseBranch": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "branch": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "labels": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "order": {
+                            "type": "number"
+                          },
+                          "prUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "preferredHarnessId": {
+                            "type": "string"
+                          },
+                          "priority": {
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ],
+                            "type": "string"
+                          },
+                          "projectId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "backlog",
+                              "todo",
+                              "doing",
+                              "needs_review",
+                              "done"
+                            ],
+                            "type": "string"
+                          },
+                          "ticketNumber": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "usesWorktree": {
+                            "type": "boolean"
+                          },
+                          "worktreePath": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "projectId",
+                          "ticketNumber",
+                          "title",
+                          "status",
+                          "priority",
+                          "labels",
+                          "usesWorktree",
+                          "preferredHarnessId",
+                          "order",
+                          "worktreePath",
+                          "branch",
+                          "baseBranch",
+                          "prUrl",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "op",
+                      "id",
+                      "projectId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commandId": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "label",
+                        "type": "string"
+                      },
+                      "label": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "color": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "projectId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "projectId",
+                          "name",
+                          "color"
+                        ],
+                        "type": "object"
+                      },
+                      "op": {
+                        "enum": [
+                          "upsert",
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "op",
+                      "id",
+                      "projectId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commandId": {
+                        "type": "string"
+                      },
+                      "comment": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "ticketId": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "ticketId",
+                          "sessionId",
+                          "actor",
+                          "body",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "comment",
+                        "type": "string"
+                      },
+                      "op": {
+                        "enum": [
+                          "upsert",
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "ticketId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "op",
+                      "id",
+                      "projectId",
+                      "ticketId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commandId": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "ticketEvent",
+                        "type": "string"
+                      },
+                      "op": {
+                        "enum": [
+                          "upsert",
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "ticketId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "op",
+                      "id",
+                      "projectId",
+                      "ticketId"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "x-volli-open-union": "kind"
+              },
+              "type": "array"
+            },
+            "cursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cursor",
+            "changes"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "board.comments": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "createdAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ticketId": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "ticketId",
+              "sessionId",
+              "actor",
+              "body",
+              "createdAt",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.createComment": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "body": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "sessionId": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId",
+            "body"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "comment": {
+              "additionalProperties": false,
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "sessionId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ticketId": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "ticketId",
+                "sessionId",
+                "actor",
+                "body",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "comment"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.createTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "baseBranch": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "body": {
+              "type": "string"
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "labels": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "preferredHarnessId": {
+              "pattern": "^[a-z][a-z0-9-]{1,31}$",
+              "type": "string"
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "backlog",
+                "todo",
+                "doing",
+                "needs_review",
+                "done"
+              ],
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "usesWorktree": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "commandId",
+            "projectId",
+            "status",
+            "title"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "prUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "preferredHarnessId": {
+                  "type": "string"
+                },
+                "priority": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                "ticketNumber": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "usesWorktree": {
+                  "type": "boolean"
+                },
+                "worktreePath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "ticketNumber",
+                "title",
+                "status",
+                "priority",
+                "labels",
+                "usesWorktree",
+                "preferredHarnessId",
+                "order",
+                "worktreePath",
+                "branch",
+                "baseBranch",
+                "prUrl",
+                "createdAt",
+                "updatedAt",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "ticket"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.deleteTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.latestSignals": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sessionId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "signal": {
+                "enum": [
+                  "done",
+                  "blocked"
+                ],
+                "type": "string"
+              },
+              "ticketId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ticketId",
+              "sessionId",
+              "signal",
+              "reason",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.moveTickets": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "choice": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "automationId": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "automation",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "automationId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "move-only",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "ticketIds": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 1024,
+              "minItems": 1,
+              "type": "array"
+            },
+            "toIndex": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "toStatus": {
+              "enum": [
+                "backlog",
+                "todo",
+                "doing",
+                "needs_review",
+                "done"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "projectId",
+            "ticketIds",
+            "toStatus",
+            "toIndex"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "tickets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "baseBranch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "branch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "labels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "order": {
+                    "type": "number"
+                  },
+                  "prUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "preferredHarnessId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "backlog",
+                      "todo",
+                      "doing",
+                      "needs_review",
+                      "done"
+                    ],
+                    "type": "string"
+                  },
+                  "ticketNumber": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "usesWorktree": {
+                    "type": "boolean"
+                  },
+                  "worktreePath": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectId",
+                  "ticketNumber",
+                  "title",
+                  "status",
+                  "priority",
+                  "labels",
+                  "usesWorktree",
+                  "preferredHarnessId",
+                  "order",
+                  "worktreePath",
+                  "branch",
+                  "baseBranch",
+                  "prUrl",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "tickets"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.projectFolder": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "present",
+                "missing",
+                "not-a-directory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "state"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.removeComment": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "commentId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "commentId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.roster": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "labels": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectId",
+                  "name",
+                  "color"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "tickets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "baseBranch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "branch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "labels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "order": {
+                    "type": "number"
+                  },
+                  "prUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "preferredHarnessId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "backlog",
+                      "todo",
+                      "doing",
+                      "needs_review",
+                      "done"
+                    ],
+                    "type": "string"
+                  },
+                  "ticketNumber": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "usesWorktree": {
+                    "type": "boolean"
+                  },
+                  "worktreePath": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectId",
+                  "ticketNumber",
+                  "title",
+                  "status",
+                  "priority",
+                  "labels",
+                  "usesWorktree",
+                  "preferredHarnessId",
+                  "order",
+                  "worktreePath",
+                  "branch",
+                  "baseBranch",
+                  "prUrl",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "tickets",
+            "labels",
+            "cursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.setLabelColor": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "color": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "labelId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "labelId",
+            "color"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "additionalProperties": false,
+              "properties": {
+                "color": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "name",
+                "color"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "label"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.setLabels": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "labels": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId",
+            "labels"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "prUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "preferredHarnessId": {
+                  "type": "string"
+                },
+                "priority": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                "ticketNumber": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "usesWorktree": {
+                  "type": "boolean"
+                },
+                "worktreePath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "ticketNumber",
+                "title",
+                "status",
+                "priority",
+                "labels",
+                "usesWorktree",
+                "preferredHarnessId",
+                "order",
+                "worktreePath",
+                "branch",
+                "baseBranch",
+                "prUrl",
+                "createdAt",
+                "updatedAt",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "ticket"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.setPriority": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId",
+            "priority"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "prUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "preferredHarnessId": {
+                  "type": "string"
+                },
+                "priority": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                "ticketNumber": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "usesWorktree": {
+                  "type": "boolean"
+                },
+                "worktreePath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "ticketNumber",
+                "title",
+                "status",
+                "priority",
+                "labels",
+                "usesWorktree",
+                "preferredHarnessId",
+                "order",
+                "worktreePath",
+                "branch",
+                "baseBranch",
+                "prUrl",
+                "createdAt",
+                "updatedAt",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "ticket"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.setSessionDefaults": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "projectId",
+            "model"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "additionalProperties": false,
+              "properties": {
+                "authorityPolicy": {
+                  "$ref": "#/$defs/__schema3"
+                },
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "colorIndex": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "decisionModel": {
+                  "$ref": "#/$defs/__schema2"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "sessionModel": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "modelId": {
+                          "type": "string"
+                        },
+                        "providerId": {
+                          "type": "string"
+                        },
+                        "reasoningLevel": {
+                          "enum": [
+                            "off",
+                            "minimal",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "providerId",
+                        "modelId",
+                        "reasoningLevel"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "setupCommand": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skillModes": {
+                  "additionalProperties": {
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off"
+                    ],
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "sortOrder": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "themeAppearance": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "auto"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "themeCanvas": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "themeOverride": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "ticketPrefix": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "path",
+                "ticketPrefix",
+                "colorIndex",
+                "sortOrder",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "project"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.setSkillModes": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "modes": {
+              "additionalProperties": {
+                "enum": [
+                  "auto",
+                  "manual",
+                  "off"
+                ],
+                "type": "string"
+              },
+              "propertyNames": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "projectId",
+            "modes"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "additionalProperties": false,
+              "properties": {
+                "authorityPolicy": {
+                  "$ref": "#/$defs/__schema3"
+                },
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "colorIndex": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "decisionModel": {
+                  "$ref": "#/$defs/__schema2"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "sessionModel": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "modelId": {
+                          "type": "string"
+                        },
+                        "providerId": {
+                          "type": "string"
+                        },
+                        "reasoningLevel": {
+                          "enum": [
+                            "off",
+                            "minimal",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "providerId",
+                        "modelId",
+                        "reasoningLevel"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "setupCommand": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skillModes": {
+                  "additionalProperties": {
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off"
+                    ],
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "sortOrder": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "themeAppearance": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "auto"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "themeCanvas": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "themeOverride": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "ticketPrefix": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "path",
+                "ticketPrefix",
+                "colorIndex",
+                "sortOrder",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "project"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.snapshot": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "labels": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "color": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectId",
+                  "name",
+                  "color"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "project": {
+              "additionalProperties": false,
+              "properties": {
+                "authorityPolicy": {
+                  "$ref": "#/$defs/__schema3"
+                },
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "colorIndex": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "decisionModel": {
+                  "$ref": "#/$defs/__schema2"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "sessionModel": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "modelId": {
+                          "type": "string"
+                        },
+                        "providerId": {
+                          "type": "string"
+                        },
+                        "reasoningLevel": {
+                          "enum": [
+                            "off",
+                            "minimal",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "providerId",
+                        "modelId",
+                        "reasoningLevel"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "setupCommand": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skillModes": {
+                  "additionalProperties": {
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off"
+                    ],
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "sortOrder": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "themeAppearance": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "auto"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "themeCanvas": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "themeOverride": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "ticketPrefix": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "path",
+                "ticketPrefix",
+                "colorIndex",
+                "sortOrder",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "tickets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "baseBranch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "labels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "order": {
+                    "type": "number"
+                  },
+                  "prUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "preferredHarnessId": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "backlog",
+                      "todo",
+                      "doing",
+                      "needs_review",
+                      "done"
+                    ],
+                    "type": "string"
+                  },
+                  "ticketNumber": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "usesWorktree": {
+                    "type": "boolean"
+                  },
+                  "worktreePath": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectId",
+                  "ticketNumber",
+                  "title",
+                  "status",
+                  "priority",
+                  "labels",
+                  "usesWorktree",
+                  "preferredHarnessId",
+                  "order",
+                  "worktreePath",
+                  "branch",
+                  "baseBranch",
+                  "prUrl",
+                  "createdAt",
+                  "updatedAt",
+                  "body"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "project",
+            "tickets",
+            "labels",
+            "cursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.statusEntries": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "enteredAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "status": {
+                "enum": [
+                  "backlog",
+                  "todo",
+                  "doing",
+                  "needs_review",
+                  "done"
+                ],
+                "type": "string"
+              },
+              "ticketId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ticketId",
+              "status",
+              "enteredAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.ticketBody": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.ticketEvents": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "enum": [
+                  "user",
+                  "session",
+                  "automation",
+                  "unauthenticated"
+                ],
+                "type": "string"
+              },
+              "actorContext": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "ticketId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "sessionId",
+                      "ticketId"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "ticketId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "ticketId",
+              "actor",
+              "createdAt",
+              "payload"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.unarchiveTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "prUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "preferredHarnessId": {
+                  "type": "string"
+                },
+                "priority": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                "ticketNumber": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "usesWorktree": {
+                  "type": "boolean"
+                },
+                "worktreePath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "ticketNumber",
+                "title",
+                "status",
+                "priority",
+                "labels",
+                "usesWorktree",
+                "preferredHarnessId",
+                "order",
+                "worktreePath",
+                "branch",
+                "baseBranch",
+                "prUrl",
+                "createdAt",
+                "updatedAt",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "ticket"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.updateComment": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "body": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "commentId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "commandId",
+            "commentId",
+            "body"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "comment": {
+              "additionalProperties": false,
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "sessionId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ticketId": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "ticketId",
+                "sessionId",
+                "actor",
+                "body",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "comment"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.updateProject": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "baseBranch": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "setupCommand": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "commandId",
+            "projectId",
+            "baseBranch"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "additionalProperties": false,
+              "properties": {
+                "authorityPolicy": {
+                  "$ref": "#/$defs/__schema3"
+                },
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "colorIndex": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "decisionModel": {
+                  "$ref": "#/$defs/__schema2"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "sessionModel": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "modelId": {
+                          "type": "string"
+                        },
+                        "providerId": {
+                          "type": "string"
+                        },
+                        "reasoningLevel": {
+                          "enum": [
+                            "off",
+                            "minimal",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "providerId",
+                        "modelId",
+                        "reasoningLevel"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "setupCommand": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skillModes": {
+                  "additionalProperties": {
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off"
+                    ],
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "sortOrder": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "themeAppearance": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "auto"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "themeCanvas": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "themeOverride": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "ticketPrefix": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "path",
+                "ticketPrefix",
+                "colorIndex",
+                "sortOrder",
+                "createdAt",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "project"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "board.updateTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "baseBranch": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "body": {
+              "type": "string"
+            },
+            "branch": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "usesWorktree": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "commandId",
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": false,
+              "properties": {
+                "commandId": {
+                  "type": "string"
+                },
+                "replayed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "const": "completed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commandId",
+                "status",
+                "replayed"
+              ],
+              "type": "object"
+            },
+            "throughCursor": {
+              "type": "string"
+            },
+            "ticket": {
+              "additionalProperties": false,
+              "properties": {
+                "baseBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "labels": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "order": {
+                  "type": "number"
+                },
+                "prUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "preferredHarnessId": {
+                  "type": "string"
+                },
+                "priority": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "backlog",
+                    "todo",
+                    "doing",
+                    "needs_review",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                "ticketNumber": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "usesWorktree": {
+                  "type": "boolean"
+                },
+                "worktreePath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "ticketNumber",
+                "title",
+                "status",
+                "priority",
+                "labels",
+                "usesWorktree",
+                "preferredHarnessId",
+                "order",
+                "worktreePath",
+                "branch",
+                "baseBranch",
+                "prUrl",
+                "createdAt",
+                "updatedAt",
+                "body"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt",
+            "throughCursor",
+            "ticket"
           ],
           "type": "object"
         },
@@ -24323,7 +29159,6 @@
             },
             "value": {
               "maxLength": 16384,
-              "minLength": 1,
               "type": "string"
             }
           },

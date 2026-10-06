@@ -1,12 +1,7 @@
 import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
 export type { ProcedureSchema } from "./procedure-schema";
 import { TRPCError, tracked } from "@trpc/server";
-import {
-  isHostActor,
-  type HostActor,
-  type HostOperation,
-  type JsonUnsafeProcedures,
-} from "@volli/host-protocol";
+import { isHostActor, type HostActor, type JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { SessionReadInput } from "./session-reads";
 import {
@@ -69,6 +64,7 @@ import {
   type RouterTransport,
   type RouterContextPorts,
 } from "./catalog";
+import { AsyncQueue } from "./async-queue";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
 import {
   SIGN_IN_VOID_OUTPUTS,
@@ -150,13 +146,20 @@ export {
   type BoardTicketMoveInput,
 } from "./board-router";
 export {
+  createHostRouter,
+  type HostRouter,
+  type HostRouterCatalogBinding,
+  type HostRouterContext,
+  type HostRouterFeatureBinding,
+  type HostRouterPaths,
+} from "./host-router";
+export {
   createDesktopRouter,
   desktopProcedureSchemas,
   type DesktopRouter,
   type DesktopRouterContext,
   type DesktopRouterHandlers,
 } from "./desktop-router";
-export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
 export {
   DESKTOP_IPC_EXPOSURE,
   DESKTOP_IPC_PATHS,
@@ -168,6 +171,7 @@ export {
   type IpcExposureTable,
 } from "./desktop-ipc";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
+export { AsyncQueue } from "./async-queue";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
@@ -1710,100 +1714,11 @@ export type SessionRouterCatalogBinding = AssertNever<
 >;
 
 /**
- * Every operation a v1 feature grants is a procedure this router serves
- * (`HOST_FEATURE_OPERATIONS`, VC-663): a feature that names a key no router
- * has fails `pnpm typecheck` here. Moves to the composition root with the
- * catalog binding when a second area router lands.
- */
-export type SessionRouterFeatureBinding = AssertNever<
-  Exclude<HostOperation, ProcedurePaths<AppRouter["_def"]["record"]>>
->;
-
-/**
  * The Session RPC seam, checked in one place. If a procedure starts carrying a
  * value that changes across a JSON wire, this alias fails here and names the
  * procedure plus `input` or `output`.
  */
 export type SessionRouterJsonSafety = AssertNever<JsonUnsafeProcedures<AppRouter>>;
-
-export class AsyncQueue<T> implements AsyncIterable<T> {
-  readonly #values: T[] = [];
-  /** Each held value's size, beside it, when the queue is bounded in bytes. */
-  readonly #sizes: number[] = [];
-  readonly #waiters: ((result: IteratorResult<T>) => void)[] = [];
-  readonly #capacity: number;
-  readonly #maxBytes: number;
-  #bytes = 0;
-  #closed = false;
-  #overflowed = false;
-
-  /**
-   * `capacity` bounds the values held; `maxBytes`, when given, bounds the
-   * sizes their pushes declared too, so a few huge values overflow it as
-   * surely as many small ones.
-   */
-  constructor(capacity = 4_096, maxBytes = Number.POSITIVE_INFINITY) {
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error("AsyncQueue capacity must be a positive integer");
-    }
-    this.#capacity = capacity;
-    this.#maxBytes = maxBytes;
-  }
-
-  /**
-   * True once a push found the buffer full. **A consumer must convert this into
-   * a terminal error rather than letting the iteration end.** An overflowed
-   * queue ends exactly like an exhausted one, and a normal end is the single
-   * thing this stream must never claim after dropping frames: downstream it
-   * becomes a `done` frame, then `observer.complete()`, then a surface that
-   * silently stops updating while its own state is already stale.
-   */
-  get overflowed(): boolean {
-    return this.#overflowed;
-  }
-
-  /** `bytes` is what this value counts against `maxBytes`. */
-  push(value: T, bytes = 0): void {
-    if (this.#closed) return;
-    const waiter = this.#waiters.shift();
-    if (waiter) waiter({ done: false, value });
-    else if (this.#values.length < this.#capacity && this.#bytes + bytes <= this.#maxBytes) {
-      this.#values.push(value);
-      this.#sizes.push(bytes);
-      this.#bytes += bytes;
-    } else {
-      // Closed without discarding: what the queue did hold is still contiguous
-      // history the consumer can use, and the gap only starts after it. Dropping
-      // it would widen the hole the consumer then has to resume across.
-      this.#overflowed = true;
-      this.close(false);
-    }
-  }
-
-  close(discard = true): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    if (discard) {
-      this.#values.length = 0;
-      this.#sizes.length = 0;
-      this.#bytes = 0;
-    }
-    for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
-  }
-
-  async next(): Promise<IteratorResult<T>> {
-    if (this.#values.length > 0) {
-      this.#bytes -= this.#sizes.shift()!;
-      return { done: false, value: this.#values.shift()! };
-    }
-    if (this.#closed) return { done: true, value: undefined };
-    return new Promise((resolve) => this.#waiters.push(resolve));
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return this;
-  }
-}
 
 function maxCursor(cursor: number | undefined, lastEventId: string | undefined): number {
   const restored = lastEventId === undefined ? 0 : Number.parseInt(lastEventId, 10);

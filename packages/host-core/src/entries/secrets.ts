@@ -14,6 +14,7 @@ export {
   CredentialLock,
   type CredentialStatus,
   credentialsUnavailable,
+  fileCredentialKeyring,
   fileSecretKey,
   keychainCredentialKeyring,
   SealedInventory,

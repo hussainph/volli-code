@@ -18,6 +18,7 @@ import {
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
+import type { BoardChangeFeed } from "@volli/host-core/board";
 import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
@@ -40,7 +41,6 @@ import {
   createSessionRuntimeLifecycle,
   fileGitCredentialStore,
   GIT_CREDENTIALS_FILE,
-  gitCredentialHelperEnv,
   HostSignIns,
 } from "@volli/host-core/session-runtime";
 import {
@@ -52,6 +52,7 @@ import {
 } from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
+import { sessionGitEnv } from "./agent-git-env";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -67,6 +68,8 @@ export interface HeadlessRuntimeOptions {
    * Sessions push exactly as before.
    */
   gitCredentialHelper?: string | null;
+  /** The box's platform (`process.platform`): on a Mac, Session git never reaches the keychain. */
+  platform?: string;
 }
 
 function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {
@@ -100,6 +103,8 @@ export function createHeadlessSessionRuntime(input: {
   host: LiveHostCore;
   version: string;
   ports: HostCorePorts;
+  /** The host's board change feeds (VC-565): its bus already feeds them. */
+  boardFeed?: BoardChangeFeed;
   secrets: HeadlessSecrets;
   env: Readonly<Record<string, string | undefined>>;
   /** The agent socket this host serves; every Session command is pointed at it. */
@@ -181,19 +186,18 @@ export function createHeadlessSessionRuntime(input: {
     // with operators and bakes nothing. Without it the agent's `volli` answers
     // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
     // The Session's identity is still composed after this, never from here.
-    concurrencyEnvFor: async (sessionId) => {
-      const environment: Record<string, string> = {
-        ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
-        [VOLLI_SOCKET_ENV]: input.socketPath,
-      };
-      // A Session's `git push` over HTTPS asks Volli's helper for the push
-      // credential a person sent this host (VC-702), behind `cloud`. Appended
-      // after any command-scope git configuration composed above it (a
-      // platform's reset of the helper list goes first), never over it.
-      return gitHelper === null
-        ? environment
-        : { ...environment, ...gitCredentialHelperEnv(gitHelper, environment) };
-    },
+    // A Session's git (VC-700, VC-702): on a Mac the keychain helper is reset
+    // first, and Volli's push-credential helper (behind `cloud`) is appended
+    // after it, never over it.
+    concurrencyEnvFor: async (sessionId) =>
+      sessionGitEnv(
+        {
+          ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
+          [VOLLI_SOCKET_ENV]: input.socketPath,
+        },
+        options.platform ?? process.platform,
+        gitHelper,
+      ),
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
       sessionEngine,
@@ -365,6 +369,8 @@ export function createHeadlessSessionRuntime(input: {
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
           signIns,
+          ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
+          ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
         }),
       };
     },

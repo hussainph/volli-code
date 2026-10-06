@@ -5,12 +5,12 @@
  * `start`; and the one-line JSON answer each prints (`@volli/host-install/
  * contract`).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { HostdFailure, HostdFailureCode, InstallMode } from "@volli/host-install/contract";
 
 import type { InstallLayout } from "./layout";
-import { SERVICE_UNIT } from "./layout";
+import { LAUNCHD_LABEL, SERVICE_UNIT } from "./layout";
 import { atomicWrite } from "./write-file";
 
 export interface CommandResult {
@@ -91,6 +91,21 @@ export function unitState(run: RunTool, mode: InstallMode): UnitState {
       ? new RegExp(`^${name}=(.*)$`, "mu").exec(result.stdout)?.[1]?.trim() || "unknown"
       : "unknown";
   return { name: SERVICE_UNIT, active: field("ActiveState"), enabled: field("UnitFileState") };
+}
+
+/**
+ * A Mac's agent as launchd sees it in the per-user domain: `active` while it
+ * runs, `inactive` when it is not loaded or between runs; `enabled` while
+ * its plist is in ~/Library/LaunchAgents.
+ */
+export function agentState(run: RunTool, layout: InstallLayout, uid: number): UnitState {
+  const printed = run("launchctl", ["print", `user/${uid}/${LAUNCHD_LABEL}`]);
+  const state = /^\s*state = (.+)$/mu.exec(printed.stdout)?.[1]?.trim();
+  return {
+    name: LAUNCHD_LABEL,
+    active: printed.code === 0 && state === "running" ? "active" : "inactive",
+    enabled: existsSync(layout.agentPlist!) ? "enabled" : "not-found",
+  };
 }
 
 /** Whether `login`'s user units outlive their sessions; `null` when logind will not say. */

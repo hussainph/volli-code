@@ -134,13 +134,15 @@ describe("the helper's protocol", () => {
 
   it("appends after configuration a layer before it already set, never over it", () => {
     // A platform's reset of the helper list (an empty value clears it), then Volli's.
-    const reset = appendGitConfig({}, [["credential.helper", ""]]);
+    const reset = appendGitConfig({ PATH: "/usr/bin" }, [["credential.helper", ""]]);
     expect(reset).toEqual({
+      PATH: "/usr/bin",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: "",
     });
     expect(gitCredentialHelperEnv("!volli", reset)).toEqual({
+      ...reset,
       GIT_CONFIG_COUNT: "2",
       GIT_CONFIG_KEY_1: "credential.helper",
       GIT_CONFIG_VALUE_1: "!volli",

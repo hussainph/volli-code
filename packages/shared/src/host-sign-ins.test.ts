@@ -42,7 +42,8 @@ describe("expiredHostSignIns", () => {
       ],
       git: [{ host: "github.com", state: "signed-in", kind: "git" }],
     };
-    expect(expiredHostSignIns(status).map((row) => row.providerId)).toEqual(["anthropic"]);
+    // Exactly `HostRecord.expiredSignIns`'s shape (VC-576): a provider and its name.
+    expect(expiredHostSignIns(status)).toStrictEqual([{ providerId: "anthropic", name: "Claude" }]);
   });
 });
 

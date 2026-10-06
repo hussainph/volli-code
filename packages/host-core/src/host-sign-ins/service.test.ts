@@ -224,10 +224,10 @@ describe("status", () => {
     });
     // An ambient-only provider offers no sign-in and stores nothing: not a row.
     expect(status.providers.some((row) => row.providerId === "ambient-env")).toBe(false);
-    // The host-chip badge's read (VC-576).
-    expect(expiredHostSignIns(status).map((row) => row.providerId)).toEqual([
-      "expired-oauth",
-      "needs-sign-in-again",
+    // The host-chip badge's read, in `HostRecord.expiredSignIns`'s shape (VC-576).
+    expect(expiredHostSignIns(status)).toStrictEqual([
+      { providerId: "expired-oauth", name: "expired-oauth" },
+      { providerId: "needs-sign-in-again", name: "needs-sign-in-again" },
     ]);
     const wire = JSON.stringify([status, await h.signIns.status()]);
     expect(wire).not.toContain(API_KEY);
@@ -468,6 +468,63 @@ describe("the auth-callback relay", () => {
       ),
     ).toMatchObject({ reason: "sign-in-conflict" });
     expect(replay).toHaveBeenCalledOnce();
+  });
+
+  it("revokes the grant as soon as cancel returns, whatever Pi's unwinding takes", async () => {
+    // A Pi whose login takes its time to unwind after the abort.
+    const unwound = Promise.withResolvers<void>();
+    const replay = vi.fn(async () => 200);
+    const h = harness({
+      flows: {
+        anthropic: async (steps, signal) => {
+          steps.say({
+            kind: "auth-url",
+            url: "https://provider.invalid/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback",
+            instructions: null,
+          });
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true }),
+          );
+          await unwound.promise;
+          throw new Error("cancelled");
+        },
+      },
+      replay,
+    });
+    const mac = connection("mac");
+    const { flowId } = h.signIns.start({ providerId: "anthropic" }, mac.call);
+    h.signIns.cancel({ flowId }, mac.call);
+    expect(
+      await refusal(() =>
+        h.signIns.deliverCallback({ flowId, pathAndQuery: "/callback?code=c&state=s" }, mac.call),
+      ),
+    ).toMatchObject({ reason: "sign-in-conflict" });
+    expect(
+      await refusal(() => h.signIns.answer({ flowId, promptId: "p", value: PASTED }, mac.call)),
+    ).toMatchObject({ reason: "sign-in-conflict" });
+    unwound.resolve();
+    expect(replay).not.toHaveBeenCalled();
+  });
+
+  it("abandons a replay still running when the flow is cancelled, and never reports it delivered", async () => {
+    const answered = Promise.withResolvers<number>();
+    let seen: AbortSignal | undefined;
+    const replay = vi.fn((_url: string, signal: AbortSignal) => {
+      seen = signal;
+      return answered.promise;
+    });
+    const h = harness({ flows: { anthropic: loopbackFlow(() => 53692) }, replay });
+    const mac = connection("mac");
+    const { flowId } = h.signIns.start({ providerId: "anthropic" }, mac.call);
+    const delivering = refusal(() =>
+      h.signIns.deliverCallback({ flowId, pathAndQuery: "/callback?code=c&state=s" }, mac.call),
+    );
+    await until(() => seen !== undefined);
+    expect(seen!.aborted).toBe(false);
+    h.signIns.cancel({ flowId }, mac.call);
+    expect(seen!.aborted).toBe(true);
+    answered.resolve(200);
+    expect(await delivering).toMatchObject({ reason: "sign-in-conflict" });
   });
 
   it("sends no grant to a connection that cannot relay; it pastes instead", async () => {

@@ -314,7 +314,18 @@ step 7, once you can reach the socket.
 > Session command finds it through Volli's own credential helper
 > (`volli-hostd git-credential`, installed as command-scope git configuration,
 > never in a git config file or a remote URL). Git still asks any helper you
-> configure below first. The steps below are the manual path.
+> configure below first. The helper answers for **any repository on that git
+> host**, for fetch and clone as well as push, so the token's own scope (a
+> fine-grained token limited to one repository) is the real limit.
+>
+> **What `0600` protects.** On a system install every Session runs as the
+> same account as hostd (`volli`). The file modes fence out *other* users
+> only: any Session can read `git-push.json` and `auth.json` directly, for
+> example with `cat`. Volli's structured read tools refuse those paths, but
+> that is not a sandbox. The boundary is what you agreed to when you sent the
+> credential: the box keeps a copy of it, for its Sessions.
+>
+> The steps below are the manual path.
 
 The agent commits and pushes as `volli`, with `volli`'s git identity and
 credential. Set the identity and the shared checkout folder:

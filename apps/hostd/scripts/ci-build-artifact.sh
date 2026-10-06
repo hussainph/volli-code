@@ -6,6 +6,10 @@
 #   docker build -f .devcontainer/host/Dockerfile -t volli-host-dev .
 #   docker run --rm -v "$PWD:/src:ro" -v "$PWD/.tmp/hostd:/out" volli-host-dev \
 #     bash /src/apps/hostd/scripts/ci-build-artifact.sh
+#
+# macOS has no image: release.yml's hostd-darwin job runs the same install,
+# integration test and packager directly on the runner, and
+# scripts/release-workflow.test.mjs holds the two in step.
 set -euo pipefail
 
 repo=/workspace/repo

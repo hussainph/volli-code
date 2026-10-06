@@ -62,6 +62,14 @@ const identifier = z.string().trim().min(1).max(256);
  */
 const secretValue = z.string().min(1).max(16_384);
 
+/**
+ * A step's answer: a pasted redirect, a choice, a value. May be empty: some
+ * steps take blank as their ordinary answer (GitHub Copilot's "GitHub
+ * Enterprise URL/domain (blank for github.com)"). Bounded like a secret,
+ * because a pasted API key is an answer too.
+ */
+const promptAnswer = z.string().max(16_384);
+
 const stateSchema = z.enum(["signed-in", "expired", "missing"]);
 
 const methodSchema = z.object({
@@ -196,7 +204,7 @@ export function signInProcedures() {
           }
         }),
       answer: hostProcedure("signIns.answer")
-        .input(z.object({ flowId: identifier, promptId: identifier, value: secretValue }))
+        .input(z.object({ flowId: identifier, promptId: identifier, value: promptAnswer }))
         .output(z.null())
         .mutation(async ({ ctx, input }) => {
           await ctx.handlers["signIns.answer"](input, ctx.call);

@@ -1,5 +1,12 @@
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type { BootstrapPayload } from "../../../ipc/contract";
-import { CHAT_DRAFTS_APP_STATE_KEY, type VenueSnapshot } from "@volli/shared";
+import {
+  CHAT_DRAFTS_APP_STATE_KEY,
+  type Project,
+  type Ticket,
+  type VenueSnapshot,
+} from "@volli/shared";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";
@@ -10,8 +17,29 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-import { boot, refreshPlanningData, type BootGateway, type BootStorage } from "./boot";
+import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
+
+import { boardProtocol, startBoardProtocol, stopBoardProtocol } from "./board-protocol";
+import { sessionRpcClient } from "./session-rpc-ipc-link";
+import {
+  boot,
+  refreshPlanningData,
+  startBoardProtocolIfEnabled,
+  type BootGateway,
+  type BootStorage,
+} from "./boot";
 import { takeBootNotice } from "./boot-notice";
+
+// The real client unless a test says otherwise: only the `cloud` flag read is stubbed.
+vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-rpc-ipc-link")>();
+  // A fresh client over whatever bridge the case stubbed: the app's one
+  // client is a singleton, which would carry one case's bridge into the next.
+  return {
+    ...actual,
+    sessionRpcClient: vi.fn(() => actual.createSessionRpcClient(window.api.sessionRpc)),
+  };
+});
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
@@ -961,5 +989,381 @@ describe("refreshPlanningData", () => {
       ticketId: null,
       projectId: null,
     });
+  });
+});
+
+// ---- VC-565: the board on the host protocol (`cloud` on) ------------------------------------
+
+function workspace(id: string): Project {
+  return {
+    id,
+    name: id.toUpperCase(),
+    path: `/${id}`,
+    ticketPrefix: id.toUpperCase(),
+    colorIndex: 0,
+    sortOrder: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function boardTicket(id: string, projectId: string): Ticket {
+  return {
+    id,
+    projectId,
+    ticketNumber: 1,
+    title: `Ticket ${id}`,
+    body: `# ${id}`,
+    status: "todo",
+    priority: "medium",
+    labels: [],
+    usesWorktree: true,
+    preferredHarnessId: "claude-code",
+    order: 0,
+    worktreePath: null,
+    branch: null,
+    baseBranch: null,
+    prUrl: null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
+/**
+ * The desktop's generic IPC bridge (`window.api.sessionRpc`, which serves the
+ * board router), answering each project's
+ * snapshot from `boards`, acknowledging each feed, and letting the test push
+ * feed frames. A path in `refuse` answers the router's refusal.
+ */
+function stubBoardBridge(
+  boards: Record<string, Ticket[]>,
+  refuse: Record<string, { code: string; message: string }> = {},
+) {
+  let listener: ((event: IpcEvent) => void) | undefined;
+  let feeds = 0;
+  const request = vi.fn(async (call: IpcRequest): Promise<IpcResponse> => {
+    const refusal = refuse[call.path];
+    if (refusal !== undefined) return { ok: false, error: refusal };
+    const { projectId } = call.input as { projectId: string };
+    if (call.path === "board.changes") return { ok: true, subscriptionId: `feed-${++feeds}` };
+    if (call.path === "board.snapshot") {
+      const tickets = boards[projectId];
+      if (tickets === undefined) throw new Error(`no board for ${projectId}`);
+      return {
+        ok: true,
+        data: { project: workspace(projectId), tickets, labels: [], cursor: `${projectId}:0` },
+      };
+    }
+    throw new Error(`unexpected ${call.path}`);
+  });
+  vi.stubGlobal("window", {
+    api: {
+      sessionRpc: {
+        request,
+        onEvent: (next: (event: IpcEvent) => void) => {
+          listener = next;
+          return () => {};
+        },
+        cancel: vi.fn(),
+      },
+    },
+  });
+  const push = (event: IpcEvent) => listener!(event);
+  return { request, push };
+}
+
+describe("startBoardProtocolIfEnabled", () => {
+  beforeEach(() => {
+    useBoardStore.getState().hydrate({}, {});
+    useProjectsStore.getState().hydrate([workspace("p1"), workspace("p2")], "p1");
+  });
+
+  afterEach(() => {
+    stopBoardProtocol();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("reads the flag from the host's experiments by default", async () => {
+    const query = vi.fn(async () => ({ cloud: { enabled: false } }));
+    vi.mocked(sessionRpcClient).mockReturnValueOnce({
+      settings: { experiments: { query } },
+    } as never);
+
+    expect(await startBoardProtocolIfEnabled()).toBe(false);
+    expect(query).toHaveBeenCalledOnce();
+    expect(boardProtocol()).toBeNull();
+  });
+
+  it("leaves the board on the legacy IPC with the flag off", async () => {
+    expect(await startBoardProtocolIfEnabled(async () => false)).toBe(false);
+    expect(boardProtocol()).toBeNull();
+  });
+
+  it("leaves the board on the legacy IPC when the flag cannot be read", async () => {
+    expect(
+      await startBoardProtocolIfEnabled(async () => {
+        throw new Error("no host");
+      }),
+    ).toBe(false);
+    expect(boardProtocol()).toBeNull();
+  });
+
+  it("with the flag on, opens every Workspace from its snapshot and paints the board store", async () => {
+    const { request } = stubBoardBridge({
+      p1: [boardTicket("a", "p1")],
+      p2: [boardTicket("b", "p2")],
+    });
+
+    expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
+
+    expect(boardProtocol()?.sync.follows("p1")).toBe(true);
+    expect(boardProtocol()?.sync.follows("p2")).toBe(true);
+    expect(request.mock.calls.map(([call]) => [call.path, call.input])).toEqual(
+      expect.arrayContaining([
+        ["board.snapshot", { projectId: "p1" }],
+        ["board.snapshot", { projectId: "p2" }],
+        ["board.changes", { projectId: "p1", lastEventId: "p1:0" }],
+        ["board.changes", { projectId: "p2", lastEventId: "p2:0" }],
+      ]),
+    );
+    expect(useBoardStore.getState().ticketsByProject).toEqual({
+      p1: [boardTicket("a", "p1")],
+      p2: [boardTicket("b", "p2")],
+    });
+  });
+
+  it("says which Workspace it could not open, and opens the rest", async () => {
+    stubBoardBridge({ p1: [boardTicket("a", "p1")] });
+    const error = vi.spyOn(toast, "error");
+
+    expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
+
+    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([boardTicket("a", "p1")]);
+    expect(error).toHaveBeenCalledWith("Couldn't open the board: no board for p2", {
+      duration: 8000,
+      closeButton: true,
+    });
+  });
+
+  it("says what a failed open threw when it is not an Error", async () => {
+    stubBoardBridge({});
+    vi.spyOn(BoardSync.prototype, "open").mockRejectedValue("refused");
+    const error = vi.spyOn(toast, "error");
+
+    await startBoardProtocolIfEnabled(async () => true);
+
+    expect(error).toHaveBeenCalledWith("Couldn't open the board: refused", expect.anything());
+  });
+
+  it("routes the feed's project rows, ticket changes and moved checkouts to their stores", async () => {
+    const { push } = stubBoardBridge({ p1: [boardTicket("a", "p1")], p2: [] });
+    const invalidate = vi.spyOn(useVenueStore.getState(), "invalidateTickets");
+    await startBoardProtocolIfEnabled(async () => true);
+    const renamed = { ...workspace("p1"), name: "Renamed" };
+    const version = useBoardStore.getState().lastPlanningChange.version;
+
+    push({
+      kind: "data",
+      subscriptionId: "feed-1",
+      eventId: "p1:1",
+      data: {
+        cursor: "p1:1",
+        changes: [
+          { kind: "project", op: "upsert", id: "p1", projectId: "p1", project: renamed },
+          { kind: "comment", op: "upsert", id: "c1", projectId: "p1", ticketId: "a" },
+          { kind: "ticket", op: "delete", id: "a", projectId: "p1", checkoutMoved: true },
+        ],
+      },
+    });
+
+    expect(useProjectsStore.getState().projects[0]?.name).toBe("Renamed");
+    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({
+      version: version + 2,
+      ticketId: "a",
+      projectId: "p1",
+    });
+    expect(invalidate).toHaveBeenCalledWith("a");
+    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([]);
+  });
+
+  it("says when a board write fails", async () => {
+    stubBoardBridge(
+      { p1: [boardTicket("a", "p1")], p2: [] },
+      { "board.moveTickets": { code: "CONFLICT", message: "stale board" } },
+    );
+    const error = vi.spyOn(toast, "error");
+    await startBoardProtocolIfEnabled(async () => true);
+
+    await useBoardStore.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(error).toHaveBeenCalledWith("Couldn't move ticket: stale board", expect.anything());
+    expect(useBoardStore.getState().ticketsByProject.p1?.[0]?.status).toBe("todo");
+  });
+
+  it("warns once that a write is still unconfirmed, and keeps it on the board", async () => {
+    vi.useFakeTimers();
+    try {
+      stubBoardBridge(
+        { p1: [boardTicket("a", "p1")], p2: [] },
+        { "board.moveTickets": { code: "SERVICE_UNAVAILABLE", message: "host-unreachable" } },
+      );
+      const error = vi.spyOn(toast, "error");
+      const warning = vi.spyOn(toast, "warning");
+      await startBoardProtocolIfEnabled(async () => true);
+
+      void useBoardStore.getState().moveTicket("p1", "a", "doing", 0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        "Still trying to move ticket: host-unreachable",
+      );
+      expect(error).not.toHaveBeenCalled();
+      expect(useBoardStore.getState().ticketsByProject.p1?.[0]?.status).toBe("doing");
+    } finally {
+      stopBoardProtocol();
+      vi.useRealTimers();
+    }
+  });
+});
+
+const unused = () => Promise.reject(new Error("not expected"));
+
+/** A transport nothing should reach: these tests spy on the engine itself. */
+function unusedTransport(): BoardSyncTransport {
+  return {
+    snapshot: vi.fn(unused),
+    roster: vi.fn(unused),
+    changes: vi.fn(() => () => {}),
+    createTicket: vi.fn(unused),
+    moveTickets: vi.fn(unused),
+    setPriority: vi.fn(unused),
+    updateTicket: vi.fn(unused),
+    setLabels: vi.fn(unused),
+    setLabelColor: vi.fn(unused),
+    archiveTicket: vi.fn(unused),
+    unarchiveTicket: vi.fn(unused),
+    deleteTicket: vi.fn(unused),
+    archivedTickets: vi.fn(unused),
+  };
+}
+
+describe("refreshPlanningData with the protocol on", () => {
+  function startProtocol(followed: string[]) {
+    const { sync } = startBoardProtocol({
+      view: {
+        paint: vi.fn(),
+        adoptProject: vi.fn(),
+        notePlanningChange: vi.fn(),
+        checkoutMoved: vi.fn(),
+        failed: vi.fn(),
+      },
+      client: {} as never,
+      sync: { transport: unusedTransport() },
+    });
+    return {
+      sync,
+      follows: vi.spyOn(sync, "follows").mockImplementation((id) => followed.includes(id)),
+      open: vi.spyOn(sync, "open").mockResolvedValue(),
+      close: vi.spyOn(sync, "close"),
+    };
+  }
+
+  beforeEach(() => {
+    useBoardStore.getState().hydrate({}, {});
+  });
+
+  afterEach(() => {
+    stopBoardProtocol();
+    vi.restoreAllMocks();
+  });
+
+  it("reads nothing for a change to a Workspace the board follows: its feed carries it", async () => {
+    startProtocol(["p1"]);
+    const gateway = fakeGateway();
+
+    expect(await refreshPlanningData({ projectId: "p1", ticketId: "t1" }, gateway)).toEqual({
+      ok: true,
+    });
+
+    expect(gateway.bootstrap).not.toHaveBeenCalled();
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+  });
+
+  it("re-reads only the Workspace list for an untargeted change: forgets the removed, opens the new", async () => {
+    const { open, close } = startProtocol(["p1", "p2"]);
+    useProjectsStore.getState().hydrate([workspace("p1"), workspace("p2")], "p2");
+    const held = [boardTicket("a", "p1")];
+    useBoardStore
+      .getState()
+      .hydrate({ p1: held, p2: [boardTicket("b", "p2")] }, { p1: [], p2: [] });
+    const version = useBoardStore.getState().lastPlanningChange.version;
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({
+          projects: [workspace("p1"), workspace("p3")],
+          // The bootstrap's board slices are the feed's business now.
+          ticketsByProject: { p1: [], p3: [] },
+        }),
+      })),
+    });
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
+
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "p3"]);
+    // The selected Workspace was removed: the first one is selected.
+    expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
+    expect(close).toHaveBeenCalledWith("p2");
+    expect(useBoardStore.getState().ticketsByProject.p2).toBeUndefined();
+    expect(useBoardStore.getState().ticketsByProject.p1).toBe(held);
+    expect(useBoardStore.getState().ticketsByProject.p3).toEqual([]);
+    expect(open.mock.calls).toEqual([["p3"]]);
+    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({
+      version: version + 1,
+      ticketId: null,
+      projectId: null,
+    });
+  });
+
+  it("re-reads the list for a change naming a Workspace it does not follow, keeping the selection", async () => {
+    startProtocol(["p1"]);
+    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({ projects: [workspace("p1"), workspace("p9")] }),
+      })),
+    });
+
+    expect(await refreshPlanningData({ projectId: "p9" }, gateway)).toEqual({ ok: true });
+
+    expect(gateway.bootstrap).toHaveBeenCalledOnce();
+    expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
+    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({ projectId: "p9" });
+  });
+
+  it("selects nothing when no Workspace is left", async () => {
+    startProtocol([]);
+    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
+    const gateway = fakeGateway();
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
+
+    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+  });
+
+  it("answers a failed list read untouched, changing nothing", async () => {
+    startProtocol([]);
+    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db locked" })),
+    });
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: false, error: "db locked" });
+
+    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1"]);
   });
 });

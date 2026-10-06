@@ -17,7 +17,15 @@ import {
   generateHostdReleaseManifest,
   releaseVersion,
   repositoryRoot,
+  targets,
 } from "./hostd-release-manifest.mjs";
+
+const expectedTargets = [
+  ["linux", "x64"],
+  ["linux", "arm64"],
+  ["darwin", "arm64"],
+  ["darwin", "x64"],
+];
 
 function fixture(t, version = "1.2.3") {
   const root = mkdtempSync(join(repositoryRoot, ".hostd-manifest-test-"));
@@ -28,7 +36,9 @@ function fixture(t, version = "1.2.3") {
   const assets = join(root, "assets");
   mkdirSync(assets);
   writeFileSync(join(root, "payload"), "hostd test payload\n");
-  const names = ["x64", "arm64"].map((arch) => `volli-hostd-${version}-linux-${arch}.tar.gz`);
+  const names = expectedTargets.map(
+    ([platform, arch]) => `volli-hostd-${version}-${platform}-${arch}.tar.gz`,
+  );
   for (const name of names) {
     execFileSync("tar", ["-czf", join(assets, name), "-C", root, "payload"]);
     const sha256 = createHash("sha256")
@@ -48,10 +58,7 @@ for (const version of ["1.2.3", "1.2.3-canary.42", "1.2.3-beta.1"]) {
     assert.equal(manifest.releaseTag, `v${version}`);
     assert.deepEqual(
       manifest.assets.map(({ platform, arch }) => [platform, arch]),
-      [
-        ["linux", "x64"],
-        ["linux", "arm64"],
-      ],
+      expectedTargets,
     );
     const sums = names
       .map((name, index) => {
@@ -79,18 +86,29 @@ test("fails on root/desktop version drift before writing outputs", async (t) => 
   assert.equal(existsSync(join(assets, "SHA256SUMS")), false);
 });
 
-for (const target of ["tarball", "sidecar"]) {
-  test(`rejects missing ${target}`, async (t) => {
-    const { root, assets, names } = fixture(t);
-    rmSync(join(assets, names[1] + (target === "sidecar" ? ".sha256" : "")));
-    await assert.rejects(generateHostdReleaseManifest(assets, root), /Missing release asset/);
-    assert.equal(existsSync(join(assets, "hostd-release-manifest.json")), false);
-  });
+test("release targets are exactly linux x64/arm64 then darwin arm64/x64", () => {
+  assert.deepEqual(
+    targets.map(({ platform, arch }) => [platform, arch]),
+    expectedTargets,
+  );
+  assert.ok(Object.isFrozen(targets));
+});
+
+for (const [index, [platform, arch]] of expectedTargets.entries()) {
+  for (const target of ["tarball", "sidecar"]) {
+    test(`rejects missing ${platform}-${arch} ${target}`, async (t) => {
+      const { root, assets, names } = fixture(t);
+      rmSync(join(assets, names[index] + (target === "sidecar" ? ".sha256" : "")));
+      await assert.rejects(generateHostdReleaseManifest(assets, root), /Missing release asset/);
+      assert.equal(existsSync(join(assets, "SHA256SUMS")), false);
+      assert.equal(existsSync(join(assets, "hostd-release-manifest.json")), false);
+    });
+  }
 }
 
 test("rejects tarball tampering and emits neither output", async (t) => {
   const { root, assets, names } = fixture(t);
-  writeFileSync(join(assets, names[1]), "tampered");
+  writeFileSync(join(assets, names[3]), "tampered");
   await assert.rejects(generateHostdReleaseManifest(assets, root), /SHA256 mismatch/);
   assert.equal(existsSync(join(assets, "SHA256SUMS")), false);
   assert.equal(existsSync(join(assets, "hostd-release-manifest.json")), false);
@@ -119,6 +137,18 @@ test("rejects extra/wrong-version filenames", async (t) => {
   renameSync(join(assets, names[0]), join(assets, "volli-hostd-9.9.9-linux-x64.tar.gz"));
   await assert.rejects(generateHostdReleaseManifest(assets, root), /Unexpected release asset/);
 });
+
+for (const extra of [
+  "volli-hostd-1.2.3-darwin-universal.tar.gz",
+  "volli-hostd-1.2.3-win32-x64.tar.gz",
+]) {
+  test(`rejects an unlisted target: ${extra}`, async (t) => {
+    const { root, assets } = fixture(t);
+    writeFileSync(join(assets, extra), "unexpected");
+    await assert.rejects(generateHostdReleaseManifest(assets, root), /Unexpected release asset/);
+    assert.equal(existsSync(join(assets, "SHA256SUMS")), false);
+  });
+}
 
 test("CLI requires --assets and generates outputs at the requested path", (t) => {
   const script = join(repositoryRoot, "scripts/hostd-release-manifest.mjs");

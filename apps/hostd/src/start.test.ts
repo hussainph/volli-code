@@ -1,11 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { installLayout, type InstallLayout } from "./layout";
 import { ManagementError, readManaged, writeManaged, type CommandResult } from "./management";
-import { runStart, type StartCommand, type StartPorts } from "./start";
+import {
+  AGENT_LOG_MAX_BYTES,
+  logTail,
+  rotateLog,
+  runStart,
+  type StartCommand,
+  type StartPorts,
+} from "./start";
 import type { HostdStatus, StatusProbes } from "./status";
 
 let root: string;
@@ -116,7 +123,12 @@ describe("start", () => {
     const fake = box({ systemctl: () => ({ stdout: "ActiveState=activating\n" }) });
     const p = ports({
       run: fake.run,
-      probes: probes(status({ version: "1.0.0" }), null, status({ state: "starting" }), status()),
+      probes: probes(
+        status({ version: "1.0.0" }),
+        null,
+        status({ state: "starting", pid: 43 }),
+        status({ pid: 43 }),
+      ),
     });
     expect(await runStart(SYSTEM, p)).toMatchObject({ restarted: true, version: "1.1.0" });
     expect(fake.calls.slice(0, 2)).toEqual([
@@ -281,7 +293,12 @@ describe("start, after the final review", () => {
       installedAt: "t",
     });
     const fake = box();
-    expect(await runStart(SYSTEM, ports({ run: fake.run }))).toMatchObject({ restarted: true });
+    expect(
+      await runStart(
+        SYSTEM,
+        ports({ run: fake.run, probes: probes(status(), status({ pid: 43 })) }),
+      ),
+    ).toMatchObject({ restarted: true });
     expect(fake.calls.slice(0, 2)).toEqual([
       "systemctl stop volli-hostd.service volli-hostd.socket",
       "systemctl start volli-hostd.socket volli-hostd.service",
@@ -290,5 +307,210 @@ describe("start, after the final review", () => {
     const again = box();
     expect(await runStart(SYSTEM, ports({ run: again.run }))).toMatchObject({ restarted: false });
     expect(again.calls).toEqual([]);
+  });
+});
+
+// VC-700 PR 1c: a Mac's host is the person's launchd agent, in user/<uid>.
+describe("start --user on a Mac", () => {
+  const USER: StartCommand = { kind: "start", mode: "user", timeoutMs: 5_000 };
+  let mac: InstallLayout;
+  beforeEach(() => {
+    mac = installLayout("user", { home: join(root, "Users/alice"), env: {}, platform: "darwin" });
+    mkdirSync(mac.root, { recursive: true });
+    mkdirSync(join(root, "Users/alice/Library/Logs"), { recursive: true });
+    writeManaged(mac, { v: 1, mode: "user", version: "1.1.0", port: 7420, installedAt: "t" });
+  });
+  const macPorts = (overrides: Partial<StartPorts> = {}) =>
+    ports({ uid: () => 501, layout: mac, ...overrides });
+
+  it("bootstraps the agent into the per-user domain, out of every domain first", async () => {
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "bootout"
+          ? { code: 3, stderr: "No such process" }
+          : args[0] === "print"
+            ? { code: 113, stderr: "Could not find service" }
+            : {},
+    });
+    const p = macPorts({ run: fake.run, probes: probes(null, status()) });
+    expect(await runStart(USER, p)).toEqual({
+      v: 1,
+      ok: true,
+      mode: "user",
+      version: "1.1.0",
+      restarted: true,
+      hostId: "host-1",
+      listen: { host: "127.0.0.1", port: 7420 },
+      linger: null,
+    });
+    expect(fake.calls).toEqual([
+      // Each bootout that failed is checked: the job is gone, so it may go on.
+      "launchctl bootout gui/501/com.volli.hostd",
+      "launchctl print gui/501/com.volli.hostd",
+      "launchctl bootout user/501/com.volli.hostd",
+      "launchctl print user/501/com.volli.hostd",
+      "launchctl enable user/501/com.volli.hostd",
+      `launchctl bootstrap user/501 ${mac.agentPlist}`,
+    ]);
+    // No logind on a Mac: nothing asked of it.
+    expect(fake.calls.some((call) => call.startsWith("loginctl"))).toBe(false);
+  });
+
+  it("does nothing when the agent already serves the recorded version", async () => {
+    const fake = box();
+    expect(await runStart(USER, macPorts({ run: fake.run }))).toMatchObject({
+      restarted: false,
+      linger: null,
+    });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("answers start-failed with launchctl's words and the agent's log when bootstrap fails", async () => {
+    writeFileSync(mac.logFile!, "earlier\nvolli-hostd: the data directory is not 0700\n");
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "bootstrap"
+          ? { code: 5, stderr: "Bootstrap failed: 5: Input/output error\n" }
+          : {},
+    });
+    expect(
+      await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) }))),
+    ).toMatchObject({
+      code: "start-failed",
+      detail: [
+        "Bootstrap failed: 5: Input/output error",
+        "earlier",
+        "volli-hostd: the data directory is not 0700",
+      ],
+    });
+  });
+
+  it("answers start-failed when launchd says the agent exited non-zero, with the log", async () => {
+    writeFileSync(mac.logFile!, "refusing to boot\n");
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "print" ? { stdout: "\tstate = not running\n\tlast exit code = 78\n" } : {},
+    });
+    expect(
+      await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) }))),
+    ).toMatchObject({ code: "start-failed", detail: ["refusing to boot"] });
+  });
+
+  it("keeps waiting while launchd has it running or has not seen it exit, then times out with the log", async () => {
+    const answers = [
+      { stdout: "\tstate = running\n\tlast exit code = 1\n" },
+      { stdout: "\tstate = spawn scheduled\n\tlast exit code = (never exited)\n" },
+      { code: 113 },
+    ];
+    let printed = 0;
+    const fake = box({
+      launchctl: (args) => (args[0] === "print" ? answers[Math.min(printed++, 2)]! : {}),
+    });
+    const error = await refusal(
+      runStart({ ...USER, timeoutMs: 1_000 }, macPorts({ run: fake.run, probes: probes(null) })),
+    );
+    expect(error).toMatchObject({ code: "start-timeout", detail: ["no status file"] });
+  });
+
+  // The #812 review's B2 reproducer, inverted into the invariant it broke.
+  it("never takes an old host that launchd would not stop for the new release", async () => {
+    writeManaged(mac, {
+      v: 1,
+      mode: "user",
+      version: "1.1.0",
+      release: "1.1.0-new",
+      started: "1.1.0-old",
+      port: 7420,
+      installedAt: "t",
+    });
+    const calls: string[] = [];
+    const run = (tool: string, args: readonly string[]): CommandResult => {
+      calls.push([tool, ...args].join(" "));
+      // The GUI domain's old host stays: its bootout is denied, and print still finds it.
+      if (args[0] === "bootout")
+        return {
+          code: args[1]!.startsWith("gui/") ? 1 : 3,
+          stdout: "",
+          stderr: "Operation not permitted",
+        };
+      if (args[0] === "print")
+        return args[1]!.startsWith("gui/")
+          ? { code: 0, stdout: "\tstate = running\n", stderr: "" }
+          : { code: 113, stdout: "", stderr: "Could not find service" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const error = await refusal(runStart(USER, macPorts({ run, probes: probes(status()) })));
+    expect(error).toMatchObject({
+      code: "start-failed",
+      message: "Couldn't stop the volli-hostd already loaded in gui/501; it is still running.",
+      detail: ["Operation not permitted"],
+    });
+    expect(calls.some((call) => call.startsWith("launchctl bootstrap"))).toBe(false);
+    expect(readManaged(mac)?.started).toBe("1.1.0-old");
+  });
+
+  it("waits for a new process: the old pid still answering is not the new release", async () => {
+    writeManaged(mac, {
+      v: 1,
+      mode: "user",
+      version: "1.1.0",
+      release: "1.1.0-new",
+      started: "1.1.0-old",
+      port: 7420,
+      installedAt: "t",
+    });
+    const gone = box({
+      launchctl: (args) =>
+        args[0] === "print" ? { code: 113 } : args[0] === "bootout" ? { code: 3 } : {},
+    });
+    // Same pid throughout: the replacement never answered.
+    const stuck = await refusal(
+      runStart(
+        { ...USER, timeoutMs: 1_000 },
+        macPorts({ run: gone.run, probes: probes(status()) }),
+      ),
+    );
+    expect(stuck.code).toBe("start-timeout");
+    expect(readManaged(mac)?.started).toBe("1.1.0-old");
+    // A new pid that serves the version is the replacement.
+    const done = await runStart(
+      USER,
+      macPorts({ run: gone.run, probes: probes(status(), status({ pid: 77 })) }),
+    );
+    expect(done).toMatchObject({ restarted: true });
+    expect(readManaged(mac)?.started).toBe("1.1.0-new");
+  });
+
+  it("sets a grown log aside before launchd reopens it, and reads only its tail", async () => {
+    const big = Buffer.alloc(AGENT_LOG_MAX_BYTES + 1, "x");
+    writeFileSync(mac.logFile!, big);
+    const fake = box({
+      launchctl: (args) =>
+        args[0] === "print"
+          ? { code: 113 }
+          : args[0] === "bootstrap"
+            ? { code: 5, stderr: "nope" }
+            : {},
+    });
+    const error = await refusal(runStart(USER, macPorts({ run: fake.run, probes: probes(null) })));
+    expect(error.code).toBe("start-failed");
+    expect(statSync(`${mac.logFile!}.1`).size).toBe(AGENT_LOG_MAX_BYTES + 1);
+    // Only the end is read: a long file's first, cut line is dropped. Written
+    // exclusively: it succeeds only because the grown log was set aside.
+    writeFileSync(mac.logFile!, `${"y".repeat(100)}\nearly\n${"z".repeat(10)}\nlast line\n`, {
+      flag: "wx",
+    });
+    expect(logTail(mac, 22)).toEqual(["zzzzzzzzzz", "last line"]);
+    expect(logTail(mac, 20)).toEqual(["last line"]);
+    expect(logTail(mac)).toEqual(["y".repeat(100), "early", "z".repeat(10), "last line"]);
+    rotateLog(mac.logFile!);
+    expect(existsSync(mac.logFile!)).toBe(true);
+    rotateLog(join(root, "absent.log"));
+  });
+
+  it("refuses a system start: a Mac has none", async () => {
+    expect(await refusal(runStart(SYSTEM, macPorts()))).toMatchObject({
+      code: "system-unsupported",
+    });
   });
 });
