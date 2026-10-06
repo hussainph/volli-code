@@ -1,3 +1,4 @@
+import { procedureSchemas } from "./procedure-schema";
 /**
  * The board area's router (VC-668): the catalog's board commands, projected
  * from the host's handler map. Its first and, until VC-565, only command is
@@ -107,3 +108,8 @@ export type BoardRouterCatalogBinding = AssertNever<
 
 /** Every board procedure's input and output survive JSON (docs/BOUNDARIES.md, rule 3). */
 export type BoardRouterJsonSafety = AssertNever<JsonUnsafeProcedures<BoardRouter>>;
+
+/** Published grammar from the board's actual validators, not a parallel shape. */
+export function boardProcedureSchemas(router: BoardRouter = createBoardRouter()) {
+  return procedureSchemas(router);
+}
