@@ -563,6 +563,12 @@ export default defineConfig(({ mode }) => ({
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
         "src/lib/session-rpc-ipc-link.ts",
+        // Which door the board goes through (VC-565): with `cloud` on, every
+        // board surface's write is a command under one `commandId`, retried
+        // while its outcome is unknown; a wrong branch is a write sent twice
+        // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
+        // is gated by `src/stores/**` above.)
+        "src/lib/board-protocol.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
