@@ -122,6 +122,7 @@ import {
   testTicket,
   type TestDb,
   createTestSessionEngine,
+  testHostHandlers,
 } from "@volli/host-core/testing";
 import type { HarnessId } from "@volli/shared";
 import { syncProjectRoots } from "@volli/host-core/board";
@@ -1916,7 +1917,7 @@ describe("resume launch (issue #78)", () => {
     // wrapper does, since Volli exported the token into that terminal.
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
-      busyWorktreeSites: async () => [],
+      handlers: testHostHandlers({ db: testDb.db }),
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",
@@ -1966,7 +1967,7 @@ describe("resume launch (issue #78)", () => {
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
-      busyWorktreeSites: async () => [],
+      handlers: testHostHandlers({ db: testDb.db }),
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",

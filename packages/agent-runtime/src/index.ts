@@ -73,7 +73,13 @@ export {
   type WebExtractLimits,
 } from "./web/extract";
 export { BrowserRefusal, type BrowserRefusalPage } from "./browser/refusal";
-export { BROWSER_TOOL_NAMES, type BrowserToolId } from "./pi/browser-tools";
+export {
+  BROWSER_TOOL_NAMES,
+  createBrowserFindTool,
+  createBrowserHoldTool,
+  createBrowserTool,
+  type BrowserToolId,
+} from "./pi/browser-tools";
 export { ShellRefusal } from "./shell/refusal";
 export {
   createShellTool,

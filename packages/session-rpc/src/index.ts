@@ -1,18 +1,24 @@
 import { TRPCError, tracked, type AnyProcedure } from "@trpc/server";
-import type { JsonUnsafeProcedures } from "@volli/host-protocol";
+import {
+  isHostActor,
+  type HostActor,
+  type HostOperation,
+  type JsonUnsafeProcedures,
+} from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
+export type { SessionReadInput } from "./session-reads";
 import {
   isSessionStreamFrame,
   SuperviseSessionError,
   type ModelAccessSnapshot,
   type SessionClientCommand,
-  type SessionRuntime,
   type SessionRuntimeCommandResult,
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
   type SessionStreamFrame,
+  type SessionStreamEmission,
   type SessionStreamOverlay,
   type SessionStartResult,
 } from "@volli/session-engine";
@@ -28,11 +34,16 @@ import {
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type AgentResponse,
   type CodeModePolicy,
   type CompactionPolicy,
   type ExperimentId,
   type ExperimentSnapshot,
+  type HandlerCall,
   type HiddenModelRef,
+  type HostHandler,
+  type CatalogKeyOf,
+  type HostHandlerKeyOf,
   type ModelAccessDefaults,
   type ModelPickerView,
   type ModelPurpose,
@@ -43,13 +54,28 @@ import {
 import { z } from "zod";
 
 import {
+  hostAnswer,
   HostProcedureError,
+  jsonByteLength,
   PROJECT_RESOURCE,
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
+  type RouterTransport,
+  type RouterContextPorts,
 } from "./catalog";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
+import { replayExceedsEvents, ReplayMeter, resnapshotRequired } from "./replay-bound";
+import {
+  readSession,
+  readWorkspace,
+  sessionHandleInput,
+  sessionListInput,
+  sessionListOutput,
+  sessionPeekInput,
+  sessionReadOutput,
+  type SessionReadInput,
+} from "./session-reads";
 import {
   diagnosticEntrySchema,
   interactionResolutionWireSchema,
@@ -70,10 +96,12 @@ import {
   hostProcedure,
   sessionResource,
   workspaceProcedure,
+  type SessionRouterEntry,
 } from "./session-catalog";
 
 export {
   createCatalogBuilders,
+  handlerCallOf,
   hostErrorOf,
   HostProcedureError,
   LOCAL_DESKTOP_CALLER,
@@ -87,11 +115,22 @@ export {
   type NetworkRouterCaller,
   type ProcedurePaths,
   type RouterCaller,
+  type RouterContextPorts,
   type WorkspaceResource,
   type ResourceRelation,
+  type RouterTransport,
   type WorkspaceResources,
 } from "./catalog";
-export { SESSION_RESOURCE } from "./session-catalog";
+export { SESSION_RESOURCE, type SessionRouterEntry } from "./session-catalog";
+export {
+  createBoardRouter,
+  TICKET_RESOURCE,
+  type BoardRouter,
+  type BoardRouterContext,
+  type BoardRouterHandlers,
+  type BoardTicketMoveInput,
+} from "./board-router";
+export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
@@ -215,45 +254,94 @@ export interface RpcProcedurePerformanceObserver {
 }
 
 /**
+ * The slice of the host's handler map (`@volli/host-core/handlers`) the
+ * Session router projects, keyed by catalog key (VC-668). Declared here
+ * structurally because this package cannot import host-core (D2); a
+ * composition root hands it the host's one map, and that assignment is the
+ * check that the two agree. Properties, not methods, so an input drift is a
+ * type error rather than a bivariant pass.
+ */
+export interface SessionRouterHandlers {
+  readonly "sessions.create": HostHandler<SessionCreateInput, SessionCreateResult>;
+  readonly "sessions.attach": HostHandler<SessionAttachInput, SessionStartResult>;
+  readonly "settings.experiments": HostHandler<void, ExperimentSnapshot>;
+  readonly "settings.setExperiment": HostHandler<
+    { id: ExperimentId; enabled: boolean },
+    ExperimentSnapshot
+  >;
+  readonly "modelAccess.inspect": HostHandler<{ refresh?: boolean }, ModelAccessSnapshot>;
+  readonly "modelAccess.defaults": HostHandler<void, ModelAccessDefaults>;
+  readonly "modelAccess.setDefault": HostHandler<
+    { purpose: ModelPurpose; selection: RpcModelSelection | null },
+    ModelAccessDefaults
+  >;
+  readonly "modelAccess.hiddenModels": HostHandler<void, readonly HiddenModelRef[]>;
+  readonly "modelAccess.setHiddenModels": HostHandler<readonly HiddenModelRef[], void>;
+  readonly "modelAccess.compactionPolicy": HostHandler<void, CompactionPolicy>;
+  readonly "modelAccess.setCompactionPolicy": HostHandler<CompactionPolicy, CompactionPolicy>;
+  readonly "modelAccess.codeModePolicy": HostHandler<void, CodeModePolicy>;
+  readonly "modelAccess.setCodeModePolicy": HostHandler<CodeModePolicy, CodeModePolicy>;
+  readonly "modelAccess.pickerView": HostHandler<void, ModelPickerView>;
+  readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
+  readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
+  readonly "session.projection": HostHandler<
+    { sessionId: string },
+    SessionRuntimeProjectionSnapshot
+  >;
+  /**
+   * A bounded door (the WebSocket's replay bounds, VC-663) passes `signal`
+   * to cancel a replay it has refused before the subscribe call returns.
+   */
+  readonly "session.subscribe": (
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
+    call: HandlerCall,
+    sink: {
+      emit(emission: SessionStreamEmission): void | Promise<void>;
+      fail(error: unknown): void;
+    },
+  ) => Promise<() => void>;
+  readonly "session.command": HostHandler<
+    SessionRuntimeCommandRequest,
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.cancelInteraction": HostHandler<
+    { sessionId: string; interactionId: string },
+    void
+  >;
+  readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
+  /**
+   * The socket's Session reads, Workspace-scoped (VC-663, D4): the map runs
+   * the socket verb's own handler with its roster forced to `workspaceId`
+   * (`SOCKET_DELEGATED_HANDLER_KEYS`). The answer is the socket's envelope.
+   */
+  readonly "session.list": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.show": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.peek": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.answer": HostHandler<SessionReadInput, AgentResponse>;
+}
+
+type AssertNever<Type extends never> = Type;
+
+/** The Session family's keys and the slice's keys are one set: a missing handler fails here. */
+export type SessionRouterHandlersCoverage = AssertNever<
+  CatalogMismatch<keyof SessionRouterHandlers & string, HostHandlerKeyOf<SessionRouterEntry>>
+>;
+
+/**
  * The Session router's context: the catalog's caller and resource ports
  * ({@link CatalogCallerContext}; its `resourceWorkspace` answers `session`
- * resources), plus the Session runtime and its facades.
+ * resources), plus the one handler map it projects. No other port: every
+ * procedure reaches the host through `handlers` (VC-668).
  */
 export interface SessionRouterContext extends CatalogCallerContext {
-  runtime: SessionRuntime;
-  inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readModelAccessDefaults?: () => ModelAccessDefaults;
-  writeModelAccessDefault?: (
-    purpose: ModelPurpose,
-    selection: RpcModelSelection | null,
-  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
-  readHiddenModels?: () => readonly HiddenModelRef[];
-  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
-  readCompactionPolicy?: () => CompactionPolicy;
-  writeCompactionPolicy?: (
-    policy: CompactionPolicy,
-  ) => CompactionPolicy | Promise<CompactionPolicy>;
-  /**
-   * Code Mode's switch and per-model pins (VC-471), profile-wide. Read when a
-   * Session is born, so a write reaches new Sessions only.
-   */
-  readCodeModePolicy?: () => CodeModePolicy;
-  writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
-  /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
-  readModelPickerView?: () => ModelPickerView;
-  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
-  readExperiments?: () => ExperimentSnapshot;
-  writeExperiment?: (
-    id: ExperimentId,
-    enabled: boolean,
-  ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
-  /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
-  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
-  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  handlers: SessionRouterHandlers;
   diagnostics: RpcDiagnosticLog;
-  transport?: "electron-ipc" | "unknown";
+  transport?: RouterTransport;
   performanceObserver?: RpcProcedurePerformanceObserver;
 }
+
+/** The context adds no port but the map. */
+export type SessionRouterContextPorts = AssertNever<RouterContextPorts<SessionRouterContext>>;
 
 export interface RpcDiagnosticEntry {
   id: number;
@@ -705,6 +793,21 @@ const commandRequestSchema = z
     }
   });
 
+/**
+ * The welcome as `protocol.welcome` answers it: the grammar `isHostWelcome`
+ * checks, stated in zod so the JSON Schema a non-TypeScript client reads can
+ * be derived from it (D2). The actor is the one field left to its guard,
+ * which also refuses the reserved local device.
+ */
+const hostWelcomeSchema = z.object({
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  workspace: z.object({ id: z.uuidv4(), epoch: nonNegativeSafeInteger }),
+  actor: z.custom<HostActor>(isHostActor, "Expected a network actor"),
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
+});
+
 const sessionSubscriptionSchema = z.object({
   sessionId: nonEmptyString,
   afterSequence: nonNegativeSafeInteger.optional(),
@@ -727,6 +830,10 @@ const SESSION_SOURCE_FAILURE_MESSAGE =
  * because resuming from the last event id is the only thing the caller can do.
  */
 const SESSION_OVERFLOW_MESSAGE = "Session subscription fell behind; resume from the last event id";
+const SESSION_FRAME_TOO_LARGE_MESSAGE =
+  "A Session stream frame is larger than this connection's frame bound; read the Session in bounded pages instead";
+/** Frames one Session stream may hold unsent to its consumer, on every door. */
+const SESSION_STREAM_QUEUE_CAPACITY = 4_096;
 const DIAGNOSTICS_OVERFLOW_MESSAGE =
   "Diagnostics subscription fell behind; resume from the last event id";
 
@@ -757,6 +864,21 @@ function subscriptionOverflowError(message: string): HostProcedureError {
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
   return catalogRouter({
+    protocol: {
+      // The v1 bootstrap read: base, in no feature, so a client can always
+      // ask what its handshake negotiated before anything else.
+      welcome: hostProcedure("protocol.welcome")
+        .output(hostWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined) {
+            throw new HostProcedureError(
+              "operation-unavailable",
+              "This connection negotiated no welcome",
+            );
+          }
+          return ctx.welcome;
+        }),
+    },
     sessions: {
       create: workspaceProcedure(
         "sessions.create",
@@ -793,60 +915,46 @@ export function createSessionRouter() {
         }),
         // The Workspace is the project the Session is born in.
         (input) => ({ kind: PROJECT_RESOURCE, id: input.projectId }),
-      ).mutation(async ({ ctx, input }) => {
-        if (!ctx.createSession) {
-          unavailable("Sessions are unavailable on this transport");
-        }
-        return ctx.createSession(input);
-      }),
+      ).mutation(({ ctx, input }) => ctx.handlers["sessions.create"](input, ctx.call)),
       attach: workspaceProcedure(
         "sessions.attach",
         z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }),
         sessionResource,
-      ).mutation(async ({ ctx, input }) => {
-        if (!ctx.attachSession) {
-          unavailable("Sessions are unavailable on this transport");
-        }
-        return ctx.attachSession(input);
-      }),
+      ).mutation(({ ctx, input }) => ctx.handlers["sessions.attach"](input, ctx.call)),
     },
     settings: {
       experiments: hostProcedure("settings.experiments")
         .output(experimentSnapshotSchema)
-        .query(({ ctx }) => {
-          if (!ctx.readExperiments) {
-            unavailable("Experimental settings are unavailable on this transport");
-          }
-          return experimentSnapshotSchema.parse(ctx.readExperiments());
-        }),
+        .query(async ({ ctx }) =>
+          experimentSnapshotSchema.parse(
+            await ctx.handlers["settings.experiments"](undefined, ctx.call),
+          ),
+        ),
       setExperiment: hostProcedure("settings.setExperiment")
         .input(z.object({ id: experimentIdSchema, enabled: z.boolean() }))
         .output(experimentSnapshotSchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeExperiment) {
-            unavailable("Experimental settings are unavailable on this transport");
-          }
-          return experimentSnapshotSchema.parse(await ctx.writeExperiment(input.id, input.enabled));
-        }),
+        .mutation(async ({ ctx, input }) =>
+          experimentSnapshotSchema.parse(
+            await ctx.handlers["settings.setExperiment"](input, ctx.call),
+          ),
+        ),
     },
     modelAccess: {
       inspect: hostProcedure("modelAccess.inspect")
         .input(z.object({ refresh: z.boolean().optional() }))
         .output(modelAccessSnapshotSchema)
-        .query(async ({ ctx, input }) => {
-          if (!ctx.inspectModelAccess) {
-            unavailable("Model Access is unavailable on this transport");
-          }
-          return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
-        }),
+        .query(async ({ ctx, input }) =>
+          modelAccessSnapshotSchema.parse(
+            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
+          ),
+        ),
       defaults: hostProcedure("modelAccess.defaults")
         .output(modelAccessDefaultsSchema)
-        .query(({ ctx }) => {
-          if (!ctx.readModelAccessDefaults) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return modelAccessDefaultsSchema.parse(ctx.readModelAccessDefaults());
-        }),
+        .query(async ({ ctx }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
+          ),
+        ),
       setDefault: hostProcedure("modelAccess.setDefault")
         .input(
           z
@@ -860,92 +968,120 @@ export function createSessionRouter() {
             ),
         )
         .output(modelAccessDefaultsSchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeModelAccessDefault) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return modelAccessDefaultsSchema.parse(
-            await ctx.writeModelAccessDefault(input.purpose, input.selection),
-          );
-        }),
+        .mutation(async ({ ctx, input }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
+          ),
+        ),
       hiddenModels: hostProcedure("modelAccess.hiddenModels")
         .output(hiddenModelsSchema)
-        .query(({ ctx }) => {
-          if (!ctx.readHiddenModels) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return hiddenModelsSchema.parse(ctx.readHiddenModels());
-        }),
+        .query(async ({ ctx }) =>
+          hiddenModelsSchema.parse(
+            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
+          ),
+        ),
       setHiddenModels: hostProcedure("modelAccess.setHiddenModels")
         .input(hiddenModelsSchema)
         .output(hiddenModelsSchema)
         .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeHiddenModels) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          await ctx.writeHiddenModels(input);
+          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
           return input;
         }),
       compactionPolicy: hostProcedure("modelAccess.compactionPolicy")
         .output(compactionPolicySchema)
-        .query(({ ctx }) => {
-          if (!ctx.readCompactionPolicy) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return compactionPolicySchema.parse(ctx.readCompactionPolicy());
-        }),
+        .query(async ({ ctx }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
+          ),
+        ),
       setCompactionPolicy: hostProcedure("modelAccess.setCompactionPolicy")
         .input(compactionPolicySchema)
         .output(compactionPolicySchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeCompactionPolicy) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
-        }),
+        .mutation(async ({ ctx, input }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
+          ),
+        ),
       codeModePolicy: hostProcedure("modelAccess.codeModePolicy")
         .output(codeModePolicySchema)
-        .query(({ ctx }) => {
-          if (!ctx.readCodeModePolicy) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return codeModePolicySchema.parse(ctx.readCodeModePolicy());
-        }),
+        .query(async ({ ctx }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
+          ),
+        ),
       setCodeModePolicy: hostProcedure("modelAccess.setCodeModePolicy")
         .input(codeModePolicySchema)
         .output(codeModePolicySchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeCodeModePolicy) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return codeModePolicySchema.parse(await ctx.writeCodeModePolicy(input));
-        }),
+        .mutation(async ({ ctx, input }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
+          ),
+        ),
       pickerView: hostProcedure("modelAccess.pickerView")
         .output(modelPickerViewSchema)
-        .query(({ ctx }) => {
-          if (!ctx.readModelPickerView) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return modelPickerViewSchema.parse(ctx.readModelPickerView());
-        }),
+        .query(async ({ ctx }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
+          ),
+        ),
       setPickerView: hostProcedure("modelAccess.setPickerView")
         .input(modelPickerViewSchema)
         .output(modelPickerViewSchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeModelPickerView) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return modelPickerViewSchema.parse(await ctx.writeModelPickerView(input));
-        }),
+        .mutation(async ({ ctx, input }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
+          ),
+        ),
     },
     session: {
+      // The socket's Session reads, forced to the caller's Workspace (D4).
+      list: workspaceProcedure("session.list", sessionListInput, readWorkspace)
+        .output(sessionListOutput)
+        .query(({ ctx, input: { projectId, ...filters } }) =>
+          readSession(
+            (read) => ctx.handlers["session.list"](read, ctx.call),
+            projectId,
+            filters,
+            sessionListOutput,
+          ),
+        ),
+      show: workspaceProcedure("session.show", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.show"](read, ctx.call),
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
+      peek: workspaceProcedure("session.peek", sessionPeekInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.peek"](read, ctx.call),
+            input.projectId,
+            { id: input.session, lines: input.lines },
+            sessionReadOutput,
+          ),
+        ),
+      answer: workspaceProcedure("session.answer", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.answer"](read, ctx.call),
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
       snapshot: workspaceProcedure(
         "session.snapshot",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      )
-        .output(sessionSnapshotOutputSchema)
-        .query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+      ).output(sessionSnapshotOutputSchema).query(async ({ ctx, input }) =>
+        rendererSnapshot(await ctx.handlers["session.snapshot"](input, ctx.call)),
+      ),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
@@ -955,9 +1091,9 @@ export function createSessionRouter() {
         "session.projection",
         z.object({ sessionId: nonEmptyString }),
         sessionResource,
-      )
-        .output(sessionProjectionOutputSchema)
-        .query(async ({ ctx, input }) => rendererProjection(await ctx.runtime.projection(input))),
+      ).output(sessionProjectionOutputSchema).query(async ({ ctx, input }) =>
+        rendererProjection(await ctx.handlers["session.projection"](input, ctx.call)),
+      ),
       subscribe: workspaceProcedure(
         "session.subscribe",
         sessionSubscriptionSchema,
@@ -965,34 +1101,111 @@ export function createSessionRouter() {
       ).subscription(async function* ({ ctx, input, signal }) {
         if (signal?.aborted) return;
         const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-        const queue = new AsyncQueue<RendererSessionStreamEmission>();
-        const sourceFailure: { current: { error: unknown } | null } = { current: null };
-        const unsubscribe = await ctx.runtime.subscribe(
-          { sessionId: input.sessionId, afterSequence },
-          // Live emissions pass through untouched: `rendererFrame` exists to
-          // keep runtime identity and recovery locators behind the server
-          // boundary, and no transient arm carries either. Asked as the
-          // negation of the durable arm so a third transient arm needs no
-          // edit here.
-          (emission) =>
-            queue.push(isSessionStreamFrame(emission) ? rendererFrame(emission) : emission),
-          // The runtime's drain died behind this subscription. Ended like an
-          // overflow — buffered contiguous frames still drain, then the
-          // stream closes with an error instead of a clean `done`, because a
-          // clean end here is the one thing the client must never see: it
-          // reads as a stream with nothing left to say, not one that lost
-          // `turn.completed` mid-turn.
-          (error) => {
-            sourceFailure.current = { error };
-            queue.close(false);
-          },
+        // A bounded door (the WebSocket, D9) refuses a resume it would have
+        // to replay too much for, before the source is opened at all.
+        const bounds = ctx.replayBounds;
+        if (
+          bounds !== undefined &&
+          replayExceedsEvents(
+            bounds,
+            afterSequence,
+            (
+              await hostAnswer(() =>
+                ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
+              )
+            ).throughSequence,
+          )
+        ) {
+          throw resnapshotRequired();
+        }
+        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
+        const frameBound = ctx.maxResponseBytes;
+        // Bounded in bytes too on a bounded door: twice the replay bound holds a
+        // whole admitted replay and the live frames that arrive behind it.
+        const queue = new AsyncQueue<RendererSessionStreamEmission>(
+          SESSION_STREAM_QUEUE_CAPACITY,
+          bounds === undefined ? undefined : 2 * bounds.bytes,
         );
+        const sourceFailure: { current: { error: unknown } | null } = { current: null };
+        // What this stream ends with instead of a frame it refused to stage:
+        // resnapshot past the replay bounds, response-too-large past the frame
+        // bound. Set once; the source is cancelled with it.
+        const refused: { current: HostProcedureError | null } = { current: null };
+        // Cancels the runtime's side even while its subscribe call is still
+        // replaying: a refused replay is not read any further.
+        const source = new AbortController();
+        const abort = (): void => {
+          source.abort();
+          queue.close();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        // A subscription's handler runs inside the stream, past the policy
+        // middleware, so its "unavailable" is mapped here.
+        const unsubscribe = await hostAnswer(() =>
+          ctx.handlers["session.subscribe"](
+            {
+              sessionId: input.sessionId,
+              afterSequence,
+              ...(replay === null ? {} : { signal: source.signal }),
+            },
+            ctx.call,
+            {
+              // Live emissions pass through untouched: `rendererFrame` exists to
+              // keep runtime identity and recovery locators behind the server
+              // boundary, and no transient arm carries either. Asked as the
+              // negation of the durable arm so a third transient arm needs no
+              // edit here.
+              emit: (emission) => {
+                if (refused.current !== null) return;
+                const durable = isSessionStreamFrame(emission);
+                const sent = durable ? rendererFrame(emission) : emission;
+                if (replay === null) {
+                  queue.push(sent);
+                  return;
+                }
+                // Judged before it is staged: nothing past a bound is ever held.
+                const bytes = jsonByteLength(sent);
+                if (frameBound !== undefined && bytes > frameBound) {
+                  refused.current = new HostProcedureError(
+                    "response-too-large",
+                    SESSION_FRAME_TOO_LARGE_MESSAGE,
+                  );
+                } else if (!replay.admit(bytes, durable)) {
+                  refused.current = resnapshotRequired();
+                } else {
+                  queue.push(sent, bytes);
+                  return;
+                }
+                // A refused replay sends nothing of itself; a live refusal still
+                // drains what came before it.
+                queue.close(replay.replaying);
+                source.abort();
+              },
+              // The runtime's drain died behind this subscription. Ended like an
+              // overflow — buffered contiguous frames still drain, then the
+              // stream closes with an error instead of a clean `done`, because a
+              // clean end here is the one thing the client must never see: it
+              // reads as a stream with nothing left to say, not one that lost
+              // `turn.completed` mid-turn.
+              fail: (error) => {
+                sourceFailure.current = { error };
+                queue.close(false);
+              },
+            },
+          ),
+        );
+        // The runtime replays history before its subscribe call returns, so
+        // a refusal so far was a replay's: nothing of it is sent.
+        replay?.end();
+        if (refused.current !== null) {
+          signal?.removeEventListener("abort", abort);
+          unsubscribe();
+          throw refused.current;
+        }
         if (signal?.aborted) {
           unsubscribe();
           return;
         }
-        const abort = () => queue.close();
-        signal?.addEventListener("abort", abort, { once: true });
         try {
           // A transient emission is tracked by the durable sequence it was
           // emitted beside, never by a suffixed id: `sseCursor` rejects one on
@@ -1012,6 +1225,9 @@ export function createSessionRouter() {
           // A consumer that tears the iterator down instead resumes at the
           // `yield` with a return completion and never reaches this line —
           // an overflow the client already walked away from stays a diagnostic.
+          // A frame refused after the replay ended the stream, once what
+          // came before it drained.
+          if (refused.current !== null) throw refused.current;
           if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
           // A source failure ends the same way an overflow does, and for the
           // same reason: whatever this stream still owed its consumer is now
@@ -1053,41 +1269,33 @@ export function createSessionRouter() {
         // `session.create`, the one kind that names no Session, is withheld
         // before this resolves; every other kind requires `sessionId`.
         (input) => sessionResource({ sessionId: input.sessionId! }),
-      )
-        .output(sessionCommandOutputSchema)
-        .mutation(async ({ ctx, input }) => {
-          // The start kinds are refused before this line on every door: the
-          // catalog entry withholds them (`refusedIntents`), whoever asks.
-          try {
-            return rendererCommandResult(
-              await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
-            );
-          } catch (error) {
-            if (error instanceof SuperviseSessionError) {
-              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
-            }
-            throw error;
+      ).output(sessionCommandOutputSchema).mutation(async ({ ctx, input }) => {
+        // The start kinds are refused before this line on every door: the
+        // catalog entry withholds them (`refusedIntents`), whoever asks.
+        try {
+          return rendererCommandResult(
+            await ctx.handlers["session.command"](toSessionRuntimeCommandRequest(input), ctx.call),
+          );
+        } catch (error) {
+          if (error instanceof SuperviseSessionError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
           }
-        }),
-      // A pending interaction the user walked away from. The reason is fixed
-      // here rather than taken as input: this transport is the user seam, and
-      // the only thing it can honestly report is that they left it undecided.
+          throw error;
+        }
+      }),
+      // A pending interaction the user walked away from. The handler fixes the
+      // reason rather than taking it as input: a person's door can honestly
+      // report only that they left it undecided.
       cancelInteraction: workspaceProcedure(
         "session.cancelInteraction",
         z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }),
         sessionResource,
-      ).mutation(({ ctx, input }) =>
-        ctx.runtime.cancelInteraction({
-          ...input,
-          reason: "abandoned",
-          origin: { kind: "user" },
-        }),
-      ),
+      ).mutation(({ ctx, input }) => ctx.handlers["session.cancelInteraction"](input, ctx.call)),
       reconcile: workspaceProcedure(
         "session.reconcile",
         z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }),
         sessionResource,
-      ).mutation(({ ctx, input }) => ctx.runtime.reconcile(input)),
+      ).mutation(({ ctx, input }) => ctx.handlers["session.reconcile"](input, ctx.call)),
     },
     labDiagnostics: {
       list: hostProcedure("labDiagnostics.list")
@@ -1226,116 +1434,27 @@ function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
   };
 }
 
-function unavailable(message: string): never {
-  throw new HostProcedureError("operation-unavailable", message);
-}
-
 export type AppRouter = ReturnType<typeof createSessionRouter>;
 
 /**
- * Publishable wire grammar for every catalog procedure, including subscriptions
- * (their output is one untracked emission, not the transport's SSE envelope).
- * No-input and void-result calls have no JSON value: null is the document
- * sentinel, explicitly distinguished by the booleans, never a runtime rewrite.
- * The two command-input adapters describe custom/transform parsers without
- * weakening their runtime checks. Refinements remain runtime-only constraints.
- */
-export interface SessionProcedureSchema {
-  readonly type: "query" | "mutation" | "subscription";
-  readonly input: z.ZodType;
-  readonly output: z.ZodType;
-  readonly noInput: boolean;
-  readonly voidOutput: boolean;
-  readonly outputValidation: "runtime" | "documented-yield" | "legacy-documentation";
-}
-
-function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
-  if (
-    !(input instanceof z.ZodObject) ||
-    !(input.shape.command instanceof z.ZodDiscriminatedUnion)
-  ) {
-    throw new Error("session.command needs a structural command envelope for publication");
-  }
-  const commandWireSchema = z.union(
-    input.shape.command.options.map((option) => {
-      if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
-        throw new Error("session.command needs object alternatives with literal kinds");
-      }
-      if (option.shape.kind.value === "message.submit") {
-        return option.extend({
-          message: uiMessageWireSchema.extend({
-            id: nonEmptyString,
-            parts: uiMessageWireSchema.shape.parts.min(1),
-          }),
-        });
-      }
-      if (option.shape.kind.value === "interaction.resolve") {
-        return option.extend({ resolution: interactionResolutionWireSchema });
-      }
-      return option;
-    }),
-  );
-  // Preserve the actual envelope's required fields, bounds and refinements.
-  // Rebuilding it here would hide a breaking router change from the CI diff.
-  return input.safeExtend({ command: commandWireSchema });
-}
-
-export function sessionProcedureSchemas(
-  router: AppRouter = createSessionRouter(),
-): Record<string, SessionProcedureSchema> {
-  const supplementalOutputs: Record<string, z.ZodType> = {
-    "sessions.create": z.object({ sessionId: z.string() }),
-    "sessions.attach": sessionAttachOutputSchema,
-    "session.subscribe": streamEmissionSchema,
-    "session.cancelInteraction": z.null(),
-    "session.reconcile": z.null(),
-    "labDiagnostics.list": z.array(diagnosticEntrySchema),
-    "labDiagnostics.subscribe": diagnosticEntrySchema,
-  };
-  // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
-  const procedures = router._def.procedures as unknown as Record<string, AnyProcedure>;
-  return Object.fromEntries(
-    Object.entries(procedures).map(([key, procedure]): [string, SessionProcedureSchema] => {
-      // oxlint-disable-next-line no-underscore-dangle -- as above.
-      const definition = procedure._def as unknown as {
-        type: "query" | "mutation" | "subscription";
-        inputs: readonly z.ZodType[];
-        output?: z.ZodType;
-      };
-      const inputs = definition.inputs;
-      if (inputs.length > 1) throw new Error(`Procedure ${key} has multiple input schemas`);
-      const input =
-        key === "session.command" ? publishCommandInput(inputs[0]) : (inputs[0] ?? z.null());
-      const output = definition.output ?? supplementalOutputs[key];
-      if (output === undefined)
-        throw new Error(`Procedure ${key} has no publishable output schema`);
-      return [
-        key,
-        {
-          type: definition.type,
-          input,
-          output,
-          noInput: inputs.length === 0,
-          voidOutput: key === "session.cancelInteraction" || key === "session.reconcile",
-          outputValidation: definition.output
-            ? "runtime"
-            : definition.type === "subscription"
-              ? "documented-yield"
-              : "legacy-documentation",
-        },
-      ];
-    }),
-  );
-}
-
-/**
- * Every Session-router procedure is one catalog entry and every catalog entry
- * is one procedure (VC-564, D2). A procedure added here without a Verb
- * Registry entry, or an entry with no procedure, fails `pnpm typecheck` on
- * this line and names the key.
+ * Every Session-router procedure is one of the family's catalog entries and
+ * every such entry is one procedure (VC-564, D2). A procedure added here
+ * without a Verb Registry entry, or an entry with no procedure, fails
+ * `pnpm typecheck` on this line and names the key. The union over every
+ * router is `HostRouterCatalogBinding` (`host-router.ts`).
  */
 export type SessionRouterCatalogBinding = AssertNever<
-  CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>
+  CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>, CatalogKeyOf<SessionRouterEntry>>
+>;
+
+/**
+ * Every operation a v1 feature grants is a procedure this router serves
+ * (`HOST_FEATURE_OPERATIONS`, VC-663): a feature that names a key no router
+ * has fails `pnpm typecheck` here. Moves to the composition root with the
+ * catalog binding when a second area router lands.
+ */
+export type SessionRouterFeatureBinding = AssertNever<
+  Exclude<HostOperation, ProcedurePaths<AppRouter["_def"]["record"]>>
 >;
 
 /**
@@ -1343,21 +1462,30 @@ export type SessionRouterCatalogBinding = AssertNever<
  * value that changes across a JSON wire, this alias fails here and names the
  * procedure plus `input` or `output`.
  */
-type AssertNever<Type extends never> = Type;
 export type SessionRouterJsonSafety = AssertNever<JsonUnsafeProcedures<AppRouter>>;
 
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];
+  /** Each held value's size, beside it, when the queue is bounded in bytes. */
+  readonly #sizes: number[] = [];
   readonly #waiters: ((result: IteratorResult<T>) => void)[] = [];
   readonly #capacity: number;
+  readonly #maxBytes: number;
+  #bytes = 0;
   #closed = false;
   #overflowed = false;
 
-  constructor(capacity = 4_096) {
+  /**
+   * `capacity` bounds the values held; `maxBytes`, when given, bounds the
+   * sizes their pushes declared too, so a few huge values overflow it as
+   * surely as many small ones.
+   */
+  constructor(capacity = 4_096, maxBytes = Number.POSITIVE_INFINITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new Error("AsyncQueue capacity must be a positive integer");
     }
     this.#capacity = capacity;
+    this.#maxBytes = maxBytes;
   }
 
   /**
@@ -1372,12 +1500,16 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     return this.#overflowed;
   }
 
-  push(value: T): void {
+  /** `bytes` is what this value counts against `maxBytes`. */
+  push(value: T, bytes = 0): void {
     if (this.#closed) return;
     const waiter = this.#waiters.shift();
     if (waiter) waiter({ done: false, value });
-    else if (this.#values.length < this.#capacity) this.#values.push(value);
-    else {
+    else if (this.#values.length < this.#capacity && this.#bytes + bytes <= this.#maxBytes) {
+      this.#values.push(value);
+      this.#sizes.push(bytes);
+      this.#bytes += bytes;
+    } else {
       // Closed without discarding: what the queue did hold is still contiguous
       // history the consumer can use, and the gap only starts after it. Dropping
       // it would widen the hole the consumer then has to resume across.
@@ -1389,12 +1521,19 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   close(discard = true): void {
     if (this.#closed) return;
     this.#closed = true;
-    if (discard) this.#values.length = 0;
+    if (discard) {
+      this.#values.length = 0;
+      this.#sizes.length = 0;
+      this.#bytes = 0;
+    }
     for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
   }
 
   async next(): Promise<IteratorResult<T>> {
-    if (this.#values.length > 0) return { done: false, value: this.#values.shift()! };
+    if (this.#values.length > 0) {
+      this.#bytes -= this.#sizes.shift()!;
+      return { done: false, value: this.#values.shift()! };
+    }
     if (this.#closed) return { done: true, value: undefined };
     return new Promise((resolve) => this.#waiters.push(resolve));
   }

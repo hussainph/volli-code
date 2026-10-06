@@ -23,17 +23,19 @@ import type {
   AgentRequest,
   AgentResponse,
   SessionProjection,
+  SessionReadVerb,
   SessionRecord,
   TicketEventActor,
 } from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
-import { coordinationRefusal } from "./agent-dispatch/admission";
+import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
+import { isHostHandlerMap } from "./handlers/handler-map";
 import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import type { DoorActor } from "./agent-dispatch/resolution";
-import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 
@@ -50,9 +52,10 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
-  // JS callers must fail closed too; the type alone cannot guard a missing supplier.
-  if (typeof options.busyWorktreeSites !== "function") {
-    throw new Error("The busy-worktree supplier is required.");
+  // JS callers must fail closed too: without the map there is no move, and
+  // a socket that answered one some other way would be a second handler.
+  if (!isHostHandlerMap(options.handlers)) {
+    throw new Error("The host's handler map is required.");
   }
   const now = options.now ?? Date.now;
   /**
@@ -107,8 +110,17 @@ export function createAgentCommandService(
     options.readAuthorityPolicy ??
     ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
 
-  return {
-    async execute(request): Promise<AgentResponse> {
+  const service = {
+    /**
+     * One request, through the one pipeline. `workspaceId` is
+     * `executeInWorkspace`'s alone (the service's type does not offer it):
+     * it scopes the roster to that one project and its Sessions, so a handle
+     * in any other Workspace resolves exactly as an absent one does.
+     */
+    async execute(
+      request: AgentRequest,
+      workspaceId: string | null = null,
+    ): Promise<AgentResponse> {
       // Both answers below precede every read: a preview must be refused before
       // the work that would perform it, and a capability probe must not be able
       // to fail for a reason that has nothing to do with the capability.
@@ -135,7 +147,9 @@ export function createAgentCommandService(
           ),
         };
       }
-      const projects = listProjects(options.db);
+      const projects = listProjects(options.db).filter(
+        (project) => workspaceId === null || project.id === workspaceId,
+      );
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
       // `context.loadSessions()`, and calling either twice (or calling both —
@@ -237,10 +251,32 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
+        handlerPolicy: socketHandlerPolicy(request, () =>
+          coordinationRefusal(readPolicy, projects, envSession, request, door),
+        ),
       };
       return auditOperatorWrite(door, request, await binding.handle(context, request));
     },
+    executeInWorkspace: (
+      verb: SessionReadVerb,
+      workspaceId: string,
+      args: Record<string, unknown>,
+    ) =>
+      service.execute(
+        // No `VOLLI_SESSION`, no token, no cwd: the WebSocket's actor was
+        // authenticated by its own door, and these reads need none of them.
+        // The project is forced, never taken from the caller (VC-663, D4):
+        // named by its path, the one selector no other project can share.
+        {
+          v: 1,
+          cmd: verb,
+          args: { ...args, project: getProjectById(options.db, workspaceId)?.path ?? workspaceId },
+          ctx: { cwd: "/", env: {} },
+        },
+        workspaceId,
+      ),
   };
+  return service;
 
   /**
    * Reports an operator's write to the host's audit line (VC-623), and hands

@@ -318,7 +318,7 @@ describe("DatabaseRecovery", () => {
     );
   });
 
-  it("fails closed if a WAL reader prevents checkpointing the current DB", () => {
+  it("refuses a WAL reader before marking or displacing the current DB", () => {
     backup(1);
     rmSync(dbPath);
     const writer = database.openVolliDb(dbPath);
@@ -335,12 +335,24 @@ describe("DatabaseRecovery", () => {
         value: "newer",
       });
       expect(recovery.list()[0]?.integrity).toBe("clean");
-      expect(existsSync(join(preservedDirectory(), "before-checkpoint", "volli.db-wal"))).toBe(
-        true,
+      expect(existsSync(`${dbPath}-wal`)).toBe(true);
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+      expect(readdirSync(directory).some((entry) => entry.startsWith("volli.db.damaged-"))).toBe(
+        false,
       );
     } finally {
       reader.close();
       writer.close();
+    }
+    const reopened = database.openVolliDb(dbPath);
+    try {
+      expect(reopened.prepare("SELECT value FROM app_state WHERE key = 'busy-test'").get()).toEqual(
+        {
+          value: "newer",
+        },
+      );
+    } finally {
+      reopened.close();
     }
   }, 15000);
 
@@ -382,7 +394,16 @@ describe("DatabaseRecovery", () => {
     );
     expect(() => recovery.restore()).toThrow("Restore failed");
     for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
-    expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+    // Header validation now precedes intent. No swap began, but damaged files
+    // still refuse boot and their raw evidence remains available for recovery.
+    expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+    const saved = preservedDirectory();
+    for (const suffix of ["", "-wal", "-shm"])
+      expect(readFileSync(join(saved, "before-checkpoint", `volli.db${suffix}`))).toEqual(
+        readFileSync(`${dbPath}${suffix}`),
+      );
+    expect(() => database.openVolliDb(dbPath)).toThrow("damaged header");
+    for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
   });
 
   it("does not undo a verified publication when marker cleanup fails", () => {
@@ -458,11 +479,22 @@ describe("DatabaseRecovery", () => {
         { value: "before" },
         { value: "after" },
       ]);
-      expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
+      expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
+      expect(readdirSync(directory).some((entry) => entry.startsWith("volli.db.damaged-"))).toBe(
+        false,
+      );
     } finally {
       writer.close();
     }
-    expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
+    const reopened = database.openVolliDb(dbPath);
+    try {
+      expect(reopened.prepare("SELECT value FROM idle_writer_probe ORDER BY rowid").all()).toEqual([
+        { value: "before" },
+        { value: "after" },
+      ]);
+    } finally {
+      reopened.close();
+    }
   }, 15000);
 
   it("resumes an interrupted switch without allowing boot to create an empty database", () => {

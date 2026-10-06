@@ -45,8 +45,10 @@ import {
   type HostActorKind,
   type HostError,
   type HostErrorReason,
+  type HostWelcome,
   type LocalDeviceActor,
   type SessionId,
+  type SubscriptionReplayBounds,
   type WorkspaceId,
 } from "@volli/host-protocol";
 import {
@@ -57,6 +59,8 @@ import {
   catalogLookup,
   HOST_ACTOR_POLICY,
   isCommandIntentConflict,
+  isHandlerRefused,
+  isOperationUnavailable,
   isolatePerformanceObserver,
   readOptionalPerformanceClock,
   type CatalogEntry,
@@ -64,6 +68,7 @@ import {
   type CatalogKeyOf,
   type CatalogKeyOfScope,
   type CatalogKeyRefusingIntents,
+  type HandlerCall,
   type HostActorKindName,
   type VerbEntry,
   type VerbRegistryEntry,
@@ -174,8 +179,129 @@ export interface CatalogCallerContext {
    */
   sessionMayAct?: (resource: WorkspaceResource, sessionId: SessionId) => boolean | Promise<boolean>;
   diagnostics: CatalogDiagnostics;
-  transport?: "electron-ipc" | "unknown";
+  transport?: RouterTransport;
   performanceObserver?: RpcProcedurePerformanceObserver;
+  /**
+   * The catalog keys this connection's negotiated features grant
+   * (`operationsGrantedBy`, `@volli/host-protocol`). A door with a handshake
+   * always sets it, and a call to any other key is `FORBIDDEN` /
+   * `verb-refused` before its input is read. Absent: the door negotiates no
+   * features (the desktop's in-process IPC).
+   */
+  operations?: ReadonlySet<string>;
+  /** The welcome the door's handshake negotiated; `protocol.welcome` answers it. */
+  welcome?: HostWelcome;
+  /**
+   * The door refused this connection's handshake (VC-663): every call answers
+   * this refusal before anything else about it is read, so each operation a
+   * client queued behind its hello learns the reason, and the door then
+   * closes the connection. Such a context carries no caller a handler could
+   * use.
+   */
+  refused?: HandshakeRefusal;
+  /**
+   * How much history one subscription may replay before it answers
+   * `subscription-resnapshot-required` instead. The WebSocket listener sets
+   * `SUBSCRIPTION_REPLAY_BOUNDS`; absent (IPC), replay is unbounded (D9).
+   */
+  replayBounds?: SubscriptionReplayBounds;
+  /**
+   * A network door's hold on this connection (VC-663): what every in-flight
+   * call and open stream answers to. Absent: a door with no connection to
+   * lose (the desktop's in-process IPC), whose calls behave exactly as before.
+   */
+  admission?: ConnectionAdmission;
+  /**
+   * The largest answer, in UTF-8 bytes of its JSON, the door will send. A
+   * query or mutation whose answer is larger is refused with
+   * `PAYLOAD_TOO_LARGE` / `response-too-large`, never truncated. Absent (IPC):
+   * unbounded.
+   */
+  maxResponseBytes?: number;
+}
+
+/**
+ * One network connection's admission, as its door holds it (VC-663). The
+ * catalog reads it at three points: immediately before a resolver runs (a
+ * call whose authorization was still being awaited when the grant was revoked
+ * never reaches its handler), before a successful answer is released, and
+ * around every stream the connection opens (each one counts against its
+ * budget and ends, with `credential-invalid`, the moment `signal` aborts).
+ */
+export interface ConnectionAdmission {
+  /**
+   * Aborted, never to be restored, once the connection's grant is revoked or
+   * lapses, or the connection ends. Every resolver on the connection receives
+   * a signal that aborts with it.
+   */
+  readonly signal: AbortSignal;
+  /** Takes one of the connection's stream slots; `false` at its budget. */
+  openStream(): boolean;
+  /** Gives a slot back: a stream ended, however it ended. */
+  closeStream(): void;
+}
+
+/** Why a door refused a handshake: a host-protocol reason, never a bare message. */
+export interface HandshakeRefusal {
+  readonly reason: HostErrorReason;
+  readonly message: string;
+}
+
+/** Which door a call came through, as diagnostics record it. */
+export type RouterTransport = "electron-ipc" | "websocket" | "unknown";
+
+/**
+ * The context keys an area's router may add to {@link CatalogCallerContext}:
+ * exactly one, `handlers`, the slice of the host's handler map
+ * (`@volli/host-core/handlers`) the area projects, keyed by catalog key. A
+ * router reaches domain behaviour only through it (VC-668): no other port, so
+ * a composition root wires one object, and every door that projects a key
+ * reaches the same function.
+ */
+export type RouterContextPorts<Ctx> = Exclude<keyof Ctx, keyof CatalogCallerContext | "handlers">;
+
+/**
+ * What a procedure's handler is told about the call, from the caller the door
+ * authenticated: the person (the desktop's own window, or a paired device),
+ * or a Session. Never from input.
+ */
+export function handlerCallOf(actor: CallerActor): HandlerCall {
+  if (isLocalDeviceActor(actor)) return { actor: { kind: "user" }, origin: "desktop-window" };
+  switch (actor.kind) {
+    case "device":
+      return { actor: { kind: "user" } };
+    case "session":
+      // A router names the Session, never its ticket: no entry admits a
+      // Session to an attributed write yet. VC-565 resolves the ticket when
+      // the board's `session-own` entries land.
+      return { actor: { kind: "session", sessionId: actor.sessionId, ticketId: null } };
+    case "worker":
+      // HOST_ACTOR_POLICY admits no worker to any entry.
+      throw new HostProcedureError("verb-refused", "No catalog entry is open to a worker.");
+  }
+}
+
+/**
+ * Runs a handler outside the policy middleware (a subscription's body, which
+ * tRPC starts after the chain has returned) and maps its "unavailable" and a
+ * refusal at the map the way the middleware maps a query's or mutation's.
+ */
+export async function hostAnswer<Answer>(run: () => Answer | Promise<Answer>): Promise<Answer> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isHandlerRefused(error)) {
+      throw new HostProcedureError("verb-refused", error.message, error);
+    }
+    if (isOperationUnavailable(error)) {
+      throw new HostProcedureError(
+        "operation-unavailable",
+        error instanceof Error ? error.message : "This operation is unavailable on this host",
+        error,
+      );
+    }
+    throw error;
+  }
 }
 
 /** A refusal the host protocol names: the reason travels to every client as `data.hostError`. */
@@ -209,8 +335,10 @@ export function hostErrorOf(error: unknown, fallback = "Session RPC request fail
     : { code, message };
 }
 
+export const CREDENTIAL_INVALID_MESSAGE = "This connection's credential is no longer valid.";
+
 /** Same message for a foreign and an absent resource, so neither reveals the other. */
-const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
+export const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
 
 /** Pins host-protocol's actor kinds to the shared mapping's, in both directions. */
 type AssertNever<Type extends never> = Type;
@@ -243,6 +371,143 @@ function carriesCommandKind(schema: z.ZodType): boolean {
 function callerAffirmed({ actor, current }: { actor: CallerActor; current?: unknown }): boolean {
   if (!isLocalDeviceActor(actor) && !isHostActor(actor)) return false;
   return typeof current === "function" ? current() === true : isLocalDeviceActor(actor);
+}
+
+/**
+ * Whether a call may still run, or release what it ran: asked again at the
+ * resolver and at the answer, after every awaited authorization step, so a
+ * revocation that lands mid-authorization wins. The desktop's own window is
+ * never revoked, and its calls are never re-judged (flag off is unchanged).
+ */
+function stillAdmitted(ctx: CatalogCallerContext): boolean {
+  if (isLocalDeviceActor(ctx.caller.actor)) return true;
+  return ctx.admission?.signal.aborted !== true && callerAffirmed(ctx.caller);
+}
+
+function credentialInvalid(): HostProcedureError {
+  return new HostProcedureError("credential-invalid", CREDENTIAL_INVALID_MESSAGE);
+}
+
+const encoder = new TextEncoder();
+
+/** UTF-8 bytes of a value's JSON, as the wire would carry it; `undefined` is nothing. */
+export function jsonByteLength(value: unknown): number {
+  const json = JSON.stringify(value) as string | undefined;
+  return json === undefined ? 0 : encoder.encode(json).byteLength;
+}
+
+export const RESPONSE_TOO_LARGE_MESSAGE =
+  "This answer is larger than the connection's frame bound; read it in bounded pages instead.";
+
+export const SUBSCRIPTION_LIMIT_MESSAGE =
+  "This connection already holds as many open subscriptions as it may; stop one first.";
+
+/** A promise that rejects with `credential-invalid` the moment the admission ends. */
+function unlessRevoked<Value>(promise: Promise<Value>, signal: AbortSignal): Promise<Value> {
+  if (signal.aborted) return Promise.reject(credentialInvalid());
+  return new Promise<Value>((resolve, reject) => {
+    const revoked = (): void => reject(credentialInvalid());
+    signal.addEventListener("abort", revoked, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", revoked);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", revoked);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * One stream on a connection with an admission: it takes a slot before its
+ * source is opened (refused with `subscription-limit` at the budget), gives
+ * it back however it ends, and ends with `credential-invalid` the moment the
+ * admission does. The source sees the same abort through its own signal, so
+ * one parked on its own await unparks and releases what it holds; it is not
+ * awaited here, so a source that ignored its signal could not hold the
+ * revocation answer back.
+ */
+async function* admittedStream(
+  admission: ConnectionAdmission,
+  open: () => unknown,
+): AsyncGenerator<unknown, void, unknown> {
+  if (admission.signal.aborted) throw credentialInvalid();
+  if (!admission.openStream()) {
+    throw new HostProcedureError("subscription-limit", SUBSCRIPTION_LIMIT_MESSAGE);
+  }
+  let iterator: AsyncIterator<unknown> | undefined;
+  try {
+    iterator = (open() as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await unlessRevoked(iterator.next(), admission.signal);
+      if (admission.signal.aborted) throw credentialInvalid();
+      if (next.done === true) return;
+      yield next.value;
+    }
+  } finally {
+    admission.closeStream();
+    void iterator?.return?.()?.catch(() => {});
+  }
+}
+
+type AnyResolver = (opts: {
+  ctx: CatalogCallerContext;
+  signal?: AbortSignal | undefined;
+}) => unknown;
+
+/** Every resolver a catalog builder wrapped; `catalogRouter` refuses any other. */
+const guardedResolvers = new WeakSet<object>();
+
+/**
+ * Wraps a resolver in the connection's admission: re-judged immediately
+ * before it runs, handed a signal that aborts with the connection, and, for
+ * a stream, counted and ended with it. A caller with no admission (the
+ * desktop's IPC, a router test) reaches its resolver unchanged.
+ */
+function guardResolver(resolver: AnyResolver, type: ResolverType): AnyResolver {
+  const guarded: AnyResolver = (opts) => {
+    const { ctx } = opts;
+    if (!stillAdmitted(ctx)) throw credentialInvalid();
+    const { admission } = ctx;
+    if (admission === undefined || isLocalDeviceActor(ctx.caller.actor)) return resolver(opts);
+    const signal =
+      opts.signal === undefined
+        ? admission.signal
+        : AbortSignal.any([opts.signal, admission.signal]);
+    if (type !== "subscription") return resolver({ ...opts, signal });
+    return admittedStream(admission, () => resolver({ ...opts, signal }));
+  };
+  guardedResolvers.add(guarded);
+  return guarded;
+}
+
+type ResolverType = "query" | "mutation" | "subscription";
+const RESOLVER_TYPES: ReadonlySet<string> = new Set(["query", "mutation", "subscription"]);
+
+/**
+ * A builder whose every descendant resolves through {@link guardResolver}:
+ * `.input()`, `.output()`, `.use()` and the rest return guarded builders, and
+ * `.query()`, `.mutation()` and `.subscription()` wrap the resolver they are
+ * given. A Proxy rather than a re-listing of tRPC's builder methods, so one
+ * tRPC adds later cannot slip a resolver past the guard.
+ */
+function guardedBuilder<Builder extends object>(builder: Builder): Builder {
+  return new Proxy(builder, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      const method = value as (...args: unknown[]) => unknown;
+      if (typeof property === "string" && RESOLVER_TYPES.has(property)) {
+        return (resolver: AnyResolver) =>
+          method.call(target, guardResolver(resolver, property as ResolverType));
+      }
+      // Every other builder method returns the next builder.
+      return (...args: unknown[]) => guardedBuilder(method.apply(target, args) as object);
+    },
+  });
 }
 
 function namedResources(named: WorkspaceResources): readonly WorkspaceResource[] {
@@ -411,7 +676,7 @@ export function createCatalogBuilders<
     // oxlint-disable-next-line no-underscore-dangle -- as above.
     const chain = [...builder._def.middlewares];
     provenance.set(chain.at(-1)!, { key, chain });
-    return builder;
+    return guardedBuilder(builder);
   }
 
   /** The named entry, refused unless it is declared with the scope the builder serves. */
@@ -468,12 +733,12 @@ export function createCatalogBuilders<
    */
   function policed(entry: CatalogEntry) {
     const requirement = catalogActorOf(entry);
-    return instrumented.use(async function admit({ ctx, next }) {
+    return instrumented.use(async function admit({ ctx, type, next }) {
+      if (ctx.refused !== undefined) {
+        throw new HostProcedureError(ctx.refused.reason, ctx.refused.message);
+      }
       if (!callerAffirmed(ctx.caller)) {
-        throw new HostProcedureError(
-          "credential-invalid",
-          "This connection's credential is no longer valid.",
-        );
+        throw new HostProcedureError("credential-invalid", CREDENTIAL_INVALID_MESSAGE);
       }
       const { actor } = ctx.caller;
       const policyActor = HOST_ACTOR_POLICY[actor.kind];
@@ -488,12 +753,42 @@ export function createCatalogBuilders<
       if (!admitted) {
         throw new HostProcedureError("verb-refused", `${entry.key} is not open to this caller.`);
       }
-      const result = await next();
+      if (ctx.operations !== undefined && !ctx.operations.has(entry.key)) {
+        throw new HostProcedureError(
+          "verb-refused",
+          `${entry.key} is not among the features this connection negotiated.`,
+        );
+      }
+      // The handler learns who is calling from the door, never from input.
+      const result = await next({ ctx: { call: handlerCallOf(actor) } });
       // A command id reused for a different intent is the client's conflict,
       // and the one the wire names; every other ledger conflict stays what it
       // was. Any area's ledger opts in by the shared brand.
       if (!result.ok && isCommandIntentConflict(result.error.cause)) {
         throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
+      }
+      // The map judged the call again under the door's policy and refused it
+      // before its handler ran (VC-668): the same refusal this middleware gives.
+      if (!result.ok && isHandlerRefused(result.error.cause)) {
+        throw new HostProcedureError("verb-refused", result.error.message, result.error.cause);
+      }
+      // What this host cannot do now is the handler's answer (VC-668).
+      if (!result.ok && isOperationUnavailable(result.error.cause)) {
+        throw new HostProcedureError(
+          "operation-unavailable",
+          result.error.message,
+          result.error.cause,
+        );
+      }
+      if (!result.ok) return result;
+      // Nothing is released to a caller whose grant ended while it ran.
+      if (!stillAdmitted(ctx)) throw credentialInvalid();
+      if (
+        ctx.maxResponseBytes !== undefined &&
+        type !== "subscription" &&
+        jsonByteLength(result.data) > ctx.maxResponseBytes
+      ) {
+        throw new HostProcedureError("response-too-large", RESPONSE_TOO_LARGE_MESSAGE);
       }
       return result;
     });
@@ -542,10 +837,11 @@ export function createCatalogBuilders<
     const procedures = router._def.procedures as Readonly<Record<string, AnyProcedure>>;
     for (const [path, procedure] of Object.entries(procedures)) {
       // oxlint-disable-next-line no-underscore-dangle -- as above.
-      const { middlewares, type, output } = procedure._def as unknown as {
+      const { middlewares, type, output, resolver } = procedure._def as unknown as {
         middlewares: readonly object[];
         type: string;
         output?: unknown;
+        resolver?: object;
       };
       const completes = middlewares.findIndex((middleware) => provenance.has(middleware));
       const minted = completes === -1 ? undefined : provenance.get(middlewares[completes]!);
@@ -555,6 +851,10 @@ export function createCatalogBuilders<
         minted.chain.some((middleware, index) => middlewares[index] !== middleware)
       ) {
         throw new Error(`Procedure ${path} was not built from its catalog entry`);
+      }
+      // Built from the entry's chain, but resolved past the admission guard.
+      if (!guardedResolvers.has(resolver!)) {
+        throw new Error(`Procedure ${path} resolves outside its connection's admission`);
       }
       const reads = entryOf(minted.key).catalog.idempotency === "read";
       if (reads !== (type !== "mutation")) {

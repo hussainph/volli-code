@@ -4,6 +4,8 @@ import { parseArgs } from "node:util";
 
 import { HostdBootError } from "./boot-error";
 import type { CredentialsResetCommand } from "./credentials";
+import { parseListen, type HostProtocolBind } from "./host-protocol";
+import type { DatabaseRestoreCommand } from "./database";
 import type { OperatorTokenCommand } from "./operator-token";
 import { DEFAULT_OPERATORS_FILE } from "./operators";
 
@@ -12,13 +14,17 @@ export const DEFAULT_SERVICE_USER = "volli";
 
 export const USAGE = `Usage:
   volli-hostd --data-dir <dir> [--socket <path>] [--operators <file>]
-                                                   Serve this data directory.
+              [--listen <host>:<port>]             Serve this data directory.
   volli-hostd status --data-dir <dir>              Report health; exit 0 serving,
                                                    1 refusing, 3 not serving.
   volli-hostd credentials reset --data-dir <dir> [--yes]
                                                    With hostd stopped: set aside saved
                                                    secrets it cannot open, and start
                                                    with none.
+  volli-hostd database restore --data-dir <dir> --from <file> --schema <N> [--yes]
+                                                   With hostd stopped: restore a cold
+                                                   copy at N, without migration.
+                                                   Discards later writes.
   volli-hostd operator-token --for <login>         As root: issue <login> an operator
   volli-hostd operator-token --revoke <login>      token, or revoke it. [--operators
                                                    <file>] [--service-user <name>]
@@ -30,6 +36,10 @@ only names it. Point the volli CLI at it with VOLLI_SOCKET=<path>. The operators
 and must be root's; the service user defaults to ${DEFAULT_SERVICE_USER}.
 VOLLI_SECRET_KEY_FILE names an absolute key file; VOLLI_HOSTD_LOG_LEVEL is
 debug, info (default), warn or error.
+
+With VOLLI_EXPERIMENTAL=cloud, --listen serves the host protocol's WebSocket
+on a loopback address (127.0.0.1:<port>, [::1]:<port>); port 0 picks one, and
+the status file names it. Until pairing lands it refuses every credential.
 `;
 
 export type HostdCommand =
@@ -38,9 +48,12 @@ export type HostdCommand =
       dataDir: string;
       socketPath: string;
       operatorsFile: string;
+      /** `--listen`: the host protocol's loopback address, or `null`. */
+      listen: HostProtocolBind | null;
     }
   | { kind: "status"; dataDir: string }
   | CredentialsResetCommand
+  | DatabaseRestoreCommand
   | OperatorTokenCommand
   | { kind: "help" }
   | { kind: "version" };
@@ -62,9 +75,16 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   if (values.help === true) return { kind: "help" };
   if (values.version === true) return { kind: "version" };
   const [verb, ...rest] = positionals;
-  const known = verb === "status" || verb === "operator-token" || verb === "credentials";
-  // `credentials` takes one action word, `reset`.
-  const action = verb === "credentials" ? rest.shift() : undefined;
+  const known =
+    verb === "status" || verb === "operator-token" || verb === "credentials" || verb === "database";
+  // Maintenance commands take one action word.
+  const action = verb === "credentials" || verb === "database" ? rest.shift() : undefined;
+  if (verb === "database" && action !== "restore") {
+    throw new HostdBootError(
+      "usage",
+      action === undefined ? "database needs an action: restore." : `Unknown argument: ${action}`,
+    );
+  }
   if (verb === "credentials" && action !== "reset") {
     throw new HostdBootError(
       "usage",
@@ -74,9 +94,14 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
   if (rest.length > 0 || (verb !== undefined && !known)) {
     throw new HostdBootError("usage", `Unknown argument: ${known ? rest[0] : verb}`);
   }
-  if (verb !== "credentials" && values.yes !== undefined) {
-    throw new HostdBootError("usage", "--yes belongs to credentials reset.");
+  if (verb !== "credentials" && verb !== "database" && values.yes !== undefined) {
+    throw new HostdBootError("usage", "--yes belongs to credentials reset or database restore.");
   }
+  if (verb !== undefined && values.listen !== undefined) {
+    throw new HostdBootError("usage", `--listen belongs to serving, not to ${verb}.`);
+  }
+  if (verb !== "database" && (values.from !== undefined || values.schema !== undefined))
+    throw new HostdBootError("usage", "--from and --schema belong to database restore.");
   if (verb === "operator-token") return operatorTokenCommand(values, cwd);
   if (
     values.for !== undefined ||
@@ -92,6 +117,31 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
     throw new HostdBootError("usage", "--data-dir <dir> is required.");
   }
   const dataDir = resolve(cwd, values["data-dir"]);
+  if (verb === "database") {
+    if ([values.socket, values.operators].some((v) => v !== undefined))
+      throw new HostdBootError(
+        "usage",
+        "database restore takes --data-dir, --from, --schema and --yes only.",
+      );
+    if (values.from === undefined || values.from.length === 0)
+      throw new HostdBootError("usage", "database restore requires --from <file>.");
+    if (
+      values.schema === undefined ||
+      !/^[1-9][0-9]*$/.test(values.schema) ||
+      !Number.isSafeInteger(Number(values.schema))
+    )
+      throw new HostdBootError(
+        "usage",
+        "database restore requires --schema <N>, a positive integer.",
+      );
+    return {
+      kind: "database-restore",
+      dataDir,
+      sourcePath: resolve(cwd, values.from),
+      schemaVersion: Number(values.schema),
+      confirmed: values.yes === true,
+    };
+  }
   if (verb === "credentials") {
     if ([values.socket, values.operators].some((v) => v !== undefined)) {
       throw new HostdBootError("usage", "credentials reset takes --data-dir and --yes only.");
@@ -111,11 +161,14 @@ export function parseHostdArgs(argv: readonly string[], cwd: string): HostdComma
     values.socket === undefined || values.socket.length === 0
       ? defaultSocketPath(dataDir)
       : resolve(cwd, values.socket);
+  const listen = values.listen === undefined ? null : parseListen(values.listen);
+  if (typeof listen === "string") throw new HostdBootError("usage", listen);
   return {
     kind: "serve",
     dataDir,
     socketPath,
     operatorsFile: operatorsFileFrom(values.operators, cwd),
+    listen,
   };
 }
 
@@ -159,10 +212,13 @@ function parse(argv: readonly string[]) {
       "data-dir": { type: "string" },
       socket: { type: "string" },
       operators: { type: "string" },
+      listen: { type: "string" },
       for: { type: "string" },
       revoke: { type: "string" },
       "service-user": { type: "string" },
       yes: { type: "boolean" },
+      from: { type: "string" },
+      schema: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },

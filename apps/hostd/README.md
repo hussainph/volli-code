@@ -9,6 +9,8 @@ directory.
 ```sh
 volli-hostd --data-dir /var/lib/volli-hostd [--socket <path>] [--operators <file>]
 volli-hostd status --data-dir /var/lib/volli-hostd
+# offline, explicit data loss confirmation; use the current/new install
+sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
 sudo volli-hostd operator-token --for <login> | --revoke <login>
 VOLLI_SOCKET=/var/lib/volli-hostd/volli.sock volli project list
 ```
@@ -30,6 +32,23 @@ project (`volli project add`). The host lifecycle starts retention and automatic
 process reap at readiness and joins them at stop (VC-627). Migration rollback
 backups and backup retention use the shared database open path; backup bundles
 remain explicit operations, not a periodic scheduler.
+
+### The host protocol (behind `cloud`)
+
+With `VOLLI_EXPERIMENTAL=cloud` and `--listen <host>:<port>`, hostd also serves
+the host protocol's WebSocket (VC-663; `docs/plans/host-protocol.md`): the
+Session router (`sessions`, `sessions.subscribe`) and the socket's Session reads
+(`session.read`), from the same runtime and verb handlers the socket answers
+through. Without the flag nothing listens, whatever `--listen` says (hostd warns
+and ignores it); without `--listen` nothing listens either.
+
+- **Loopback only** (`127.0.0.1`, `localhost`, `[::1]`) until pairing and TLS
+  land (VC-575); `--listen` refuses anything else. Port `0` picks one; the
+  status file's `hostProtocol` names it.
+- **Every credential is refused** until VC-575 (pairing) and VC-577 (the
+  same-machine bootstrap) provide verifiers: a hello answers `UNAUTHORIZED` /
+  `credential-invalid`. An operator token is never accepted here.
+- An address it cannot bind refuses boot (`host-protocol`, exit 78).
 
 ## Ports
 
@@ -261,7 +280,9 @@ believing it only when its pid is alive and its socket accepts a connection:
 | 1    | `refusing`    | Up, but the database did not open: read `database`.          |
 | 3    | `not-serving` | Stopped, starting, stopping, crashed, or socket unreachable. |
 
-The host protocol (VC-564) carries the same facts to remote clients.
+`hostProtocol` is where the host protocol listens, `{ "url", "host", "port" }`,
+or `null` when nothing does. The host protocol (VC-564) carries the same facts
+to remote clients.
 
 ## Stable execution venue
 
@@ -349,6 +370,8 @@ volli-hostd-<version>-linux-x64/
   lib/node_modules/     `pnpm deploy --prod` of this package, from the lockfile
   share/systemd/volli-hostd.{service,socket}
   share/launchd/com.volli.hostd.plist
+  share/apparmor/volli-chromium   the agent browser's AppArmor profile (VC-619)
+  share/probe-chromium-sandbox.sh Chromium sandboxed under the unit's hardening?
   MANIFEST.json  README.md  LICENSE
 ```
 
@@ -485,8 +508,23 @@ The socket unit binds the agent socket at `/run/volli-hostd.sock`.
   `/srv`, never under `/home`), the
   kernel and control-group protections, an empty `CapabilityBoundingSet=`,
   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
-  `RestrictNamespaces=yes` and `SystemCallArchitectures=native`. Not
+  `RestrictNamespaces=user pid net` and `SystemCallArchitectures=native`. Not
   `MemoryDenyWriteExecute` (V8's JIT).
+- **Namespaces for the agent browser's sandbox, and no others** (VC-619). The
+  agent browser is standalone Chromium, and Chromium's Linux sandbox puts each
+  renderer in new user, PID and network namespaces. `RestrictNamespaces=yes`
+  made that impossible, leaving `--no-sandbox` — every web page with the
+  service's whole reach — as the only way to start it. The unit allows those
+  three and still denies mount, IPC, UTS, cgroup and time namespaces. On Ubuntu
+  23.10+ (`kernel.apparmor_restrict_unprivileged_userns=1`) the binary also
+  needs `share/apparmor/volli-chromium` loaded for its path; it grants user
+  namespaces to that one binary and nothing more. Keep the browser outside
+  `/home` (`ProtectHome=yes` hides it), e.g. `/opt/volli-chromium`, and check
+  both with `sudo share/probe-chromium-sandbox.sh /opt/volli-chromium/chrome volli`,
+  which starts it under this unit's hardening and fails unless Chromium
+  reports itself sandboxed. CI runs the same probe. `--no-sandbox` exists only
+  as the host-core option `noSandbox` for a container that cannot provide user
+  namespaces, and logs a warning on every launch.
 
 ### Credentials
 
@@ -591,9 +629,9 @@ by the service user, so every step inside it runs as that user. The box
 runbook has the same steps:
 [`docs/runbooks/hostd-box.md`](../../docs/runbooks/hostd-box.md#upgrades).
 
-The rollback checks the database with the `sqlite3` command-line tool, which
-the archive doesn't include (it carries the `better-sqlite3` module, not the
-CLI). On Ubuntu:
+The rollback uses `sqlite3` only to read the live schema. Restore validation
+and the fenced swap run in `volli-hostd database restore`, using the packaged
+SQLite module. The archive does not include the `sqlite3` CLI. On Ubuntu:
 
 ```sh
 sudo apt-get update && sudo apt-get install -y sqlite3
@@ -629,57 +667,62 @@ You need two things before anything is stopped or moved:
   sudo -u volli sqlite3 -readonly /var/lib/volli-hostd/volli.db 'PRAGMA user_version;'   # the schema now
   ```
 
+Close any `sqlite3` sessions on the live database first. Check
+`df -h /var/lib /var/tmp`: the fenced restore needs about **2× the database
+size free under `D`** for staging and the raw safety copy. A cold restore also
+needs space for the extracted archive (`S`) and full copies of the current
+data and checkouts (`R`).
+
 Then run the rollback as one block. It stops at the first failed step, and
-starts nothing until every check has passed:
+starts nothing until the database restore and install swap have succeeded:
 
 1. It checks `P` and stops both units.
-2. It reads the schema. At `N` the database was never migrated and is kept.
-   Above `N`, it first checks that the safety copy exists and isn't empty, and
-   that it reads `ok` and then `N`, read-only. `integrity_check` exits 0 even
-   when it finds damage, so the block compares the output.
-3. Only then does it set `volli.db` and its `-wal`, `-shm` and `-journal` aside
-   in a new `rolled-back-*` folder. Never delete that folder: it is the only
-   copy of what was written since the upgrade. It copies the safety copy in
-   (copy, don't move: it stays the rollback point) and checks the copy too.
-   The copy's check opens it read-write: over a read-only connection,
-   `integrity_check` skips CHECK constraints. The safety copy itself is only
-   ever opened read-only.
+2. A `volli.db.recovery-pending` marker means retry the restore, even if the
+   live database is missing or already at `N`. Without that marker, it keeps
+   a database at `N`, restores one above `N`, and refuses one below `N`.
+3. **The current/new install's** `database restore` command requires `--from`,
+   an exact `--schema` and `--yes`; without confirmation it refuses. It
+   validates a checkpointed source, acquires the hostd instance lock and then
+   host-core's database swap fence, and preserves the live database family in
+   a unique `rolled-back-*` directory. It atomically installs and verifies the
+   source at exactly `N`, **without migration**, leaving the source unchanged.
+   Keep **every `rolled-back-*` directory** until the restore is confirmed:
+   a retry can create several, and the earliest holds the writes made after
+   the rollback point. Do not replace the command with shell moves/copies of
+   live database or fence files.
 4. It swaps `P` in as `/opt/volli-hostd`, installs its units, reloads systemd
    and starts.
+
+An interrupted swap blocks boot with the pending marker. Retrying the command
+adopts that pending swap and installs the source again; schema equality alone
+is not recovery. Run it before swapping to the older install, which may not
+have this subcommand.
 
 ```sh
 P=/opt/volli-hostd.prev-20261004-120000   # example: replace with the install to return to
 N=59                                      # example: replace with the schema it left
 (
   set -eu
+  trap 'rc=$?; if [ "$rc" -ne 0 ]; then sudo systemctl stop volli-hostd.socket volli-hostd || true; fi; exit "$rc"' EXIT
   D=/var/lib/volli-hostd
   B="$D/volli.db.backup-v$N"
   T=$(date +%Y%m%d-%H%M%S)
-  check_db() {   # check_db FILE [-readonly]: it must read ok, then N
-    f=$1; shift
-    sudo -u volli test -s "$f" || { echo "missing or empty: $f" >&2; return 1; }
-    result=$(sudo -u volli sqlite3 "$@" "$f" 'PRAGMA integrity_check; PRAGMA user_version;') ||
-      return 1
-    [ "$result" = "$(printf 'ok\n%s' "$N")" ] ||
-      { printf 'check failed: %s:\n%s\n' "$f" "$result" >&2; return 1; }
-  }
+  case "$N" in ''|*[!0-9]*) echo "invalid N: $N" >&2; exit 1;; esac
   sudo test -x "$P/bin/volli-hostd"
   sudo systemctl stop volli-hostd.socket volli-hostd
-  now=$(sudo -u volli sqlite3 -readonly "$D/volli.db" 'PRAGMA user_version;')
-  if [ "$now" = "$N" ]; then
-    echo "volli.db is at schema $N: never migrated, kept as it is"
-  elif [ "$now" -gt "$N" ]; then
-    check_db "$B" -readonly           # the rollback point: never written to
-    aside=$(sudo -u volli mktemp -d "$D/rolled-back-$T.XXXXXX")
-    for f in volli.db volli.db-wal volli.db-shm volli.db-journal; do
-      if sudo -u volli test -e "$D/$f"; then sudo -u volli mv "$D/$f" "$aside/$f"; fi
-    done
-    sudo -u volli cp "$B" "$D/volli.db"
-    check_db "$D/volli.db"             # read-write: read-only skips CHECK constraints
-    echo "migrated database set aside in $aside"
+  if sudo -u volli test -e "$D/volli.db.recovery-pending" ||
+     sudo -u volli test -L "$D/volli.db.recovery-pending"; then
+    sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
   else
-    echo "volli.db is at schema $now, below N=$N: wrong N" >&2
-    exit 1
+    now=$(sudo -u volli sqlite3 -readonly "$D/volli.db" 'PRAGMA user_version;')
+    if [ "$now" = "$N" ]; then
+      echo "volli.db is at schema $N with no pending restore: kept as it is"
+    elif [ "$now" -gt "$N" ]; then
+      sudo -u volli /opt/volli-hostd/bin/volli-hostd database restore --data-dir "$D" --from "$B" --schema "$N" --yes
+    else
+      echo "volli.db is at schema $now, below N=$N: wrong N" >&2
+      exit 1
+    fi
   fi
   sudo mv /opt/volli-hostd "/opt/volli-hostd.failed-$T"
   sudo mv "$P" /opt/volli-hostd
@@ -692,17 +735,60 @@ N=59                                      # example: replace with the schema it 
 sudo -u volli /opt/volli-hostd/bin/volli-hostd status --data-dir /var/lib/volli-hostd
 ```
 
-**If the block stops on an error, it has started nothing.** Don't start the
-units by hand. A failed database step means the safety copy can't be used.
-Examples: no `volli.db`, a missing or empty copy, or a check that didn't read
-`ok` and then `N`. Restore the copy of the data directory you took before the
-upgrade instead ([runbook, Backups](../../docs/runbooks/hostd-box.md#backups),
-all but its start), then run the block again: it finds the database at `N`,
-keeps it and finishes the swap. Whether the new build migrated is read from
-the schema. The absence of a newer `volli.db.backup-v*` doesn't prove it.
-`/opt/volli-hostd.failed-*` is the new install; remove it once the old one
-serves. The read-only checks can leave empty `-wal`/`-shm` files beside the
-safety copy and the database; they are harmless.
+**On error, the block stops both units. Don't start them by hand.** Read the
+error first. For an interrupted database swap, keep the current/new install
+and retry its `database restore` command with the same `D`, `B` and `N`;
+never remove the pending marker to unblock boot. If the safety copy is missing,
+empty, damaged or at the wrong schema, restore the pre-upgrade cold copy
+([runbook, Backups](../../docs/runbooks/hostd-box.md#backups), with `START=no`
+to leave both units stopped). That stages the archive in a root-owned temporary
+directory and cold-copies the current data and checkouts into `R` instead of
+moving the live data directory away. **Immediately after the safety copy**, it
+invokes the fenced database command on the staged database at its recorded
+schema, **before** replacing secrets, worktrees or checkouts. Only after that
+succeeds does it replace non-database entries, leaving database/fence families
+and preservation directories alone.
+
+For a cold restore error, keep both units stopped and record `D`, `B`, `N`, `S`
+and `R` from the block (subshell variables do not survive). Before cases 2 and 3,
+set them in the operator's outer shell. Replace these example `S`, `R` and `N`
+values with the exact printed values; do not create new directories:
+
+```sh
+D=/var/lib/volli-hostd
+S=/var/tmp/volli-hostd-restore.ABC123                 # replace with the printed archive staging path
+R=/var/lib/volli-hostd.before-restore.DEF456          # replace with the printed current cold state path
+B="$S/var/lib/volli-hostd/volli.db"
+N=59                                                # replace with the printed restore schema
+```
+
+The three cases:
+
+1. **Database restore refused, with no pending marker:** nothing else was
+   replaced. The current state is untouched and saved in `R`. Fix or replace
+   the archive, or close a busy database connection; do not repeatedly retry
+   an invalid archive.
+2. **Database restore interrupted:** rerun the current/new install's same
+   command with `D`, `B`, `N` (it converges), then run the remaining replacement
+   lines from `S`. Never remove the pending marker to unblock boot.
+3. **Copy failed after a successful restore:** finish the copy lines from `S`,
+   or put all prior state back from `R`. To revert, work on a separate copy of
+   `R/data` including sidecars, checkpoint and integrity-check that database,
+   restore it at its recorded schema through the fenced command, then use
+   `R/data` and `R/checkouts` in the non-database replacement loops. Keep the
+   original `R` untouched; never copy its database/fence files over live paths.
+
+Do not blindly rerun the whole cold block or start with mismatched state.
+After the cold restore finishes, run the rollback block again: it keeps the
+database at `N` with no pending marker and finishes the install swap. A cold
+restore replaces credentials too; separately preserve any secret key
+configured outside the archive and use the matching key.
+
+If an install swap failed partway through, inspect `/opt/volli-hostd`, `P` and
+`/opt/volli-hostd.failed-*` and finish that swap before starting; do not blindly
+rerun its moves. The absence of a newer `volli.db.backup-v*` doesn't prove no
+migration happened. `/opt/volli-hostd.failed-*` is the new install; remove it
+once the old one serves.
 
 Credential files (`host-credentials.*`, the secret key) are not in the
 database and stay where they are. The old build reads its keys from the

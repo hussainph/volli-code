@@ -20,6 +20,13 @@ desktop, web/phone client, CLI. Owns no durable workspace state and never talks
 to databases.
 _Avoid_: renderer (only one client), Worker
 
+**Host link**:
+A Client's one connection to one Workspace's Host: it handshakes before
+anything else, never queues a command while the Host is away, resumes
+subscriptions after the next welcome, and is observable as one connection
+state (`@volli/host-protocol/client-link`, VC-670).
+_Avoid_: socket, sync connection, offline queue
+
 **Workspace**:
 The portable unit a Host is authoritative for: one database file, its artifacts
 and git refs. Today: one project's board. Not the **Ticket workspace**, which

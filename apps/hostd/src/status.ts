@@ -78,6 +78,19 @@ export interface HostdStatus {
    * by an older hostd.
    */
   readonly credentials?: CredentialStatus | null;
+  /**
+   * The host protocol's WebSocket listener (VC-663): where it listens, or
+   * `null` when nothing does (the `cloud` flag off, or no `--listen`). Absent
+   * in a file written by an older hostd.
+   */
+  readonly hostProtocol?: HostdHostProtocolStatus | null;
+}
+
+/** Where the host protocol listens: loopback only until VC-575. */
+export interface HostdHostProtocolStatus {
+  readonly url: string;
+  readonly host: string;
+  readonly port: number;
 }
 
 export function statusFilePath(dataDir: string): string {

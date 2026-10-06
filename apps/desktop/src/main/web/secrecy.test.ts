@@ -41,7 +41,7 @@ vi.mock("electron", () => ({
 
 import { openTestDb, type TestDb, createTestSessionEngine } from "@volli/host-core/testing";
 import { readSecret } from "@volli/host-core/db";
-import { registerDataIpcHandlers } from "../data-ipc";
+import { registerDataIpcHandlers } from "../data-ipc.test-support";
 import { createPiNativeAdapter, type PiRuntimeContext } from "@volli/host-core/session-runtime";
 import {
   BRAVE_SEARCH_KEY_SECRET,

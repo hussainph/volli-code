@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
 import type { OperatorWriteRecord } from "./agent-dispatch/context";
 import {
   findProjectByPath,
@@ -76,7 +77,7 @@ function scenario(options: { verifier?: boolean } = {}) {
   const audit: OperatorWriteRecord[] = [];
   let ids = 0;
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: ctx.db }),
     db: ctx.db,
     sessionEngine: createTestSessionEngine(ctx.db),
     appVersion: "1.2.3",
