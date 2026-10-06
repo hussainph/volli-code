@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
+import { busyRefusal } from "@volli/host-core/worktree";
 import type {
   RuntimeAssemblyOptions,
   BackgroundShellHostPorts,
@@ -328,10 +329,14 @@ describe("headless runtime ownership", () => {
     const ready = await f.launch().ready();
     seam.shells.liveCwds.mockReturnValue(["/tree/shell"]);
     seam.sites.mockReturnValue([{ sessionId: "s", directory: "/tree/agent" }]);
-    expect(await ready.busyWorktreeSites("/tree")).toEqual([
-      { surface: "terminal", directory: "/tree/shell" },
+    const sites = await ready.busyWorktreeSites("/tree");
+    expect(sites).toEqual([
+      { surface: "shell", directory: "/tree/shell" },
       { surface: "agent", directory: "/tree/agent" },
     ]);
+    expect(busyRefusal(sites[0]!)).toBe(
+      "A background shell is still running in this worktree. Stop it first.",
+    );
     f.runtime.projection.mockResolvedValueOnce({ projection: { turnActive: false } });
     expect(await ready.busyWorktreeSites("/tree")).toHaveLength(1);
     f.runtime.projection.mockRejectedValueOnce(new Error("unreadable"));
