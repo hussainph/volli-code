@@ -333,6 +333,12 @@ not called during construction, so desktop can bind notifications after the
 database is known. Desktop wires `onFocusedSessionsChanged` to the returned
 read watch.
 
+The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) rides
+the same observe port. It counts Sessions with a turn open on a binding this
+process holds, plus running background shells, which the composition root
+feeds from the shell host's state feed. Desktop's menu-bar quit decision reads
+it synchronously; armed Automations are deliberately not live work.
+
 Two facts arrive later and are not ports, because host-core answers both
 itself: which executor bindings are open (a listing row is live only while one
 is) and each folded projection for scheduled resume. They are

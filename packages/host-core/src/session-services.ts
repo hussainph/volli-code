@@ -8,10 +8,12 @@ import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/s
 import { createRunAttentionWatch } from "./automations/run-attention";
 import {
   createSqliteSessionLedger,
+  createHostLiveWork,
   createSessionReadWatch,
   publishSessionListingRow,
   watchSessionActivity,
   type SessionActivityWatch,
+  type HostLiveWorkWatch,
   type SessionActivityWatchPorts,
   type SessionReadWatch,
 } from "./session-control";
@@ -41,7 +43,7 @@ export interface HostSessionPorts {
  * and nothing is scheduled.
  */
 export interface SessionRuntimeWiring {
-  openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId">[];
+  openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId" | "sessionId">[];
   observeScheduledResume(projection: SessionProjection): void;
 }
 
@@ -66,6 +68,8 @@ export interface HostSessionServices {
   readonly hostNoticeOutbox: HostNoticeOutbox;
   readonly sessionWakeBus: SessionWakeBus;
   readonly sessionReadWatch: SessionReadWatch;
+  /** Running turns and shells, read synchronously by a quit decision (VC-577). */
+  readonly liveWork: HostLiveWorkWatch;
   readonly sessionActivityWatch: SessionActivityWatch;
   readonly sessionEngine: SessionEngine;
 }
@@ -119,6 +123,10 @@ export function createHostSessionServices(
       publishSessionRow(sessionId);
     },
   });
+  const liveWork = createHostLiveWork({
+    openSessionIds: () => new Set(runtime.openNativeBindings().map((binding) => binding.sessionId)),
+    onError: (error) => ports.log.warn("[volli] live work:", error),
+  });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
     publish: publishSessionActivity,
     provenanceOf: (born) => readSessionProvenance(db, born),
@@ -133,6 +141,7 @@ export function createHostSessionServices(
       runAttention.observe(projection);
       runtime.observeScheduledResume(projection);
       sessionReadWatch.observe(projection);
+      liveWork.observeSession(projection);
     },
     observeBirth: (sessionId) => {
       runAttention.observeBirth(sessionId);
@@ -146,6 +155,7 @@ export function createHostSessionServices(
     hostNoticeOutbox,
     sessionWakeBus,
     sessionReadWatch,
+    liveWork,
     sessionActivityWatch,
     sessionEngine,
   };

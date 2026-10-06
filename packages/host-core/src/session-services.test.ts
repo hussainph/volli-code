@@ -33,7 +33,7 @@ function ports() {
 /** What host-core's runtime assembly and lifecycle wire in once they exist. */
 function runtimeWiring() {
   return {
-    openNativeBindings: vi.fn(() => [{ attachmentId: "live-binding" }]),
+    openNativeBindings: vi.fn(() => [{ attachmentId: "live-binding", sessionId: "live-session" }]),
     observeScheduledResume: vi.fn<SessionRuntimeWiring["observeScheduledResume"]>(),
   } satisfies SessionRuntimeWiring;
 }
@@ -134,6 +134,34 @@ describe("host Session composition", () => {
         failure,
       ),
     );
+  });
+
+  it("reads live turns from the same fold, intersected with open bindings (VC-577)", async () => {
+    const { engine, runtime, sessionId } = await seeded();
+    const observed = vi.spyOn(services.liveWork, "observeSession");
+    await services.sessionActivityWatch.flush();
+    expect(observed).toHaveBeenCalledWith(
+      expect.objectContaining({ session: expect.objectContaining({ id: sessionId }) }),
+    );
+    const projection = (await engine.getSession({ sessionId }))!;
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+    services.liveWork.observeSession({ ...projection, turnActive: true });
+    // Folded open, but this Session holds no binding: not a live turn.
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+    runtime.openNativeBindings.mockReturnValue([{ attachmentId: "bound", sessionId }]);
+    expect(services.liveWork.current()).toEqual({ turns: 1, shells: 0 });
+    services.liveWork.observeSession({ ...projection, turnActive: false });
+    expect(services.liveWork.current()).toEqual({ turns: 0, shells: 0 });
+  });
+
+  it("reports a live-work listener failure through the host log", async () => {
+    const { sinks } = await seeded();
+    const failure = new Error("listener");
+    services.liveWork.subscribe(() => {
+      throw failure;
+    });
+    services.liveWork.observeShell({ shellId: "shell", state: "running" });
+    expect(sinks.log.warn).toHaveBeenCalledWith("[volli] live work:", failure);
   });
 
   it("folds with nothing open and nothing scheduled until the runtime wires each in", async () => {
