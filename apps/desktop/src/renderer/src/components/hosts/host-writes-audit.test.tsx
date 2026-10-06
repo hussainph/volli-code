@@ -55,7 +55,7 @@ const TICKET: Ticket = {
   priority: "medium",
   labels: ["bug"],
   usesWorktree: true,
-  preferredHarnessId: null,
+  preferredHarnessId: "claude-code",
   order: 0,
   worktreePath: null,
   branch: null,
@@ -105,9 +105,9 @@ async function openSubmenu(name: string): Promise<void> {
   });
 }
 
-function renderCard(world: HostWorld) {
+function renderCard(on: HostWorld) {
   vi.spyOn(useTicketSessionRecordsStore.getState(), "ensure").mockResolvedValue(undefined);
-  return world.render(
+  return on.render(
     <TicketDialogHost projectId="remote">
       <TicketContextMenu ticket={{ ...TICKET, worktreePath: "/w/r1" }} projectId="remote">
         <button type="button">Card</button>
