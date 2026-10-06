@@ -22,6 +22,35 @@ import { startHostd, type RunningHostd } from "./hostd";
 import { checkStatus, LIVE_PROBES, statusExitCode } from "./status";
 import { headlessRuntimePaths } from "./runtime-paths";
 import { HOSTD_VERSION } from "./version";
+import { randomUUID } from "node:crypto";
+import { chownSync, existsSync } from "node:fs";
+import { userInfo } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
+import { runEnroll } from "./enroll";
+import { ROOT_UID, runInstall } from "./install";
+import { runDevices } from "./devices";
+import { installLayout, SERVICE_UNIT } from "./layout";
+import { answer, type RunTool } from "./management";
+import { spawnSync } from "node:child_process";
+import { managedStatus } from "./manage-status";
+import { runStart } from "./start";
+
+/**
+ * Where a live box keeps its tools. Root's PATH is not trusted (it is
+ * whatever sudo or the login left), so tools resolve in these alone.
+ */
+const TOOL_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+const LIVE_RUN_TOOL: RunTool = (tool, args) => {
+  const path = TOOL_DIRS.map((dir) => `${dir}/${tool}`).find((candidate) => existsSync(candidate));
+  if (path === undefined) return { code: 127, stdout: "", stderr: `${tool}: not found` };
+  const result = spawnSync(path, [...args], { encoding: "utf8", timeout: 120_000 });
+  return {
+    code: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? result.error?.message ?? "",
+  };
+};
 
 /** Past this, a stop that has not finished is abandoned and the process exits 1. */
 const SHUTDOWN_DEADLINE_MS = 30_000;
@@ -78,8 +107,86 @@ async function main(): Promise<number> {
         stdin: () => readAll(process.stdin),
         out: (text) => process.stdout.write(text),
       });
+    case "install":
+    case "start":
+    case "enroll":
+    case "devices":
+    case "status-json":
+      return manage(command);
     case "serve":
       return serve(command, logger);
+  }
+}
+
+const out = (text: string) => process.stdout.write(text);
+const uid = () => process.getuid!();
+const login = () => userInfo().username;
+
+/** install, start, enroll, devices and `status --json` on this box (VC-700): one line of JSON each. */
+async function manage(
+  command: Extract<
+    HostdCommand,
+    { kind: "install" | "start" | "enroll" | "devices" | "status-json" }
+  >,
+): Promise<number> {
+  const where = { home: userInfo().homedir, env: process.env };
+  const layouts = { system: installLayout("system", where), user: installLayout("user", where) };
+  switch (command.kind) {
+    case "install":
+      return answer(out, () =>
+        runInstall(command, {
+          uid,
+          layout: layouts[command.mode],
+          // The artifact runs from <release>/lib/hostd/hostd.cjs.
+          ownRelease: resolvePath(__dirname, "../.."),
+          version: HOSTD_VERSION,
+          run: LIVE_RUN_TOOL,
+          lookupUser: lookupSystemUser,
+          chown: chownSync,
+          systemInstallPresent: () => existsSync(join(layouts.system.unitDir, SERVICE_UNIT)),
+          now: () => new Date(),
+        }),
+      );
+    case "start":
+      return answer(out, () =>
+        runStart(command, {
+          uid,
+          login,
+          layout: layouts[command.mode],
+          run: LIVE_RUN_TOOL,
+          probes: LIVE_PROBES,
+          sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+          now: Date.now,
+        }),
+      );
+    case "enroll":
+      return answer(out, () =>
+        runEnroll(command, {
+          uid,
+          layouts,
+          probes: LIVE_PROBES,
+          version: HOSTD_VERSION,
+          now: () => new Date(),
+          newId: randomUUID,
+          trustedOwnerUid: ROOT_UID,
+        }),
+      );
+    case "devices":
+      return answer(out, () =>
+        runDevices(command, { uid, layouts, now: () => new Date(), trustedOwnerUid: ROOT_UID }),
+      );
+    case "status-json": {
+      const report = await managedStatus(command, {
+        layouts,
+        run: LIVE_RUN_TOOL,
+        probes: LIVE_PROBES,
+        login,
+        version: HOSTD_VERSION,
+        trustedOwnerUid: ROOT_UID,
+      });
+      out(`${JSON.stringify(report)}\n`);
+      return statusExitCode(report.verdict);
+    }
   }
 }
 
@@ -172,6 +279,7 @@ async function serve(
       listenFd,
       operatorsFile: command.operatorsFile,
       listen: command.listen,
+      devicesFile: command.devicesFile,
       version: HOSTD_VERSION,
       env: process.env,
       logger,

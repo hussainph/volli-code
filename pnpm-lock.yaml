@@ -371,6 +371,9 @@ importers:
       '@volli/host-core':
         specifier: workspace:*
         version: link:../../packages/host-core
+      '@volli/host-install':
+        specifier: workspace:*
+        version: link:../../packages/host-install
       '@volli/host-protocol':
         specifier: workspace:*
         version: link:../../packages/host-protocol
@@ -621,6 +624,18 @@ importers:
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.3.0
         version: '@voidzero-dev/vite-plus-core@0.3.0(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.3.0(@opentelemetry/api@1.9.1)(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(typescript@7.0.2)(yaml@2.9.0)
+
+  packages/host-install:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.3.0
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
       vite-plus:
         specifier: 'catalog:'
         version: 0.3.0(@opentelemetry/api@1.9.1)(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(typescript@7.0.2)(yaml@2.9.0)
