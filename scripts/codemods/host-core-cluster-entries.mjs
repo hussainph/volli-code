@@ -373,7 +373,9 @@ for (const file of consumers) {
       const entry = relative(SRC, entryFile(cluster)).split("\\").join("/");
       for (const spec of parseSpecifiers(clause).list) {
         if (cluster !== "testing" && Object.values(PRIVATE).some((n) => n.includes(spec.name))) {
-          unresolved.push(`${file}: ${spec.name} is served by ${NAME}/testing; import it from there`);
+          unresolved.push(
+            `${file}: ${spec.name} is served by ${NAME}/testing; import it from there`,
+          );
           continue;
         }
         if (exportKind(entry, spec.name)) continue;
@@ -609,9 +611,10 @@ for (const [cluster, files] of [...wanted].toSorted(([a], [b]) => a.localeCompar
     "/**",
     ` * \`${entrySpecifier(cluster)}\`: ${doc}.`,
     " *",
-    " * An explicit list: a name is public because a client imports it. Add one",
-    " * here when a client needs it; host-core's own files import the module",
-    " * itself, never this entry. See the cluster map in the package README.",
+    " * An explicit list: a name is public because a client, or a client's test,",
+    " * imports it as this cluster's API. Add one here when a client needs it;",
+    " * host-core's own files import the module itself, never this entry. See",
+    " * the cluster map in the package README.",
     " */",
   ];
   for (const [file, names] of [...files].toSorted(([a], [b]) => a.localeCompare(b))) {

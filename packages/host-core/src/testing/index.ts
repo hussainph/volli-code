@@ -1,9 +1,10 @@
 /**
  * `@volli/host-core/testing`: test support for host-core's clients: database and Session fixtures, scripted git, the backup fixture profile, a standalone Session engine and ledger, child-process helpers. Production code never imports it (`package-interface.test.ts`, and desktop's and hostd's own guards).
  *
- * An explicit list: a name is public because a client imports it. Add one
- * here when a client needs it; host-core's own files import the module
- * itself, never this entry. See the cluster map in the package README.
+ * An explicit list: a name is public because a client, or a client's test,
+ * imports it as this cluster's API. Add one here when a client needs it;
+ * host-core's own files import the module itself, never this entry. See
+ * the cluster map in the package README.
  */
 export {
   createFixtureProfile,
