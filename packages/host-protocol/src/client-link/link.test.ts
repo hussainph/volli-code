@@ -969,6 +969,8 @@ describe("subscriptions resume, resnapshot or end", () => {
     });
     started.emit(1);
     started.proxy.down();
+    // Down first: the link is still "ready" until the drop reaches it.
+    await until(subject, "unreachable");
     started.proxy.up();
     await until(subject, "ready");
     await sleep(50);
@@ -1012,6 +1014,8 @@ describe("subscriptions resume, resnapshot or end", () => {
     await eventually(() => completing.last()?.kind === "complete", "the completion");
     // Ended streams are not resumed by the next connection.
     started.proxy.down();
+    // Down first: the link is still "ready" until the drop reaches it.
+    await until(subject, "unreachable");
     started.proxy.up();
     await until(subject, "ready");
     await sleep(50);
@@ -1124,6 +1128,8 @@ describe("subscriptions resume, resnapshot or end", () => {
     subscription.unsubscribe();
     started.emit(1);
     started.proxy.down();
+    // Down first: the link is still "ready" until the drop reaches it.
+    await until(subject, "unreachable");
     started.proxy.up();
     await until(subject, "ready");
     await sleep(50);
