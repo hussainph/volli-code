@@ -64,9 +64,8 @@ export interface WebSocketContractLinkOptions<Host, Router extends AnyRouter> {
 export function webSocketContractLink<Host, Router extends AnyRouter>(
   options: WebSocketContractLinkOptions<Host, Router>,
 ): ContractLink<Host, Router> {
-  return {
-    name: "websocket",
-    async open(host) {
+  return servedWebSocketContractLink<Host, Router>({
+    async serve(host) {
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       await once(server, "listening");
       applyWSSHandler<Router>({
@@ -76,11 +75,49 @@ export function webSocketContractLink<Host, Router extends AnyRouter>(
           options.createContext(host, { connectionParams: info.connectionParams }),
       });
       const { port } = server.address() as AddressInfo;
-      const socket = createWSClient({
+      return {
         url: `ws://127.0.0.1:${port}`,
-        ...(options.connectionParams === undefined
-          ? {}
-          : { connectionParams: options.connectionParams }),
+        async close() {
+          for (const peer of server.clients) peer.terminate();
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        },
+      };
+    },
+    ...(options.connectionParams === undefined
+      ? {}
+      : { connectionParams: () => options.connectionParams! }),
+  });
+}
+
+/** A server a host's own code started for one connection: where it listens, and its stop. */
+export interface ServedWebSocket {
+  readonly url: string;
+  close(): Promise<void>;
+}
+
+export interface ServedWebSocketContractLinkOptions<Host> {
+  /**
+   * Starts the real server, the one production composes, for this host
+   * fixture. The harness never builds a context itself: whatever the server's
+   * handshake mints is what the cases are judged as.
+   */
+  serve(host: Host): Promise<ServedWebSocket>;
+  /** This connection's `connectionParams`, built per connection (a hello carries a fresh nonce). */
+  connectionParams?(host: Host): Record<string, string>;
+}
+
+/** The stock tRPC WebSocket client against a server the host's own code serves. */
+export function servedWebSocketContractLink<Host, Router extends AnyRouter>(
+  options: ServedWebSocketContractLinkOptions<Host>,
+): ContractLink<Host, Router> {
+  return {
+    name: "websocket",
+    async open(host) {
+      const server = await options.serve(host);
+      const connectionParams = options.connectionParams?.(host);
+      const socket = createWSClient({
+        url: server.url,
+        ...(connectionParams === undefined ? {} : { connectionParams }),
       });
       return {
         client: createTRPCClient<Router>({
@@ -90,8 +127,7 @@ export function webSocketContractLink<Host, Router extends AnyRouter>(
         }),
         async close() {
           await socket.close();
-          for (const peer of server.clients) peer.terminate();
-          await new Promise<void>((resolve) => server.close(() => resolve()));
+          await server.close();
         },
       };
     },

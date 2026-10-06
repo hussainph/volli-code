@@ -655,6 +655,70 @@ const MCP_SERVER_FIELDS: readonly VerbToolField[] = [
 ];
 
 /**
+ * The board area's catalog rows (VC-668): the commands a board router
+ * projects, typed by exactly these rows so its family cannot build another
+ * area's key (HP § Command catalog, "Adding a command"). Spread into
+ * {@link VERB_REGISTRY} where the socket order has always had them.
+ */
+export const BOARD_ENTRIES = [
+  {
+    key: "ticket.move",
+    // The first command both kinds of door serve (VC-668): the socket keeps
+    // judging `actor`, and the WebSocket admits only the person until VC-565
+    // writes the board's `sessionMayAct` policy and widens it to `session-own`.
+    accessModes: ["cli", "hostApi"],
+    actor: "session",
+    handler: { site: "main", id: "ticket.move" },
+    // Column-only, like the socket: moving to the column a ticket already
+    // occupies is a no-op, so a repeat leaves the same state.
+    catalog: { actor: "user", scope: "workspace", idempotency: "natural" },
+    listed: true,
+    referenceOrder: 15,
+    group: "Write",
+    summary: "Move a ticket to another column.",
+    example: "volli ticket move VC-12 --to needs-review",
+    notes: [
+      "Moving to the current column is a no-op.",
+      "Columns ignore case and accept board labels such as Needs Review or needs_review.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the Ticket's board status and order and append one status-change Ticket event.",
+        },
+      ],
+      humanVisible: [
+        "The Ticket moves to the selected board column.",
+        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
+        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
+      ],
+      nonEffects: [
+        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
+      ],
+    },
+    positionalId: "required",
+    positionalSubject: "ticket",
+    options: [
+      {
+        name: "--to",
+        kind: "value",
+        placeholder: "<column>",
+        values: COLUMN_VALUES,
+        required: true,
+        help: "Destination column.",
+      },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
+  },
+] as const satisfies readonly VerbEntry[];
+
+/** One board row: the board router family's entry type. */
+export type BoardEntry = (typeof BOARD_ENTRIES)[number];
+
+/**
  * Every agent-facing verb, in the order the socket projection has always had.
  *
  * Declaration order is the socket order, so {@link AGENT_COMMANDS} is a plain
@@ -942,52 +1006,7 @@ export const VERB_REGISTRY = [
       { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
-  {
-    key: "ticket.move",
-    accessModes: ["cli"],
-    actor: "session",
-    handler: { site: "main", id: "ticket.move" },
-    listed: true,
-    referenceOrder: 15,
-    group: "Write",
-    summary: "Move a ticket to another column.",
-    example: "volli ticket move VC-12 --to needs-review",
-    notes: [
-      "Moving to the current column is a no-op.",
-      "Columns ignore case and accept board labels such as Needs Review or needs_review.",
-    ],
-    effects: {
-      durableWrites: [
-        {
-          resource: "ticket",
-          operation: "update",
-          summary:
-            "Update the Ticket's board status and order and append one status-change Ticket event.",
-        },
-      ],
-      humanVisible: [
-        "The Ticket moves to the selected board column.",
-        "If Automatic triggers is on and the destination column has an armed Automation, a cancellable arrival can start a fresh Run.",
-        "Moving from Doing or Needs Review to Backlog, Todo, or Done interrupts the Ticket's live Sessions.",
-      ],
-      nonEffects: [
-        "Without an enabled, armed Automation, the move does not start a Session, submit a kickoff turn, or create a worktree.",
-      ],
-    },
-    positionalId: "required",
-    positionalSubject: "ticket",
-    options: [
-      {
-        name: "--to",
-        kind: "value",
-        placeholder: "<column>",
-        values: COLUMN_VALUES,
-        required: true,
-        help: "Destination column.",
-      },
-      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
-    ],
-  },
+  ...BOARD_ENTRIES,
   {
     key: "ticket.comment",
     accessModes: ["cli"],

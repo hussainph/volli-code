@@ -25,7 +25,7 @@
  * a verb.
  */
 
-import type { AgentCommandBindingId } from "@volli/shared";
+import type { AgentCommandBindingId, SocketHandlerKey } from "@volli/shared";
 
 import type { AgentVerbHandler } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
@@ -56,11 +56,12 @@ import {
 import {
   ticketCommentVerb,
   ticketCreateVerb,
-  ticketMoveVerb,
+  ticketMoveDecode,
   ticketSignalVerb,
   ticketUpdateVerb,
 } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
+import { projectHandler, type ProjectedVerbBinding } from "./projection";
 
 /**
  * Whether the dispatch resolves `VOLLI_SESSION` to an identity before calling
@@ -104,9 +105,19 @@ export interface AgentVerbBinding {
   readonly envSession: EnvSessionPolicy;
 }
 
-/** Every socket binding, in the order the Verb Registry declares them. */
+/**
+ * Every socket binding, in the order the Verb Registry declares them.
+ *
+ * A verb that is also a catalog command ({@link SocketHandlerKey}) must be a
+ * {@link ProjectedVerbBinding}: `projectHandler`'s projection of the host's
+ * `handlers[key]` (VC-668), so a second implementation of a command both
+ * doors serve does not compile. Every other verb keeps its own handler until
+ * its area makes it a catalog entry.
+ */
 export const AGENT_VERB_TABLE: {
-  readonly [Id in AgentCommandBindingId]: AgentVerbBinding;
+  readonly [Id in AgentCommandBindingId]: Id extends SocketHandlerKey
+    ? ProjectedVerbBinding<Id>
+    : AgentVerbBinding;
 } = {
   identify: { handle: identifyVerb, envSession: "resolve" },
   board: { handle: boardVerb, envSession: "resolve" },
@@ -115,7 +126,7 @@ export const AGENT_VERB_TABLE: {
   "ticket.events": { handle: ticketEventsVerb, envSession: "resolve" },
   "ticket.create": { handle: ticketCreateVerb, envSession: "resolve" },
   "ticket.update": { handle: ticketUpdateVerb, envSession: "resolve" },
-  "ticket.move": { handle: ticketMoveVerb, envSession: "resolve" },
+  "ticket.move": projectHandler("ticket.move", { decode: ticketMoveDecode, envSession: "resolve" }),
   "ticket.comment": { handle: ticketCommentVerb, envSession: "resolve" },
   // Identity is the whole requirement, exactly as it is for the two session
   // signals below: a verdict needs a signer, not a terminal attachment, so the

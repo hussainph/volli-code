@@ -5,7 +5,11 @@ import {
   SessionRuntimeConflictError,
   type SessionRuntime,
 } from "@volli/session-engine";
-import { createSessionProjectionCheckpoint, EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  type CatalogKeyOf,
+} from "@volli/shared";
 import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
@@ -22,7 +26,13 @@ import {
   catalogRouter,
   hostProcedure,
   workspaceProcedure,
+  type SessionRouterEntry,
 } from "./session-catalog";
+import type {
+  HostRouterCatalogBinding,
+  HostRouterPaths,
+  HostRouterPathsDisjoint,
+} from "./host-router";
 import {
   createSessionRouter,
   RpcDiagnosticLog,
@@ -30,6 +40,7 @@ import {
   type SessionRouterCatalogBinding,
   type SessionRouterContext,
 } from "./index";
+import { sessionContext } from "./session-handlers.test-support";
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
@@ -65,14 +76,14 @@ function fixture(caller: RouterCaller) {
     close: async () => {},
   } satisfies SessionRuntime;
   const createSession = vi.fn(async () => ({ sessionId: "created" }));
-  const context: SessionRouterContext = {
+  const context: SessionRouterContext = sessionContext({
     caller,
     runtime,
     diagnostics: new RpcDiagnosticLog(),
     resourceWorkspace: ({ id }) => OWNERS[id] ?? null,
     readModelAccessDefaults: () => EMPTY_MODEL_ACCESS_DEFAULTS,
     createSession,
-  };
+  });
   return { runtime, createSession, caller: createSessionRouter().createCaller(context) };
 }
 
@@ -141,12 +152,14 @@ describe("the actor matrix (VC-564)", () => {
     } as unknown as RouterCaller;
     const { caller, runtime } = fixture(unchecked);
     const readExperiments = vi.fn(() => ({ cloud: { enabled: false, source: "default" } }));
-    const settings = createSessionRouter().createCaller({
-      caller: unchecked,
-      runtime,
-      diagnostics: new RpcDiagnosticLog(),
-      readExperiments: readExperiments as never,
-    });
+    const settings = createSessionRouter().createCaller(
+      sessionContext({
+        caller: unchecked,
+        runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        readExperiments: readExperiments as never,
+      }),
+    );
     for (const call of [
       caller.session.projection({ sessionId: "session-1" }),
       settings.settings.experiments(),
@@ -188,12 +201,14 @@ describe("the actor matrix (VC-564)", () => {
     ]) {
       const { caller, runtime } = fixture({ actor } as unknown as RouterCaller);
       const lookup = vi.fn(() => OTHER_WORKSPACE);
-      const lookalike = createSessionRouter().createCaller({
-        caller: { actor } as unknown as RouterCaller,
-        runtime,
-        diagnostics: new RpcDiagnosticLog(),
-        resourceWorkspace: lookup,
-      });
+      const lookalike = createSessionRouter().createCaller(
+        sessionContext({
+          caller: { actor } as unknown as RouterCaller,
+          runtime,
+          diagnostics: new RpcDiagnosticLog(),
+          resourceWorkspace: lookup,
+        }),
+      );
       for (const call of [
         caller.session.projection({ sessionId: "foreign-session" }),
         lookalike.session.projection({ sessionId: "foreign-session" }),
@@ -292,7 +307,7 @@ describe("workspace scope, before any read", () => {
     });
     const call = (caller: RouterCaller) =>
       router
-        .createCaller({ caller, runtime: {} as never, diagnostics: new RpcDiagnosticLog() })
+        .createCaller(sessionContext({ caller, runtime: {}, diagnostics: new RpcDiagnosticLog() }))
         .session.projection({});
     expect(await refusal(call(device))).toMatchObject({ reason: "workspace-unknown" });
     await expect(call(LOCAL_DESKTOP_CALLER)).resolves.toBe("read");
@@ -300,11 +315,13 @@ describe("workspace scope, before any read", () => {
 
   it("refuses a network caller every Session when no port can say whose it is", async () => {
     const projection = createSessionProjectionCheckpoint(session, []).projection;
-    const caller = createSessionRouter().createCaller({
-      caller: device,
-      runtime: { projection: async () => ({ projection, throughSequence: 1 }) } as never,
-      diagnostics: new RpcDiagnosticLog(),
-    });
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: device,
+        runtime: { projection: async () => ({ projection, throughSequence: 1 }) } as never,
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
     expect(await refusal(caller.session.projection({ sessionId: "session-1" }))).toMatchObject({
       reason: "workspace-unknown",
     });
@@ -409,11 +426,18 @@ describe("the error envelope", () => {
 });
 
 describe("binding procedures to the catalog (D2)", () => {
-  it("binds the Session router to the catalog exactly, at compile time", () => {
+  it("binds the Session router to its family's entries exactly, at compile time", () => {
     expectTypeOf<SessionRouterCatalogBinding>().toEqualTypeOf<never>();
     expectTypeOf<
-      CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>
+      CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>, CatalogKeyOf<SessionRouterEntry>>
     >().toEqualTypeOf<never>();
+    // Alone, the Session router leaves the board's command unserved; the union
+    // over every router (host-router.ts) is the catalog exactly.
+    expectTypeOf<
+      CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>
+    >().toEqualTypeOf<"ticket.move">();
+    expectTypeOf<HostRouterCatalogBinding>().toEqualTypeOf<never>();
+    expectTypeOf<HostRouterPathsDisjoint>().toEqualTypeOf<never>();
   });
 
   it("fails to compile a procedure with no catalog entry, or a scope it does not have", () => {
@@ -429,9 +453,9 @@ describe("binding procedures to the catalog (D2)", () => {
     ).toThrow("Catalog entry settings.experiments is host-scoped, not workspace-scoped");
     const rogue = initTRPC.create().procedure.query(() => "unpoliced");
     type WithRogue = ProcedurePaths<AppRouter["_def"]["record"] & { rogue: typeof rogue }>;
-    expectTypeOf<CatalogMismatch<WithRogue>>().toEqualTypeOf<"rogue">();
+    expectTypeOf<CatalogMismatch<WithRogue | HostRouterPaths>>().toEqualTypeOf<"rogue">();
     // @ts-expect-error -- a router carrying it fails the binding assertion.
-    expectTypeOf<CatalogMismatch<WithRogue>>().toEqualTypeOf<never>();
+    expectTypeOf<CatalogMismatch<WithRogue | HostRouterPaths>>().toEqualTypeOf<never>();
   });
 
   it("refuses at construction a procedure the catalog did not build", () => {

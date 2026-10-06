@@ -59,7 +59,7 @@ import {
   resetOrphanScanForTest,
   resetRetentionWatcherForTest,
 } from "@volli/host-core/testing";
-import { registerDataIpcHandlers } from "./data-ipc";
+import { registerDataIpcHandlers } from "./data-ipc.test-support";
 import { insertProject, getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db";
 import { createHostMaintenance } from "@volli/host-core/maintenance";
 import { worktreeDeps } from "@volli/host-core/worktree";
