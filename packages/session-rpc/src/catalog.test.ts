@@ -71,7 +71,15 @@ const OWNERS: Readonly<Record<string, string>> = {
 function fixture(caller: RouterCaller) {
   const projection = createSessionProjectionCheckpoint(session, []).projection;
   const runtime = {
-    snapshot: vi.fn(async () => ({ projection, throughSequence: 1, frames: [], transcript: [] })),
+    snapshot: vi.fn(async () => ({
+      projection,
+      throughSequence: 1,
+      frames: [],
+      before: null,
+      transcript: [],
+      latestReply: null,
+    })),
+    history: vi.fn(async () => ({ frames: [], before: null })),
     projection: vi.fn(async () => ({ projection, throughSequence: 1 })),
     command: vi.fn<SessionRuntime["command"]>(async () => {
       throw new Error("not reached");

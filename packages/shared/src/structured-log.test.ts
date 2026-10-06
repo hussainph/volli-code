@@ -132,11 +132,20 @@ describe("redaction (a merge gate: no secret, key or credential reaches a line)"
       cause: new Error("secret cause"),
     });
     const out = redactLogValue(error) as Record<string, unknown>;
-    expect(out).toEqual({ name: "TypeError", message: expect.any(String), code: "EAUTH" });
+    expect(out).toEqual({
+      name: "TypeError",
+      message: expect.any(String),
+      code: "EAUTH",
+      stack: expect.stringContaining("TypeError"),
+    });
     expect(String(out["message"])).not.toContain("abc123");
     expect(JSON.stringify(out)).not.toContain("secret cause");
-    expect(redactLogValue(new Error("plain"))).toEqual({ name: "Error", message: "plain" });
-    expect(redactLogValue(Object.assign(new Error("n"), { code: 7 }))).toEqual({
+    const stackless = (error: Error) => Object.assign(error, { stack: undefined });
+    expect(redactLogValue(stackless(new Error("plain")))).toEqual({
+      name: "Error",
+      message: "plain",
+    });
+    expect(redactLogValue(stackless(Object.assign(new Error("n"), { code: 7 })))).toEqual({
       name: "Error",
       message: "n",
       code: 7,

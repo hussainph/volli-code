@@ -26,7 +26,14 @@ import {
   type ChatSessionSlice,
 } from "./client";
 import { queuedMessageFromHost } from "./session-model";
-import { appendFrames, EMPTY_TRANSCRIPT, type ChatSessionFrame } from "./transcript";
+import {
+  appendFrames,
+  EMPTY_TRANSCRIPT,
+  prependTranscriptHistory,
+  seedTranscriptWindow,
+  type ChatSessionFrame,
+  type TranscriptWindow,
+} from "./transcript";
 
 /** A slice as a Session first appears: undescribed, empty, and `lifecycle` as seeded. */
 export function seedSlice(lifecycle: ChatSessionLifecycle): ChatSessionSlice {
@@ -59,6 +66,39 @@ export function foldStreamBatch(
   if (transcript === slice.transcript) return slice;
   const next = { ...slice, transcript };
   return { ...next, lifecycle: settledLifecycle(slice, next) };
+}
+
+/**
+ * A snapshot: its window of frames and the projection checkpoint they end at,
+ * applied as one write so nothing reads the frames against an older projection.
+ */
+export function applySnapshotWindow(
+  slice: ChatSessionSlice,
+  window: TranscriptWindow,
+  projection: ChatSessionProjection,
+): ChatSessionSlice {
+  const transcript = seedTranscriptWindow(slice.transcript, window, projection);
+  // The queue is host-projected state, not transcript: the window bounds the
+  // frames and leaves the follow-ups the projection carries untouched (VC-675).
+  const next = {
+    ...applyQueue(slice, projection.queue ?? [], projection.queueRevision ?? -1),
+    transcript,
+    projection,
+  };
+  return { ...next, lifecycle: settledLifecycle(slice, next) };
+}
+
+/**
+ * Older history above the transcript (VC-315). Lifecycle is not consulted: a
+ * page is the past, and it moves nothing about the turn running now.
+ */
+export function prependSliceHistory(
+  slice: ChatSessionSlice,
+  requested: number,
+  page: TranscriptWindow,
+): ChatSessionSlice {
+  const transcript = prependTranscriptHistory(slice.transcript, requested, page);
+  return transcript === slice.transcript ? slice : { ...slice, transcript };
 }
 
 /** A fresh durable projection, and the lifecycle it settles the slice to. */

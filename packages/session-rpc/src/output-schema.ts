@@ -20,6 +20,7 @@ import {
   SESSION_ROLES,
   SESSION_STOP_CATEGORIES,
   SESSION_USAGE_CAUSES,
+  TODO_STATUSES,
   TOOL_ROUTES,
 } from "@volli/shared";
 import type { RendererSessionEventPayload, SessionPresentationProjection } from "@volli/shared";
@@ -55,6 +56,13 @@ const auto = z.object({
   alternatives: z.array(z.object({ selection: model, probability: z.number().min(0).max(1) })),
 });
 const reference = z.object({ id: text, mediaType: nullableText, digest: nullableText });
+const todoList = z.array(z.object({ content: text, status: z.enum(TODO_STATUSES) }));
+/** What a settled message means for current state (VC-315); absent before it. */
+const transcriptDigest = z.object({
+  role: z.enum(["user", "assistant", "system"]),
+  reply: z.literal(true).optional(),
+  todoList: todoList.optional(),
+});
 const stopActor = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("session"), sessionId: text }),
   z.object({ kind: z.enum(["user", "watchdog"]) }),
@@ -369,6 +377,7 @@ const payloads = {
     attachmentId: nullableText,
     turnId: nullableText,
     reference,
+    digest: transcriptDigest.optional(),
   }),
   "attention.raised": z.object({ kind: z.literal("attention.raised"), attention: attentionSchema }),
   "attention.cleared": z.object({ kind: z.literal("attention.cleared"), attentionId: text }),
@@ -517,6 +526,7 @@ export const fullProjectionSchema = z.object({
   turnActive: z.boolean(),
   lastActivityAt: integer,
   bornTicketless: z.boolean(),
+  todoList: todoList.optional(),
   liveExecutor: z.object({ id: text }).nullable(),
   scheduledResume: z.object({ id: text, attentionId: text, resumeAt: integer }).nullable(),
 }) satisfies z.ZodType<SessionPresentationProjection>;
@@ -537,8 +547,21 @@ export const sessionProjectionOutputSchema = z.object({
   projection: projectionSchema,
   throughSequence: sequence,
 });
+/**
+ * VC-315's two snapshot fields ride only when they say something: `before`
+ * the cursor for history above the window (absent: it reaches the first
+ * event, or the host predates the bound), `latestReply` the current turn's
+ * reply (absent: it has said nothing, or the host predates it).
+ */
 export const sessionSnapshotOutputSchema = sessionProjectionOutputSchema.extend({
   frames: z.array(frameSchema),
+  before: integer.positive().optional(),
+  latestReply: z.object({ sequence, text }).optional(),
+});
+/** One page of older transcript (VC-315): frames in order, and the cursor above them. */
+export const sessionHistoryOutputSchema = z.object({
+  frames: z.array(frameSchema),
+  before: integer.positive().nullable(),
 });
 export const sessionCommandWireSchema = z.object({
   sessionId: text,

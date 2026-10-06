@@ -110,6 +110,7 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
     "modelAccess.pickerView": () => need(ports.readModelPickerView, PREFERENCES)(),
     "modelAccess.setPickerView": (view) => need(ports.writeModelPickerView, PREFERENCES)(view),
     "session.snapshot": (input) => runtime("snapshot")(input),
+    "session.history": (input) => runtime("history")(input),
     "session.projection": (input) => runtime("projection")(input),
     "session.subscribe": (input, _call, sink) =>
       runtime("subscribe")(

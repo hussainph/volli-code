@@ -52,6 +52,9 @@
       "session.cancelInteraction",
       "session.reconcile"
     ],
+    "sessions.history": [
+      "session.history"
+    ],
     "sessions.queue": [
       "session.cancelQueued",
       "session.editQueued",
@@ -3515,6 +3518,3782 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "session.history": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "before": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sessionId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "before"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema1": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema2": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "__schema3": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "before": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "frames": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "event": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attachmentId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "commandId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "commandOrigin": {
+                        "anyOf": [
+                          {
+                            "oneOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "const": "user",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "const": "session",
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sessionId"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "automationName": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "automationRunId": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "automation",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "automationRunId",
+                                  "automationName"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "const": "volli",
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "enum": [
+                                      "watch-notice",
+                                      "subagent-notice",
+                                      "relaunch-recovery",
+                                      "scheduled-resume",
+                                      "supervision",
+                                      "browser-notice",
+                                      "shell-notice",
+                                      "worktree-notice",
+                                      "auto-title"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "reason"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "occurredAt": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "payload": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "command": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "createdAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "intent": {
+                                    "oneOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "session.create",
+                                            "type": "string"
+                                          },
+                                          "parentSessionId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "projectId": {
+                                            "type": "string"
+                                          },
+                                          "role": {
+                                            "enum": [
+                                              "project",
+                                              "ticket",
+                                              "subagent"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "ticketId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "title": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "projectId",
+                                          "ticketId",
+                                          "role",
+                                          "parentSessionId",
+                                          "title"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "session.archive",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "session.retitle",
+                                            "type": "string"
+                                          },
+                                          "title": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "title"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "session.signal",
+                                            "type": "string"
+                                          },
+                                          "reason": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "signal": {
+                                            "enum": [
+                                              "done",
+                                              "blocked"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "signal",
+                                          "reason"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "by": {
+                                            "oneOf": [
+                                              {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "kind": {
+                                                    "const": "session",
+                                                    "type": "string"
+                                                  },
+                                                  "sessionId": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "sessionId"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "kind": {
+                                                    "enum": [
+                                                      "user",
+                                                      "watchdog"
+                                                    ],
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind"
+                                                ],
+                                                "type": "object"
+                                              }
+                                            ]
+                                          },
+                                          "kind": {
+                                            "const": "session.stop",
+                                            "type": "string"
+                                          },
+                                          "reason": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "reason",
+                                          "by"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "auto": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "alternatives": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "probability": {
+                                                      "maximum": 1,
+                                                      "minimum": 0,
+                                                      "type": "number"
+                                                    },
+                                                    "selection": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "modelId": {
+                                                          "type": "string"
+                                                        },
+                                                        "providerId": {
+                                                          "type": "string"
+                                                        },
+                                                        "reasoningLevel": {
+                                                          "enum": [
+                                                            "off",
+                                                            "minimal",
+                                                            "low",
+                                                            "medium",
+                                                            "high",
+                                                            "xhigh",
+                                                            "max"
+                                                          ],
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "providerId",
+                                                        "modelId",
+                                                        "reasoningLevel"
+                                                      ],
+                                                      "type": "object"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "selection",
+                                                    "probability"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "confidence": {
+                                                "maximum": 1,
+                                                "minimum": 0,
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "confidence",
+                                              "alternatives"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "kind": {
+                                            "const": "model.select",
+                                            "type": "string"
+                                          },
+                                          "selection": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "modelId": {
+                                                "type": "string"
+                                              },
+                                              "providerId": {
+                                                "type": "string"
+                                              },
+                                              "reasoningLevel": {
+                                                "enum": [
+                                                  "off",
+                                                  "minimal",
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                                ],
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "providerId",
+                                              "modelId",
+                                              "reasoningLevel"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "tier": {
+                                            "enum": [
+                                              "global",
+                                              "ticket",
+                                              "utility",
+                                              "fast",
+                                              "deep",
+                                              "visual"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "selection"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "continuity": {
+                                            "enum": [
+                                              "fresh",
+                                              "native_resume",
+                                              "context_replay",
+                                              "recreate"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "const": "executor.start",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "continuity"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "attachmentId": {
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "enum": [
+                                              "executor.stop",
+                                              "executor.interrupt",
+                                              "executor.retry"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "attachmentId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "attachmentId": {
+                                            "type": "string"
+                                          },
+                                          "instructions": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "kind": {
+                                            "const": "context.compact",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "attachmentId",
+                                          "instructions"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "message.submit",
+                                            "type": "string"
+                                          },
+                                          "reference": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "digest": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "mediaType": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "mediaType",
+                                              "digest"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "reference"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "attachmentId": {
+                                            "type": "string"
+                                          },
+                                          "interactionId": {
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "const": "interaction.resolve",
+                                            "type": "string"
+                                          },
+                                          "reference": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "digest": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "mediaType": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "mediaType",
+                                              "digest"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "resolution": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "answers": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "optionIds": {
+                                                      "items": {
+                                                        "type": "string"
+                                                      },
+                                                      "type": "array"
+                                                    },
+                                                    "promptId": {
+                                                      "type": "string"
+                                                    },
+                                                    "response": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "promptId",
+                                                    "optionIds",
+                                                    "response"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "optionIds": {
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "response": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "optionIds",
+                                              "response"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "attachmentId",
+                                          "interactionId",
+                                          "resolution",
+                                          "reference"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "attachmentId": {
+                                            "type": "string"
+                                          },
+                                          "attentionId": {
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "const": "resume.schedule",
+                                            "type": "string"
+                                          },
+                                          "resumeAt": {
+                                            "maximum": 9007199254740991,
+                                            "minimum": -9007199254740991,
+                                            "type": "integer"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "attentionId",
+                                          "attachmentId",
+                                          "resumeAt"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "resume.cancel",
+                                            "type": "string"
+                                          },
+                                          "scheduleId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "scheduleId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "const": "resume.settle",
+                                            "type": "string"
+                                          },
+                                          "outcome": {
+                                            "oneOf": [
+                                              {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "kind": {
+                                                    "const": "resumed",
+                                                    "type": "string"
+                                                  },
+                                                  "retryCommandId": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "retryCommandId"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "detail": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "kind": {
+                                                    "const": "skipped",
+                                                    "type": "string"
+                                                  },
+                                                  "reason": {
+                                                    "enum": [
+                                                      "continued",
+                                                      "superseded",
+                                                      "ended",
+                                                      "refused"
+                                                    ],
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "reason",
+                                                  "detail"
+                                                ],
+                                                "type": "object"
+                                              }
+                                            ]
+                                          },
+                                          "scheduleId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "scheduleId",
+                                          "outcome"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    ]
+                                  },
+                                  "route": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "attachmentId": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "attachmentId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "sessionId",
+                                  "createdAt",
+                                  "intent",
+                                  "route"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "command.recorded",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "command"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session.created",
+                                "type": "string"
+                              },
+                              "session": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "createdAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "parentSessionId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "projectId": {
+                                    "type": "string"
+                                  },
+                                  "role": {
+                                    "enum": [
+                                      "project",
+                                      "ticket",
+                                      "subagent"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "ticketId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "title": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "projectId",
+                                  "ticketId",
+                                  "role",
+                                  "parentSessionId",
+                                  "title",
+                                  "createdAt"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "session"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session.archived",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session.retitled",
+                                "type": "string"
+                              },
+                              "title": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "title"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "auto": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "alternatives": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "probability": {
+                                          "maximum": 1,
+                                          "minimum": 0,
+                                          "type": "number"
+                                        },
+                                        "selection": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "modelId": {
+                                              "type": "string"
+                                            },
+                                            "providerId": {
+                                              "type": "string"
+                                            },
+                                            "reasoningLevel": {
+                                              "enum": [
+                                                "off",
+                                                "minimal",
+                                                "low",
+                                                "medium",
+                                                "high",
+                                                "xhigh",
+                                                "max"
+                                              ],
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "providerId",
+                                            "modelId",
+                                            "reasoningLevel"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": [
+                                        "selection",
+                                        "probability"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "confidence": {
+                                    "maximum": 1,
+                                    "minimum": 0,
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "confidence",
+                                  "alternatives"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "model.selected",
+                                "type": "string"
+                              },
+                              "selection": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "modelId": {
+                                    "type": "string"
+                                  },
+                                  "providerId": {
+                                    "type": "string"
+                                  },
+                                  "reasoningLevel": {
+                                    "enum": [
+                                      "off",
+                                      "minimal",
+                                      "low",
+                                      "medium",
+                                      "high",
+                                      "xhigh",
+                                      "max"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "providerId",
+                                  "modelId",
+                                  "reasoningLevel"
+                                ],
+                                "type": "object"
+                              },
+                              "tier": {
+                                "enum": [
+                                  "global",
+                                  "ticket",
+                                  "utility",
+                                  "fast",
+                                  "deep",
+                                  "visual"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "selection"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "input": {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "runtime-brief",
+                                        "type": "string"
+                                      },
+                                      "text": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "text"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "prompt-resources",
+                                        "type": "string"
+                                      },
+                                      "resources": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "text": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "name",
+                                            "text"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "resources"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "codeMode": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "limits": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "declarationBudgetTokens": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              "maxConcurrency": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              "maxNestedCalls": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              "maxOutputBytes": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              "memoryLimitBytes": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              "timeoutMs": {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              }
+                                            },
+                                            "required": [
+                                              "timeoutMs",
+                                              "memoryLimitBytes",
+                                              "maxOutputBytes",
+                                              "maxNestedCalls",
+                                              "maxConcurrency",
+                                              "declarationBudgetTokens"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "mode": {
+                                            "enum": [
+                                              "off",
+                                              "both",
+                                              "only"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "nudge": {
+                                            "const": true,
+                                            "type": "boolean"
+                                          },
+                                          "routes": {
+                                            "additionalProperties": {
+                                              "enum": [
+                                                "direct",
+                                                "both",
+                                                "code",
+                                                "deferred",
+                                                "hidden"
+                                              ],
+                                              "type": "string"
+                                            },
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "routes",
+                                          "limits"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "kind": {
+                                        "const": "tool-surface",
+                                        "type": "string"
+                                      },
+                                      "mcpManagementNames": {
+                                        "const": "server",
+                                        "type": "string"
+                                      },
+                                      "mcpTools": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "description": {
+                                              "type": "string"
+                                            },
+                                            "inputSchema": {
+                                              "additionalProperties": {
+                                                "$ref": "#/$defs/__schema1"
+                                              },
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "type": "object"
+                                            },
+                                            "outputSchema": {
+                                              "additionalProperties": {
+                                                "$ref": "#/$defs/__schema1"
+                                              },
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "type": "object"
+                                            },
+                                            "parallelRead": {
+                                              "const": true,
+                                              "type": "boolean"
+                                            },
+                                            "providerName": {
+                                              "type": "string"
+                                            },
+                                            "serverId": {
+                                              "type": "string"
+                                            },
+                                            "toolName": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "serverId",
+                                            "toolName",
+                                            "providerName",
+                                            "description",
+                                            "inputSchema"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "tools"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "session.input.recorded",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "input"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session.signaled",
+                                "type": "string"
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "signal": {
+                                "enum": [
+                                  "done",
+                                  "blocked"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "signal",
+                              "reason"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "by": {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "session",
+                                        "type": "string"
+                                      },
+                                      "sessionId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "sessionId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "enum": [
+                                          "user",
+                                          "watchdog"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "session.stopped",
+                                "type": "string"
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "reason",
+                              "by"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachment": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "continuity": {
+                                    "enum": [
+                                      "fresh",
+                                      "native_resume",
+                                      "context_replay",
+                                      "recreate"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "venue": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "enum": [
+                                          "local",
+                                          "cloud",
+                                          "remote",
+                                          "unknown"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "sessionId",
+                                  "venue",
+                                  "continuity"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "attachment.opened",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachment"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "attachment.native_referenced",
+                                "type": "string"
+                              },
+                              "native": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "detail": {
+                                    "type": "null"
+                                  },
+                                  "id": {
+                                    "type": "null"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "detail"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "native"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachment": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "continuity": {
+                                    "enum": [
+                                      "fresh",
+                                      "native_resume",
+                                      "context_replay",
+                                      "recreate"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "venue": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "enum": [
+                                          "local",
+                                          "cloud",
+                                          "remote",
+                                          "unknown"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "sessionId",
+                                  "venue",
+                                  "continuity"
+                                ],
+                                "type": "object"
+                              },
+                              "failure": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "detail": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "diagnostic": {
+                                    "type": "null"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "detail",
+                                  "diagnostic"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "attachment.failed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachment",
+                              "failure"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "attachment.closed",
+                                "type": "string"
+                              },
+                              "outcome": {
+                                "enum": [
+                                  "completed",
+                                  "failed",
+                                  "interrupted"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "outcome"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "exitCode": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "attachment.exited",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "exitCode"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "run.started",
+                                "type": "string"
+                              },
+                              "runId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "runId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "run.completed",
+                                "type": "string"
+                              },
+                              "runId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "runId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "turn.started",
+                                "type": "string"
+                              },
+                              "turnId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "turn.completed",
+                                "type": "string"
+                              },
+                              "turnId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "turn.interrupted",
+                                "type": "string"
+                              },
+                              "stopDetail": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "category": {
+                                    "enum": [
+                                      "provider-refused",
+                                      "provider-overloaded",
+                                      "rate-limited",
+                                      "auth-failed",
+                                      "bad-request",
+                                      "context-overflow",
+                                      "network",
+                                      "retries-exhausted",
+                                      "runtime-stopped",
+                                      "unknown"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "httpStatus": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "message": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "providerType": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "resetsAt": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "retry": {
+                                    "enum": [
+                                      "not-retried",
+                                      "exhausted"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "category",
+                                  "message",
+                                  "providerType",
+                                  "httpStatus",
+                                  "retry",
+                                  "resetsAt"
+                                ],
+                                "type": "object"
+                              },
+                              "turnId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "entryId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "context.compacted",
+                                "type": "string"
+                              },
+                              "reason": {
+                                "enum": [
+                                  "threshold",
+                                  "overflow",
+                                  "manual"
+                                ],
+                                "type": "string"
+                              },
+                              "tokensAfter": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              "tokensBefore": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "reason",
+                              "entryId",
+                              "tokensBefore",
+                              "tokensAfter"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "context.compaction_failed",
+                                "type": "string"
+                              },
+                              "reason": {
+                                "enum": [
+                                  "threshold",
+                                  "overflow",
+                                  "manual",
+                                  "checkpoint"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "reason",
+                              "detail"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "causes": {
+                                "items": {
+                                  "enum": [
+                                    "prefix-mismatch",
+                                    "model-mismatch",
+                                    "unknown"
+                                  ],
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "count": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "context.reasoning_dropped",
+                                "type": "string"
+                              },
+                              "turnId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId",
+                              "count",
+                              "causes"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "digest": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "reply": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "role": {
+                                    "enum": [
+                                      "user",
+                                      "assistant",
+                                      "system"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "todoList": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "content": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "enum": [
+                                            "pending",
+                                            "in_progress",
+                                            "completed",
+                                            "cancelled"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "content",
+                                        "status"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "role"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "transcript.referenced",
+                                "type": "string"
+                              },
+                              "reference": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "digest": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "mediaType": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "mediaType",
+                                  "digest"
+                                ],
+                                "type": "object"
+                              },
+                              "turnId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId",
+                              "reference"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attention": {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "attachmentId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "diagnostic": {
+                                        "type": "null"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "const": "rate_limited",
+                                        "type": "string"
+                                      },
+                                      "retryAt": {
+                                        "anyOf": [
+                                          {
+                                            "maximum": 9007199254740991,
+                                            "minimum": -9007199254740991,
+                                            "type": "integer"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "stopDetail": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "category": {
+                                            "enum": [
+                                              "provider-refused",
+                                              "provider-overloaded",
+                                              "rate-limited",
+                                              "auth-failed",
+                                              "bad-request",
+                                              "context-overflow",
+                                              "network",
+                                              "retries-exhausted",
+                                              "runtime-stopped",
+                                              "unknown"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "httpStatus": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "message": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerType": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "resetsAt": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "retry": {
+                                            "enum": [
+                                              "not-retried",
+                                              "exhausted"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "category",
+                                          "message",
+                                          "providerType",
+                                          "httpStatus",
+                                          "retry",
+                                          "resetsAt"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "attachmentId",
+                                      "detail",
+                                      "diagnostic",
+                                      "kind",
+                                      "retryAt"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "attachmentId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "diagnostic": {
+                                        "type": "null"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "const": "quota_exhausted",
+                                        "type": "string"
+                                      },
+                                      "resetAt": {
+                                        "anyOf": [
+                                          {
+                                            "maximum": 9007199254740991,
+                                            "minimum": -9007199254740991,
+                                            "type": "integer"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "stopDetail": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "category": {
+                                            "enum": [
+                                              "provider-refused",
+                                              "provider-overloaded",
+                                              "rate-limited",
+                                              "auth-failed",
+                                              "bad-request",
+                                              "context-overflow",
+                                              "network",
+                                              "retries-exhausted",
+                                              "runtime-stopped",
+                                              "unknown"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "httpStatus": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "message": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerType": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "resetsAt": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "retry": {
+                                            "enum": [
+                                              "not-retried",
+                                              "exhausted"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "category",
+                                          "message",
+                                          "providerType",
+                                          "httpStatus",
+                                          "retry",
+                                          "resetsAt"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "attachmentId",
+                                      "detail",
+                                      "diagnostic",
+                                      "kind",
+                                      "resetAt"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "attachmentId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "diagnostic": {
+                                        "type": "null"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "const": "adapter_unrecoverable",
+                                        "type": "string"
+                                      },
+                                      "resetsAt": {
+                                        "anyOf": [
+                                          {
+                                            "maximum": 9007199254740991,
+                                            "minimum": -9007199254740991,
+                                            "type": "integer"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "stopDetail": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "category": {
+                                            "enum": [
+                                              "provider-refused",
+                                              "provider-overloaded",
+                                              "rate-limited",
+                                              "auth-failed",
+                                              "bad-request",
+                                              "context-overflow",
+                                              "network",
+                                              "retries-exhausted",
+                                              "runtime-stopped",
+                                              "unknown"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "httpStatus": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "message": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerType": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "resetsAt": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "retry": {
+                                            "enum": [
+                                              "not-retried",
+                                              "exhausted"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "category",
+                                          "message",
+                                          "providerType",
+                                          "httpStatus",
+                                          "retry",
+                                          "resetsAt"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "attachmentId",
+                                      "detail",
+                                      "diagnostic",
+                                      "kind",
+                                      "resetsAt"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "attachmentId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "diagnostic": {
+                                        "type": "null"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "enum": [
+                                          "input_required",
+                                          "permission_required",
+                                          "auth_required",
+                                          "configuration_invalid",
+                                          "context_limit_reached",
+                                          "transport_retrying",
+                                          "partial_turn_interrupted",
+                                          "adapter_disconnected"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "stopDetail": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "category": {
+                                            "enum": [
+                                              "provider-refused",
+                                              "provider-overloaded",
+                                              "rate-limited",
+                                              "auth-failed",
+                                              "bad-request",
+                                              "context-overflow",
+                                              "network",
+                                              "retries-exhausted",
+                                              "runtime-stopped",
+                                              "unknown"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "httpStatus": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "message": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "providerType": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "resetsAt": {
+                                            "anyOf": [
+                                              {
+                                                "maximum": 9007199254740991,
+                                                "minimum": -9007199254740991,
+                                                "type": "integer"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "retry": {
+                                            "enum": [
+                                              "not-retried",
+                                              "exhausted"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "category",
+                                          "message",
+                                          "providerType",
+                                          "httpStatus",
+                                          "retry",
+                                          "resetsAt"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "attachmentId",
+                                      "detail",
+                                      "diagnostic",
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "attention.raised",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attention"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attentionId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "attention.cleared",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attentionId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "interaction": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "attachmentId": {
+                                    "type": "string"
+                                  },
+                                  "credential": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "agentSays": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "projectId": {
+                                        "type": "string"
+                                      },
+                                      "projectLabel": {
+                                        "type": "string"
+                                      },
+                                      "sessionId": {
+                                        "type": "string"
+                                      },
+                                      "sessionLabel": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "name",
+                                      "sessionId",
+                                      "sessionLabel",
+                                      "projectId",
+                                      "projectLabel",
+                                      "agentSays"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "detail": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "permission",
+                                      "question"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "multiple": {
+                                    "type": "boolean"
+                                  },
+                                  "native": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "detail": {
+                                        "type": "null"
+                                      },
+                                      "id": {
+                                        "type": "null"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "detail"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "options": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "description": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string"
+                                        },
+                                        "label": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "label",
+                                        "description"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "prompts": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "custom": {
+                                          "type": "boolean"
+                                        },
+                                        "detail": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string"
+                                        },
+                                        "label": {
+                                          "type": "string"
+                                        },
+                                        "multiple": {
+                                          "type": "boolean"
+                                        },
+                                        "options": {
+                                          "items": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "description": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "label": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "label",
+                                              "description"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "label",
+                                        "detail",
+                                        "options",
+                                        "multiple",
+                                        "custom"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "attachmentId",
+                                  "kind",
+                                  "title",
+                                  "detail",
+                                  "options",
+                                  "multiple",
+                                  "native"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "interaction.opened",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "interaction"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "interactionId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "interaction.resolved",
+                                "type": "string"
+                              },
+                              "resolution": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "answers": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "optionIds": {
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "promptId": {
+                                          "type": "string"
+                                        },
+                                        "response": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "promptId",
+                                        "optionIds",
+                                        "response"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "optionIds": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "response": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "optionIds",
+                                  "response"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "interactionId",
+                              "resolution"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "type": "string"
+                              },
+                              "interactionId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "interaction.cancelled",
+                                "type": "string"
+                              },
+                              "reason": {
+                                "enum": [
+                                  "abandoned",
+                                  "superseded",
+                                  "withdrawn"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "interactionId",
+                              "reason"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "command.receipt.recorded",
+                                "type": "string"
+                              },
+                              "receipt": {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "acceptedAt": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "commandId": {
+                                        "type": "string"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "recordedAt": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "result": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "enum": [
+                                              "session.created",
+                                              "session.archived",
+                                              "session.retitled",
+                                              "session.signaled",
+                                              "session.stopped",
+                                              "model.selected",
+                                              "executor.start.requested",
+                                              "executor.stop.requested",
+                                              "executor.interrupted",
+                                              "executor.retried",
+                                              "context.compacted",
+                                              "message.submitted",
+                                              "interaction.resolved",
+                                              "resume.scheduled",
+                                              "resume.cancelled",
+                                              "resume.settled"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "sessionId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "sessionId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "sequence": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "status": {
+                                        "const": "accepted",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "commandId",
+                                      "sequence",
+                                      "recordedAt",
+                                      "status",
+                                      "acceptedAt",
+                                      "result"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "commandId": {
+                                        "type": "string"
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "recordedAt": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "sequence": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "status": {
+                                        "const": "rejected",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "commandId",
+                                      "sequence",
+                                      "recordedAt",
+                                      "status",
+                                      "code",
+                                      "detail"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "commandId": {
+                                        "type": "string"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "recordedAt": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "result": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "kind": {
+                                            "enum": [
+                                              "session.created",
+                                              "session.archived",
+                                              "session.retitled",
+                                              "session.signaled",
+                                              "session.stopped",
+                                              "model.selected",
+                                              "executor.start.requested",
+                                              "executor.stop.requested",
+                                              "executor.interrupted",
+                                              "executor.retried",
+                                              "context.compacted",
+                                              "message.submitted",
+                                              "interaction.resolved",
+                                              "resume.scheduled",
+                                              "resume.cancelled",
+                                              "resume.settled"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "sessionId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "sessionId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "sequence": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "status": {
+                                        "const": "completed",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "commandId",
+                                      "sequence",
+                                      "recordedAt",
+                                      "status",
+                                      "result"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "commandId": {
+                                        "type": "string"
+                                      },
+                                      "detail": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "recordedAt": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "sequence": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "status": {
+                                        "const": "unreconciled",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "commandId",
+                                      "sequence",
+                                      "recordedAt",
+                                      "status",
+                                      "detail"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "receipt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "adapter.observed",
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "native": {
+                                "type": "null"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "name",
+                              "native"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attachmentId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "attribution": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "projectId": {
+                                    "type": "string"
+                                  },
+                                  "ticketId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "projectId",
+                                  "ticketId"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "usage.recorded",
+                                "type": "string"
+                              },
+                              "turnId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "usage": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "cacheReadTokens": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "cacheWriteTokens": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "cause": {
+                                    "enum": [
+                                      "assistant",
+                                      "compaction",
+                                      "utility",
+                                      "decision"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "costBasis": {
+                                    "enum": [
+                                      "provider-reported",
+                                      "catalog-estimate",
+                                      "unavailable"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "costUsd": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "inputTokens": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "modelId": {
+                                    "type": "string"
+                                  },
+                                  "outputTokens": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "providerId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "cause",
+                                  "providerId",
+                                  "modelId",
+                                  "inputTokens",
+                                  "outputTokens",
+                                  "cacheReadTokens",
+                                  "cacheWriteTokens",
+                                  "costUsd",
+                                  "costBasis"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "attachmentId",
+                              "turnId",
+                              "attribution",
+                              "usage"
+                            ],
+                            "type": "object"
+                          }
+                        ],
+                        "x-volli-open-union": "kind"
+                      },
+                      "provenance": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "source": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "detail": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "user",
+                                  "system"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id",
+                              "detail"
+                            ],
+                            "type": "object"
+                          },
+                          "venue": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "local",
+                                      "cloud",
+                                      "remote",
+                                      "unknown"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "venue"
+                        ],
+                        "type": "object"
+                      },
+                      "recordedAt": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "sequence": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "sessionId",
+                      "sequence",
+                      "occurredAt",
+                      "recordedAt",
+                      "provenance",
+                      "payload"
+                    ],
+                    "type": "object"
+                  },
+                  "sequence": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "transcript": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attemptId": {
+                            "type": "string"
+                          },
+                          "branchId": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "metadata": {
+                                "$ref": "#/$defs/__schema2"
+                              },
+                              "parts": {
+                                "items": {
+                                  "additionalProperties": {
+                                    "$ref": "#/$defs/__schema3"
+                                  },
+                                  "properties": {
+                                    "type": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "role": {
+                                "enum": [
+                                  "system",
+                                  "user",
+                                  "assistant"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "role",
+                              "parts"
+                            ],
+                            "type": "object"
+                          },
+                          "threadId": {
+                            "type": "string"
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "version": {
+                            "const": 1,
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "threadId",
+                          "branchId",
+                          "attemptId",
+                          "turnId",
+                          "message"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "sequence",
+                  "event",
+                  "transcript"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "frames",
+            "before"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "session.list": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5751,6 +9530,31 @@
                   ],
                   "type": "string"
                 },
+                "todoList": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending",
+                          "in_progress",
+                          "completed",
+                          "cancelled"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "content",
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "turnActive": {
                   "type": "boolean"
                 }
@@ -6018,6 +9822,11 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "before": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
             "frames": {
               "items": {
                 "additionalProperties": false,
@@ -7975,6 +11784,52 @@
                                   }
                                 ]
                               },
+                              "digest": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "reply": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "role": {
+                                    "enum": [
+                                      "user",
+                                      "assistant",
+                                      "system"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "todoList": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "content": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "enum": [
+                                            "pending",
+                                            "in_progress",
+                                            "completed",
+                                            "cancelled"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "content",
+                                        "status"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "role"
+                                ],
+                                "type": "object"
+                              },
                               "kind": {
                                 "const": "transcript.referenced",
                                 "type": "string"
@@ -9572,6 +13427,24 @@
                 "type": "object"
               },
               "type": "array"
+            },
+            "latestReply": {
+              "additionalProperties": false,
+              "properties": {
+                "sequence": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sequence",
+                "text"
+              ],
+              "type": "object"
             },
             "projection": {
               "additionalProperties": false,
@@ -11538,6 +15411,31 @@
                     "archived"
                   ],
                   "type": "string"
+                },
+                "todoList": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "pending",
+                          "in_progress",
+                          "completed",
+                          "cancelled"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "content",
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
                 },
                 "turnActive": {
                   "type": "boolean"
@@ -13733,6 +17631,52 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "digest": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "reply": {
+                                  "const": true,
+                                  "type": "boolean"
+                                },
+                                "role": {
+                                  "enum": [
+                                    "user",
+                                    "assistant",
+                                    "system"
+                                  ],
+                                  "type": "string"
+                                },
+                                "todoList": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "content": {
+                                        "type": "string"
+                                      },
+                                      "status": {
+                                        "enum": [
+                                          "pending",
+                                          "in_progress",
+                                          "completed",
+                                          "cancelled"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "content",
+                                      "status"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "role"
+                              ],
+                              "type": "object"
                             },
                             "kind": {
                               "const": "transcript.referenced",
@@ -17755,6 +21699,52 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "digest": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "reply": {
+                                  "const": true,
+                                  "type": "boolean"
+                                },
+                                "role": {
+                                  "enum": [
+                                    "user",
+                                    "assistant",
+                                    "system"
+                                  ],
+                                  "type": "string"
+                                },
+                                "todoList": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "content": {
+                                        "type": "string"
+                                      },
+                                      "status": {
+                                        "enum": [
+                                          "pending",
+                                          "in_progress",
+                                          "completed",
+                                          "cancelled"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "content",
+                                      "status"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "role"
+                              ],
+                              "type": "object"
                             },
                             "kind": {
                               "const": "transcript.referenced",

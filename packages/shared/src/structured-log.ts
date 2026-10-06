@@ -157,7 +157,7 @@ export function isSensitiveLogKey(name: string): boolean {
  * not a secret: `inputTokens: 120`) and loses anything else. Strings are
  * scrubbed of credential-shaped text (bearer tokens, prefixed API keys, PEM
  * blocks, URL userinfo) whatever their name. An `Error` keeps its name,
- * message and code, never its cause.
+ * message, code and stack (scrubbed and cut), never its cause.
  */
 export function redactLogValue(value: unknown, depth = 0): LogValue {
   if (value === null || value === undefined) return null;
@@ -233,6 +233,8 @@ function redactError(error: Error, depth: number): LogValue {
   const code = (error as { code?: unknown }).code;
   if (typeof code === "string" || typeof code === "number")
     out["code"] = redactLogValue(code, depth);
+  // Where it was thrown: scrubbed and cut like any string, so a log still says.
+  if (typeof error.stack === "string") out["stack"] = redactLogText(error.stack);
   return out;
 }
 
