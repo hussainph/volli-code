@@ -30,6 +30,7 @@ import { projectTranscriptMessages } from "./message-projection";
 
 import {
   appendFrames,
+  currentTurnReply,
   EMPTY_TRANSCRIPT,
   mergeTranscriptMessages,
   movesProjection,
@@ -849,5 +850,87 @@ describe("a bounded transcript window (VC-315)", () => {
       ...tail,
       before: 2,
     });
+  });
+});
+
+/**
+ * `/copy`'s answer on a bounded transcript (VC-315; the verification review's
+ * B2 probe, kept): a current turn whose reply sits above 256 tool-only
+ * messages still has one.
+ */
+describe("the current turn's reply", () => {
+  const reply: UIMessage = message("reply", "Current-turn reply");
+  const tools: UIMessage[] = Array.from({ length: 256 }, (_, index) => ({
+    id: `tool-${index}`,
+    role: "assistant",
+    parts: [
+      {
+        type: "dynamic-tool",
+        toolName: "read",
+        toolCallId: `call-${index}`,
+        state: "output-available",
+        input: {},
+        output: "result",
+      },
+    ],
+  }));
+  const user: UIMessage = { id: "ask", role: "user", parts: [{ type: "text", text: "Go" }] };
+  const hostReply = { sequence: 3, text: "Current-turn reply" };
+
+  it("is found in the messages held, past tool-only and blank ones", () => {
+    const blank = message("blank", "  ");
+    expect(
+      currentTurnReply({ messages: [user, reply, ...tools, blank], before: 9, latestReply: null }),
+    ).toBe("Current-turn reply");
+  });
+
+  it("is the host's baseline when the messages run out above a turn that has said nothing since", () => {
+    expect(currentTurnReply({ messages: tools, before: 9, latestReply: hostReply })).toBe(
+      "Current-turn reply",
+    );
+    // A host that predates the baseline: nothing to offer rather than a guess.
+    expect(currentTurnReply({ messages: tools, before: 9, latestReply: null })).toBeNull();
+  });
+
+  it("is nothing once a user message starts a new turn, whatever the baseline says", () => {
+    expect(
+      currentTurnReply({ messages: [...tools, user], before: 9, latestReply: hostReply }),
+    ).toBeNull();
+    expect(
+      currentTurnReply({ messages: [user, ...tools], before: 9, latestReply: hostReply }),
+    ).toBeNull();
+  });
+
+  it("is nothing when the held messages start at the Session's first event", () => {
+    expect(currentTurnReply({ messages: tools, before: null, latestReply: hostReply })).toBeNull();
+  });
+
+  it("rides a snapshot's window, survives a page and a stream batch, and is replaced by the next snapshot", () => {
+    const projection = { turnActive: true, interactions: { active: [], resolved: [] } };
+    const seeded = seedTranscriptWindow(
+      EMPTY_TRANSCRIPT,
+      {
+        frames: [transcriptFrame(5, message("later", " "))],
+        before: 5,
+        latestReply: hostReply,
+      },
+      projection as unknown as SessionPresentationProjection,
+    );
+    expect(seeded.latestReply).toEqual(hostReply);
+    const streamed = appendFrames(seeded, [transcriptFrame(6, message("more", " "))]);
+    expect(streamed.latestReply).toEqual(hostReply);
+    const paged = prependTranscriptHistory(streamed, 5, {
+      frames: [transcriptFrame(4, message("older", " "))],
+      before: 4,
+    });
+    expect(paged.latestReply).toEqual(hostReply);
+    const next = { sequence: 7, text: "Newer" };
+    const reopened = seedTranscriptWindow(
+      paged,
+      { frames: [transcriptFrame(7, message("newer", "Newer"))], before: 7, latestReply: next },
+      projection as unknown as SessionPresentationProjection,
+    );
+    expect(reopened.latestReply).toEqual(next);
+    expect(reopened.before).toBe(4);
   });
 });

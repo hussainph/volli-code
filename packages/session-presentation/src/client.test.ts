@@ -269,6 +269,8 @@ class FakeRpc implements ChatSessionRpc {
   snapshotThrough = 0;
   /** `undefined` is a host that predates the bound and sends no cursor. */
   snapshotBefore: number | null | undefined = undefined;
+  /** `undefined` is a host that predates the reply baseline. */
+  snapshotLatestReply: unknown = undefined;
   snapshots = 0;
   /** Pages by the cursor they answer; a missing cursor is a failed read. */
   readonly pages = new Map<number, { frames: readonly unknown[]; before: number | null }>();
@@ -303,6 +305,9 @@ class FakeRpc implements ChatSessionRpc {
             frames: this.snapshotFrames,
             throughSequence: this.snapshotThrough,
             ...(this.snapshotBefore === undefined ? {} : { before: this.snapshotBefore }),
+            ...(this.snapshotLatestReply === undefined
+              ? {}
+              : { latestReply: this.snapshotLatestReply }),
           };
         },
       },
@@ -3057,6 +3062,22 @@ describe("bounded history (VC-315)", () => {
     await expect(pending).resolves.toBe(false);
     expect(rpc.historyRequests).toEqual([5]);
     expect(notifications).toEqual([]);
+  });
+
+  it("holds the snapshot's reply baseline, and reads a malformed one as none", async () => {
+    const { rpc, slice, stream } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(9, "turn.started")];
+      fake.snapshotThrough = 9;
+      fake.snapshotBefore = 9;
+      fake.snapshotLatestReply = { sequence: 4, text: "Current-turn reply" };
+    });
+    expect(slice()!.transcript.latestReply).toEqual({ sequence: 4, text: "Current-turn reply" });
+
+    rpc.snapshotLatestReply = { sequence: "4", text: 7 };
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(2);
+    expect(slice()!.transcript.latestReply).toBeNull();
   });
 
   it("answers a resnapshot by quietly reloading the tail, not with the stream band", async () => {

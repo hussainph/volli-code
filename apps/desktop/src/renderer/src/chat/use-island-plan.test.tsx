@@ -155,3 +155,82 @@ describe("useIslandPlan", () => {
     expect(seen.at(-1)).toBe(first);
   });
 });
+
+/**
+ * A bounded open (VC-315; the verification review's B1 probe, kept): the plan
+ * call sits above the newest window, so the messages held say nothing about
+ * it and the projection's `todoList` is the plan as it stands.
+ */
+describe("useIslandPlan on a Session holding only its newest window", () => {
+  const later: UIMessage[] = Array.from({ length: 256 }, (_, index) => ({
+    id: `tail-${index}`,
+    role: "assistant",
+    parts: [{ type: "text", text: "later work" }],
+  }));
+
+  function seedWindow(
+    store: ReturnType<typeof createChatSessionsStore>,
+    messages: readonly UIMessage[],
+    todoList: readonly { content: string; status: "pending" | "in_progress" }[] | undefined,
+  ) {
+    store.setState({
+      sessions: {
+        [SESSION_ID]: {
+          projection: (todoList === undefined ? {} : { todoList }) as never,
+          transcript: { ...EMPTY_TRANSCRIPT, before: 40, durableMessages: messages },
+          lifecycle: "ready",
+          sessionError: null,
+          queue: [],
+        },
+      },
+    });
+  }
+
+  it("does not forget the current plan because the window no longer holds its call", async () => {
+    const store = createChatSessionsStore(noTransport);
+    const plan = [{ content: "Finish migration", status: "in_progress" as const }];
+    seed(store, [todoCall(plan), ...later]);
+    const seen = await mount(store);
+    const whole = seen.at(-1);
+    expect(whole).toMatchObject({ steps: [{ title: "Finish migration", state: "in_progress" }] });
+
+    await act(async () => seedWindow(store, later, plan));
+
+    expect(seen.at(-1)).toEqual(whole);
+  });
+
+  it("keeps a cleared plan cleared, and a held newer call still wins", async () => {
+    const store = createChatSessionsStore(noTransport);
+    seedWindow(store, later, []);
+    const seen = await mount(store);
+    expect(seen.at(-1)).toBeNull();
+
+    await act(async () =>
+      seedWindow(
+        store,
+        [...later, todoCall([{ content: "Newer step", status: "pending" }])],
+        [{ content: "Older step", status: "pending" }],
+      ),
+    );
+    expect(seen.at(-1)).toMatchObject({ steps: [{ title: "Newer step", state: "pending" }] });
+  });
+
+  it("keeps one plan object across projection refreshes that leave the plan alone", async () => {
+    const store = createChatSessionsStore(noTransport);
+    const plan = [{ content: "Finish migration", status: "in_progress" as const }];
+    seedWindow(store, later, plan);
+    const seen = await mount(store);
+    const first = seen.at(-1);
+
+    // A refresh is a fresh object off the wire, equal and not identical.
+    await act(async () =>
+      seedWindow(
+        store,
+        later,
+        plan.map(({ content, status }) => ({ content, status })),
+      ),
+    );
+
+    expect(seen.at(-1)).toBe(first);
+  });
+});

@@ -11,6 +11,8 @@
  */
 import {
   applyTranscriptDelta,
+  replyText,
+  type SessionLatestReply,
   type SessionStreamCompactionProgress,
   type SessionStreamOverlay,
   type TranscriptOverlay,
@@ -120,6 +122,15 @@ export interface ChatTranscriptState {
    * opens with this set and fills in as the reader scrolls back.
    */
   before: number | null;
+  /**
+   * The current turn's latest reply as the host read it when the newest
+   * snapshot arrived, wherever in the Session it sits (VC-315), or `null`.
+   * The baseline {@link currentTurnReply} falls back on when the messages
+   * held cannot answer — when they run out above a current turn that has
+   * said nothing since. Not folded: what the stream adds after it is in
+   * `messages`, and the scan reaches that first.
+   */
+  latestReply: SessionLatestReply | null;
   turnActive: boolean;
   /**
    * How many turn boundaries this Session has crossed.
@@ -202,6 +213,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
   before: null,
+  latestReply: null,
   turnActive: false,
   turnEpoch: 0,
   durableMessages: [],
@@ -363,6 +375,7 @@ export function appendFrames(
     frames: last ? [...state.frames, ...fresh] : state.frames,
     throughSequence: last ? last.sequence : state.throughSequence,
     before: state.before,
+    latestReply: state.latestReply,
     turnActive,
     turnEpoch,
     durableMessages,
@@ -391,6 +404,8 @@ export function appendFrames(
 export interface TranscriptWindow {
   frames: readonly ChatSessionFrame[];
   before: number | null;
+  /** A snapshot's reply baseline ({@link ChatTranscriptState.latestReply}); a page has none. */
+  latestReply?: SessionLatestReply | null;
 }
 
 /**
@@ -417,11 +432,21 @@ export function seedTranscriptWindow(
 ): ChatTranscriptState {
   const first = window.frames[0];
   const gap = first !== undefined && first.sequence > state.throughSequence + 1;
-  if (state.throughSequence > 0 && !gap) return appendFrames(state, window.frames);
+  // The host read this at the window's own moment, so it replaces whatever
+  // baseline an older snapshot left. A host that predates it sends none.
+  const latestReply = window.latestReply ?? null;
+  if (state.throughSequence > 0 && !gap) {
+    const appended = appendFrames(state, window.frames);
+    const same =
+      appended.latestReply?.sequence === latestReply?.sequence &&
+      appended.latestReply?.text === latestReply?.text;
+    return same ? appended : { ...appended, latestReply };
+  }
   const partial = window.before !== null;
   const base: ChatTranscriptState = {
     ...EMPTY_TRANSCRIPT,
     before: window.before,
+    latestReply,
     // Counted on from the transcript it replaces, so a turn boundary in the
     // window still reads as one to `settledLifecycle`.
     turnEpoch: state.turnEpoch,
@@ -462,6 +487,7 @@ export function prependTranscriptHistory(
     ...refolded,
     throughSequence: state.throughSequence,
     before: page.before,
+    latestReply: state.latestReply,
     turnActive: state.turnActive,
     turnEpoch: state.turnEpoch,
     overlay: state.overlay,
@@ -469,6 +495,31 @@ export function prependTranscriptHistory(
     lastCompactionSequence: state.lastCompactionSequence,
     messages: layerTranscriptOverlay(refolded.durableMessages, state.overlay),
   };
+}
+
+/**
+ * What `/copy` copies: the current turn's latest reply, or `null` when the
+ * current turn has said nothing yet (VC-315, the verification review's B2).
+ *
+ * Walks back over `messages` — the drawn list, live overlays included — for
+ * the first assistant message that said something, and stops at the first
+ * user message, because a turn that has produced no words has no "last
+ * reply" and the previous turn's would paste wrong. When it runs out of
+ * messages first, the answer is above them: the Session's first event if
+ * `before` is `null` (no reply), else the host's baseline from the snapshot.
+ */
+export function currentTurnReply(
+  transcript: Pick<ChatTranscriptState, "messages" | "before" | "latestReply">,
+): string | null {
+  const { messages } = transcript;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user") return null;
+    if (message.role !== "assistant") continue;
+    const text = replyText(message);
+    if (text !== null) return text;
+  }
+  return transcript.before === null ? null : (transcript.latestReply?.text ?? null);
 }
 
 /** Every interaction the projection still remembers, open or answered, by id. */

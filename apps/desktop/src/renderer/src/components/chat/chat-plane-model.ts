@@ -29,6 +29,7 @@ import {
 import type { UIMessage } from "ai";
 
 import {
+  currentTurnReply,
   type ComposerIntent,
   type InteractionSubmission,
   type QueuedMessage,
@@ -196,35 +197,17 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 }
 
 /**
- * The plain text of the Session's most recent reply, or null.
+ * The plain text of the most recent reply in a COMPLETE transcript, or null.
  *
- * What `/copy` copies. Walks back from the end of the transcript over the
- * assistant messages of the latest turn and returns the first one that said
- * anything — the final answer, wherever in the turn it landed — and stops at
- * the first user message, because a turn that has produced no words yet has
- * no "last reply", and silently handing back the PREVIOUS turn's words would
- * be a copy that looked right and pasted wrong.
- *
- * Reasoning and tool parts are not prose and do not travel: the clipboard
- * gets what a reader would call the reply, not the transcript's internals.
- * A message whose text parts are all whitespace has not said anything, the
- * same rule the transcript's own prose rendering follows.
+ * The rule is `currentTurnReply`'s (`@volli/session-presentation`): walk back
+ * over the latest turn's assistant messages for the first that said
+ * anything, stop at the first user message, text parts only. This is that
+ * rule for a message list known to start at the Session's first event. The
+ * chat plane holds only a window (VC-315) and asks `currentTurnReply` itself,
+ * with the host's baseline for a reply above it.
  */
 export function lastAssistantText(messages: readonly UIMessage[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role !== "assistant") {
-      // The turn ended without a word: an older reply is not "the last reply".
-      if (message.role === "user") return null;
-      continue;
-    }
-    const text = message.parts
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n\n")
-      .trim();
-    if (text.length > 0) return text;
-  }
-  return null;
+  return currentTurnReply({ messages, before: null, latestReply: null });
 }
 
 /**

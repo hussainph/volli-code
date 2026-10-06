@@ -20,6 +20,7 @@ import type {
   SessionInteractionResolution,
   SessionPresentationProjection,
 } from "@volli/shared";
+import type { SessionLatestReply } from "@volli/session-engine";
 import type { UIMessage } from "ai";
 import { useStore, type StoreApi } from "zustand";
 
@@ -106,6 +107,12 @@ export interface SessionView {
    * on its newest window and pages back as the reader scrolls.
    */
   historyBefore: number | null;
+  /**
+   * The current turn's latest reply as the host read it at the newest
+   * snapshot (VC-315), for `/copy` when the reply sits above the window.
+   * Read through `currentTurnReply`, never on its own.
+   */
+  latestReply: SessionLatestReply | null;
 }
 
 export interface SessionController {
@@ -206,6 +213,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.before ?? null,
   );
+  const latestReply = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.latestReply ?? null,
+  );
 
   const session = React.useMemo<SessionView>(
     () => ({
@@ -223,12 +234,14 @@ export function useSessionController(
       reasoningDrops,
       liveCompaction,
       historyBefore,
+      latestReply,
     }),
     [
       compactions,
       deliverable,
       durableMessages,
       historyBefore,
+      latestReply,
       liveCompaction,
       messages,
       openedInteractions,

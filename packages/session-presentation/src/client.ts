@@ -20,7 +20,11 @@
  * requirements for.
  */
 import { isResnapshotRequired } from "@volli/host-protocol";
-import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@volli/session-engine";
+import type {
+  SessionLatestReply,
+  SessionStreamCompactionProgress,
+  SessionStreamOverlay,
+} from "@volli/session-engine";
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   BlobLinkView,
@@ -324,6 +328,8 @@ export interface ChatSessionRpc {
         frames: readonly unknown[];
         throughSequence: number;
         before?: number | null;
+        /** The current turn's latest reply; absent from a host that predates it. */
+        latestReply?: unknown;
       }>;
     };
     /** One older window: frames strictly below `before`, and the cursor above them. */
@@ -433,7 +439,7 @@ export function racingFlushScheduler(host: FlushHost): FlushScheduler {
  *   transport drop from the last tracked id, after the next welcome
  *   validated, so what reaches this client is the host's own answer. A
  *   `subscription-resnapshot-required` reloads the snapshot and subscribes
-   *   from its cursor, up to three times in a row; anything else surfaces.
+ *   from its cursor, up to three times in a row; anything else surfaces.
  *   This client retries nothing else.
  *
  * Both count quiet reloads with the one guard, `#silentReloads`, which only
@@ -1133,7 +1139,11 @@ export class ChatSessionClient {
         if (this.#stale(generation)) return false;
         this.#writes().applySnapshot(
           this.sessionId,
-          { frames: readFrames(snapshot.frames), before: readBefore(snapshot.before) },
+          {
+            frames: readFrames(snapshot.frames),
+            before: readBefore(snapshot.before),
+            latestReply: readLatestReply(snapshot.latestReply),
+          },
           snapshot.projection,
         );
         afterSequence = snapshot.throughSequence;
@@ -1599,6 +1609,15 @@ function wire(resolution: SessionInteractionResolution): WireResolution {
  */
 function readBefore(before: unknown): number | null {
   return typeof before === "number" && Number.isSafeInteger(before) && before > 0 ? before : null;
+}
+
+/** A snapshot's reply baseline, read structurally: anything malformed is no baseline. */
+function readLatestReply(value: unknown): SessionLatestReply | null {
+  if (value === null || typeof value !== "object") return null;
+  const { sequence, text } = value as { sequence?: unknown; text?: unknown };
+  return typeof sequence === "number" && Number.isSafeInteger(sequence) && typeof text === "string"
+    ? { sequence, text }
+    : null;
 }
 
 /** A snapshot's frames, with anything malformed dropped rather than drawn. */

@@ -901,6 +901,173 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     expect(store.getState().sessions[SESSION]?.transcript.before).toBeNull();
   });
 
+  /** Frames [`from`, `to`) as assistant messages: one grouped turn, split by the window. */
+  const assistantFrames = (from: number, to: number) =>
+    frames(from, to).map((frame) =>
+      Object.assign({}, frame, {
+        transcript: {
+          message: Object.assign({}, frame.transcript!.message, { role: "assistant" as const }),
+        },
+      }),
+    );
+
+  /**
+   * The plane over one assistant turn the window began partway through
+   * (sequences 11..20), whose host answers the rest of it (1..10) in one page.
+   */
+  async function splitTurn(onPage?: () => void) {
+    const store = chatStore([]);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: appendFrames({ ...EMPTY_TRANSCRIPT, before: 11 }, assistantFrames(10, 20)),
+        },
+      },
+    }));
+    const rpc = {
+      session: {
+        history: {
+          query: async () => {
+            onPage?.();
+            return { frames: assistantFrames(0, 10), before: null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store);
+    const scroller = container!.querySelector<HTMLElement>('[style*="scrollbar-gutter"]')!;
+    expect(scroller).not.toBeNull();
+    return { store, scroller };
+  }
+
+  const messageCount = (store: ReturnType<typeof chatStore>) =>
+    store.getState().sessions[SESSION]!.transcript.messages.length;
+
+  // The review's B3 probe, kept: a height model alone (100 px a message), no
+  // anchor positions, which is the fallback the plane takes when it can see
+  // no anchor.
+  it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
+    const { store, scroller } = await splitTurn();
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.scrollTop = 100;
+    expect(turnRows()).toBe(1);
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(turnRows()).toBe(1); // no new row: the turn got its older prefix
+    expect(messageCount(store)).toBe(20);
+    expect(scroller.scrollTop).toBe(1100);
+  });
+
+  /**
+   * A layout model with anchors in it: message `i` of the transcript is 100 px
+   * tall at `i * 100`, and an anchor's box is its message's, moved by the
+   * scroll. `drawnBelow` is height the live tail grew by at the bottom.
+   */
+  function layout(store: ReturnType<typeof chatStore>, scroller: HTMLElement) {
+    const state = { drawnBelow: 0 };
+    const index = (key: string) =>
+      store
+        .getState()
+        .sessions[SESSION]!.transcript.messages.findIndex(({ id }) => key.startsWith(`${id}:`));
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100 + state.drawnBelow,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300 }) as DOMRect;
+    for (const node of container!.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+      node.getBoundingClientRect = () => {
+        const top = index(node.dataset["transcriptAnchor"]!) * 100 - scroller.scrollTop;
+        return { top, bottom: top + 100 } as DOMRect;
+      };
+    }
+    return state;
+  }
+
+  it("puts the anchor the reader saw back where it was, even with the tail growing below", async () => {
+    let state: { drawnBelow: number } | null = null;
+    // The live tail grows while the page is in flight: a height delta would
+    // overshoot by exactly that much; the anchor does not.
+    const { store, scroller } = await splitTurn(() => {
+      state!.drawnBelow = 250;
+    });
+    state = layout(store, scroller);
+    scroller.scrollTop = 150;
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    // The anchors are the same nodes, kept through the page: the turn's
+    // identity held while its prefix completed.
+    layout(store, scroller);
+    expect(turnRows()).toBe(1);
+    // "turn number 11" was 50 px into view at the top; 10 messages arrived above.
+    expect(scroller.scrollTop).toBe(1150);
+  });
+
+  it("leaves an offset the browser's own scroll anchoring already corrected", async () => {
+    let native: (() => void) | null = null;
+    const { store, scroller } = await splitTurn(() => native?.());
+    layout(store, scroller);
+    scroller.scrollTop = 150;
+    let writes = 0;
+    let value = 150;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => value,
+      set: (next: number) => {
+        writes += 1;
+        value = next;
+      },
+    });
+    // Chromium moves the offset by the height that arrived above, itself.
+    native = () => queueMicrotask(() => (value = 1150));
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(value).toBe(1150);
+    expect(writes).toBe(0);
+  });
+
+  it("keeps the first turn mounted, not remounted, while a page completes it", async () => {
+    await splitTurn();
+    const turn = container!.querySelector(".is-assistant");
+    const segment = container!.querySelector('[data-transcript-anchor="u14:0"]');
+    expect(segment).not.toBeNull();
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(shows(0)).toBe(true);
+    expect(container!.querySelector(".is-assistant")).toBe(turn);
+    expect(container!.querySelector('[data-transcript-anchor="u14:0"]')).toBe(segment);
+  });
+
   it("reads back on its own past a window with nothing to draw", async () => {
     const { store, requests } = windowedStore(40, 40, 20);
     store.setState((state) => ({
@@ -919,5 +1086,64 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     expect(requests).toEqual([41]);
     expect(shows(39)).toBe(true);
     expect(shows(19)).toBe(false);
+  });
+});
+
+/**
+ * `/copy` on a bounded open (VC-315; the verification review's B2 probe,
+ * kept): the current turn's reply sits above 256 tool-only messages the
+ * window holds, so the messages alone cannot say what it was.
+ */
+describe("/copy on a Session holding only its newest window (VC-315)", () => {
+  const tools: UIMessage[] = Array.from({ length: 256 }, (_value, index) => ({
+    id: `tool-${index}`,
+    role: "assistant" as const,
+    parts: [
+      {
+        type: "dynamic-tool" as const,
+        toolName: "read",
+        toolCallId: `call-${index}`,
+        state: "output-available" as const,
+        input: {},
+        output: "result",
+      },
+    ],
+  }));
+
+  async function pressCopy(latestReply: { sequence: number; text: string } | null) {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const store = chatStore(tools);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          // A composable box: the Session has a model.
+          projection: {
+            ...state.sessions[SESSION]!.projection!,
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...state.sessions[SESSION]!.transcript, before: 300, latestReply },
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => type(box, "/copy"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await act(async () => submit.click());
+    return writeText;
+  }
+
+  it("copies the host's baseline when the reply sits above the window", async () => {
+    const writeText = await pressCopy({ sequence: 3, text: "Current-turn reply" });
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
+  });
+
+  it("copies nothing when the host says the current turn has not spoken", async () => {
+    const writeText = await pressCopy(null);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
