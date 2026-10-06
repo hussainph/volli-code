@@ -65,6 +65,14 @@ export const HOST_ERROR_REASON_CODES = {
    */
   "response-too-large": "PAYLOAD_TOO_LARGE",
   "operation-unavailable": "NOT_IMPLEMENTED",
+  /**
+   * Client-side: the client host link (VC-670) had no validated connection to
+   * send on, or lost it before the host answered. A call is never queued for a
+   * later connection, so a mutation that meets this was either never sent or
+   * has an unknown outcome; its `commandId` is what makes an explicit retry
+   * safe.
+   */
+  "host-unreachable": "SERVICE_UNAVAILABLE",
 } as const satisfies Record<string, HostErrorCode>;
 export type HostErrorReason = keyof typeof HOST_ERROR_REASON_CODES;
 
