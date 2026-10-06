@@ -30,11 +30,18 @@ import {
   type ModelSelection,
 } from "@volli/shared";
 import {
+  appendFrames,
+  disposeChatClient,
   EMPTY_TRANSCRIPT,
-  type ChatSessionTransport,
-  type ChatSessionProjection,
+  getOrCreateChatClient,
   type ChatCommandRequest,
+  type ChatSessionFrame,
+  type ChatSessionProjection,
+  type ChatSessionRpc,
+  type ChatSessionTransport,
 } from "@volli/session-presentation";
+import { createSessionEngine } from "@volli/session-engine";
+import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
@@ -275,6 +282,7 @@ function hostChatStore(
     rpc: {
       session: {
         snapshot: { query: async () => ({ projection, frames: [], throughSequence: 0 }) },
+        history: { query: async () => ({ frames: [], before: null }) },
         projection: { query: async () => ({ projection }) },
         subscribe: { subscribe: () => ({ unsubscribe: () => {} }) },
         command: {
@@ -1206,5 +1214,371 @@ describe("a chat plane holding a long transcript", () => {
     await mountPlane(store);
     expect(shows(revealedTop)).toBe(true);
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS + TRANSCRIPT_PAGE_ROWS);
+  });
+});
+
+describe("a chat plane holding only the host's newest window (VC-315)", () => {
+  /** Turn `index` as a durable frame at sequence `index + 1`. */
+  const turnFrame = (index: number): ChatSessionFrame =>
+    ({
+      sessionId: SESSION,
+      sequence: index + 1,
+      event: {
+        id: `event-${index + 1}`,
+        sessionId: SESSION,
+        sequence: index + 1,
+        occurredAt: index,
+        recordedAt: index,
+        provenance: {
+          source: { kind: "system", id: "session-runtime", detail: null },
+          venue: null,
+        },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: `sha256:${index}`, mediaType: null, digest: null },
+        },
+      },
+      transcript: { message: transcript(index + 1)[index]! },
+    }) as never;
+  const frames = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_value, offset) => turnFrame(from + offset));
+
+  /**
+   * A store holding turns [`from`, TOTAL) with the host's cursor above them,
+   * and a resident client whose host answers pages of `PAGE` turns.
+   */
+  function windowedStore(from: number, total: number, page: number) {
+    const store = chatStore([]);
+    const held = appendFrames({ ...EMPTY_TRANSCRIPT, before: from + 1 }, frames(from, total));
+    store.setState((state) => ({
+      sessions: { [SESSION]: { ...state.sessions[SESSION]!, transcript: held } },
+    }));
+    const requests: number[] = [];
+    const rpc = {
+      session: {
+        history: {
+          query: async ({ before }: { before: number }) => {
+            requests.push(before);
+            const start = Math.max(0, before - 1 - page);
+            return { frames: frames(start, before - 1), before: start > 0 ? start + 1 : null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    return { store, requests };
+  }
+
+  afterEach(() => {
+    disposeChatClient(SESSION);
+  });
+
+  it("offers the host's history above a short window, and reveals each page as it lands", async () => {
+    const { store, requests } = windowedStore(30, 40, 20);
+    await mountPlane(store);
+
+    expect(turnRows()).toBe(10);
+    const button = earlierButton();
+    if (button === null) throw new Error("expected an earlier affordance");
+    expect(button.getAttribute("data-transcript-earlier")).toBe("0");
+
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(requests).toEqual([31]);
+    expect(shows(10)).toBe(true);
+    expect(shows(9)).toBe(false);
+    expect(turnRows()).toBe(30);
+
+    // Pressed until the host has nothing more; bounded so a stuck window fails.
+    for (let press = 0; press < 10 && earlierButton() !== null; press += 1) {
+      await act(async () => {
+        earlierButton()!.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+    }
+    expect(shows(0)).toBe(true);
+    expect(turnRows()).toBe(40);
+    expect(requests).toEqual([31, 11]);
+    expect(store.getState().sessions[SESSION]?.transcript.before).toBeNull();
+  });
+
+  /** Frames [`from`, `to`) as assistant messages: one grouped turn, split by the window. */
+  const assistantFrames = (from: number, to: number) =>
+    frames(from, to).map((frame) =>
+      Object.assign({}, frame, {
+        transcript: {
+          message: Object.assign({}, frame.transcript!.message, { role: "assistant" as const }),
+        },
+      }),
+    );
+
+  /**
+   * The plane over one assistant turn the window began partway through
+   * (sequences 11..20), whose host answers the rest of it (1..10) in one page.
+   */
+  async function splitTurn(onPage?: () => void) {
+    const store = chatStore([]);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: appendFrames({ ...EMPTY_TRANSCRIPT, before: 11 }, assistantFrames(10, 20)),
+        },
+      },
+    }));
+    const rpc = {
+      session: {
+        history: {
+          query: async () => {
+            onPage?.();
+            return { frames: assistantFrames(0, 10), before: null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store);
+    const scroller = container!.querySelector<HTMLElement>('[style*="scrollbar-gutter"]')!;
+    expect(scroller).not.toBeNull();
+    return { store, scroller };
+  }
+
+  const messageCount = (store: ReturnType<typeof chatStore>) =>
+    store.getState().sessions[SESSION]!.transcript.messages.length;
+
+  // The review's B3 probe, kept: a height model alone (100 px a message), no
+  // anchor positions, which is the fallback the plane takes when it can see
+  // no anchor.
+  it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
+    const { store, scroller } = await splitTurn();
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.scrollTop = 100;
+    expect(turnRows()).toBe(1);
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(turnRows()).toBe(1); // no new row: the turn got its older prefix
+    expect(messageCount(store)).toBe(20);
+    expect(scroller.scrollTop).toBe(1100);
+  });
+
+  /**
+   * A layout model with anchors in it: message `i` of the transcript is 100 px
+   * tall at `i * 100`, and an anchor's box is its message's, moved by the
+   * scroll. `drawnBelow` is height the live tail grew by at the bottom.
+   */
+  function layout(store: ReturnType<typeof chatStore>, scroller: HTMLElement) {
+    const state = { drawnBelow: 0 };
+    const index = (key: string) =>
+      store
+        .getState()
+        .sessions[SESSION]!.transcript.messages.findIndex(({ id }) => key.startsWith(`${id}:`));
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100 + state.drawnBelow,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300 }) as DOMRect;
+    for (const node of container!.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+      node.getBoundingClientRect = () => {
+        const top = index(node.dataset["transcriptAnchor"]!) * 100 - scroller.scrollTop;
+        return { top, bottom: top + 100 } as DOMRect;
+      };
+    }
+    return state;
+  }
+
+  it("puts the anchor the reader saw back where it was, even with the tail growing below", async () => {
+    let state: { drawnBelow: number } | null = null;
+    // The live tail grows while the page is in flight: a height delta would
+    // overshoot by exactly that much; the anchor does not.
+    const { store, scroller } = await splitTurn(() => {
+      state!.drawnBelow = 250;
+    });
+    state = layout(store, scroller);
+    scroller.scrollTop = 150;
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    // The anchors are the same nodes, kept through the page: the turn's
+    // identity held while its prefix completed.
+    layout(store, scroller);
+    expect(turnRows()).toBe(1);
+    // "turn number 11" was 50 px into view at the top; 10 messages arrived above.
+    expect(scroller.scrollTop).toBe(1150);
+  });
+
+  it("leaves an offset the browser's own scroll anchoring already corrected", async () => {
+    let native: (() => void) | null = null;
+    const { store, scroller } = await splitTurn(() => native?.());
+    layout(store, scroller);
+    scroller.scrollTop = 150;
+    let writes = 0;
+    let value = 150;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => value,
+      set: (next: number) => {
+        writes += 1;
+        value = next;
+      },
+    });
+    // Chromium moves the offset by the height that arrived above, itself.
+    native = () => queueMicrotask(() => (value = 1150));
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(value).toBe(1150);
+    expect(writes).toBe(0);
+  });
+
+  it("keeps the first turn mounted, not remounted, while a page completes it", async () => {
+    await splitTurn();
+    const turn = container!.querySelector(".is-assistant");
+    const segment = container!.querySelector('[data-transcript-anchor="u14:0"]');
+    expect(segment).not.toBeNull();
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(shows(0)).toBe(true);
+    expect(container!.querySelector(".is-assistant")).toBe(turn);
+    expect(container!.querySelector('[data-transcript-anchor="u14:0"]')).toBe(segment);
+  });
+
+  it("reads back on its own past a window with nothing to draw", async () => {
+    const { store, requests } = windowedStore(40, 40, 20);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: { ...EMPTY_TRANSCRIPT, throughSequence: 40, before: 41 },
+        },
+      },
+    }));
+    await mountPlane(store);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(requests).toEqual([41]);
+    expect(shows(39)).toBe(true);
+    expect(shows(19)).toBe(false);
+  });
+});
+
+/**
+ * `/copy` on a bounded open (VC-315; the verification review's B2 probe,
+ * kept): the current turn's reply sits above 256 tool-only messages the
+ * window holds, so the messages alone cannot say what it was.
+ */
+describe("/copy on a Session holding only its newest window (VC-315)", () => {
+  const tools: UIMessage[] = Array.from({ length: 256 }, (_value, index) => ({
+    id: `tool-${index}`,
+    role: "assistant" as const,
+    parts: [
+      {
+        type: "dynamic-tool" as const,
+        toolName: "read",
+        toolCallId: `call-${index}`,
+        state: "output-available" as const,
+        input: {},
+        output: "result",
+      },
+    ],
+  }));
+
+  async function pressCopy(latestReply: { sequence: number; text: string } | null) {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const store = chatStore(tools);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          // A composable box: the Session has a model.
+          projection: {
+            ...state.sessions[SESSION]!.projection!,
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...state.sessions[SESSION]!.transcript, before: 300, latestReply },
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => type(box, "/copy"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await act(async () => submit.click());
+    return writeText;
+  }
+
+  it("copies the host's baseline when the reply sits above the window", async () => {
+    const writeText = await pressCopy({ sequence: 3, text: "Current-turn reply" });
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
+  });
+
+  it("copies nothing when the host says the current turn has not spoken", async () => {
+    const writeText = await pressCopy(null);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  // The re-check review's legacy probe, kept: the reply was recorded before
+  // transcript digests, so no event says where it is. The host recovers it
+  // from history above the window (VC-315's legacy baseline), and `/copy`
+  // copies what that real snapshot answers.
+  it("VC-315 recheck: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
+    const snapshot = await openLegacySession(createSessionEngine, [
+      { say: "Current-turn reply" },
+      ...tools.map(() => ({ say: "   " })),
+      { say: "   " },
+    ]);
+    expect(snapshot.before).not.toBeNull();
+    expect(JSON.stringify(snapshot.frames)).not.toContain("Current-turn reply");
+    const writeText = await pressCopy(snapshot.latestReply);
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
   });
 });

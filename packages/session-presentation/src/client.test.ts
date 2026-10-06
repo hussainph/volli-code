@@ -269,6 +269,15 @@ class FakeRpc implements ChatSessionRpc {
 
   snapshotFrames: readonly unknown[] = [];
   snapshotThrough = 0;
+  /** `undefined` is a host that predates the bound and sends no cursor. */
+  snapshotBefore: number | null | undefined = undefined;
+  /** `undefined` is a host that predates the reply baseline. */
+  snapshotLatestReply: unknown = undefined;
+  snapshots = 0;
+  /** Pages by the cursor they answer; a missing cursor is a failed read. */
+  readonly pages = new Map<number, { frames: readonly unknown[]; before: number | null }>();
+  readonly historyRequests: number[] = [];
+  historyGate: Promise<unknown> = Promise.resolve();
   snapshotProjection: ChatSessionProjection = projectionFor(null);
   snapshotGate: Promise<unknown> = Promise.resolve();
   snapshotError: Error | null = null;
@@ -290,13 +299,27 @@ class FakeRpc implements ChatSessionRpc {
     this.session = {
       snapshot: {
         query: async () => {
+          this.snapshots += 1;
           await this.snapshotGate;
           if (this.snapshotError !== null) throw this.snapshotError;
           return {
             projection: this.snapshotProjection,
             frames: this.snapshotFrames,
             throughSequence: this.snapshotThrough,
+            ...(this.snapshotBefore === undefined ? {} : { before: this.snapshotBefore }),
+            ...(this.snapshotLatestReply === undefined
+              ? {}
+              : { latestReply: this.snapshotLatestReply }),
           };
+        },
+      },
+      history: {
+        query: async ({ before }) => {
+          this.historyRequests.push(before);
+          await this.historyGate;
+          const page = this.pages.get(before);
+          if (page === undefined) throw new Error("history is unavailable");
+          return page;
         },
       },
       projection: {
@@ -2731,5 +2754,213 @@ describe("dispose", () => {
     }).not.toThrow();
     gate.release();
     await settle();
+  });
+});
+
+/* ------------------------------------------------------- bounded history */
+
+/** The host's "read a fresh snapshot" refusal, as either link carries it. */
+function resnapshotRequired(): unknown {
+  return Object.assign(new Error("Session history moved past this cursor"), {
+    data: {
+      hostError: {
+        code: "PRECONDITION_FAILED",
+        message: "Session history moved past this cursor",
+        reason: "subscription-resnapshot-required",
+      },
+    },
+  });
+}
+
+describe("bounded history (VC-315)", () => {
+  it("keeps the host's queued follow-ups through a bounded open and a page of history", async () => {
+    // The queue is host-projected state, not transcript (VC-675): a window
+    // that holds only the newest frames shows every queued row, and paging
+    // the history above it leaves them alone.
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(5, "m3"), frameOf(6, "turn.completed")];
+      fake.snapshotThrough = 6;
+      fake.snapshotBefore = 5;
+      fake.snapshotProjection = {
+        ...projectionFor("attach-1"),
+        queue: [queued("q1"), queued("q2")],
+        queueRevision: 3,
+      };
+      fake.pages.set(5, { frames: [transcriptFrameOf(4, "m2")], before: null });
+    });
+
+    expect(slice()!.transcript.before).toBe(5);
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1", "q2"]);
+    expect(slice()!.queueRevision).toBe(3);
+    await expect(client.loadOlder()).resolves.toBe(true);
+    expect(slice()!.transcript.before).toBeNull();
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1", "q2"]);
+  });
+
+  it("opens on the tail and pages the history above it on demand", async () => {
+    const { client, rpc, sessionId, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(5, "m3"), frameOf(6, "turn.completed")];
+      fake.snapshotThrough = 6;
+      fake.snapshotBefore = 5;
+      fake.pages.set(5, {
+        frames: [transcriptFrameOf(3, "m1"), transcriptFrameOf(4, "m2")],
+        before: 3,
+      });
+      fake.pages.set(3, { frames: [frameOf(2, "turn.started")], before: null });
+    });
+
+    expect(slice()!.transcript.before).toBe(5);
+    expect(rpc.streams[0]!.input).toEqual({ sessionId, afterSequence: 6 });
+
+    const both = await Promise.all([client.loadOlder(), client.loadOlder()]);
+    expect(both).toEqual([true, true]);
+    expect(rpc.historyRequests).toEqual([5]);
+    expect(slice()!.transcript.messages.map(({ id }) => id)).toEqual(["m1", "m2", "m3"]);
+    expect(slice()!.transcript.before).toBe(3);
+
+    await expect(client.loadOlder()).resolves.toBe(true);
+    expect(slice()!.transcript.before).toBeNull();
+    expect(slice()!.transcript.frames.map(({ sequence }) => sequence)).toEqual([2, 3, 4, 5, 6]);
+    await expect(client.loadOlder()).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([5, 3]);
+  });
+
+  it("reads a missing or malformed cursor as a transcript that is already whole", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(1, "turn.started")];
+      fake.snapshotThrough = 1;
+      fake.snapshotBefore = 0;
+    });
+
+    expect(slice()!.transcript.before).toBeNull();
+    await expect(client.loadOlder()).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([]);
+  });
+
+  it("tells the reader a page that could not be read, and keeps the cursor for another try", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(5, "turn.started")];
+      fake.snapshotThrough = 5;
+      fake.snapshotBefore = 5;
+    });
+
+    await expect(client.loadOlder()).resolves.toBe(false);
+
+    expect(notifications).toEqual(["Earlier messages: history is unavailable"]);
+    expect(notificationTones).toEqual(["error"]);
+    expect(slice()!.transcript.before).toBe(5);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it.each([
+    ["a page", true],
+    ["a failure", false],
+  ])("says nothing about %s that lands after the client retired", async (_, answered) => {
+    const gate = deferred();
+    const { client, rpc, close, notifications } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(5, "turn.started")];
+      fake.snapshotThrough = 5;
+      fake.snapshotBefore = 5;
+      fake.historyGate = gate.promise;
+      if (answered) fake.pages.set(5, { frames: [frameOf(4, "turn.started")], before: null });
+    });
+
+    const pending = client.loadOlder();
+    close();
+    gate.release();
+
+    await expect(pending).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([5]);
+    expect(notifications).toEqual([]);
+  });
+
+  it("holds the snapshot's reply baseline, and reads a malformed one as none", async () => {
+    const { rpc, slice, stream } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(9, "turn.started")];
+      fake.snapshotThrough = 9;
+      fake.snapshotBefore = 9;
+      fake.snapshotLatestReply = { sequence: 4, text: "Current-turn reply" };
+    });
+    expect(slice()!.transcript.latestReply).toEqual({ sequence: 4, text: "Current-turn reply" });
+
+    rpc.snapshotLatestReply = { sequence: "4", text: 7 };
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(2);
+    expect(slice()!.transcript.latestReply).toBeNull();
+  });
+
+  it("answers a resnapshot by quietly reloading the tail, not with the stream band", async () => {
+    const { rpc, sessionId, slice, stream, notifications } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(3, "m1")];
+      fake.snapshotThrough = 3;
+      fake.snapshotBefore = 3;
+    });
+    stream().start();
+    stream().send("3", frameOf(3, "turn.started"));
+    stream().fail(new Error("socket hang up"));
+    await settle();
+    // The resume past the host's replay bound is refused before it starts.
+    rpc.snapshotFrames = [transcriptFrameOf(40, "m9")];
+    rpc.snapshotThrough = 40;
+    rpc.snapshotBefore = 40;
+    stream().fail(resnapshotRequired());
+    await settle();
+
+    expect(rpc.snapshots).toBe(2);
+    expect(rpc.streams.at(-1)!.input).toEqual({ sessionId, afterSequence: 40 });
+    expect(slice()!.transcript.messages.map(({ id }) => id)).toEqual(["m9"]);
+    expect(slice()!.transcript.before).toBe(40);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+
+    // A reloaded stream that delivered something earns another quiet reload:
+    // its replay was admitted, so the next refusal is a new one.
+    stream().start();
+    stream().send("41", frameOf(41, "turn.started"));
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(3);
+    expect(notifications).toEqual([]);
+  });
+
+  // tRPC's WebSocket adapter answers `started` once the subscription's
+  // iterator exists, before its first `next()` runs the replay that refuses.
+  // `started` therefore proves nothing about the replay (VC-315 review, B4).
+  it("reports repeated refusals even when the transport says started before the replay refuses", async () => {
+    const { rpc, slice, stream, notifications } = await adopted();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      stream().start();
+      stream().fail(resnapshotRequired());
+      await settle();
+    }
+
+    expect(rpc.snapshots).toBe(2);
+    expect(rpc.streams).toHaveLength(2);
+    expect(slice()!.sessionError).toBe(
+      "Lost the Session stream: Session history moved past this cursor",
+    );
+    expect(notifications).toHaveLength(1);
+
+    // However often the dead stream is poked, nothing reloads again.
+    stream().start();
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(2);
+  });
+
+  it("reports a host that refuses the fresh snapshot's own cursor instead of looping", async () => {
+    const { rpc, slice, stream, notifications } = await adopted();
+
+    stream().fail(resnapshotRequired());
+    await settle();
+    stream().fail(resnapshotRequired());
+    await settle();
+
+    expect(rpc.snapshots).toBe(2);
+    expect(slice()!.sessionError).toBe(
+      "Lost the Session stream: Session history moved past this cursor",
+    );
+    expect(notifications).toHaveLength(1);
   });
 });

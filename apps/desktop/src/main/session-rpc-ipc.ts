@@ -332,6 +332,8 @@ async function callProcedure(
       return caller.sessions.attach(request.input as never);
     case "session.snapshot":
       return caller.session.snapshot(request.input as never);
+    case "session.history":
+      return caller.session.history(request.input as never);
     case "session.projection":
       return caller.session.projection(request.input as never);
     case "session.command":

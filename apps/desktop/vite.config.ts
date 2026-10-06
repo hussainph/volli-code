@@ -652,6 +652,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/host-runtime.ts",
+        // Menu-bar mode's whole decision and lifecycle (VC-577).
+        "**/src/main/menu-bar-host.ts",
+        "**/src/main/menu-bar-electron.ts",
+        // The flush-and-ack barrier before menu-bar mode destroys a window.
+        "**/src/main/client-state-flush.ts",
         // When the web keys' sealed mirror reconciles, and that an accepted quit
         // stops it before it can start keychain work (VC-643). Every branch is
         // a rule about teardown nobody watches.
@@ -777,7 +782,7 @@ export default defineConfig(({ mode }) => ({
       },
       build: {
         command:
-          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
+          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/copy-hostd-manifest.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
         cache: false,
       },
       // The UI lab (src/renderer/lab) — the renderer dev server alone, no

@@ -222,6 +222,196 @@ function gitFailure(caught: unknown, args: readonly string[], timeoutMs: number)
 }
 
 /**
+ * This is a local-operation runner, not an arbitrary git CLI door. Array args
+ * prevent shell injection but do not stop git interpreting a ref as an option
+ * (notably --upload-pack). Keep the command/option vocabulary owned here; refs
+ * and repository paths must be operands, never a way to extend that vocabulary.
+ * Network verbs belong to net.ts and are intentionally not admitted here.
+ */
+function localGitArgs(args: readonly string[]): string[] {
+  const rest = [...args];
+  const global = rest[0] === "--no-optional-locks" ? [rest.shift()!] : [];
+  const command = rest.shift();
+  const reject = (): never => {
+    throw new GitError("Unsafe or unsupported local git arguments.", "", args);
+  };
+  const operand = (value: string): string => {
+    if (value.length === 0 || value.startsWith("-") || value.includes("\0")) reject();
+    return value;
+  };
+  const finish = (prefix: string[], values: string[], separator = "--"): string[] => [
+    ...global,
+    ...prefix,
+    ...(values.length > 0 ? [separator, ...values.map(operand)] : []),
+  ];
+
+  // These two reads deliberately put options AFTER refs. Preserve --not's
+  // ordering: moving it before the branch would invert the reachability test.
+  if (command === "log") {
+    if (rest[0] === "-1" && rest[1] === "--format=%ct" && rest.length === 3) {
+      return [...global, command, "-1", "--format=%ct", operand(rest[2]!), "--"];
+    }
+    const tail = ["--remotes", "--max-count=1", "--format=%H"];
+    if (
+      (rest.length === 5 || rest.length === 6) &&
+      rest[1] === "--not" &&
+      tail.every((value, index) => rest[rest.length - 3 + index] === value)
+    ) {
+      operand(rest[0]!);
+      if (rest.length === 6) operand(rest[2]!);
+      return [...global, command, ...rest, "--"];
+    }
+    return reject();
+  }
+  if (command === "for-each-ref") {
+    if (
+      rest.length !== 3 ||
+      rest[1] !== "--sort=-committerdate" ||
+      rest[2] !== "--format=%(refname:short)"
+    ) {
+      return reject();
+    }
+    return finish([command, rest[1]!, rest[2]!], [rest[0]!]);
+  }
+  if (command === "config") {
+    const readHelper = [
+      "--includes",
+      "--null",
+      "--show-scope",
+      "--show-origin",
+      "--get-all",
+      "credential.helper",
+    ];
+    if (rest.length !== readHelper.length || !rest.every((value, i) => value === readHelper[i])) {
+      return reject();
+    }
+    return [...global, command, ...readHelper];
+  }
+
+  let prefix: string[];
+  let flags: readonly string[];
+  let maxOperands: number;
+  let separator = "--";
+  switch (command) {
+    case "rev-parse":
+      prefix = [command];
+      flags = ["--verify", "--quiet", "--git-dir", "--git-common-dir", "--git-path"];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "diff":
+      prefix = [command];
+      flags = ["--numstat", "--raw", "--name-only", "--diff-filter=U", "-z", "-M"];
+      maxOperands = 2;
+      separator = "--end-of-options";
+      break;
+    case "rev-list":
+      prefix = [command];
+      flags = ["--count", "--left-right"];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "merge-base":
+      prefix = [command];
+      flags = [];
+      maxOperands = 2;
+      break;
+    case "merge":
+      prefix = [command];
+      flags = ["--no-edit", "--abort"];
+      maxOperands = 1;
+      break;
+    case "show":
+      prefix = [command];
+      flags = [];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "cat-file":
+      prefix = [command];
+      flags = ["-e"];
+      maxOperands = 1;
+      break;
+    case "symbolic-ref":
+      prefix = [command];
+      flags = ["--quiet"];
+      maxOperands = 1;
+      break;
+    case "branch":
+      prefix = [command];
+      flags = ["--show-current"];
+      maxOperands = 0;
+      break;
+    case "status":
+      prefix = [command];
+      flags = ["--porcelain", "--porcelain=v2", "-z", "-uall"];
+      maxOperands = 0;
+      break;
+    case "ls-files":
+      prefix = [command];
+      flags = ["-z", "-o", "-i", "--cached", "--others", "--exclude-standard", "--directory"];
+      maxOperands = Number.POSITIVE_INFINITY;
+      break;
+    case "submodule":
+      if (rest.shift() !== "status") return reject();
+      prefix = [command, "status"];
+      flags = [];
+      maxOperands = 0;
+      break;
+    case "worktree": {
+      const operation = rest.shift();
+      if (operation === "add") {
+        prefix = [command, operation];
+        if (rest[0] === "-b") {
+          rest.shift();
+          prefix.push("-b", operand(rest.shift() ?? ""));
+        }
+        flags = [];
+        maxOperands = 2;
+      } else if (operation === "remove") {
+        prefix = [command, operation];
+        flags = ["--force"];
+        maxOperands = 1;
+      } else if (operation === "repair") {
+        prefix = [command, operation];
+        flags = [];
+        maxOperands = Number.POSITIVE_INFINITY;
+      } else if (operation === "list" || operation === "prune") {
+        prefix = [command, operation];
+        flags = operation === "list" ? ["--porcelain"] : [];
+        maxOperands = 0;
+      } else {
+        return reject();
+      }
+      break;
+    }
+    default:
+      return reject();
+  }
+  while (rest.length > 0 && flags.includes(rest[0]!)) prefix.push(rest.shift()!);
+  const literalPaths = command === "ls-files" && rest[0] === "--";
+  if (rest[0] === "--" || rest[0] === "--end-of-options") rest.shift();
+  if (rest.length > maxOperands) return reject();
+  // --git-path consumes the following token as its own value, not a revision.
+  if (command === "rev-parse" && prefix.includes("--git-path")) {
+    if (rest.length !== 1 || prefix.at(-1) !== "--git-path") return reject();
+    return [...global, ...prefix, operand(rest[0]!)];
+  }
+  // Without --verify, rev-parse echoes --end-of-options to stdout.
+  // Refs still pass operand(), which refuses option-prefixed values.
+  if (command === "rev-parse" && !prefix.includes("--verify")) {
+    return [...global, ...prefix, ...rest.map(operand)];
+  }
+  // A caller may supply a literal option-looking filename after ls-files' --.
+  // It is safe there, unlike a ref or worktree repository operand.
+  if (literalPaths) {
+    if (rest.some((value) => value.length === 0 || value.includes("\0"))) return reject();
+    return [...global, ...prefix, "--", ...rest];
+  }
+  return finish(prefix, rest, separator);
+}
+
+/**
  * Default synchronous worktree git runner. Since VC-383 it has ONE deliberate
  * consumer on a user path: the confirmed orphan cleanup's gate (`cleanup.ts`),
  * which may not yield between its last look and the delete. Everything else a
@@ -233,7 +423,7 @@ function gitFailure(caught: unknown, args: readonly string[], timeoutMs: number)
  */
 export const runGitCapturing: RunGit = (args, cwd) => {
   try {
-    return execFileSync("git", args, {
+    return execFileSync("git", localGitArgs(args), {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -275,7 +465,9 @@ export function createGitCapturingAsyncRunner(
   return (args, cwd) =>
     withGitChildSlot(async () => {
       try {
-        const { stdout } = await execFileAsync(file, [...args], {
+        // A non-git executable is the existing test seam for hung children.
+        const safeArgs = file === "git" ? localGitArgs(args) : [...args];
+        const { stdout } = await execFileAsync(file, safeArgs, {
           cwd,
           encoding: "utf8",
           maxBuffer: GIT_MAX_BUFFER,
