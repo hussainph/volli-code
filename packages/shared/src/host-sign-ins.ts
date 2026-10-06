@@ -140,6 +140,23 @@ export interface HostAuthCallbackDeliverResult {
   status: number;
 }
 
+/**
+ * What the auth-callback relay is doing on a Client, for its sign-in row:
+ * listening for the browser's redirect, unable to (the port is taken: paste
+ * instead), delivered to the host, or delivered and refused (paste instead).
+ */
+export type HostSignInRelayState = "listening" | "paste" | "delivered" | "failed";
+
+/**
+ * What a Client's sign-in row hears about one flow on a host: the flow's own
+ * updates (less the relay grant, which the Client's relay consumes), the
+ * relay's state, and `lost` when the host went away before the flow ended.
+ */
+export type HostSignInRunEvent =
+  | Exclude<HostSignInUpdate, { kind: "auth-callback" }>
+  | { readonly kind: "relay"; readonly state: HostSignInRelayState }
+  | { readonly kind: "lost" };
+
 /** Whether an update ends its flow's stream. */
 export function hostSignInUpdateIsFinal(update: { kind: string }): boolean {
   return update.kind === "done" || update.kind === "failed" || update.kind === "cancelled";
