@@ -164,6 +164,33 @@ one writes (`n1-compatibility.test.ts`, against main's exact code).
   lock is advisory: an older build that does not take it, or a hostile
   program running as the same user, is not stopped, so stop older processes
   before upgrading.
+
+**Contention policy (VC-653).** Storage's synchronous methods are try-once
+primitives, not waiting doors. Do not use a raw `status()` after a successful
+save as evidence that the save failed: it is a *new read* that can meet the
+next writer. Use `statusAsync()` for an explicit open/read that can wait.
+
+| Operation | Lock wait | Bound / outcome |
+| --- | --- | --- |
+| `CredentialLock.withSync`, synchronous store/inventory reads and changes | None | Busy at once; never block Electron's main thread |
+| Raw status/list/snapshot/availability polls, initial redaction | None | Momentary `locked`/`busy`; no stale records; not remembered |
+| Store/inventory `statusAsync` | Async retries | 10 s by default (caller may specify a bound); then busy status |
+| Session `execute` and background-shell injection (including last-use commit) | Async retries | 10 s; then busy error **before spawning**, never silently omit secrets for contention |
+| `request_secret` availability | Try once, then async retries on busy | 10 s; then busy error, not a needless person prompt; cancellation stops retries |
+| Person list/unlock/submit/replace/revoke/reset | Async retries | 10 s; listing/unlock return busy status, changes reject busy |
+| Web-key mirror | Boot tries once, reconciliation retries asynchronously | 10 s; sealing stays pending, SQLite remains canonical |
+| Hostd boot status / local-admin reset | None | Status/warning or refusal; not a Session-use read |
+
+Session attachment registers injection ownership; it does not eagerly read
+Session secrets. Both hosts read them fresh at each command start. The previous
+injection path threw busy immediately, so the command failed before spawning;
+it did **not** run without its stored secrets on contention. Genuine unavailable
+keys retain the existing behavior (Session-scoped values remain usable).
+Command and availability retries stop on cancellation, before any further
+last-use commit or spawn. No retry holds the credential lock across a timer. Low-level UI polls remain
+nonblocking so rendering and status observation never stall on another process.
+This does not make Electron's legacy synchronous `safeStorage` calls asynchronous.
+
 - **The durable file contract** (`durable-file.ts`, `sealed-document.ts`).
   Under the lock, every read reloads the file and opens it with the key its
   header names, so another process's revocation, and a key removed or

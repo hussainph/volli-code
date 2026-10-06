@@ -62,7 +62,7 @@ function observe(store: SecretStore | N1SecretStore) {
   };
 }
 
-describe("N-1 compatibility of the Session-secrets file", { timeout: 30_000 }, () => {
+describe("N-1 compatibility of the Session-secrets file", () => {
   it("tests against main's exact code", () => {
     for (const [file, blob] of Object.entries(MAIN_BLOBS)) {
       const bytes = readFileSync(new URL(`./test-support/n1/${file}`, import.meta.url));

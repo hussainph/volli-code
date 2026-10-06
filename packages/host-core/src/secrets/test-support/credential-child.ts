@@ -5,9 +5,10 @@
  * desktop, hostd and `volli-hostd credentials` do. It reads one JSON command
  * from argv, prints JSON lines, and exits.
  */
+import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 
-import { CredentialLock, retryWhileBusy } from "../credential-lock";
+import { CredentialLock, CredentialLockBusyError, retryWhileBusy } from "../credential-lock";
 import type { PublishStep } from "../durable-file";
 import { fileCredentialKeyring, fileSecretKey } from "../file-key";
 import { SealedInventory } from "../inventory";
@@ -24,6 +25,7 @@ type Command =
       family: string;
       selectors: Record<string, string>[];
       value: string;
+      reportAfter?: string;
     }
   /** Removes one record. */
   | { kind: "remove"; path: string; key: string; family: string; selector: Record<string, string> }
@@ -40,7 +42,14 @@ type Command =
       at: PublishStep;
     }
   /** Session secrets: saves each input, one locked commit per input; dies at `crashAt`. */
-  | { kind: "secret-put"; path: string; key: string; inputs: SecretInput[]; crashAt?: PublishStep }
+  | {
+      kind: "secret-put";
+      path: string;
+      key: string;
+      inputs: SecretInput[];
+      crashAt?: PublishStep;
+      reportAfter?: string;
+    }
   /** Session secrets: revokes the stored secret with this name. */
   | { kind: "secret-revoke"; path: string; key: string; name: string }
   /** Session secrets: what a command started now would be given. */
@@ -48,6 +57,35 @@ type Command =
 
 function say(line: unknown): void {
   process.stdout.write(`${JSON.stringify(line)}\n`);
+}
+
+async function report(store: SecretStore | SealedInventory, after?: string): Promise<void> {
+  if (after !== undefined) {
+    say({ saved: true });
+    while (!existsSync(after)) await new Promise((settle) => setTimeout(settle, 10));
+  }
+  // Acknowledge an actual failed acquisition, not elapsed time or readiness.
+  // The parent keeps its holder alive until every writer sends this line.
+  const acquire = CredentialLock.prototype.withSync;
+  let acknowledged = false;
+  if (after !== undefined) {
+    CredentialLock.prototype.withSync = function <T>(this: CredentialLock, fn: () => T): T {
+      try {
+        return acquire.call(this, fn) as T;
+      } catch (error) {
+        if (!acknowledged && error instanceof CredentialLockBusyError) {
+          acknowledged = true;
+          say({ busy: true });
+        }
+        throw error;
+      }
+    };
+  }
+  try {
+    say({ status: (await store.statusAsync()).state });
+  } finally {
+    CredentialLock.prototype.withSync = acquire;
+  }
 }
 
 const command = JSON.parse(process.argv[2]!) as Command;
@@ -96,7 +134,7 @@ switch (command.kind) {
         10_000,
       );
     }
-    say({ status: store.status().state });
+    await report(store, command.reportAfter);
     break;
   }
   case "remove": {
@@ -125,7 +163,7 @@ switch (command.kind) {
   case "secret-put": {
     const store = secrets(command.path, command.key, command.crashAt);
     for (const input of command.inputs) await retryWhileBusy(() => store.put(input), 10_000);
-    say({ status: store.status().state });
+    await report(store, command.reportAfter);
     break;
   }
   case "secret-revoke": {
