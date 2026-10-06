@@ -193,6 +193,8 @@ import {
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { keychainSecretCodec } from "./secrets/codec";
+import { installHarnessGuard } from "./harness/keychain-guard";
+import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
@@ -279,6 +281,14 @@ import {
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
+
+// Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
+// `volli-drive` sets. When on, every safeStorage method becomes a trap that
+// fails the run, Chromium is told to use a mock keychain, and the secret ports
+// below seal with per-instance key files instead. First, before anything else
+// in this module can reach safeStorage or the command line is frozen at ready.
+const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage });
+const harnessPorts = harnessGuard.active ? harnessSecretPorts(harnessGuard.paths) : null;
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -736,14 +746,17 @@ const appStartup = app.whenReady().then(async () => {
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
-    secretKey: keychainSecretCodec(keychainUse.keychain),
+    secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
-      keyring: keychainCredentialKeyring({
-        path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-        keychain: safeStorage,
-        inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
-      }),
-      mayUnlockUnattended: keychainUse.used,
+      keyring:
+        harnessPorts?.keyring ??
+        keychainCredentialKeyring({
+          path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+          keychain: safeStorage,
+          inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
+        }),
+      // A key file never prompts, so harness mode may always unlock it.
+      mayUnlockUnattended: harnessPorts === null ? keychainUse.used : () => true,
       onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
     },
     terminal: () => ({
@@ -915,7 +928,9 @@ const appStartup = app.whenReady().then(async () => {
   // about any key.
   // Whether this launch has used the keychain successfully yet (VC-643): the
   // web keys' unattended launch reconcile may fetch its own key only then.
-  if (dbHandle.ok) {
+  // Harness mode has no keychain to carry anything out of: the migration is
+  // skipped rather than left to trip the guard on a copied profile.
+  if (dbHandle.ok && harnessPorts === null) {
     const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
     if (moved.carried > 0) keychainUse.markUsed();
     if (moved.carried + moved.dropped + moved.deferred > 0) {
@@ -939,7 +954,7 @@ const appStartup = app.whenReady().then(async () => {
     liveHost?.secretStore ??
       new SecretStore(
         join(dirname(dbPath), "session-secrets.enc"),
-        keychainSecretCodec(keychainUse.keychain),
+        harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
       ),
   );
   sessionWakeBus?.subscribe(({ event }) => {
