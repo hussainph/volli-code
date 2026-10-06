@@ -969,12 +969,23 @@ export function createCatalogBuilders<
   return { hostProcedure, workspaceProcedure, catalogRouter, assertCatalogBound };
 }
 
-/** Every procedure path of a router record, dotted the way the catalog keys them. */
-export type ProcedurePaths<Record> = {
-  [Key in keyof Record & string]: Record[Key] extends AnyProcedure
-    ? Key
-    : `${Key}.${ProcedurePaths<Record[Key]>}`;
-}[keyof Record & string];
+/**
+ * Every procedure path of a router record, dotted the way the catalog keys
+ * them. Distributive: a union of records (several routers' records) yields
+ * every path of each, never only the namespaces they happen to share.
+ */
+export type ProcedurePaths<Record> = Record extends unknown
+  ? {
+      [Key in keyof Record & string]: Record[Key] extends AnyProcedure
+        ? Key
+        : `${Key}.${ProcedurePaths<Record[Key]>}`;
+    }[keyof Record & string]
+  : never;
+
+/** Every procedure path of some routers: each router's paths, together. */
+export type RouterProcedurePaths<Routers extends AnyRouter> = Routers extends AnyRouter
+  ? ProcedurePaths<Routers["_def"]["record"]>
+  : never;
 
 /**
  * The keys on which the routers' procedures and the catalog disagree: a

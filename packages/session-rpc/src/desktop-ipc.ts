@@ -1,0 +1,114 @@
+/**
+ * What crosses the desktop's own IPC bridge (VC-608; HP § Command catalog,
+ * "Doors are projections").
+ *
+ * The bridge is router-generic (`@volli/host-protocol/ipc-server`): it
+ * dispatches any path its routers publish through tRPC, under the same
+ * router context and error envelope the WebSocket uses. What it serves is
+ * decided here, once, for every procedure of every router it is handed: a
+ * total table, so a procedure added to any of those routers fails
+ * `pnpm typecheck` here until someone decides whether the desktop window may
+ * reach it. A deliberate exclusion is written down, never an omission.
+ *
+ * The renderer's client is typed from the same table ({@link DesktopIpcRouter}),
+ * so a withheld procedure is not even a method on it.
+ */
+import type { IpcClientRouter } from "@volli/host-protocol/ipc";
+
+import type { AnyRouter } from "@trpc/server";
+
+import type { RouterProcedurePaths } from "./catalog";
+import type { AppRouter } from "./index";
+
+/** The routers the desktop's IPC bridge serves, composed by `src/main/session-rpc-ipc.ts`. */
+export type DesktopIpcRouters = AppRouter;
+
+/** Every procedure path those routers publish: each router's, together. */
+export type DesktopIpcRouterPath = RouterProcedurePaths<DesktopIpcRouters>;
+
+/**
+ * How one procedure crosses the desktop's IPC bridge:
+ *
+ * - `ipc`: served to the desktop's own window;
+ * - `lab-only`: development diagnostics. No production transport serves
+ *   them: a production client has no debug pane to feed and no business
+ *   reading a diagnostic log over the channel it runs Sessions on;
+ * - `websocket-only`: the host protocol's own, for a network caller (the
+ *   welcome a handshake negotiated, which the window never has; the socket's
+ *   Session reads, Workspace-scoped; a remote host's sign-ins, owned by the
+ *   asking connection, VC-702). The renderer keeps its own listing.
+ */
+export type DesktopIpcExposure = "ipc" | "lab-only" | "websocket-only";
+
+/**
+ * A total classification of every path some routers publish: a path with no
+ * row, or a row naming no path, fails `pnpm typecheck` (an object literal
+ * checked against it with `satisfies`).
+ */
+export type IpcExposureTable<Routers extends AnyRouter> = {
+  readonly [Path in RouterProcedurePaths<Routers>]: DesktopIpcExposure;
+};
+
+export const DESKTOP_IPC_EXPOSURE = Object.freeze({
+  "settings.experiments": "ipc",
+  "settings.setExperiment": "ipc",
+  "modelAccess.inspect": "ipc",
+  "modelAccess.defaults": "ipc",
+  "modelAccess.setDefault": "ipc",
+  "modelAccess.hiddenModels": "ipc",
+  "modelAccess.setHiddenModels": "ipc",
+  "modelAccess.compactionPolicy": "ipc",
+  "modelAccess.setCompactionPolicy": "ipc",
+  "modelAccess.codeModePolicy": "ipc",
+  "modelAccess.setCodeModePolicy": "ipc",
+  "modelAccess.pickerView": "ipc",
+  "modelAccess.setPickerView": "ipc",
+  "sessions.create": "ipc",
+  "sessions.attach": "ipc",
+  "session.snapshot": "ipc",
+  "session.history": "ipc",
+  "session.projection": "ipc",
+  "session.subscribe": "ipc",
+  "session.command": "ipc",
+  "session.cancelQueued": "ipc",
+  "session.editQueued": "ipc",
+  "session.cancelInteraction": "ipc",
+  "session.reconcile": "ipc",
+  "session.list": "websocket-only",
+  "session.show": "websocket-only",
+  "session.peek": "websocket-only",
+  "session.answer": "websocket-only",
+  "session.subscribeQueue": "websocket-only",
+  "protocol.welcome": "websocket-only",
+  // Sign-ins on a remote host (VC-702): a connection owns its flows, and the
+  // desktop's own window signs in over its own Model Access IPC.
+  "signIns.status": "websocket-only",
+  "signIns.setApiKey": "websocket-only",
+  "signIns.signOut": "websocket-only",
+  "signIns.start": "websocket-only",
+  "signIns.subscribe": "websocket-only",
+  "signIns.answer": "websocket-only",
+  "signIns.cancel": "websocket-only",
+  "signIns.setGitCredential": "websocket-only",
+  "signIns.clearGitCredential": "websocket-only",
+  "auth.callback.deliver": "websocket-only",
+  "labDiagnostics.list": "lab-only",
+  "labDiagnostics.subscribe": "lab-only",
+} satisfies IpcExposureTable<DesktopIpcRouters>);
+
+type Exposure = typeof DESKTOP_IPC_EXPOSURE;
+
+/** The paths the desktop's own window reaches over IPC. */
+export type DesktopIpcPath = {
+  [Path in keyof Exposure]: Exposure[Path] extends "ipc" ? Path : never;
+}[keyof Exposure];
+
+/** {@link DesktopIpcPath}, at runtime: what the bridge serves. */
+export const DESKTOP_IPC_PATHS: readonly DesktopIpcPath[] = Object.freeze(
+  (Object.keys(DESKTOP_IPC_EXPOSURE) as (keyof Exposure)[]).filter(
+    (path): path is DesktopIpcPath => DESKTOP_IPC_EXPOSURE[path] === "ipc",
+  ),
+);
+
+/** The desktop renderer's client router: the served paths, with the procedures' own types. */
+export type DesktopIpcRouter = IpcClientRouter<DesktopIpcRouters, DesktopIpcPath>;

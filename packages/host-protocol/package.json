@@ -13,6 +13,14 @@
       "types": "./src/client-link/index.ts",
       "import": "./src/client-link/index.ts"
     },
+    "./ipc": {
+      "types": "./src/ipc/index.ts",
+      "import": "./src/ipc/index.ts"
+    },
+    "./ipc-server": {
+      "types": "./src/ipc/server.ts",
+      "import": "./src/ipc/server.ts"
+    },
     "./testing": {
       "types": "./src/testing/index.ts",
       "import": "./src/testing/index.ts"

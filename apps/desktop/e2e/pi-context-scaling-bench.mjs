@@ -530,7 +530,8 @@ async function prepare(options, paths) {
     if (projectId === undefined) throw new Error("the fixture project did not import");
     const inspected = await page.evaluate(async () => {
       const response = await window.api.sessionRpc.request({
-        procedure: "modelAccess.inspect",
+        path: "modelAccess.inspect",
+        type: "query",
         input: {},
       });
       return response.ok
@@ -562,12 +563,14 @@ async function prepare(options, paths) {
         const started = await page.evaluate(
           async ({ pid, title }) => {
             const created = await window.api.sessionRpc.request({
-              procedure: "sessions.create",
+              path: "sessions.create",
+              type: "mutation",
               input: { operationId: crypto.randomUUID(), projectId: pid, ticketId: null, title },
             });
             if (!created.ok) return { ok: false, step: "create", error: created.error };
             const attached = await window.api.sessionRpc.request({
-              procedure: "sessions.attach",
+              path: "sessions.attach",
+              type: "mutation",
               input: { operationId: crypto.randomUUID(), sessionId: created.data.sessionId },
             });
             if (!attached.ok) return { ok: false, step: "attach", error: attached.error };
