@@ -1,3 +1,4 @@
+import { assertHostFeatureReadiness } from "./feature-readiness";
 /**
  * The host protocol's WebSocket listener (VC-663; HP § Handshake and
  * capabilities, § Commands, subscriptions and errors, § The listener). Node-only,
@@ -318,7 +319,8 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
   }
   const limits: HostProtocolListenerLimits = { ...DEFAULT_LISTENER_LIMITS, ...options.limits };
   validateListenerLimits(limits);
-  const { features } = options;
+  const features = [...options.features];
+  assertHostFeatureReadiness(options.router, features);
   const log = options.log ?? ignore;
   const connections = new WeakMap<WebSocket, Connection>();
   /** Every accepted TCP socket, until it closes: the connection budget. */

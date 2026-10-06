@@ -1,4 +1,40 @@
 {
+  "baseOperations": [
+    "protocol.welcome"
+  ],
+  "features": {
+    "model-access": [
+      "modelAccess.inspect",
+      "modelAccess.defaults",
+      "modelAccess.setDefault",
+      "modelAccess.hiddenModels",
+      "modelAccess.setHiddenModels",
+      "modelAccess.compactionPolicy",
+      "modelAccess.setCompactionPolicy",
+      "modelAccess.codeModePolicy",
+      "modelAccess.setCodeModePolicy",
+      "modelAccess.pickerView",
+      "modelAccess.setPickerView"
+    ],
+    "session.read": [
+      "session.list",
+      "session.show",
+      "session.peek",
+      "session.answer"
+    ],
+    "sessions": [
+      "sessions.create",
+      "sessions.attach",
+      "session.snapshot",
+      "session.projection",
+      "session.command",
+      "session.cancelInteraction",
+      "session.reconcile"
+    ],
+    "sessions.subscribe": [
+      "session.subscribe"
+    ]
+  },
   "protocolVersion": 1,
   "tiers": {
     "desktop": {},

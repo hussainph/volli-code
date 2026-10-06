@@ -341,8 +341,17 @@ export function protocolChanges(before, after) {
     }
   }
   // Public operation membership is frozen, even when widening it seems additive.
+  if (
+    before.baseOperations !== undefined &&
+    !isDeepStrictEqual(
+      list(before.baseOperations).toSorted(),
+      list(after.baseOperations).toSorted(),
+    )
+  ) {
+    changes.push({ path: "/baseOperations", reason: "frozen bootstrap membership changed" });
+  }
   for (const [feature, operations] of Object.entries(before.features ?? {})) {
-    if (!isDeepStrictEqual(operations, after.features?.[feature]))
+    if (!isDeepStrictEqual(list(operations).toSorted(), list(after.features?.[feature]).toSorted()))
       changes.push({
         path: `/features/${escape(feature)}`,
         reason: "frozen feature membership changed",

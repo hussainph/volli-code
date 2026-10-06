@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRequire } from "node:module";
@@ -407,4 +408,40 @@ test("dangling/external references and assertion siblings fail closed", () => {
     assert.throws(() => schemaChanges(text, next), /schema reference|reference alias/);
   const alias = { $ref: "#/$defs/alias", $defs: { alias: { $ref: "#/$defs/body" }, body: text } };
   assert.deepEqual(schemaChanges(text, alias), []);
+});
+
+test("the committed public feature/bootstrap sets are frozen independently of declaration order", () => {
+  const old = JSON.parse(
+    readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),
+  );
+  assert.ok(old.features.sessions.includes("session.command"));
+  const next = structuredClone(old);
+  next.features.sessions.reverse();
+  assert.deepEqual(unapprovedChanges(old, next), []);
+  next.features.sessions.push("new.area.read");
+  next.baseOperations.push("protocol.newBootstrap");
+  next.tiers.public["new.area.read"] = { kind: "query", input: {}, output: text };
+  assert.deepEqual(
+    unapprovedChanges(old, next).map(({ path }) => path),
+    ["/baseOperations", "/features/sessions"],
+  );
+  for (const mutate of [
+    (p) => {
+      delete p.features.sessions;
+    },
+    (p) => {
+      p.features.sessions.pop();
+    },
+    (p) => {
+      delete p.baseOperations;
+    },
+  ]) {
+    const after = structuredClone(old);
+    mutate(after);
+    assert.ok(unapprovedChanges(old, after).length);
+  }
+  const additive = structuredClone(old);
+  additive.features["board.read"] = ["new.area.read"];
+  additive.tiers.public["new.area.read"] = { kind: "query", input: {}, output: text };
+  assert.deepEqual(unapprovedChanges(old, additive), []);
 });
