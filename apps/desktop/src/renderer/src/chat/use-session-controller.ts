@@ -106,15 +106,10 @@ export interface SessionController {
   /** Empty rather than absent for a Session this surface no longer has. */
   session: SessionView;
   selectModel(selection: ModelSelection): Promise<boolean>;
-  enqueue(message: QueuedMessage): void;
-  dequeue(id: string): void;
-  /** Freezes resident queue release while an explicit steer becomes durable. */
-  claimQueued(id: string): boolean;
-  /** Resumes ordinary ordered release after an explicit steer aborts. */
-  releaseQueuedClaim(id: string): void;
-  /** Consumes the claimed row immediately before explicit submission. */
-  dequeueClaimed(id: string): boolean;
-  submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery>;
+  cancelQueued(id: string): Promise<boolean>;
+  editQueued(message: QueuedMessage): Promise<boolean>;
+  steerQueued(id: string): Promise<MessageDelivery>;
+  submit(message: QueuedMessage, delivery?: ChatMessageDelivery): Promise<MessageDelivery>;
   interrupt(): Promise<boolean>;
   resolveInteraction(
     interactionId: string,
@@ -235,17 +230,10 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
   const refused = Promise.resolve(false);
   return {
     selectModel: (selection) => getChatClient(sessionId)?.selectModel(selection) ?? refused,
-    enqueue: (message) => {
-      store.getState().enqueue(sessionId, message);
-    },
-    dequeue: (id) => {
-      store.getState().dequeue(sessionId, id);
-    },
-    claimQueued: (id) => getChatClient(sessionId)?.claimQueued(id) ?? false,
-    releaseQueuedClaim: (id) => {
-      getChatClient(sessionId)?.releaseQueuedClaim(id);
-    },
-    dequeueClaimed: (id) => getChatClient(sessionId)?.dequeueClaimed(id) ?? false,
+    cancelQueued: (id) => getChatClient(sessionId)?.cancelQueued(id) ?? refused,
+    editQueued: (message) => getChatClient(sessionId)?.editQueued(message) ?? refused,
+    steerQueued: (id) =>
+      getChatClient(sessionId)?.steerQueued(id) ?? Promise.resolve("refused" as const),
     // A lookup that misses is a Session this surface no longer has: nothing was
     // sent and nothing is durable, which is exactly `refused`.
     submit: (message, delivery) =>

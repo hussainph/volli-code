@@ -62,14 +62,13 @@ export { CHAT_DRAFTS_APP_STATE_KEY };
  * - `sending` — a round trip is open on it. The surface draws nothing: the
  *   transcript is already showing the message, and a second copy under the
  *   composer would read as a message that failed to leave.
- * - `queued` — the Session's release queue holds it. The queue is renderer
- *   memory, so this is its only copy that outlives the window.
+ * - `queued` — legacy renderer-owned follow-up recovery. New follow-ups are
+ *   host-owned and retire this local copy only after durable acceptance.
  * - `unsent` — nothing took it. It belongs back in front of the person who
  *   wrote it, as its own message rather than welded onto whatever they typed
  *   next.
  *
- * A renderer that has just booted has no round trip open and no release queue,
- * so hydration reads every held message back as `unsent` — see
+ * Hydration conservatively reads every legacy held message back as `unsent` — see
  * {@link readPersistedDrafts}. That is what makes a crash mid-send show up as
  * words waiting rather than as words gone.
  */

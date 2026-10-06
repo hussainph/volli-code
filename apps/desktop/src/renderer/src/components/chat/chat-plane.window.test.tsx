@@ -26,10 +26,15 @@ import {
   type ModelAccessSnapshot,
   type ModelSelection,
 } from "@volli/shared";
-import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
+import {
+  EMPTY_TRANSCRIPT,
+  type ChatSessionTransport,
+  type ChatSessionProjection,
+  type ChatCommandRequest,
+} from "@volli/session-presentation";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { createChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -130,6 +135,7 @@ afterEach(async () => {
     root?.unmount();
   });
   root = null;
+  for (const store of hostStores.splice(0)) store.getState().closeChatSession(SESSION);
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
@@ -142,7 +148,7 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
     () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
   );
   const promoteChatSession = vi.fn(promote);
-  const enqueue = vi.fn();
+  const enqueue = vi.fn<ChatSessionsState["enqueue"]>().mockResolvedValue("delivered");
   store.setState({ promoteChatSession, enqueue } as never);
   useChatDraftsStore.getState().openProvisional(SESSION, {
     projectId: PROJECT,
@@ -194,6 +200,81 @@ function chatStore(
     },
   } as never);
   return store;
+}
+
+const hostStores: ReturnType<typeof createChatSessionsStore>[] = [];
+
+function hostChatStore() {
+  const commands: ChatCommandRequest[] = [];
+  let projection: ChatSessionProjection = {
+    session: {
+      id: SESSION,
+      projectId: PROJECT,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Chat",
+      createdAt: 0,
+    },
+    status: "open",
+    signal: null,
+    modelSelection: DEFAULT_SELECTION,
+    modelTier: null,
+    turnActive: false,
+    lastActivityAt: 0,
+    bornTicketless: true,
+    scheduledResume: null,
+    attention: { active: [], primary: null },
+    interactions: { active: [], resolved: [] },
+    liveExecutor: null,
+    queue: [
+      {
+        id: "q1",
+        commandId: "q1",
+        state: "queued",
+        message: { id: "q1", role: "user", parts: [{ type: "text", text: "host follow-up" }] },
+      },
+    ],
+    queueRevision: 1,
+  };
+  const cancel = vi.fn(async () => true);
+  const store = createChatSessionsStore(() => ({
+    rpc: {
+      session: {
+        snapshot: { query: async () => ({ projection, frames: [], throughSequence: 0 }) },
+        projection: { query: async () => ({ projection }) },
+        subscribe: { subscribe: () => ({ unsubscribe: () => {} }) },
+        command: {
+          mutate: async (input) => {
+            commands.push(input);
+            return { sessionId: SESSION };
+          },
+        },
+        cancelQueued: {
+          mutate: async () => {
+            const accepted = await cancel();
+            if (accepted) projection = { ...projection, queue: [], queueRevision: 2 };
+            return {
+              sessionId: SESSION,
+              receipt: { status: accepted ? "accepted" : "rejected", detail: "already releasing" },
+            };
+          },
+        },
+        editQueued: { mutate: async () => ({ sessionId: SESSION }) },
+        cancelInteraction: { mutate: async () => ({ sessionId: SESSION }) },
+        reconcile: { mutate: async () => ({ sessionId: SESSION }) },
+      },
+    },
+    scheduler: { schedule: () => () => {} },
+    newCommandId: () => crypto.randomUUID(),
+    createSession: async () => ({ sessionId: SESSION }),
+    attachSession: async () => {
+      throw new Error("renderer must not attach for the queue");
+    },
+  }));
+  store.getState().adoptChatSession(SESSION);
+  hostStores.push(store);
+  return { store, cancel, commands };
 }
 
 async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
@@ -343,6 +424,34 @@ describe("a provisional chat plane", () => {
       SESSION,
       expect.objectContaining({ text: "first durable words" }),
     );
+  });
+
+  it("retains the persisted first message until the host accepts its queued command", async () => {
+    const { enqueue, store } = provisionalChatStore();
+    let accept!: (outcome: "delivered" | "refused") => void;
+    enqueue.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () => {
+      type(box, "keep these words");
+    });
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledOnce());
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "sending" },
+    ]);
+    await act(async () => accept("refused"));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "unsent" },
+    ]);
   });
 
   it("keeps an import already in flight with the first held message", async () => {
@@ -621,6 +730,51 @@ describe("a provisional chat plane", () => {
 
     expect(enqueue).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+  });
+});
+
+describe("host-owned rows with cloud off", () => {
+  it("waits for cancellation before Backspace restores text and preserves typing during the wait", async () => {
+    const { store, cancel } = hostChatStore();
+    let accept!: (accepted: boolean) => void;
+    cancel.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { id: "q1", state: "sending" },
+    ]);
+    await act(async () => type(box, "new typing"));
+    await act(async () => accept(true));
+    expect(box.value).toBe("host follow-up\nnew typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toEqual([]);
+  });
+
+  it("leaves the draft unchanged when host release beats Backspace", async () => {
+    const { store, cancel } = hostChatStore();
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
   });
 });
 

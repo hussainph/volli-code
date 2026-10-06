@@ -45,14 +45,12 @@ function blobLinkView(): BlobLinkView {
 }
 
 import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
-import type { QueuedMessage } from "@volli/session-presentation";
 
 import {
   answerInteraction,
   composerModelSelection,
   composerPress,
   coordinateQueuedMutation,
-  coordinateQueuedSteerStart,
   detachableRowAttachments,
   dispatchHeldMessage,
   hasReconciledSessionSnapshot,
@@ -70,70 +68,16 @@ import {
   sessionBlocker,
   sessionModelStanding,
   visibleBlocker,
-  steerRollbackState,
   steerTurnIsCurrent,
-  steerQueuedMessage,
   settledHeldIds,
   terminalCompanionTabId,
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
-  type QueuedSteerActs,
-  type QueuedSteerDelivery,
 } from "./chat-plane-model";
 
 function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
   return { id, text, state };
-}
-
-interface SteerHarnessInput {
-  held?: readonly HeldMessage[];
-  queue?: readonly QueuedMessage[];
-  steerable?: boolean;
-  submit?: QueuedSteerActs["submit"];
-}
-
-function steerHarness({ held = [], queue = [], steerable = true, submit }: SteerHarnessInput = {}) {
-  const drafts = createChatDraftsStore({
-    getItem: () => null,
-    setItem: () => undefined,
-    removeItem: () => undefined,
-  });
-  for (const entry of held) {
-    drafts.getState().holdMessage("s1", entry);
-    drafts.getState().markHeld("s1", entry.id, entry.state);
-  }
-  let releaseQueue = [...queue];
-  const events: string[] = [];
-  const acts: QueuedSteerActs = {
-    read: () => ({
-      held: drafts.getState().drafts.s1?.held ?? [],
-      queue: releaseQueue,
-      steerable,
-    }),
-    start: async (visible, targetId) => {
-      events.push(`start:${visible.map((entry) => entry.id).join(",")}:${targetId}`);
-      drafts.getState().beginQueuedSteer("s1", visible, targetId);
-      releaseQueue = releaseQueue.filter((entry) => entry.id !== targetId);
-      return "started";
-    },
-    submit: (message, delivery) => {
-      events.push(`submit:${message.id}:${delivery}`);
-      return submit?.(message, delivery) ?? Promise.resolve("delivered");
-    },
-    finish: async (id, outcome) => {
-      events.push(`finish:${id}:${outcome}`);
-      if (outcome === "refused") drafts.getState().markHeld("s1", id, "unsent");
-      else drafts.getState().dropHeld("s1", id);
-    },
-  };
-  return {
-    acts,
-    events,
-    held: () => drafts.getState().drafts.s1?.held ?? [],
-    queue: () => releaseQueue,
-    strip: () => heldStrip(drafts.getState().drafts.s1?.held ?? [], releaseQueue),
-  };
 }
 
 describe("composer model selection", () => {
@@ -1348,74 +1292,54 @@ describe("dispatchHeldMessage", () => {
 });
 
 describe("coordinateQueuedMutation", () => {
-  it("refuses to mutate a queue row already owned by resident delivery", () => {
+  it("waits for durable cancellation before dropping a local recovery copy", async () => {
+    let accept!: (accepted: boolean) => void;
     const events: string[] = [];
-
-    expect(
-      coordinateQueuedMutation({
-        queueBacked: true,
-        claim: () => (events.push("claim"), false),
-        consumeClaim: () => (events.push("consume"), true),
-        releaseClaim: () => events.push("release"),
-        dropHeld: () => events.push("drop"),
-      }),
-    ).toBe(false);
-    expect(events).toEqual(["claim"]);
-  });
-
-  it("atomically consumes an unclaimed queue row before dropping its held copy", () => {
-    const events: string[] = [];
-
-    expect(
-      coordinateQueuedMutation({
-        queueBacked: true,
-        claim: () => (events.push("claim"), true),
-        consumeClaim: () => (events.push("consume"), true),
-        releaseClaim: () => events.push("release"),
-        dropHeld: () => events.push("drop"),
-      }),
-    ).toBe(true);
-    expect(events).toEqual(["claim", "consume", "drop"]);
-  });
-
-  it("releases a claim when its queue row vanished before consumption", () => {
-    const events: string[] = [];
-
-    expect(
-      coordinateQueuedMutation({
-        queueBacked: true,
-        claim: () => true,
-        consumeClaim: () => false,
-        releaseClaim: () => events.push("release"),
-        dropHeld: () => events.push("drop"),
-      }),
-    ).toBe(false);
-    expect(events).toEqual(["release"]);
-  });
-
-  it("drops a held-only row without touching the resident queue", () => {
-    const events: string[] = [];
-
-    expect(
-      coordinateQueuedMutation({
-        queueBacked: false,
-        claim: () => (events.push("claim"), false),
-        consumeClaim: () => (events.push("consume"), false),
-        releaseClaim: () => events.push("release"),
-        dropHeld: () => events.push("drop"),
-      }),
-    ).toBe(true);
+    const pending = coordinateQueuedMutation({
+      queueBacked: true,
+      localMutable: false,
+      cancel: () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+      dropHeld: () => events.push("drop"),
+    });
+    expect(events).toEqual([]);
+    accept(true);
+    await expect(pending).resolves.toBe(true);
     expect(events).toEqual(["drop"]);
+  });
+  it("preserves the recovery copy if release already won", async () => {
+    const events: string[] = [];
+    await expect(
+      coordinateQueuedMutation({
+        queueBacked: true,
+        localMutable: true,
+        cancel: async () => false,
+        dropHeld: () => events.push("drop"),
+      }),
+    ).resolves.toBe(false);
+    expect(events).toEqual([]);
+  });
+  it("only locally removes unsent device recovery, never an in-flight send", async () => {
+    let dropped = 0;
+    const acts = {
+      queueBacked: false,
+      localMutable: true,
+      cancel: async () => {
+        throw new Error("must not cancel");
+      },
+      dropHeld: () => {
+        dropped++;
+      },
+    };
+    await expect(coordinateQueuedMutation(acts)).resolves.toBe(true);
+    await expect(coordinateQueuedMutation({ ...acts, localMutable: false })).resolves.toBe(false);
+    expect(dropped).toBe(1);
   });
 });
 
-describe("steerQueuedMessage", () => {
-  it("restores queue-backed targets as queued and held-only targets as unsent", () => {
-    expect(steerRollbackState(true, "unsent")).toBe("queued");
-    expect(steerRollbackState(false, "unsent")).toBe("unsent");
-    expect(steerRollbackState(false, undefined)).toBe("unsent");
-  });
-
+describe("steerTurnIsCurrent", () => {
   it("refuses to steer a new working turn that replaced the one the user targeted", () => {
     expect(steerTurnIsCurrent(4, { turnEpoch: 5, working: true, deliverable: true })).toBe(false);
     expect(steerTurnIsCurrent(4, { turnEpoch: 4, working: true, deliverable: true })).toBe(true);
@@ -1425,474 +1349,6 @@ describe("steerQueuedMessage", () => {
     expect(steerTurnIsCurrent(4, undefined)).toBe(false);
     expect(steerTurnIsCurrent(4, { turnEpoch: 4, working: false, deliverable: true })).toBe(false);
     expect(steerTurnIsCurrent(4, { turnEpoch: 4, working: true, deliverable: false })).toBe(false);
-  });
-
-  it("leaves source state untouched when the resident target cannot be claimed", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => (events.push("claim"), false),
-      persist: async () => (events.push("persist"), true),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), true),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("stale");
-    expect(events).toEqual(["claim"]);
-  });
-
-  it("restores and releases a queue claim when durability is refused", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => (events.push("claim"), true),
-      persist: async () => (events.push("persist"), false),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), true),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("refused");
-    expect(events).toEqual(["claim", "persist", "restore", "release"]);
-  });
-
-  it("releases its queue claim even when persistence rejects", async () => {
-    const events: string[] = [];
-    const steering = coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => (events.push("claim"), true),
-      persist: async () => {
-        events.push("persist");
-        throw new Error("ipc gone");
-      },
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => true,
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    await expect(steering).rejects.toThrow("ipc gone");
-    expect(events).toEqual(["claim", "persist", "restore", "release"]);
-  });
-
-  it("restores and releases when the targeted turn changed during persistence", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => true,
-      persist: () => Promise.resolve(true),
-      current: () => ({ turnEpoch: 5, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), true),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("held");
-    expect(events).toEqual(["restore", "release"]);
-  });
-
-  it("restores and releases when the claimed row vanished before consumption", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => (events.push("claim"), true),
-      persist: async () => (events.push("persist"), true),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), false),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("stale");
-    expect(events).toEqual(["claim", "persist", "consume", "restore", "release"]);
-  });
-
-  it("consumes a queue claim only after persistence and turn revalidation", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => (events.push("claim"), true),
-      persist: async () => (events.push("persist"), true),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), true),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("started");
-    expect(events).toEqual(["claim", "persist", "consume"]);
-  });
-
-  it("restores only once when restoration itself rejects", async () => {
-    const events: string[] = [];
-    const steering = coordinateQueuedSteerStart(4, {
-      queueBacked: true,
-      claim: () => true,
-      persist: () => Promise.resolve(false),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => true,
-      restore: async () => {
-        events.push("restore");
-        throw new Error("restore failed");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    await expect(steering).rejects.toThrow("restore failed");
-    expect(events).toEqual(["restore", "release"]);
-  });
-
-  it("starts a held-only target without claiming the resident queue", async () => {
-    const events: string[] = [];
-    const outcome = await coordinateQueuedSteerStart(4, {
-      queueBacked: false,
-      claim: () => (events.push("claim"), false),
-      persist: async () => (events.push("persist"), true),
-      current: () => ({ turnEpoch: 4, working: true, deliverable: true }),
-      consumeClaim: () => (events.push("consume"), false),
-      restore: async () => {
-        events.push("restore");
-      },
-      releaseClaim: () => {
-        events.push("release");
-      },
-    });
-
-    expect(outcome).toBe("started");
-    expect(events).toEqual(["persist"]);
-  });
-
-  it("waits for the held strip to become durable before dequeueing or submitting", async () => {
-    let acknowledge!: (durable: boolean) => void;
-    let queue = [{ id: "q1", text: "first" }];
-    const events: string[] = [];
-    const acts: QueuedSteerActs = {
-      read: () => ({ held: [], queue, steerable: true }),
-      start: async () => {
-        events.push("persist");
-        const durable = await new Promise<boolean>((resolve) => {
-          acknowledge = resolve;
-        });
-        if (!durable) return "refused";
-        queue = [];
-        events.push("dequeue");
-        return "started";
-      },
-      submit: () => {
-        events.push("submit");
-        return Promise.resolve("delivered");
-      },
-      finish: async () => {
-        events.push("finish");
-      },
-    };
-
-    const steering = steerQueuedMessage("q1", new Set(), acts);
-    await Promise.resolve();
-    const beforeAcknowledgement = [...events];
-    const queueBeforeAcknowledgement = [...queue];
-    acknowledge(true);
-
-    await expect(steering).resolves.toBe("delivered");
-    expect(beforeAcknowledgement).toEqual(["persist"]);
-    expect(queueBeforeAcknowledgement).toEqual([{ id: "q1", text: "first" }]);
-    expect(events).toEqual(["persist", "dequeue", "submit", "finish"]);
-  });
-
-  it("does not complete a delivered steer until held cleanup is durable", async () => {
-    let acknowledgeCleanup!: () => void;
-    let cleanupStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      cleanupStarted = resolve;
-    });
-    const acts: QueuedSteerActs = {
-      read: () => ({
-        held: [{ id: "q1", text: "first", state: "unsent" }],
-        queue: [],
-        steerable: true,
-      }),
-      start: () => Promise.resolve("started"),
-      submit: () => Promise.resolve("delivered"),
-      finish: async () => {
-        cleanupStarted();
-        await new Promise<void>((resolve) => {
-          acknowledgeCleanup = resolve;
-        });
-      },
-    };
-
-    const steering = steerQueuedMessage("q1", new Set(), acts);
-    let settled = false;
-    void steering.then(() => {
-      settled = true;
-    });
-    await started;
-    await Promise.resolve();
-    const settledBeforeCleanup = settled;
-    acknowledgeCleanup();
-
-    await expect(steering).resolves.toBe("delivered");
-    expect(settledBeforeCleanup).toBe(false);
-  });
-
-  it("keeps the release queue and refuses submission when durability fails", async () => {
-    const queue = [{ id: "q1", text: "first" }];
-    const events: string[] = [];
-    const acts: QueuedSteerActs = {
-      read: () => ({ held: [], queue, steerable: true }),
-      start: async () => {
-        events.push("persist:refused");
-        return "refused";
-      },
-      submit: () => {
-        events.push("submit");
-        return Promise.resolve("delivered");
-      },
-      finish: async (id, outcome) => {
-        events.push(`finish:${id}:${outcome}`);
-      },
-    };
-
-    await expect(steerQueuedMessage("q1", new Set(), acts)).resolves.toBe("refused");
-
-    expect(queue).toEqual([{ id: "q1", text: "first" }]);
-    expect(events).toEqual(["persist:refused"]);
-  });
-
-  it("persists the ordered strip before dequeueing and submitting", async () => {
-    const state = steerHarness({
-      held: [heldMessage("q1", "first", "queued")],
-      queue: [{ id: "q1", text: "first" }],
-      submit: (message, delivery) => {
-        expect(message).toEqual({ id: "q1", text: "first" });
-        expect(delivery).toBe("steer");
-        expect(state.held()).toEqual([heldMessage("q1", "first", "sending")]);
-        expect(state.queue()).toEqual([]);
-        return Promise.resolve("delivered");
-      },
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
-
-    expect(state.held()).toEqual([]);
-    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
-  });
-
-  // The other half of the strip's VC-49 round trip: `heldStrip` keeps a held
-  // row's skill resources, and this pins that a steer's rebuilt submit row
-  // carries them too — a `/skill` message queued behind a live turn delivers
-  // what it resolved to at ⏎, not bare text.
-  it("hands a held row's skill resources to submit when steered", async () => {
-    const resources = [{ name: "logos", text: "# Logos" }];
-    const state = steerHarness({
-      held: [{ ...heldMessage("q1", "/logos go", "unsent"), resources }],
-      submit: (message, delivery) => {
-        expect(message).toEqual({ id: "q1", text: "/logos go", resources });
-        expect(delivery).toBe("steer");
-        return Promise.resolve("delivered");
-      },
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
-
-    expect(state.held()).toEqual([]);
-    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
-  });
-
-  // The attachments half of the same promise (VC-137): steering a queued row
-  // must deliver the file that was attached when ⏎ was pressed — not a copy
-  // the rebuild silently stripped to its words.
-  it("hands a held row's attachments to submit when steered", async () => {
-    const attachments = [blobLinkView()];
-    const state = steerHarness({
-      held: [{ ...heldMessage("q1", "look at this", "unsent"), attachments }],
-      submit: (message, delivery) => {
-        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
-        expect(delivery).toBe("steer");
-        return Promise.resolve("delivered");
-      },
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
-
-    expect(state.held()).toEqual([]);
-    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
-  });
-
-  // A held copy predating this feature (or one `beginQueuedSteer` has not yet
-  // touched) may carry no attachments field at all while the resident release
-  // queue still holds the row it came from — the queue observes an enqueue
-  // synchronously, before any held write. The queue's own copy is the fallback.
-  it("falls back to the queue copy's attachments when the held copy names none", async () => {
-    const attachments = [blobLinkView()];
-    const state = steerHarness({
-      held: [heldMessage("q1", "look at this", "unsent")],
-      queue: [{ id: "q1", text: "look at this", attachments }],
-      submit: (message, delivery) => {
-        expect(message).toEqual({ id: "q1", text: "look at this", attachments });
-        expect(delivery).toBe("steer");
-        return Promise.resolve("delivered");
-      },
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
-  });
-
-  it("restores a refused queue-only row between its original neighbors", async () => {
-    const state = steerHarness({
-      queue: [
-        { id: "q1", text: "first" },
-        { id: "q2", text: "second" },
-        { id: "q3", text: "third" },
-      ],
-      submit: () => Promise.resolve("refused"),
-    });
-
-    await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe("refused");
-
-    expect(state.held()).toEqual([
-      heldMessage("q1", "first", "queued"),
-      heldMessage("q2", "second", "unsent"),
-      heldMessage("q3", "third", "queued"),
-    ]);
-    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q2", "q3"]);
-    expect(new Set(state.strip().map((message) => message.id)).size).toBe(3);
-  });
-
-  it.each(["delivered", "recorded"] satisfies readonly QueuedSteerDelivery[])(
-    "retires only the queue-only target after a %s steer",
-    async (outcome) => {
-      const state = steerHarness({
-        queue: [
-          { id: "q1", text: "first" },
-          { id: "q2", text: "second" },
-          { id: "q3", text: "third" },
-        ],
-        submit: () => Promise.resolve(outcome),
-      });
-
-      await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe(outcome);
-
-      expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
-      expect(state.held()).toEqual([
-        heldMessage("q1", "first", "queued"),
-        heldMessage("q3", "third", "queued"),
-      ]);
-    },
-  );
-
-  it("leaves a queue-only source untouched when the Session is no longer steerable", async () => {
-    const state = steerHarness({
-      queue: [
-        { id: "q1", text: "first" },
-        { id: "q2", text: "second" },
-      ],
-      steerable: false,
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("held");
-
-    expect(state.held()).toEqual([]);
-    expect(state.queue().map((message) => message.id)).toEqual(["q1", "q2"]);
-    expect(state.events).toEqual([]);
-  });
-
-  it("leaves a held-only source untouched when the Session is no longer steerable", async () => {
-    const state = steerHarness({
-      held: [heldMessage("q1", "first", "unsent")],
-      steerable: false,
-    });
-
-    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("held");
-
-    expect(state.held()).toEqual([heldMessage("q1", "first", "unsent")]);
-    expect(state.queue()).toEqual([]);
-    expect(state.events).toEqual([]);
-  });
-
-  it("ignores a repeated steer while the first click owns the queue-only id", async () => {
-    let settle!: (outcome: "recorded") => void;
-    let submissions = 0;
-    const state = steerHarness({
-      queue: [
-        { id: "q1", text: "first" },
-        { id: "q2", text: "second" },
-        { id: "q3", text: "third" },
-      ],
-      submit: () => {
-        submissions += 1;
-        return new Promise<"recorded">((resolve) => {
-          settle = resolve;
-        });
-      },
-    });
-    const inFlight = new Set<string>();
-
-    const first = steerQueuedMessage("q2", inFlight, state.acts);
-    await expect(steerQueuedMessage("q2", inFlight, state.acts)).resolves.toBe("stale");
-
-    expect(submissions).toBe(1);
-    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
-    settle("recorded");
-    await expect(first).resolves.toBe("recorded");
-    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
-  });
-
-  it("retries a held-only row without moving either neighbor", async () => {
-    const state = steerHarness({
-      held: [
-        heldMessage("q1", "first", "unsent"),
-        heldMessage("q2", "second", "unsent"),
-        heldMessage("q3", "third", "unsent"),
-      ],
-    });
-
-    await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe("delivered");
-
-    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
-    expect(state.events).toEqual(["start:q1,q2,q3:q2", "submit:q2:steer", "finish:q2:delivered"]);
-  });
-
-  it("leaves a missing, already-sending, or already-released row untouched as stale", async () => {
-    const states = [
-      steerHarness(),
-      steerHarness({ held: [heldMessage("q1", "first", "sending")] }),
-      steerHarness({ held: [heldMessage("q1", "first", "queued")] }),
-    ];
-
-    await expect(steerQueuedMessage("q1", new Set(), states[0]!.acts)).resolves.toBe("stale");
-    await expect(steerQueuedMessage("q1", new Set(), states[1]!.acts)).resolves.toBe("stale");
-    await expect(steerQueuedMessage("q1", new Set(), states[2]!.acts)).resolves.toBe("stale");
-    expect(states.flatMap((state) => state.events)).toEqual([]);
   });
 });
 
@@ -1960,6 +1416,23 @@ describe("sameMessages", () => {
 });
 
 describe("heldStrip", () => {
+  it("uses host order and edited content rather than a local recovery copy", () => {
+    expect(
+      heldStrip(
+        [heldMessage("q2", "stale", "unsent"), heldMessage("legacy", "recovery", "unsent")],
+        [
+          { id: "q1", text: "first" },
+          { id: "q2", text: "host edit" },
+        ],
+        new Set(["q1"]),
+      ),
+    ).toEqual([
+      { id: "q1", text: "first" },
+      { id: "q2", text: "host edit" },
+      { id: "legacy", text: "recovery" },
+    ]);
+  });
+
   it("draws one row for a message both records name", () => {
     expect(
       heldStrip([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
@@ -1972,7 +1445,7 @@ describe("heldStrip", () => {
     expect(heldStrip([heldMessage("m1", "ship it", "sending")], [])).toEqual([]);
     expect(
       heldStrip([heldMessage("m1", "ship it", "sending")], [{ id: "m1", text: "ship it" }]),
-    ).toEqual([]);
+    ).toEqual([{ id: "m1", text: "ship it" }]);
   });
 
   // A crash between the box emptying and anything accepting the words. The
@@ -2109,13 +1582,13 @@ describe("settledHeldIds", () => {
   });
 
   it("retires the copy once the release queue has let go of it", () => {
-    expect(settledHeldIds([heldMessage("m1", "ship it", "queued")], [])).toEqual(["m1"]);
+    expect(settledHeldIds([heldMessage("m1", "ship it", "queued")], [])).toEqual([]);
   });
 
   it("keeps the copy while the queue still names it", () => {
     expect(
       settledHeldIds([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
-    ).toEqual([]);
+    ).toEqual(["m1"]);
   });
 
   it("leaves alone what the queue never had", () => {

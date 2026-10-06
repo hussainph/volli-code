@@ -1,15 +1,5 @@
-/**
- * Module-level registry of live chat clients, keyed by Session id. Living
- * OUTSIDE the React tree is the whole point, and it is the terminal registry's
- * point restated for a different kind of live thing: a Session's stream, its
- * fold and its queue must survive every incidental unmount — nav switches,
- * project switches, Settings, React StrictMode's dev double-mount — and only
- * ever die when the Session itself is closed.
- *
- * The React layer treats this as get-or-create: a chat view looks its client up
- * here on mount instead of constructing one, which is what makes a queued
- * message written before a tab was closed still leave when the harness frees up.
- */
+/** Resident stream clients survive incidental view unmounts. Sessions and
+ * pending follow-ups remain host-owned when every client is disposed. */
 import { ChatSessionClient, type ChatSessionClientDeps } from "./client";
 
 const clients = new Map<string, ChatSessionClient>();

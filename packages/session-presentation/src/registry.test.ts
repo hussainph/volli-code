@@ -25,7 +25,7 @@ function deps(): ChatSessionClientDeps {
     attaching: () => undefined,
     delivered: () => undefined,
     settle: () => undefined,
-    dequeue: () => undefined,
+    setQueue: () => undefined,
   } satisfies ChatSessionWrites;
   return {
     rpc: {
