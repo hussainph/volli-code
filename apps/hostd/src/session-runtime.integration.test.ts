@@ -23,14 +23,13 @@ import {
 import { insertProject, insertTicket, listRunsForTicket } from "@volli/host-core/db";
 import { createAutomationEngine, SqliteAutomationLedger } from "@volli/host-core/automations";
 import { isLiveHost, type LiveHostCore } from "@volli/host-core";
-import { resetRetentionWatcherForTest } from "@volli/host-core/maintenance";
 import {
   fileSecretKey,
   SecretStore,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,
 } from "@volli/host-core/secrets";
-import { testProject, testTicket } from "@volli/host-core/testing";
+import { resetRetentionWatcherForTest, testProject, testTicket } from "@volli/host-core/testing";
 import { startHostd, type RunningHostd } from "./hostd";
 import { headlessRuntimePaths } from "./runtime-paths";
 import { hostdVenue } from "./venue";

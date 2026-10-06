@@ -56,14 +56,12 @@ import {
   testProject,
   testTicket,
   type TestDb,
+  resetOrphanScanForTest,
+  resetRetentionWatcherForTest,
 } from "@volli/host-core/testing";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { insertProject, getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db";
-import {
-  resetOrphanScanForTest,
-  resetRetentionWatcherForTest,
-  createHostMaintenance,
-} from "@volli/host-core/maintenance";
+import { createHostMaintenance } from "@volli/host-core/maintenance";
 import { worktreeDeps } from "@volli/host-core/worktree";
 import { HEADLESS_ATTENTION } from "@volli/host-core/ports";
 

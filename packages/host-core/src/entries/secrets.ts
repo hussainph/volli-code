@@ -1,9 +1,10 @@
 /**
  * `@volli/host-core/secrets`: persistent Session secrets, the sealed credential module and its keys.
  *
- * An explicit list: a name is public because a client imports it. Add one
- * here when a client needs it; host-core's own files import the module
- * itself, never this entry. See the cluster map in the package README.
+ * An explicit list: a name is public because a client, or a client's test,
+ * imports it as this cluster's API. Add one here when a client needs it;
+ * host-core's own files import the module itself, never this entry. See
+ * the cluster map in the package README.
  */
 export {
   CREDENTIAL_INVENTORY_FILE_NAME,

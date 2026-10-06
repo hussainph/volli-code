@@ -88,8 +88,9 @@ vi.mock("../../../../packages/host-core/src/project-base-branch", async (importO
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch } = vi.hoisted(
-  () => ({
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch, appMode } =
+  vi.hoisted(() => ({
+    appMode: { isPackaged: false },
     handlers: new Map<string, (...args: never[]) => unknown>(),
     dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
     showItemInFolder: vi.fn(),
@@ -107,8 +108,7 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
           }
         | undefined,
     },
-  }),
-);
+  }));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -120,6 +120,9 @@ vi.mock("electron", () => ({
   // this — a stable stand-in path is enough since none of the mocked worktree
   // functions below actually read it.
   app: {
+    get isPackaged() {
+      return appMode.isPackaged;
+    },
     getPath: () => "/volli-test-userdata",
   },
   // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
@@ -240,8 +243,10 @@ import {
   testProject,
   testSession,
   type TestDb,
+  resetOrphanScanForTest,
+  resetWorktreeSnapshotsForTest,
+  resetDeletionLeasesForTest,
 } from "@volli/host-core/testing";
-import { resetOrphanScanForTest } from "@volli/host-core/maintenance";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
 import {
   worktreesHome,
@@ -264,10 +269,8 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-  resetWorktreeSnapshotsForTest,
   orphanCleanupEngine,
   acquireDeletionLease,
-  resetDeletionLeasesForTest,
 } from "@volli/host-core/worktree";
 import {
   updateTicketFieldsCommand,
@@ -330,6 +333,7 @@ function freshProjectDir(): string {
 }
 
 beforeEach(() => {
+  appMode.isPackaged = false;
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
@@ -4890,25 +4894,85 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     expect(
       ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
     ).toBeUndefined();
-    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:other", "1")).toEqual({
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "1")).toEqual({
       ok: true,
     });
+  });
+
+  it("refuses an unclassified renderer key (VC-574)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:unclassified", "1")).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get("volli:unclassified"),
+    ).toBeUndefined();
+  });
+
+  it("preserves unregistered renderer and legacy writes byte-for-byte when packaged (VC-574)", () => {
+    appMode.isPackaged = true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(invoke("volli:app-state-set", "volli:unclassified", "raw renderer value")).toEqual({
+        ok: true,
+      });
+      ctx.db.exec("DELETE FROM projects");
+      expect(
+        invoke("volli:legacy-import", {
+          projects: [],
+          appState: { "volli:unclassified-legacy": "raw legacy value" },
+          rawBackup: {},
+        }),
+      ).toMatchObject({ ok: true });
+      expect(
+        ctx.db
+          .prepare(
+            "SELECT key, value FROM app_state WHERE key LIKE 'volli:unclassified%' ORDER BY key",
+          )
+          .all(),
+      ).toEqual([
+        { key: "volli:unclassified", value: "raw renderer value" },
+        { key: "volli:unclassified-legacy", value: "raw legacy value" },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("refuses an unclassified legacy key and rolls back the import (VC-574)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    expect(
+      invoke("volli:legacy-import", {
+        projects: [],
+        appState: { "volli:ui": "registered", "volli:unclassified": "1" },
+        rawBackup: { "volli:ui": "source" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db
+        .prepare("SELECT key FROM app_state WHERE key IN (?, ?, ?)")
+        .all("volli:ui", "volli:unclassified", "volli:legacy-backup"),
+    ).toEqual([]);
   });
 
   it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
     ctx.db.exec("DELETE FROM projects");
     const result = invoke<{ ok: boolean }>("volli:legacy-import", {
       projects: [],
-      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:imported": "1" },
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:ui": "1" },
       rawBackup: {},
     });
     expect(result.ok).toBe(true);
     expect(
       ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
     ).toBeUndefined();
-    expect(
-      ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:imported'").get(),
-    ).toEqual({ value: "1" });
+    expect(ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get()).toEqual({
+      value: "1",
+    });
   });
 
   it("optional-object-arg shape: rejects a non-object argument", () => {

@@ -25,7 +25,7 @@ import { insertProject, SCHEMA_HEAD, MIN_READER_VERSION_KEY } from "@volli/host-
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
 import type { DetachedWorkPort } from "@volli/host-core/board";
-import { resetRetentionWatcherForTest } from "@volli/host-core/maintenance";
+import { resetRetentionWatcherForTest } from "@volli/host-core/testing";
 
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";

@@ -1,9 +1,10 @@
 /**
  * `@volli/host-core/maintenance`: keeping a host healthy: backup, recovery, process reaping, retention, quiet windows, login PATH and shutdown.
  *
- * An explicit list: a name is public because a client imports it. Add one
- * here when a client needs it; host-core's own files import the module
- * itself, never this entry. See the cluster map in the package README.
+ * An explicit list: a name is public because a client, or a client's test,
+ * imports it as this cluster's API. Add one here when a client needs it;
+ * host-core's own files import the module itself, never this entry. See
+ * the cluster map in the package README.
  */
 export { buildBackupDataDocument, validateBackupDataDocument } from "../backup/data-document";
 export { DatabaseRecovery, NO_CLEAN_BACKUP, RecoveryFailure } from "../database-recovery";
@@ -22,7 +23,6 @@ export {
 export {
   invalidateOrphanScan,
   orphanScanReport,
-  resetOrphanScanForTest,
   resolveCleanupPlan,
   startOrphanScan,
 } from "../orphan-scan";
@@ -35,9 +35,5 @@ export {
   revealWindow,
   sealQuietAppActivation,
 } from "../quiet-windows";
-export {
-  getRetentionWatcher,
-  resetRetentionWatcherForTest,
-  type RetentionReclaimSeams,
-} from "../retention-runtime";
+export { getRetentionWatcher, type RetentionReclaimSeams } from "../retention-runtime";
 export { settleShutdownBeforeDeadline } from "../shutdown-deadline";
