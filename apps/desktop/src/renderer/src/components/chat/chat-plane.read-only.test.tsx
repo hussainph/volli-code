@@ -172,6 +172,8 @@ describe("ChatPlane host read-only", () => {
     const send = container.querySelector<HTMLButtonElement>('[aria-label="Send"]');
     expect(send).not.toBeNull();
     expect(send!.disabled).toBe(true);
+    // Greyed and desaturated like every write control, not a quieter orange.
+    expect(send!.hasAttribute("data-host-read-only")).toBe(true);
     await act(async () => {
       send!.click();
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -188,6 +190,7 @@ describe("ChatPlane host read-only", () => {
     expect(textarea.disabled).toBe(false);
     expect(textarea.value).toBe(DRAFT);
     expect(send!.disabled).toBe(false);
+    expect(send!.hasAttribute("data-host-read-only")).toBe(false);
   });
 
   it("draws Running on at the plane root, never inside the composer dock", async () => {
@@ -211,5 +214,7 @@ describe("ChatPlane host read-only", () => {
     expect(container.querySelector('[data-slot="running-on"]')).toBeNull();
     expect(message(container).disabled).toBe(false);
     expect(message(container).value).toBe(DRAFT);
+    const send = container.querySelector('[aria-label="Send"]');
+    expect(send?.hasAttribute("data-host-read-only")).toBe(false);
   });
 });

@@ -201,11 +201,14 @@ function ValueTrigger({
 function LabelPill({
   name,
   color,
+  canWrite,
   removeRef,
   onRemove,
 }: {
   name: string;
   color: string;
+  /** Read-only (VC-576): the pill reads; its Remove stands down. */
+  canWrite: boolean;
   removeRef: (node: HTMLButtonElement | null) => void;
   onRemove: () => void;
 }) {
@@ -227,7 +230,8 @@ function LabelPill({
         aria-label={`Remove ${name}`}
         title={`Remove ${name}`}
         data-testid="ticket-rail-label-remove"
-        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        disabled={!canWrite}
+        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         onClick={onRemove}
       >
         <XIcon weight="bold" className="size-2.5" />
@@ -270,11 +274,14 @@ function LabelPill({
 function AddLabelControl({
   projectId,
   applied,
+  canWrite,
   addRef,
   onAdd,
 }: {
   projectId: string;
   applied: readonly string[];
+  /** Read-only (VC-576): Add stands down, like Status and Priority. */
+  canWrite: boolean;
   addRef: (node: HTMLButtonElement | null) => void;
   onAdd: (name: string) => void;
 }) {
@@ -305,7 +312,8 @@ function AddLabelControl({
           aria-label="Add label"
           title="Add label"
           data-testid="ticket-rail-label-add"
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          disabled={!canWrite}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         >
           {/* `bold` at 12px: the size tier where regular draws lighter than the
               text it sits among (CLAUDE.md), and this glyph now has no word
@@ -379,10 +387,12 @@ function AddLabelControl({
 function LabelRun({
   projectId,
   labels,
+  canWrite,
   onChange,
 }: {
   projectId: string;
   labels: readonly string[];
+  canWrite: boolean;
   onChange: (next: string[]) => void;
 }) {
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
@@ -422,6 +432,7 @@ function LabelRun({
           key={name}
           name={name}
           color={resolveLabelColor(projectLabels, name)}
+          canWrite={canWrite}
           removeRef={(node) => {
             if (node === null) removeRefs.current.delete(name);
             else removeRefs.current.set(name, node);
@@ -432,6 +443,7 @@ function LabelRun({
       <AddLabelControl
         projectId={projectId}
         applied={labels}
+        canWrite={canWrite}
         addRef={(node) => {
           addRef.current = node;
         }}
@@ -536,6 +548,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
             <LabelRun
               projectId={projectId}
               labels={ticket.labels}
+              canWrite={canWrite}
               onChange={(next) => {
                 if (!guardWrite(projectId)) return;
                 void useBoardStore.getState().setLabels(ticket.id, next);

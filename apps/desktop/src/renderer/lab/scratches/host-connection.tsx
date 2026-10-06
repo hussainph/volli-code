@@ -67,6 +67,12 @@ export const api = {
     index: () => Promise.resolve({ ok: true, files: [], truncated: false }),
     promptTemplates: () => Promise.resolve({ ok: true, templates: [], skills: [] }),
   },
+  // An opened ticket's Activity feed: empty and quiet.
+  tickets: {
+    ...(appApi["tickets"] as object),
+    events: () => Promise.resolve({ ok: true, events: [] }),
+  },
+  comments: { list: () => Promise.resolve({ ok: true, comments: [] }) },
   attachments: {
     list: () => Promise.resolve({ ok: true, blobs: [] }),
     materialized: () => Promise.resolve({ ok: true, links: [] }),

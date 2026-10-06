@@ -1675,6 +1675,7 @@ export function ChatPlane({
               modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
               working={working}
               ready={composable && canWrite}
+              hostReadOnly={!canWrite}
               contextUsage={contextUsage}
               queued={strip}
               onQueuedChange={onQueuedChange}

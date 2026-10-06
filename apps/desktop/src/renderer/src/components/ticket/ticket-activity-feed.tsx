@@ -43,7 +43,7 @@ import {
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
 import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
-import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { guardWrite, readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -377,6 +377,7 @@ function Composer({
           size="sm"
           className="prompt-primary"
           disabled={draft.trim() === "" || submitting || !canWrite}
+          {...readOnlyMark(canWrite)}
           aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >

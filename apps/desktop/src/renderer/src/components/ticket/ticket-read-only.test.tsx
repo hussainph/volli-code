@@ -248,6 +248,8 @@ describe("TicketActivityFeed read-only", () => {
     const textarea = query<HTMLTextAreaElement>('textarea[aria-label="Add a comment"]');
     await type(textarea, "  A held draft  ");
     expect(commentButton().disabled).toBe(true);
+    // Greyed and desaturated like every write control, not a quieter orange.
+    expect(commentButton().hasAttribute("data-host-read-only")).toBe(true);
     await enter(textarea, true);
     expect(doors.create).not.toHaveBeenCalled();
     expect(textarea.value).toBe("  A held draft  ");
@@ -257,6 +259,7 @@ describe("TicketActivityFeed read-only", () => {
     expect(note()).toBeNull();
     expectCommentActions(true);
     expect(commentButton().disabled).toBe(false);
+    expect(commentButton().hasAttribute("data-host-read-only")).toBe(false);
     expect(textarea.value).toBe("  A held draft  ");
     await enter(textarea, true);
     expect(doors.create).toHaveBeenCalledExactlyOnceWith({
