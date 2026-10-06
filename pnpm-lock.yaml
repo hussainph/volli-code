@@ -627,13 +627,13 @@ importers:
 
   packages/host-protocol:
     dependencies:
+      '@trpc/client':
+        specifier: ^11.18.0
+        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
       '@trpc/server':
         specifier: ^11.18.0
         version: 11.18.0(typescript@7.0.2)
     devDependencies:
-      '@trpc/client':
-        specifier: ^11.18.0
-        version: 11.18.0(@trpc/server@11.18.0(typescript@7.0.2))(typescript@7.0.2)
       '@types/node':
         specifier: 'catalog:'
         version: 26.3.0
@@ -668,6 +668,9 @@ importers:
 
   packages/session-presentation:
     dependencies:
+      '@volli/host-protocol':
+        specifier: workspace:*
+        version: link:../host-protocol
       '@volli/session-engine':
         specifier: workspace:*
         version: link:../session-engine
