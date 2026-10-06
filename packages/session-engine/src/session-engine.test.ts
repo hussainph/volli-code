@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
+  SessionEngineCommandConflictError,
   SessionEngineConflictError,
   SessionEngineNotFoundError,
   createSessionEngine,
@@ -187,7 +188,7 @@ describe("SessionEngine creation and explicit commands", () => {
         ...createRequest("command-promote"),
         requestedSessionId: "11111111-2222-4333-8444-555555555555",
       }),
-    ).rejects.toBeInstanceOf(SessionEngineConflictError);
+    ).rejects.toBeInstanceOf(SessionEngineCommandConflictError);
   });
 
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
@@ -283,7 +284,9 @@ describe("SessionEngine creation and explicit commands", () => {
       { ...createRequest(), parentSessionId: "other-parent" },
       { ...createRequest(), title: "different" },
     ]) {
-      await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
+      await expect(plane.createSession(request)).rejects.toBeInstanceOf(
+        SessionEngineCommandConflictError,
+      );
     }
     await plane.submit({
       commandId: "command-create-conflict",

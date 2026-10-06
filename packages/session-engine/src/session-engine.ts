@@ -1,3 +1,4 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
@@ -233,6 +234,24 @@ export class SessionEngineConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SessionEngineConflictError";
+  }
+}
+
+/**
+ * A command id the ledger already holds, sent again with a different intent:
+ * the one conflict a client causes, and the one the host protocol answers
+ * `CONFLICT` / `command-conflict` (HP § Commands, VC-564). Every other
+ * {@link SessionEngineConflictError} is a fact about the ledger, not the request.
+ */
+export class SessionEngineCommandConflictError
+  extends SessionEngineConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionEngineCommandConflictError";
   }
 }
 
@@ -1169,7 +1188,7 @@ function replayCreate(
 ): CreateSessionResult {
   const stored = transaction.getCommand(request.commandId);
   if (!stored || !sameCreateSessionRequest(stored, request)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
     );
   }
@@ -1177,7 +1196,7 @@ function replayCreate(
   // the id the command was first accepted under — a promote that replays with
   // a different client-minted id is a different intent, not the same one.
   if (request.requestedSessionId && stored.sessionId !== request.requestedSessionId) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${stored.id} was accepted for Session ${stored.sessionId}, not ${request.requestedSessionId}`,
     );
   }
@@ -1253,7 +1272,7 @@ function replaySubmit(
 ): SubmitSessionCommandResult {
   const stored = transaction.getCommand(command.id);
   if (!stored || !sameSessionCommandRequest(stored, command)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${command.id} was already accepted with different intent`,
     );
   }

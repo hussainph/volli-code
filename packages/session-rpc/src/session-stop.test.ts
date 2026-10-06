@@ -9,7 +9,7 @@ import {
   type SessionStreamFrame,
   isSessionStreamFrame,
 } from "@volli/session-engine";
-import { createSessionRouter, RpcDiagnosticLog } from "./index";
+import { createSessionRouter, LOCAL_DESKTOP_CALLER, RpcDiagnosticLog } from "./index";
 
 async function fixture(
   options: {
@@ -115,6 +115,7 @@ async function fixture(
     });
   }
   const caller = createSessionRouter().createCaller({
+    caller: LOCAL_DESKTOP_CALLER,
     runtime,
     diagnostics: new RpcDiagnosticLog(),
     transport: "electron-ipc",
