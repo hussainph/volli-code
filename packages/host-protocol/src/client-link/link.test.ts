@@ -31,6 +31,7 @@ import {
   type HostLink,
   type HostLinkOptions,
   type HostLinkState,
+  type HostLinkSubscription,
   type HostLinkSubscriptionHandlers,
 } from "./index";
 
@@ -208,7 +209,7 @@ async function startHost(overrides: Partial<HostState> = {}) {
 
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
-  applyWSSHandler({
+  const handler = applyWSSHandler({
     wss: server,
     router,
     createContext: ({ res, info }): Ctx => {
@@ -294,6 +295,10 @@ async function startHost(overrides: Partial<HostState> = {}) {
     },
     close(code: number, reason = "") {
       for (const connection of host.connections) connection.socket.close(code, reason);
+    },
+    /** tRPC's own `{ id: null, method: "reconnect" }` to every open client, as a draining host sends it. */
+    requestReconnect() {
+      handler.broadcastReconnectNotification();
     },
   };
 }
@@ -1318,11 +1323,14 @@ describe("one link per Workspace", () => {
 describe("a typed tRPC client over the link", () => {
   type Client = {
     echo: { query(input: string): Promise<string> };
-    record: { mutate(input: { id: string }): Promise<{ recorded: string }> };
+    record: {
+      mutate(input: { id: string }, opts?: { signal?: AbortSignal }): Promise<{ recorded: string }>;
+    };
     feed: {
       subscribe(
         input: undefined,
         handlers: {
+          signal?: AbortSignal;
           onStarted?(): void;
           onData?(data: unknown): void;
           onError?(error: unknown): void;
@@ -1391,6 +1399,310 @@ describe("a typed tRPC client over the link", () => {
     let completed = false;
     client.feed.subscribe(undefined, { onComplete: () => (completed = true) });
     await eventually(() => completed, "the completion");
+  });
+});
+
+describe("a typed call honours its AbortSignal on this side of the wire", () => {
+  async function typed(url: string) {
+    const { link: subject } = link(url);
+    const client = createTRPCClient({ links: [hostLinkTrpcLink(subject)] }) as unknown as {
+      record: {
+        mutate(input: { id: string }, opts?: { signal?: AbortSignal }): Promise<unknown>;
+      };
+      feed: {
+        subscribe(
+          input: undefined,
+          handlers: { signal?: AbortSignal; onStarted?(): void; onData?(data: unknown): void },
+        ): { unsubscribe(): void };
+      };
+    };
+    return { subject, client };
+  }
+
+  const ABORTED = {
+    code: "CLIENT_CLOSED_REQUEST",
+    message:
+      "The caller aborted the call; a mutation the host already received may have taken effect",
+  };
+
+  it("sends nothing for a call or a stream already aborted", async () => {
+    const started = await startHost();
+    const { subject, client } = await typed(started.url);
+    await until(subject, "ready");
+    const controller = new AbortController();
+    controller.abort();
+    const error = await client.record
+      .mutate({ id: "never" }, { signal: controller.signal })
+      .catch((caught: unknown) => caught);
+    expect((error as Error).name).toBe("TRPCClientError");
+    expect(readHostError(error)).toStrictEqual(ABORTED);
+    let opened = 0;
+    client.feed.subscribe(undefined, { signal: controller.signal, onStarted: () => (opened += 1) });
+    await sleep(50);
+    expect(opened).toBe(0);
+    expect(started.host.mutations).toStrictEqual([]);
+    expect(started.host.connections[0]!.log).toStrictEqual([
+      "protocol.welcome",
+      "welcome:answered",
+    ]);
+  });
+
+  it("settles a call aborted mid-flight at once, and stops a stream aborted mid-flight", async () => {
+    const started = await startHost();
+    const { subject, client } = await typed(started.url);
+    await until(subject, "ready");
+    started.host.hold = new Promise(() => {});
+    const controller = new AbortController();
+    const call = client.record
+      .mutate({ id: "sent" }, { signal: controller.signal })
+      .catch((caught: unknown) => caught);
+    await eventually(() => started.host.mutations.length === 1, "the mutation to arrive");
+    controller.abort();
+    // Settled locally; not a rollback: the host already ran it.
+    expect(readHostError(await call)).toStrictEqual(ABORTED);
+    expect(started.host.mutations).toStrictEqual([{ id: "sent" }]);
+    started.host.hold = null;
+    // A signal that outlives its answered call aborts nothing.
+    const later = new AbortController();
+    expect(await client.record.mutate({ id: "answered" }, { signal: later.signal })).toStrictEqual({
+      recorded: "answered",
+    });
+    later.abort();
+
+    const streaming = new AbortController();
+    const seen: unknown[] = [];
+    client.feed.subscribe(undefined, {
+      signal: streaming.signal,
+      onData: (data) => seen.push(data),
+    });
+    started.emit(1);
+    await eventually(() => seen.length === 1, "the event");
+    streaming.abort();
+    await eventually(() => started.host.openFeeds === 0, "the stream to stop");
+    started.emit(1);
+    await sleep(50);
+    expect(seen).toHaveLength(1);
+    expect(subject.getState().status).toBe("ready");
+  });
+});
+
+describe("a server-requested reconnect goes through the link", () => {
+  it("fails the mutation in flight and never resends it", async () => {
+    const started = await startHost();
+    const { link: subject, credentials, states } = link(started.url);
+    await until(subject, "ready");
+    started.host.hold = new Promise(() => {});
+    const pending = expectRejected(subject.mutate("record", { id: "held" }));
+    await eventually(() => started.host.mutations.length === 1, "the mutation to arrive");
+    started.requestReconnect();
+    expect(await pending).toMatchObject({
+      reason: "host-unreachable",
+      message:
+        "The connection to the host ended before it answered; whether the call took effect is unknown",
+    });
+    expect(states.find(({ status }) => status === "unreachable")).toMatchObject({
+      error: { reason: "host-unreachable", message: "The host asked this client to reconnect" },
+      closeCode: null,
+    });
+    await until(subject, "ready");
+    // Past tRPC's own retry delay: had its reconnect run, it would have resent by now.
+    await sleep(1_200);
+    expect(started.host.mutations).toStrictEqual([{ id: "held" }]);
+    expect(credentials).toHaveLength(2);
+    expect(started.host.connections).toHaveLength(2);
+    expect(started.host.connections[1]!.log).toStrictEqual([
+      "protocol.welcome",
+      "welcome:answered",
+    ]);
+  });
+
+  it("resubscribes only after a fresh credential's hello is welcomed", async () => {
+    const started = await startHost();
+    let issued = 0;
+    const { link: subject } = link(started.url, {
+      credential: () => {
+        issued += 1;
+        started.host.credentials.add(`token-${issued}`);
+        return `token-${issued}`;
+      },
+    });
+    await until(subject, "ready");
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    started.emit(1);
+    await eventually(() => feed.ids().length === 1, "the first event");
+    started.host.welcomeDelayMs = 100;
+    started.requestReconnect();
+    await until(subject, "unreachable");
+    started.emit(1);
+    await until(subject, "ready");
+    await eventually(() => feed.ids().length === 2, "the resumed stream");
+    await sleep(1_200);
+    expect(feed.ids()).toStrictEqual(["1", "2"]);
+    const [first, second] = started.host.connections.map(({ hello }) => hello!);
+    expect(started.host.connections).toHaveLength(2);
+    expect([first!.credential, second!.credential]).toStrictEqual(["token-1", "token-2"]);
+    expect(second!.nonce).not.toBe(first!.nonce);
+    expect(started.host.connections[1]!.log).toStrictEqual([
+      "protocol.welcome",
+      "welcome:answered",
+      "feed",
+      "feed:1",
+    ]);
+  });
+
+  it("fences a host whose epoch went backwards across it, and resubscribes nothing", async () => {
+    const started = await startHost({ fence: false });
+    const { link: subject } = link(started.url);
+    await until(subject, "ready");
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    await eventually(() => started.host.connections[0]!.log.includes("feed"), "the stream");
+    started.host.epoch = 1;
+    started.requestReconnect();
+    expect((await until(subject, "fenced")).error.reason).toBe("workspace-epoch-fenced");
+    await sleep(1_200);
+    expect(started.host.connections).toHaveLength(2);
+    expect(started.host.connections[1]!.log).toStrictEqual([
+      "protocol.welcome",
+      "welcome:answered",
+    ]);
+    expect(feed.last()).toMatchObject({
+      kind: "error",
+      value: { reason: "workspace-epoch-fenced" },
+    });
+  });
+
+  it("never builds a socket for a connection closed before tRPC built it", async () => {
+    const { url, host } = await startHost();
+    let built = 0;
+    class Counting extends NodeWebSocket {
+      constructor(address: string) {
+        super(address);
+        built += 1;
+      }
+    }
+    const { link: subject } = link(url, { WebSocket: Counting as unknown as typeof WebSocket });
+    // The credential answered and the attempt handed tRPC its hello; tRPC
+    // builds the socket a few microtasks on, after this close.
+    await Promise.resolve();
+    subject.close();
+    await sleep(1_200);
+    expect(built).toBe(0);
+    expect(host.connections).toHaveLength(0);
+  });
+});
+
+describe("a listener that moves the link on is final", () => {
+  it("closes from unreachable, and nothing reconnects", async () => {
+    const started = await startHost();
+    const { link: subject, credentials } = link(started.url);
+    await until(subject, "ready");
+    subject.subscribeState((state) => {
+      if (state.status === "unreachable") subject.close();
+    });
+    const later: string[] = [];
+    subject.subscribeState((state) => later.push(state.status));
+    started.proxy.down();
+    await eventually(() => subject.getState().status === "closed", "the close");
+    started.proxy.up();
+    await sleep(150);
+    expect(subject.getState().status).toBe("closed");
+    // A listener after the one that closed hears the newer state only.
+    expect(later).toStrictEqual(["closed"]);
+    expect(credentials).toHaveLength(1);
+    expect(started.host.connections).toHaveLength(1);
+  });
+
+  it("closes from connecting, and the attempt asks for nothing", async () => {
+    const started = await startHost();
+    const { link: subject, credentials } = link(started.url);
+    await until(subject, "ready");
+    subject.subscribeState((state) => {
+      if (state.status === "connecting") subject.close();
+    });
+    started.proxy.down();
+    await until(subject, "closed");
+    started.proxy.up();
+    await sleep(150);
+    expect(credentials).toHaveLength(1);
+    expect(started.host.connections).toHaveLength(1);
+  });
+
+  it("closes from ready, and opens no stream", async () => {
+    const started = await startHost();
+    const { link: subject } = link(started.url);
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    subject.subscribeState((state) => {
+      if (state.status === "ready") subject.close();
+    });
+    await until(subject, "closed");
+    await sleep(50);
+    expect(started.host.connections[0]!.log).toStrictEqual([
+      "protocol.welcome",
+      "welcome:answered",
+    ]);
+    expect(feed.seen).toStrictEqual([]);
+  });
+
+  it("reconnects from refused, and keeps the streams for the next welcome", async () => {
+    const started = await startHost({ credentials: new Set() });
+    const { link: subject } = link(started.url);
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    let retried = false;
+    subject.subscribeState((state) => {
+      if (state.status !== "refused" || retried) return;
+      retried = true;
+      started.host.credentials.add("good");
+      subject.reconnect();
+    });
+    started.emit(1);
+    await eventually(() => feed.ids().length === 1, "the stream after the retry");
+    expect(feed.seen.filter(({ kind }) => kind === "error")).toStrictEqual([]);
+  });
+
+  it("keeps the streams a failing one's handler reconnected for", async () => {
+    const started = await startHost();
+    const { link: subject } = link(started.url, { lastSeen: { epoch: 2, hostId: OTHER_HOST } });
+    const errors: unknown[] = [];
+    subject.subscribe("feed", undefined, {
+      onData: () => undefined,
+      onResnapshot: () => undefined,
+      onError: (error) => {
+        errors.push(readHostError(error).reason);
+        started.host.hostId = OTHER_HOST;
+        subject.reconnect();
+      },
+    });
+    const kept = record();
+    subject.subscribe("feed", undefined, kept.handlers);
+    started.emit(1);
+    await eventually(() => kept.ids().length === 1, "the kept stream");
+    expect(errors).toStrictEqual(["workspace-split-brain"]);
+    expect(kept.seen.filter(({ kind }) => kind === "error")).toStrictEqual([]);
+  });
+
+  it("opens a stream a ready listener subscribes exactly once", async () => {
+    const started = await startHost({ welcomeDelayMs: 40 });
+    const { link: subject } = link(started.url);
+    const feed = record();
+    let subscription: HostLinkSubscription | null = null;
+    subject.subscribeState((state) => {
+      if (state.status === "ready" && subscription === null) {
+        subscription = subject.subscribe("feed", undefined, feed.handlers);
+      }
+    });
+    started.emit(1);
+    await until(subject, "ready");
+    await eventually(() => feed.ids().length === 1, "the event");
+    await sleep(80);
+    expect(feed.ids()).toStrictEqual(["1"]);
+    expect(started.host.openFeeds).toBe(1);
+    expect(started.host.connections[0]!.log.filter((path) => path === "feed")).toHaveLength(1);
+    subscription!.unsubscribe();
+    await eventually(() => started.host.openFeeds === 0, "the stream to stop");
   });
 });
 

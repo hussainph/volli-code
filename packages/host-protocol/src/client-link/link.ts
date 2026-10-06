@@ -19,8 +19,9 @@
  * - **It never queues.** A call while the link is not `ready` fails at once
  *   with `host-unreachable`, and a call in flight when the socket dies fails
  *   with it too: one authority, never sync (Ruling 1). Each connection is its
- *   own `wsClient`, retired whole when the socket ends, so nothing it held
- *   can be sent on the next.
+ *   own `wsClient` and one socket, retired whole when the socket ends or the
+ *   host asks for a reconnect (before tRPC's own reconnect can resend what it
+ *   held), so nothing it held can be sent on the next.
  * - **It resumes subscriptions itself**, from each one's last tracked id, once
  *   the next welcome validates; `subscription-resnapshot-required` goes to the
  *   subscriber's `onResnapshot`, never to a silent reload.
@@ -203,7 +204,12 @@ const FENCE_REASONS: ReadonlySet<string> = new Set([
 const IDENTITY = { serialize: (value: unknown) => value, deserialize: (value: unknown) => value };
 const TRANSFORMER = { input: IDENTITY, output: IDENTITY };
 
-/** tRPC's own reconnect never runs (the link retires a client at its socket's first error or close); this only bounds it if it did. */
+/**
+ * tRPC's own reconnect never opens anything: the link retires a client at its
+ * socket's first error, close or server-requested reconnect, before tRPC hears
+ * it, and a retired Connection's captured constructor refuses. This only paces
+ * the loop tRPC runs until it reads that it was closed.
+ */
 const TRPC_RETRY_MS = 1_000;
 
 type Outcome =
@@ -258,18 +264,34 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function setState(next: HostLinkState): void {
+  /**
+   * Publishes `next`, and says whether it is still the state once every
+   * listener heard it. A listener may close, reconnect or subscribe
+   * synchronously; once it moved the link on, the rest hear the newer state
+   * from that change instead, and the caller must not continue the
+   * transition it started.
+   */
+  function setState(next: HostLinkState): boolean {
     state = next;
-    for (const listener of listeners) listener(next);
+    for (const listener of listeners) {
+      if (state !== next) return false;
+      listener(next);
+    }
+    return state === next;
   }
 
   /* ------------------------------------------------------------- attempts */
 
   async function connect(): Promise<void> {
+    /* v8 ignore next -- every timer that connects is cleared or token-guarded by close; this holds if one ever is not. */
+    if (state.status === "closed") return;
     clearTimeout(retryTimer);
+    clearTimeout(handshakeTimer);
     const token = ++attemptToken;
-    setState({ status: "connecting", attempt: failures });
+    // Armed before anyone hears `connecting`, so a listener's close clears it.
     handshakeTimer = setTimeout(() => {
+      /* v8 ignore next -- every transition clears this timer; the token holds if one ever does not. */
+      if (token !== attemptToken) return;
       fail(
         connection,
         unreachable(
@@ -277,6 +299,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         ),
       );
     }, timing.handshakeTimeoutMs);
+    if (!setState({ status: "connecting", attempt: failures })) return;
     let credential: string;
     try {
       credential = await options.credential();
@@ -311,9 +334,16 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     };
     connection = current;
     // The socket is captured as tRPC builds it, so the link hears its open,
-    // frames, error and close before tRPC's own listeners do.
+    // frames, error and close before tRPC's own listeners do. One Connection
+    // is one socket: tRPC never gets a second (its reconnect would resend
+    // every pending mutation and resubscribe on the old hello, unwelcomed),
+    // nor one for a Connection the link already retired.
     const Captured = new Proxy(Socket, {
       construct(target, args: [string]) {
+        if (current.retired || current.socket !== null) {
+          fail(current, unreachable("The connection to the host tried to open a second socket"));
+          throw new Error("A host link connection opens one socket, once");
+        }
         const socket = new target(...args);
         current.socket = socket;
         watch(current, socket);
@@ -364,8 +394,9 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     current.phase = "ready";
     failures = 0;
     lastSeen = { epoch: verdict.welcome.workspace.epoch, hostId: verdict.welcome.host.id };
-    setState({ status: "ready", welcome: verdict.welcome });
-    // Only now: no subscription reaches a host whose welcome this client has not judged.
+    if (!setState({ status: "ready", welcome: verdict.welcome })) return;
+    // Only now: no subscription reaches a host whose welcome this client has
+    // not judged. One a listener already opened is left as it is.
     for (const entry of entries) openSubscription(entry, current);
   }
 
@@ -377,10 +408,17 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     }
     clearTimeout(handshakeTimer);
     connection = null;
-    attemptToken += 1;
+    const token = ++attemptToken;
     if (outcome.status === "unreachable") {
       failures += 1;
       const delay = hostLinkBackoffDelay(failures, timing, random);
+      // Armed before anyone hears `unreachable`, so a listener's close or
+      // reconnect replaces it; and it only connects for the failure that armed it.
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        /* v8 ignore next -- every transition clears this timer; the token holds if one ever does not. */
+        if (token === attemptToken) void connect();
+      }, delay);
       setState({
         status: "unreachable",
         attempt: failures,
@@ -388,11 +426,10 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         closeCode: outcome.closeCode,
         retryAt: Date.now() + delay,
       });
-      retryTimer = setTimeout(() => void connect(), delay);
       return;
     }
-    setState(outcome);
-    endAll(new HostLinkError(outcome.error));
+    if (!setState(outcome)) return;
+    endAll(new HostLinkError(outcome.error), token);
   }
 
   /** No traffic after this: calls in flight fail, streams detach and wait for the next connection. */
@@ -412,8 +449,10 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     current.socket?.close();
   }
 
-  function endAll(error: HostLinkError): void {
+  /** Ends every stream with `error`, until a handler moves the link on (its reconnect keeps the rest). */
+  function endAll(error: HostLinkError, token: number): void {
     for (const entry of entries) {
+      if (token !== attemptToken) return;
       end(entry);
       entry.handlers.onError(error);
     }
@@ -431,7 +470,17 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   function watch(current: Connection, socket: WebSocket): void {
     socket.addEventListener("open", () => heard(current));
-    socket.addEventListener("message", () => heard(current));
+    socket.addEventListener("message", (event) => {
+      // tRPC would answer this with its own reconnect on this client, which
+      // resends pending mutations and resubscribes on the old hello. The link
+      // retires the Connection before tRPC reads the frame; its own retry
+      // asks the provider, says hello and judges the welcome again.
+      if (isReconnectRequest(event.data)) {
+        fail(current, unreachable("The host asked this client to reconnect"));
+        return;
+      }
+      heard(current);
+    });
     // A socket error is always the end of it; the close that follows changes nothing.
     socket.addEventListener("error", () =>
       fail(current, unreachable("The connection to the host failed")),
@@ -510,12 +559,25 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     });
   }
 
+  /**
+   * Opens `entry` on `current`, at most once: an Entry already attached (a
+   * listener subscribed it during `ready`), ended, or meeting a Connection
+   * that is no longer the live one stays as it is.
+   */
   function openSubscription(entry: Entry, current: Connection): void {
+    if (entry.ended || entry.detach !== null || current.retired || connection !== current) {
+      return;
+    }
     // A socket already closing would make tRPC open another for this
     // connection; the stream waits for the next welcome instead.
     if (current.socket!.readyState !== Socket.OPEN) return;
     entry.delivered = false;
-    const subscription = request(
+    // Attached before the request exists, so nothing re-enters and opens it
+    // twice. tRPC answers nothing synchronously: the binding is set by then.
+    let subscription!: { unsubscribe(): void };
+    const detach = (): void => subscription.unsubscribe();
+    entry.detach = detach;
+    subscription = request(
       current,
       "subscription",
       entry.path,
@@ -535,16 +597,19 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         }
       },
       error: (error) => {
+        /* v8 ignore next -- retiring or unsubscribing deletes the request first; only this open's own failure arrives. */
+        if (entry.detach !== detach) return;
         entry.detach = null;
         failed(entry, current, error);
       },
+      // Only this open's own completion ends the Entry: a detached one (retired,
+      // unsubscribed, or replaced by a newer open) completes on the way out.
       complete: () => {
-        if (current.retired || entry.ended) return;
+        if (entry.detach !== detach) return;
         end(entry);
         entry.handlers.onComplete?.();
       },
     });
-    entry.detach = () => subscription.unsubscribe();
   }
 
   function failed(entry: Entry, current: Connection, error: unknown): void {
@@ -647,6 +712,19 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   void connect();
   return link;
+}
+
+/** tRPC's server-to-client `{ id: null, method: "reconnect" }`, as its `wsClient` would decode it. */
+function isReconnectRequest(data: unknown): boolean {
+  // Cheap first: only a frame naming it can be it.
+  if (typeof data !== "string" || !data.includes('"reconnect"')) return false;
+  try {
+    return (JSON.parse(data) as { method?: unknown }).method === "reconnect";
+  } catch {
+    /* v8 ignore start -- tRPC's host sends only JSON text; tRPC's own decoder is the one that rejects anything else. */
+    return false;
+    /* v8 ignore stop */
+  }
 }
 
 /** A server's answer (it carries tRPC error data), read as a HostError; null for a transport failure. */

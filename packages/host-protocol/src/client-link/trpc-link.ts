@@ -8,6 +8,16 @@
  * client `onResnapshot` arrives as `onError` with an error
  * `isResnapshotRequired` recognizes; a store that wants the callback itself
  * calls {@link HostLink.subscribe}.
+ *
+ * An operation's `AbortSignal` is honoured on this side of the wire only. One
+ * already aborted sends nothing: a query or mutation rejects
+ * `CLIENT_CLOSED_REQUEST`, a subscription never opens. Aborted mid-flight, a
+ * query or mutation rejects the same way at once and whatever answer arrives
+ * later is dropped; a subscription stops its stream and calls nothing more,
+ * as tRPC's own `wsLink` does. It is not a rollback: a mutation
+ * the host already received may have taken effect, exactly as when the link
+ * drops mid-call, so a caller that must know re-reads, or retries with the
+ * same `commandId`.
  */
 import { TRPCClientError, type TRPCLink } from "@trpc/client";
 import type { AnyRouter } from "@trpc/server";
@@ -21,7 +31,9 @@ export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPC
   return () =>
     ({ op }) =>
       observable((observer) => {
+        const signal = op.signal ?? null;
         if (op.type === "subscription") {
+          if (signal?.aborted === true) return undefined;
           const subscription = link.subscribe(op.path, op.input, {
             onStarted: () => observer.next({ result: { type: "started" } }),
             onData: (data) => observer.next({ result: { type: "data", data } }),
@@ -29,10 +41,21 @@ export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPC
             onError: (error) => observer.error(clientError(error)),
             onComplete: () => observer.complete(),
           });
-          return () => subscription.unsubscribe();
+          const stop = (): void => subscription.unsubscribe();
+          signal?.addEventListener("abort", stop, { once: true });
+          return () => {
+            signal?.removeEventListener("abort", stop);
+            subscription.unsubscribe();
+          };
         }
-        // An answer that lands after the caller let go reaches an observer
-        // nobody holds; the call itself is never cancelled on the host.
+        if (signal?.aborted === true) {
+          observer.error(clientError(aborted()));
+          return undefined;
+        }
+        // An answer that lands after the caller let go (or aborted) reaches
+        // an observer that is done; the call itself is never cancelled on the host.
+        const abort = (): void => observer.error(clientError(aborted()));
+        signal?.addEventListener("abort", abort, { once: true });
         const call =
           op.type === "query" ? link.query(op.path, op.input) : link.mutate(op.path, op.input);
         call.then(
@@ -42,8 +65,17 @@ export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPC
           },
           (error: unknown) => observer.error(clientError(error)),
         );
-        return undefined;
+        return () => signal?.removeEventListener("abort", abort);
       });
+}
+
+/** The caller let go; the host is not told, and a mutation it already received may have run. */
+function aborted(): HostError {
+  return {
+    code: "CLIENT_CLOSED_REQUEST",
+    message:
+      "The caller aborted the call; a mutation the host already received may have taken effect",
+  };
 }
 
 /** The host's own errors pass through; the link's become the same `data.hostError` shape. */
