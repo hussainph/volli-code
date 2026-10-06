@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  symlinkSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -30,6 +38,7 @@ import {
   assertNoPendingDatabaseRecovery,
   beginDatabaseRecovery,
   finishDatabaseRecovery,
+  hasPendingDatabaseRecovery,
   readDatabaseRecoveryIntent,
   recoveryPendingPath,
 } from "./recovery-pending";
@@ -94,6 +103,37 @@ describe("durable recovery intent", () => {
       "--from <same-source> --schema <same-schema> --yes",
     );
     expect(existsSync(recoveryPendingPath(path))).toBe(true);
+  });
+
+  it("returns no metadata for a missing marker", () => {
+    const path = profile();
+    expect(readDatabaseRecoveryIntent(path)).toBeUndefined();
+    expect(hasPendingDatabaseRecovery(path)).toBe(false);
+    expect(paths.size).toBe(0);
+  });
+
+  it.each([false, true])("does not follow a marker symlink, even if dangling (%s)", (dangling) => {
+    const path = profile();
+    const target = join(directory!, "marker-target");
+    const marker = JSON.stringify({ preservedDirectory: "must-not-be-read" });
+    if (!dangling) writeFileSync(target, marker);
+    symlinkSync(target, recoveryPendingPath(path));
+    expect(readDatabaseRecoveryIntent(path)).toBeUndefined();
+    expect(hasPendingDatabaseRecovery(path)).toBe(true);
+    expect(() => assertNoPendingDatabaseRecovery(path)).toThrow(
+      "--from <same-source> --schema <same-schema> --yes",
+    );
+    if (!dangling) expect(readFileSync(target, "utf8")).toBe(marker);
+    expect(paths.size).toBe(0);
+  });
+
+  it("keeps a non-file marker fenced and closes its descriptor without reading it", () => {
+    const path = profile();
+    mkdirSync(recoveryPendingPath(path));
+    expect(readDatabaseRecoveryIntent(path)).toBeUndefined();
+    expect(hasPendingDatabaseRecovery(path)).toBe(true);
+    expect(() => assertNoPendingDatabaseRecovery(path)).toThrow("interrupted");
+    expect(paths.size).toBe(0);
   });
 
   it("ignores invalid retry fields while preserving the original evidence directory", () => {
