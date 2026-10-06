@@ -124,6 +124,7 @@ export default defineConfig({
         // typed inventory. A branch wrong here is a lost revocation, a torn
         // store, or a save sealed over credentials a lost key still opens.
         "src/secrets/credential-lock.ts",
+        "src/secrets/credential-wait.ts",
         "src/secrets/durable-file.ts",
         "src/secrets/sealed-document.ts",
         "src/secrets/credential-key-id.ts",

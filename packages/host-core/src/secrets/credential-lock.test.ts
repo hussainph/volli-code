@@ -64,7 +64,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("credential lock in one process", { timeout: 30_000 }, () => {
+describe("credential lock in one process", () => {
   it("creates an empty 0600 lock file beside the sealed file, and never writes it", () => {
     const lock = credentialLockFor(join(dir, "host-credentials.enc"));
     locks.push(lock);
@@ -120,6 +120,24 @@ describe("credential lock in one process", { timeout: 30_000 }, () => {
     open();
     await holder;
     expect(await after).toBe("after");
+  });
+
+  it("cancels before an attempt or during a busy pause, without another acquisition", async () => {
+    const before = new AbortController();
+    before.abort(new Error("cancelled before"));
+    const attempt = vi.fn(() => {
+      throw new CredentialLockBusyError();
+    });
+    await expect(retryWhileBusy(attempt, 10_000, before.signal)).rejects.toThrow(
+      "cancelled before",
+    );
+    expect(attempt).not.toHaveBeenCalled();
+    const during = new AbortController();
+    const pending = retryWhileBusy(attempt, 10_000, during.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    during.abort();
+    await cancelled;
+    expect(attempt).toHaveBeenCalledTimes(1);
   });
 
   it("excludes a second connection to the same file through another path", async () => {
@@ -267,7 +285,7 @@ describe("credential lock in one process", { timeout: 30_000 }, () => {
     const child = startChild({ kind: "hold", lock: lock.path, ms: 0 });
     expect(await child.next()).toEqual({ held: true });
     await child.exited;
-  });
+  }, 30_000);
 
   it("does nothing on close while held, and closes after", () => {
     const lock = lockAt();
@@ -278,8 +296,8 @@ describe("credential lock in one process", { timeout: 30_000 }, () => {
   });
 });
 
-// Each test starts real `node` children; a loaded machine starts them slowly.
-describe("credential lock across processes", { timeout: 30_000 }, () => {
+// Tests starting real `node` children get longer timeouts: a loaded machine starts them slowly.
+describe("credential lock across processes", () => {
   it("excludes another process until it releases, and an async waiter then gets it", async () => {
     const lock = lockAt();
     const child = startChild({ kind: "hold", lock: lock.path, ms: 300 });
@@ -290,7 +308,7 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
     expect(await lock.with(() => "mine", 5_000)).toBe("mine");
     expect(Date.now() - started).toBeGreaterThan(50);
     expect(await child.next()).toEqual({ released: true });
-  });
+  }, 30_000);
 
   it("leaves no journal beside the lock while held, and locks in a read-only directory", async () => {
     const lock = lockAt();
@@ -313,7 +331,7 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
     } finally {
       chmodSync(dir, 0o700);
     }
-  });
+  }, 30_000);
 
   it("never waits synchronously: refuses at once, and retries only asynchronously", async () => {
     const lock = lockAt();
@@ -351,7 +369,7 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
       holding.process.kill("SIGKILL");
       await holding.exited;
     }
-  });
+  }, 30_000);
 
   it("follows a lock file that was unlinked and recreated, so no two processes split", async () => {
     const lock = lockAt();
@@ -372,7 +390,7 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
     lock.withSync(() => rmSync(lock.path));
     expect(lock.withSync(() => "made again")).toBe("made again");
     expect(lstatSync(lock.path).isFile()).toBe(true);
-  });
+  }, 30_000);
 
   it("treats a lock file replaced on every attempt as busy", () => {
     const lock = lockAt();
@@ -400,7 +418,7 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
     expect(await retryWhileBusy(() => lock.withSync(() => "after the crash"), 1_000)).toBe(
       "after the crash",
     );
-  });
+  }, 30_000);
 
   it("is not kept by a process the holder started", async () => {
     const lock = lockAt();
@@ -415,5 +433,5 @@ describe("credential lock across processes", { timeout: 30_000 }, () => {
     } finally {
       process.kill(sleeper, "SIGKILL");
     }
-  });
+  }, 30_000);
 });
