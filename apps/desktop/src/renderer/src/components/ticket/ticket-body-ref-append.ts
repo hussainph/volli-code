@@ -14,6 +14,7 @@
  * ticket workspace.
  */
 import { appendFileRef } from "@renderer/editor/file-refs";
+import { readTicketBody } from "@renderer/lib/ticket-body-read";
 import { toastError } from "@renderer/lib/toast";
 import { isTicketBodyLoaded, useBoardStore } from "@renderer/stores/board";
 
@@ -26,10 +27,7 @@ export interface TicketBodyRefGateway {
 }
 
 const defaultGateway: TicketBodyRefGateway = {
-  readBody: async (input) => {
-    const result = await window.api.tickets.body(input);
-    return result.ok ? { ok: true, body: result.body } : { ok: false };
-  },
+  readBody: readTicketBody,
   reportFailure: (message) => {
     toastError(message);
   },

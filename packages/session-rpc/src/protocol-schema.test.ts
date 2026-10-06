@@ -1,5 +1,5 @@
 import { HOST_BASE_OPERATIONS, HOST_FEATURE_OPERATIONS } from "@volli/host-protocol";
-import { CATALOG_ENTRIES } from "@volli/shared";
+import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 
@@ -52,9 +52,21 @@ describe("committed protocol schema projection", () => {
 
   it("includes desktop-only providers without demanding public registry rows", () => {
     expect(
-      generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], []).tiers.desktop!
-        .read,
+      generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], [{ key: "read" }])
+        .tiers.desktop!.read,
     ).toMatchObject({ kind: "query", input: { type: "string" }, output: { type: "string" } });
+  });
+
+  it("publishes exactly the declared desktop-only entries", () => {
+    expect(Object.keys(generateProtocolSchema().tiers.desktop!).toSorted()).toEqual(
+      DESKTOP_ENTRIES.map(({ key }) => key).toSorted(),
+    );
+    expect(() =>
+      generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], []),
+    ).toThrow("Schema/desktop-tier mismatch: missing ; extra read");
+    expect(() => generateProtocolSchema([], [], [{ key: "read" }])).toThrow(
+      "Schema/desktop-tier mismatch: missing read; extra",
+    );
   });
 
   it("refuses incomplete or duplicate providers and unpublishable schemas", () => {
@@ -69,6 +81,7 @@ describe("committed protocol schema projection", () => {
           { tier: "desktop", procedures: () => sample },
         ],
         [],
+        [{ key: "read" }],
       ),
     ).toThrow("Duplicate schema provider");
     expect(() =>
@@ -80,6 +93,7 @@ describe("committed protocol schema projection", () => {
           },
         ],
         [],
+        [{ key: "opaque" }],
       ),
     ).toThrow("Custom types cannot be represented");
   });

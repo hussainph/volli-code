@@ -51,6 +51,7 @@ import {
   type HiddenModelRef,
   type HostHandler,
   type HostHandlerKey,
+  type Label,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelPickerView,
@@ -80,6 +81,8 @@ import {
 } from "../session-runtime/model-access-preferences";
 import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
 import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
+import { setLabelColor } from "../db/labels-repo";
+import { getTicketBody } from "../db/tickets-repo";
 import { executeTicketMove, type TicketMoveCommandInput } from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import type { WorktreePorts } from "../worktree/types";
@@ -189,6 +192,13 @@ export interface HostHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  /**
+   * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
+   * placement-derived policy. An unknown ticket or label is `null`, the answer
+   * the channel it replaced gave as `{ ok: false }`.
+   */
+  readonly "ticket.body": HostHandler<{ ticketId: string }, string | null>;
+  readonly "label.setColor": HostHandler<{ labelId: string; color: string | null }, Label | null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -437,5 +447,10 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    // The desktop-only tier: the bodies `volli:ticket-body` and
+    // `volli:label-set-color` had in `data-ipc.ts`, moved, not copied.
+    "ticket.body": ({ ticketId }) => getTicketBody(board(), ticketId) ?? null,
+    "label.setColor": ({ labelId, color }) =>
+      setLabelColor(board(), labelId, color, now()) ?? null,
   };
 }

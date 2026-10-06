@@ -85,6 +85,30 @@ test("bounds, objects, arrays, literal alternatives and unknown assertions fail 
   assert.deepEqual(schemaChanges(text, true), []);
 });
 
+test("a desktop-only entry leaves its tier only by promotion, under its key, compatibly", () => {
+  const before = protocol();
+  const read = before.tiers.desktop.read;
+  const promoted = (entry) => ({
+    ...before,
+    tiers: { public: { ...before.tiers.public, read: entry }, desktop: {} },
+  });
+  assert.deepEqual(protocolChanges(before, promoted(read)), []);
+  assert.deepEqual(protocolChanges(before, promoted({ ...read, kind: "mutation" })), [
+    { path: "/tiers/desktop/read/kind", reason: "operation kind changed" },
+  ]);
+  assert.deepEqual(protocolChanges(before, { ...before, tiers: { ...before.tiers, desktop: {} } }), [
+    { path: "/tiers/desktop/read", reason: "catalog entry removed" },
+  ]);
+  // A public entry never leaves for the desktop tier.
+  const demoted = {
+    ...before,
+    tiers: { public: {}, desktop: { ...before.tiers.desktop, ...before.tiers.public } },
+  };
+  assert.deepEqual(protocolChanges(before, demoted), [
+    { path: "/tiers/public/session.snapshot", reason: "catalog entry removed" },
+  ]);
+});
+
 test("feature sets cannot widen or shrink; operation kinds cannot change", () => {
   const next = protocol();
   next.features.sessions.push("board.read");
