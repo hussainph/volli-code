@@ -34,15 +34,12 @@ function vocabulary(node: Node): string {
 }
 
 describe("explicit tolerant-read output unions", () => {
-  const open = [
-    eventSchema.shape.payload,
-    receiptSchema,
-    streamEmissionWireSchema.options[1].shape.delta,
-    attentionSchema,
-  ];
+  const open = [eventSchema.shape.payload, streamEmissionWireSchema.options[1].shape.delta];
 
-  it("marks exactly payload kind, receipt status, overlay op and attention kind", () => {
-    const expectedDiscriminators = ["kind", "status", "op", "kind"];
+  it("marks only payload kind and overlay op; receipt status and attention kind stay closed", () => {
+    const expectedDiscriminators = ["kind", "op"];
+    expect(markedUnions(z.toJSONSchema(receiptSchema))).toEqual([]);
+    expect(markedUnions(z.toJSONSchema(attentionSchema))).toEqual([]);
     open.forEach((schema, index) => {
       const document = z.toJSONSchema(schema);
       expect(document[marker]).toBe(expectedDiscriminators[index]);
@@ -63,9 +60,9 @@ describe("explicit tolerant-read output unions", () => {
     expect(markedUnions(stopped)).toEqual([]);
   });
 
-  it("publishes only these four vocabularies on outputs, never on inputs", () => {
+  it("publishes only these two vocabularies on outputs, never on inputs", () => {
     const expected = new Set(open.map((schema) => vocabulary(z.toJSONSchema(schema))));
-    expect(expected.size).toBe(4);
+    expect(expected.size).toBe(2);
     const found = new Set<string>();
     for (const procedure of Object.values(sessionProcedureSchemas())) {
       expect(markedUnions(z.toJSONSchema(procedure.input, { io: "input" }))).toEqual([]);

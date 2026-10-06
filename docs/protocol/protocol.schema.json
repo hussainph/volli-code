@@ -2440,8 +2440,7 @@
                       ],
                       "type": "object"
                     }
-                  ],
-                  "x-volli-open-union": "status"
+                  ]
                 },
                 {
                   "type": "null"
@@ -3283,8 +3282,7 @@
                             ],
                             "type": "object"
                           }
-                        ],
-                        "x-volli-open-union": "kind"
+                        ]
                       },
                       "type": "array"
                     },
@@ -3832,8 +3830,7 @@
                               ],
                               "type": "object"
                             }
-                          ],
-                          "x-volli-open-union": "kind"
+                          ]
                         },
                         {
                           "type": "null"
@@ -7453,8 +7450,7 @@
                                     ],
                                     "type": "object"
                                   }
-                                ],
-                                "x-volli-open-union": "kind"
+                                ]
                               },
                               "kind": {
                                 "const": "attention.raised",
@@ -8055,8 +8051,7 @@
                                     ],
                                     "type": "object"
                                   }
-                                ],
-                                "x-volli-open-union": "status"
+                                ]
                               }
                             },
                             "required": [
@@ -9000,8 +8995,7 @@
                             ],
                             "type": "object"
                           }
-                        ],
-                        "x-volli-open-union": "kind"
+                        ]
                       },
                       "type": "array"
                     },
@@ -9549,8 +9543,7 @@
                               ],
                               "type": "object"
                             }
-                          ],
-                          "x-volli-open-union": "kind"
+                          ]
                         },
                         {
                           "type": "null"
@@ -13141,8 +13134,7 @@
                                   ],
                                   "type": "object"
                                 }
-                              ],
-                              "x-volli-open-union": "kind"
+                              ]
                             },
                             "kind": {
                               "const": "attention.raised",
@@ -13743,8 +13735,7 @@
                                   ],
                                   "type": "object"
                                 }
-                              ],
-                              "x-volli-open-union": "status"
+                              ]
                             }
                           },
                           "required": [
@@ -14655,8 +14646,7 @@
                       ],
                       "type": "object"
                     }
-                  ],
-                  "x-volli-open-union": "status"
+                  ]
                 },
                 {
                   "type": "null"
