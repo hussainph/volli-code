@@ -288,6 +288,17 @@ describe("install --system", () => {
     expect(installedReleases(layout)).toHaveLength(2);
   });
 
+  it.skipIf(process.getuid!() === 0)("refuses a release it cannot read whole to name", () => {
+    const layout = systemLayout();
+    const unknown = release("1.0.0", "unknown");
+    writeFileSync(join(unknown, "secret"), "x", { mode: 0o000 });
+    chmodSync(join(unknown, "secret"), 0o000);
+    expect(() => runInstall(SYSTEM, ports(layout, { ownRelease: unknown }))).toThrow(
+      expect.objectContaining({ code: "EACCES" }),
+    );
+    expect(installedReleases(layout)).toEqual([]);
+  });
+
   it("copies nothing when run from the installed release itself", () => {
     const layout = systemLayout();
     runInstall(SYSTEM, ports(layout));

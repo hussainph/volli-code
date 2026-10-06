@@ -40,10 +40,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   cpSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -398,12 +402,24 @@ function treeDigest(root: string): string {
   const hash = createHash("sha256");
   const walk = (relative: string): void => {
     const path = join(root, relative);
-    const stat = lstatSync(path);
-    hash.update(`${relative}\0${stat.mode & 0o777}\0`);
-    if (stat.isSymbolicLink()) hash.update(`link\0${readlinkSync(path)}\0`);
-    else if (stat.isDirectory()) {
-      for (const entry of readdirSync(path).toSorted()) walk(join(relative, entry));
-    } else hash.update(readFileSync(path));
+    let fd: number;
+    try {
+      // Never through a link: a link is hashed as its target's name.
+      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ELOOP") throw error;
+      hash.update(`${relative}\0link\0${readlinkSync(path)}\0`);
+      return;
+    }
+    try {
+      const stat = fstatSync(fd);
+      hash.update(`${relative}\0${stat.mode & 0o777}\0`);
+      if (stat.isDirectory()) {
+        for (const entry of readdirSync(path).toSorted()) walk(join(relative, entry));
+      } else hash.update(readFileSync(fd));
+    } finally {
+      closeSync(fd);
+    }
   };
   walk(".");
   return hash.digest("hex");
