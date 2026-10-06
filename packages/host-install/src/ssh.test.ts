@@ -450,3 +450,24 @@ describe("a ControlMaster directory the caller gives", () => {
     ).toThrow(UnsafeControlDirError);
   });
 });
+
+// CodeQL js/polynomial-redos: stderr is the remote's, so classifying it stays linear.
+describe("classifying hostile stderr", () => {
+  it("answers at once on long repetitions of the patterns it looks for", () => {
+    const started = performance.now();
+    expect(
+      classifySshFailure({ code: 255, stdout: "", stderr: "Host key for ".repeat(50_000) }),
+    ).toMatchObject({ kind: "ssh-failed" });
+    expect(
+      classifySshFailure({ code: 255, stdout: "", stderr: "Permission denied ((".repeat(50_000) }),
+    ).toMatchObject({ kind: "ssh-failed" });
+    expect(
+      classifySshFailure({
+        code: 255,
+        stdout: "",
+        stderr: "deploy@box: Permission denied (password,keyboard-interactive).",
+      }),
+    ).toMatchObject({ kind: "password-only" });
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});
