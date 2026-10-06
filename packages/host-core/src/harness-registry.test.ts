@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -87,13 +88,37 @@ describe("manifest descriptor safety", () => {
     expect(scan.manifests[0]?.manifestSha256).toBe(createHash("sha256").update(raw).digest("hex"));
   });
 
-  it.each([false, true])("refuses a leaf symlink (dangling: %s)", async (dangling) => {
-    const target = join(root, "target");
-    if (!dangling) await writeFile(target, raw);
+  it("loads a leaf-symlinked manifest from a dotfile repo", async () => {
+    const dotfiles = join(root, "my-harness", "dotfiles");
+    await mkdir(dotfiles);
+    const target = join(dotfiles, "harness.json");
+    await writeFile(target, raw);
     await symlink(target, path);
-    expect(await scanHarnessManifests(root)).toEqual({ manifests: [], gap: "manifest-unreadable" });
-    if (!dangling) expect(await readFile(target, "utf8")).toBe(raw);
+    const scan = await scanHarnessManifests(root);
+    expect(scan.gap).toBeNull();
+    expect(scan.manifests.map((manifest) => manifest.slug)).toEqual(["my-harness"]);
+    expect(scan.manifests[0]?.adapter?.id).toBe("my-harness");
+    expect(scan.manifests[0]?.manifestSha256).toBe(createHash("sha256").update(raw).digest("hex"));
+    expect(await readFile(target, "utf8")).toBe(raw);
   });
+
+  it("treats a dangling manifest symlink as absent", async () => {
+    await symlink(join(root, "missing"), path);
+    expect(await scanHarnessManifests(root)).toEqual({ manifests: [], gap: null });
+  });
+
+  it.each(["directory", "fifo"])(
+    "refuses a leaf symlink to a %s without reading or hanging",
+    async (kind) => {
+      const target = join(root, "target");
+      if (kind === "directory") await mkdir(target);
+      else execFileSync("mkfifo", [target]);
+      await symlink(target, path);
+      expect(await scanHarnessManifests(root)).toEqual({ manifests: [], gap: null });
+      expect(state.bytesRequested).toEqual([]);
+    },
+    5_000,
+  );
 
   it("reads the checked inode when the pathname becomes a symlink after fstat", async () => {
     await writeFile(path, raw);

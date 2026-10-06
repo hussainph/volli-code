@@ -45,9 +45,9 @@ not proof of a newly introduced defect.
 | --- | --- | --- |
 | 58, 59 | ReDoS / `agent-tools.ts` | Fix both trailing-slash regexes with a backwards character scan; adversarial long slash-run timing and compatibility tests. |
 | 55 | Git argument injection / `worktree/git.ts` | Admit only the local command/option vocabulary used by production callers, reject option-prefixed refs and worktree operands, and add command-appropriate `--` / `--end-of-options` boundaries. Literal option-looking filenames remain valid only behind `ls-files --`. Real-git compatibility and malicious-input tests cover both runners. |
-| 56 | Filesystem race / `blob-store.ts` | Validate existing blobs with no-follow descriptors; write a new exclusive descriptor and atomically hard-link complete bytes without replacing an existing destination. Reads validate and consume the same descriptor. |
+| 56 | Filesystem race / `blob-store.ts` | Validate existing blobs with no-follow descriptors; write a new exclusive staging descriptor and publish complete bytes atomically. Prefer no-clobber hard links, falling back to rename when links are unsupported; equal-hash destinations contain identical bytes and open readers retain their inode. Preserve default file mode (0666 & ~umask), and best-effort sweep staging files older than one hour on first store use. Reads validate and consume the same descriptor. |
 | 57 | Filesystem race / `worktree/change-set.ts` | Inspect and read one no-follow descriptor for untracked file previews, closing it on every exit. |
-| 61 | Filesystem race / `harness-registry.ts` | Inspect and read a manifest through one no-follow descriptor. |
+| 61 | Filesystem race / `harness-registry.ts` | Inspect and bounded-read a manifest through one nonblocking descriptor. Leaf symlinks remain supported for dotfile-repository setups; fstat rejects nonregular targets before any read. |
 | 60 | Filesystem race / `agent-tools.test.ts` | Dismiss as **used in tests**: the uninstall regression creates a private `mkdtemp` fixture, asserts a skill exists, invokes uninstall, then expects `readFile` to fail with ENOENT. The intervening deletion is intentional; there is no production check/use operation or attacker-controlled input. No code change is needed. |
 
 ## Decisions to confirm
@@ -55,8 +55,11 @@ not proof of a newly introduced defect.
 - Keep diff-scoped PR results; consider requiring both `CI gate` and the CodeQL
   results check in main's ruleset separately. Enforcement is a maintainer decision,
   not an implicit part of this remediation.
-- Manifest leaf symlinks (including legitimate dotfile-repository links) are now
-  refused rather than followed. This is the explicit no-follow security stance;
-  users must place a regular manifest at the registered location. No-follow opens
-  protect the final component, not hostile ancestor-directory replacements. The
-  registry/blob parent directories remain a user-owned trust boundary.
+
+## Filesystem compatibility
+
+Manifest leaf symlinks remain supported, including links into dotfile repos.
+Checking and reading the same descriptor closes the pathname race without
+refusing those legitimate inputs; nonblocking opens and fstat reject FIFO and
+directory targets. Blob no-follow opens protect the final component. Registry
+and blob ancestor directories remain a user-owned trust boundary.

@@ -397,6 +397,11 @@ function localGitArgs(args: readonly string[]): string[] {
     if (rest.length !== 1 || prefix.at(-1) !== "--git-path") return reject();
     return [...global, ...prefix, operand(rest[0]!)];
   }
+  // Without --verify, rev-parse echoes --end-of-options to stdout.
+  // Refs still pass operand(), which refuses option-prefixed values.
+  if (command === "rev-parse" && !prefix.includes("--verify")) {
+    return [...global, ...prefix, ...rest.map(operand)];
+  }
   // A caller may supply a literal option-looking filename after ls-files' --.
   // It is safe there, unlike a ref or worktree repository operand.
   if (literalPaths) {

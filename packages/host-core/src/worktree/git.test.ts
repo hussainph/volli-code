@@ -25,7 +25,9 @@ describe("the local git argument boundary", () => {
     ["clone", "--upload-pack=echo injected", "."],
     ["fetch", "--upload-pack=echo injected", "origin"],
     ["rev-parse", "--verify", "--quiet", "--upload-pack=echo injected"],
+    ["rev-parse", "-ref"],
     ["rev-parse", "--end-of-options", "-ref"],
+    ["rev-parse", "--verify", "--end-of-options", "-ref"],
     ["merge-base", "-ref", "HEAD"],
     ["merge", "--no-edit", "--upload-pack=echo injected"],
     ["diff", "--numstat", "-ref...HEAD"],
@@ -88,7 +90,14 @@ describe("the local git argument boundary", () => {
         "-m",
         "initial",
       ]);
+      raw(["update-ref", "refs/remotes/origin/main", "HEAD"]);
       const reads = [
+        // These non-verifying forms must return just the revision, not echo
+        // the runner's option fence into sync / Change Set measurements.
+        ["rev-parse", "HEAD"],
+        ["rev-parse", "main"],
+        ["rev-parse", "origin/main"],
+        ["rev-parse", "main^{commit}"],
         ["rev-parse", "--verify", "--quiet", "main^{commit}"],
         ["rev-parse", "--git-dir"],
         ["rev-parse", "--git-common-dir"],

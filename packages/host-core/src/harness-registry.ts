@@ -117,13 +117,11 @@ function sha256(content: string): string {
 async function scanOne(harnessesDir: string, slug: string): Promise<ScannedDirectory> {
   const manifestPath = join(harnessesDir, slug, MANIFEST_FILENAME);
   try {
-    // Validate and read one inode. Refuse leaf symlinks; O_NONBLOCK also keeps
-    // a FIFO from hanging boot before fstat can reject it. Ancestor directories
-    // are still assumed to be owned by the user, not an adversary.
-    const file = await open(
-      manifestPath,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    // Manifests may be symlinked into dotfile repos. Validate and read the
+    // resolved inode through one descriptor, so a pathname swap cannot change
+    // what we read. O_NONBLOCK keeps even a symlink to a FIFO from hanging boot
+    // before fstat rejects it. Ancestor directories remain user-owned.
+    const file = await open(manifestPath, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
       const entry = await file.stat();
       if (!entry.isFile()) return { read: "nothing" };
