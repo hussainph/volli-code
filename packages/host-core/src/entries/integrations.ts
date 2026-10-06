@@ -6,7 +6,7 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  */
-export { desktopCodeMode } from "../codemode/dev-config";
+export { hostCodeMode } from "../codemode/dev-config";
 export { codeModeSandboxAssets } from "../codemode/sandbox-assets";
 export {
   boundedFetch,
@@ -18,7 +18,7 @@ export {
 export { MemoryMcpCredentialStore } from "../mcp/credential-store";
 export { McpCredentialRejectedError, McpProtocolEraError } from "../mcp/credentials";
 export type { McpProtocolClient } from "../mcp/discovery";
-export { desktopMcpDispatch } from "../mcp/dispatch-policy";
+export { hostMcpDispatch } from "../mcp/dispatch-policy";
 export { MCP_PARALLEL_DEV_ENV } from "../mcp/parallel-dev-config";
 export { McpSessionHost, type McpSessionHostOptions } from "../mcp/session-host";
 export { McpSettingsService } from "../mcp/settings";

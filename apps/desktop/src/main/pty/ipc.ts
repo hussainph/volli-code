@@ -30,7 +30,11 @@ import {
   createSessionConcurrencyEnvReader,
   type SessionConcurrencyEnvReader,
 } from "@volli/host-core/sessions";
-import { type AgentRuntimeEnvironment, type PtyHost, PtyManager } from "@volli/host-core/pty";
+import {
+  type AgentRuntimeEnvironment,
+  type PtyManagerPorts,
+  PtyManager,
+} from "@volli/host-core/pty";
 import { worktreeDeps } from "../worktree-host";
 
 /**
@@ -38,7 +42,7 @@ import { worktreeDeps } from "../worktree-host";
  * the worktree bundle and the harness-file writer desktop composed inline
  * before the supervisor moved into host-core.
  */
-export function desktopPtyHost(): PtyHost {
+export function desktopPtyPorts(): PtyManagerPorts {
   return {
     events: windowEventBus,
     worktreeDeps,
@@ -211,7 +215,7 @@ export function registerTerminalIpcHandlers(
   // Every session persists a durable record, so the manager needs the db. When
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
-  const host = desktopPtyHost();
+  const host = desktopPtyPorts();
   const manager =
     ownership.manager ??
     new PtyManager({

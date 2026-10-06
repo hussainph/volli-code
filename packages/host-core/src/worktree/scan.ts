@@ -100,7 +100,7 @@ import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { homeDir } from "./home";
 import { canonicalize, isInside } from "./paths";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
-import { type RunGit, type RunGitAsync, type WorktreeDeps } from "./types";
+import { type RunGit, type RunGitAsync, type WorktreePorts } from "./types";
 
 /**
  * Git that may not write. `--no-optional-locks` is git's own switch for exactly
@@ -273,7 +273,7 @@ export function metadataKeptReason(
 }
 
 export async function scanOrphans(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   options: OrphanScanOptions = {},
 ): Promise<OrphanScanReport> {
   // The required async runner, never `deps.git`: a missing seam must fail at

@@ -74,7 +74,7 @@ function boundedBrowserError(error: string | null): string | null {
  * What the registry needs of its host, whatever the engine. A backend's own
  * dependencies extend this with its construction surfaces.
  */
-export interface BrowserTabRegistryDependencies {
+export interface BrowserTabRegistryPorts {
   createId: () => string;
   publishState: (event: BrowserTabState) => void;
   publishClosed: (tabId: string) => void;
@@ -129,7 +129,7 @@ export interface BrowserTabRecord {
  */
 export abstract class BrowserTabRegistry<
   E extends BrowserTabRecord,
-  D extends BrowserTabRegistryDependencies = BrowserTabRegistryDependencies,
+  D extends BrowserTabRegistryPorts = BrowserTabRegistryPorts,
 > implements BrowserBackend {
   protected readonly tabs = new Map<string, E>();
   /** Shared Browser tool queues and CDP wire lifetimes, keyed by tab. */
@@ -143,7 +143,7 @@ export abstract class BrowserTabRegistry<
    * wheel is not blocked by Sessions nobody will see again.
    */
   private readonly sessionColors = new Map<string, string>();
-  /** Names learned from {@link BrowserTabRegistryDependencies.sessionName}, so a second hold does not ask twice. */
+  /** Names learned from {@link BrowserTabRegistryPorts.sessionName}, so a second hold does not ask twice. */
   private readonly sessionNames = new Map<string, string>();
 
   /** `D` is the backend's own dependencies, which extend the registry's. */

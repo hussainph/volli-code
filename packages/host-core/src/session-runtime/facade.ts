@@ -23,7 +23,7 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicket, getTicketBrief } from "../db/tickets-repo";
 import { recordSessionStartedOnce } from "../db/events-repo";
 import { createModelAutoSelect } from "../decision/auto-select";
-import type { HostDecisions } from "../decision/desktop";
+import type { HostDecisions } from "../decision/host-decisions";
 import { loadSkills } from "../skills";
 import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
@@ -56,7 +56,7 @@ function assembleSessionServices(options: {
     homeDir,
     venue,
     events,
-    decisions: desktopDecisions,
+    decisions: hostDecisions,
     delegation: sessionDelegation,
   } = options;
   const sessionEngine = isLiveHost(host) ? host.sessionEngine : null;
@@ -195,12 +195,12 @@ function assembleSessionServices(options: {
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
-          ...(desktopDecisions === null
+          ...(hostDecisions === null
             ? {}
             : {
                 autoSelect: createModelAutoSelect({
                   db: sessionDb,
-                  port: desktopDecisions.port,
+                  port: hostDecisions.port,
                 }),
               }),
           // A Session's first start, not each idempotent attach/start call.

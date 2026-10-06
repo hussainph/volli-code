@@ -5,8 +5,8 @@
  */
 import { homedir } from "node:os";
 
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
-export function homeDir(deps: Pick<WorktreeDeps, "home">): string {
+export function homeDir(deps: Pick<WorktreePorts, "home">): string {
   return deps.home ?? homedir();
 }

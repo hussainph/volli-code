@@ -29,7 +29,7 @@ export {
   type BrowserTabChrome,
   type BrowserTabRecord,
   BrowserTabRegistry,
-  type BrowserTabRegistryDependencies,
+  type BrowserTabRegistryPorts,
 } from "../browser/tab-registry";
 export { browserTraceDisk, browserTracesRoot } from "../browser/trace-disk";
 export { type BrowserTraceStepInput, BrowserTraceStore } from "../browser/trace-store";

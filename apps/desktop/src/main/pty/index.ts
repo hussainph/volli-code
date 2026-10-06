@@ -5,7 +5,7 @@
 
 export {
   confirmDestructiveClose,
-  desktopPtyHost,
+  desktopPtyPorts,
   prepareTerminalQuit,
   registerTerminalIpcHandlers,
 } from "./ipc";

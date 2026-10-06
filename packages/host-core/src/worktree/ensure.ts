@@ -42,7 +42,7 @@ import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
 import { withRepositoryWorktreeTurn } from "./repository-turn";
-import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreePorts, type WorktreeResult } from "./types";
 
 /**
  * The success value of `ensure`: the resolved identity plus whether THIS run
@@ -73,7 +73,7 @@ type Stage = "create" | "copy" | "attachments";
 
 /** Records the failure event + phase, returns the typed error Result. */
 function fail(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
   stage: Stage,
   message: string,
@@ -115,7 +115,7 @@ async function addWorktree(
 }
 
 async function runEnsure(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const ticket = getTicketRow(deps.db, ticketId);
@@ -265,7 +265,7 @@ async function runEnsure(
  * ticket joins the in-flight promise instead of running the pipeline twice.
  */
 export function ensure(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const existing = inflight.get(ticketId);

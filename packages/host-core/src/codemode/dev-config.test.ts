@@ -8,7 +8,7 @@ import {
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CODE_MODE_DEV_ENV, desktopCodeMode, readCodeModeDevConfig } from "./dev-config";
+import { CODE_MODE_DEV_ENV, hostCodeMode, readCodeModeDevConfig } from "./dev-config";
 
 const env = (value: string | undefined) => ({ [CODE_MODE_DEV_ENV]: value });
 
@@ -76,7 +76,7 @@ describe("readCodeModeDevConfig", () => {
   });
 });
 
-describe("desktopCodeMode", () => {
+describe("hostCodeMode", () => {
   const search: McpToolDefinition = {
     serverId: "github",
     toolName: "search",
@@ -98,7 +98,7 @@ describe("desktopCodeMode", () => {
   it("follows the stored setting, read at each birth", () => {
     const logged: string[] = [];
     let policy: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
-    const codeMode = desktopCodeMode({
+    const codeMode = hostCodeMode({
       env: env("{"),
       packaged: false,
       log: (line) => logged.push(line),
@@ -125,7 +125,7 @@ describe("desktopCodeMode", () => {
 
   it("freezes the routes from the decision it is handed, whatever the setting says by then", () => {
     let policy: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
-    const codeMode = desktopCodeMode({
+    const codeMode = hostCodeMode({
       env: {},
       packaged: false,
       log: () => undefined,
@@ -140,7 +140,7 @@ describe("desktopCodeMode", () => {
   });
 
   it("offers nothing and defers nothing when this launch has no sandbox", () => {
-    const codeMode = desktopCodeMode({
+    const codeMode = hostCodeMode({
       env: env("1"),
       packaged: false,
       log: () => undefined,
@@ -151,7 +151,7 @@ describe("desktopCodeMode", () => {
     expect(born).toMatchObject({ mode: "off", nudge: false, offered: false });
     expect(born.largeServers.size).toBe(0);
     // With a sandbox the same large server would have been deferred.
-    const withSandbox = desktopCodeMode({
+    const withSandbox = hostCodeMode({
       env: {},
       packaged: false,
       log: () => undefined,
@@ -164,7 +164,7 @@ describe("desktopCodeMode", () => {
 
   it("gives a child its own model's mode and paragraph, inside the tools its parent froze", () => {
     const pinned: CodeModePolicy = { enabled: true, models: { "openai-codex/gpt-5.5": "both" } };
-    const codeMode = desktopCodeMode({
+    const codeMode = hostCodeMode({
       env: {},
       packaged: false,
       log: () => undefined,
@@ -186,7 +186,7 @@ describe("desktopCodeMode", () => {
   });
 
   it("lets a developer's variable stand in for the setting, for every model", () => {
-    const codeMode = desktopCodeMode({
+    const codeMode = hostCodeMode({
       env: env(JSON.stringify({ mode: "only", mcp: { github: "deferred" } })),
       packaged: false,
       log: () => undefined,

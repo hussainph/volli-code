@@ -18,11 +18,7 @@ import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
 import { SecretService } from "@volli/host-core/secrets";
-import {
-  AgentObservability,
-  desktopMcpDispatch,
-  desktopCodeMode,
-} from "@volli/host-core/integrations";
+import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
   createSessionTokenRegistry,
   createSessionConcurrencyEnvReader,
@@ -102,12 +98,12 @@ export function createHeadlessSessionRuntime(input: {
   const homeDir = headlessHomeDir(env);
   // One lazy module: its model access is `headlessModelAccess`, handed to host-core.
   const { modelAccess, decisions, mcp: mcpSettings, webAccess } = host.runtimeServices;
-  const mcpDispatch = desktopMcpDispatch({
+  const mcpDispatch = hostMcpDispatch({
     env,
     packaged: true,
     log: (message) => ports.log.warn(message),
   });
-  const codeMode = desktopCodeMode({
+  const codeMode = hostCodeMode({
     env,
     packaged: true,
     policy: () => readCodeModePolicy(db),

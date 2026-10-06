@@ -6,5 +6,5 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  */
-export { type AgentRuntimeEnvironment, type PtyHost, PtyManager } from "../pty/manager";
+export { type AgentRuntimeEnvironment, PtyManager, type PtyManagerPorts } from "../pty/manager";
 export type { ParkConfig, ProcessInspector } from "../pty/park";

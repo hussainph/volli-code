@@ -22,7 +22,7 @@ const dataChanged = vi.fn();
 const ports = { events: { publish: dataChanged } };
 const options = { dataDir: "/profile" };
 
-import { createDesktopSessionLocationResolver } from "./location";
+import { createSessionLocationResolver } from "./location";
 import {
   acquireDeletionLease,
   acquireWorktreeStartLease,
@@ -66,7 +66,7 @@ describe("desktop Session location resolver", () => {
     testDb = openTestDb();
     const project = testProject({ id: "p", path: "/repo" });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, {
+    const resolver = createSessionLocationResolver(testDb.db, ports, {
       ...options,
       venue: { id: "hostd", kind: "remote" },
     });
@@ -89,7 +89,7 @@ describe("desktop Session location resolver", () => {
     });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -131,7 +131,7 @@ describe("desktop Session location resolver", () => {
     insertTicket(testDb.db, ticket);
     insertProject(testDb.db, otherProject);
     insertTicket(testDb.db, foreignTicket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -187,7 +187,7 @@ describe("desktop Session location resolver", () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -209,7 +209,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", usesWorktree: false });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -236,7 +236,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // Present: the check before a turn is one `existsSync` and no git at all.
@@ -275,7 +275,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
     const reuse = (restamped: boolean) => ({
       ok: true,
@@ -308,7 +308,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // `ensure` refused: `prepare`'s own error already names the worktree and
@@ -339,7 +339,7 @@ describe("desktop Session location resolver", () => {
     const root = scratch();
     const project = testProject({ id: "project-1", path: join(root, "main") });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session: Session = {
       id: "project-session",
       projectId: project.id,
@@ -371,7 +371,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       const removing = acquireDeletionLease(worktreePath);
@@ -396,7 +396,7 @@ describe("desktop Session location resolver", () => {
       const root = scratch();
       const project = testProject({ id: "project-1", path: root });
       insertProject(testDb.db, project);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session: Session = {
         id: "project-session",
         projectId: project.id,
@@ -424,7 +424,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       let leaseDuringEnsure: unknown = "unasked";

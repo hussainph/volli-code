@@ -12,8 +12,8 @@ import {
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "../ports";
 import { SecretStore } from "../secrets";
 import { SecretService } from "../secrets/service";
-import { desktopCodeMode } from "../codemode/dev-config";
-import { desktopMcpDispatch } from "../mcp/dispatch-policy";
+import { hostCodeMode } from "../codemode/dev-config";
+import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
@@ -84,8 +84,8 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
     decisions: null,
     webAccess: composed.runtimeServices.webAccess,
     mcpSettings: null,
-    mcpDispatch: desktopMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
-    codeMode: desktopCodeMode({
+    mcpDispatch: hostMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
+    codeMode: hostCodeMode({
       env: {},
       packaged: true,
       log: vi.fn(),
@@ -126,7 +126,7 @@ describe("runtime attachment assembly", () => {
     const options = await fixture();
     const read = vi.spyOn(live().sessionEngine, "getSession");
     const events = vi.spyOn(live().sessionEngine, "listEvents");
-    const construct = vi.spyOn(runtime, "createDesktopSessionRuntime");
+    const construct = vi.spyOn(runtime, "createHostSessionRuntime");
     const assembled = createRuntimeAssembly(options);
     expect(read).not.toHaveBeenCalled();
     expect(events).not.toHaveBeenCalled();

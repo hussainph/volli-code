@@ -74,7 +74,7 @@ export function readWorkspaceEnvironment(
   };
 }
 
-interface SessionEnvReportBaseDeps {
+interface SessionEnvReportBasePorts {
   /** The session's resolved PATH — post-adoption, bin dir first. */
   path: string;
   /** The boot adoption outcome's kind: how `path` came to be what it is. */
@@ -95,7 +95,7 @@ interface SessionEnvReportBaseDeps {
 }
 
 /** A report is either host-wide, or starts in a cwd with an explicit outer boundary. */
-export type SessionEnvReportDeps = SessionEnvReportBaseDeps &
+export type SessionEnvReportPorts = SessionEnvReportBasePorts &
   (
     | { cwd?: undefined; projectRoot?: undefined }
     | {
@@ -106,7 +106,9 @@ export type SessionEnvReportDeps = SessionEnvReportBaseDeps &
       }
   );
 
-export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise<SessionEnvReport> {
+export async function buildSessionEnvReport(
+  deps: SessionEnvReportPorts,
+): Promise<SessionEnvReport> {
   const pathEntries = deps.path.split(":").filter((entry) => entry.length > 0);
   // The two workspace questions below walk the same ancestors over the same
   // markers, so they share one memo: one stat per path, and two answers that

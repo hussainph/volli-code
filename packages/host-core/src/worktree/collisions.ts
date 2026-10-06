@@ -24,7 +24,7 @@ import { collisionMatrix, displayTicketId } from "@volli/shared";
 import type { CollisionMatrix, Project } from "@volli/shared";
 
 import { listTicketsByProject } from "../db/tickets-repo";
-import { readWorktreeChangeSetPaths, type WorktreeReadDeps } from "./read";
+import { readWorktreeChangeSetPaths, type WorktreeReadPorts } from "./read";
 
 /** One scanned worktree and how much of it the radar measured. */
 export interface ScannedWorktree {
@@ -56,7 +56,7 @@ export interface CollisionScan extends CollisionMatrix {
  * be advice about a merge nobody is planning.
  */
 export async function scanCollisions(
-  deps: WorktreeReadDeps & { db: Database.Database },
+  deps: WorktreeReadPorts & { db: Database.Database },
   projects: readonly Project[],
 ): Promise<CollisionScan> {
   const worktrees: ScannedWorktree[] = [];

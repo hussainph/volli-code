@@ -4,7 +4,7 @@ import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
 import type {
   RuntimeAssemblyOptions,
-  BackgroundShellHostDependencies,
+  BackgroundShellHostPorts,
 } from "@volli/host-core/session-runtime";
 
 const seam = vi.hoisted(() => ({
@@ -19,7 +19,7 @@ const seam = vi.hoisted(() => ({
   recovered: vi.fn(),
   commands: vi.fn(),
   automationPorts: vi.fn(),
-  shellOptions: null as BackgroundShellHostDependencies | null,
+  shellOptions: null as BackgroundShellHostPorts | null,
   shells: { liveCwds: vi.fn(() => [] as string[]), close: vi.fn(async () => {}) },
   ticket: vi.fn(),
   project: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock("../../../packages/host-core/src/session-concurrency", () => ({
 }));
 vi.mock("../../../packages/host-core/src/shell/background-shell-host", () => ({
   BackgroundShellHost: class {
-    constructor(options: BackgroundShellHostDependencies) {
+    constructor(options: BackgroundShellHostPorts) {
       seam.shellOptions = options;
     }
     liveCwds = seam.shells.liveCwds;
@@ -60,13 +60,13 @@ vi.mock("../../../packages/host-core/src/shell/background-shell-host", () => ({
   },
 }));
 vi.mock("../../../packages/host-core/src/mcp/dispatch-policy", () => ({
-  desktopMcpDispatch: ({ log }: { log(message: string): void }) => {
+  hostMcpDispatch: ({ log }: { log(message: string): void }) => {
     log("mcp");
     return {};
   },
 }));
 vi.mock("../../../packages/host-core/src/codemode/dev-config", () => ({
-  desktopCodeMode: ({ log, policy }: { log(message: string): void; policy(): unknown }) => {
+  hostCodeMode: ({ log, policy }: { log(message: string): void; policy(): unknown }) => {
     log("codemode");
     policy();
     return {};

@@ -54,7 +54,7 @@ import { homeDir } from "./home";
 import { canonicalize } from "./paths";
 import { clearPhase } from "./phase";
 import { withRepositoryWorktreeTurn } from "./repository-turn";
-import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreePorts, type WorktreeResult } from "./types";
 
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
@@ -81,7 +81,7 @@ export interface WorktreeRemoveOptions {
  * caller has confirmed and `git worktree remove --force` is used.
  */
 export async function remove(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
   opts: WorktreeRemoveOptions,
 ): Promise<WorktreeResult<void>> {
@@ -258,7 +258,7 @@ async function isRegisteredWorktree(
  * Nulls `worktree_path` only (emits `worktree_changed`) and drops the phase.
  * `branch`/`base_branch` stay stamped — the branch still exists in git.
  */
-function clearIdentity(deps: WorktreeDeps, ticketId: string): void {
+function clearIdentity(deps: WorktreePorts, ticketId: string): void {
   // `allowArchived`: the worktree dir is already deleted by the time we get
   // here, so the pointer must be nulled even on an archived ticket — otherwise
   // the row dead-ends at a path that no longer exists.

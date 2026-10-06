@@ -11,7 +11,7 @@ import {
 } from "@volli/shared";
 import type { PiRuntimeContext } from "./pi-adapter";
 import type { SessionToolSurfacePorts } from "./sessions";
-import type { DesktopMcpDispatch } from "../mcp/dispatch-policy";
+import type { HostMcpDispatch } from "../mcp/dispatch-policy";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
 import { listMaterializableLinks } from "../db/blobs-repo";
@@ -85,7 +85,7 @@ export function createRuntimeContextResolver(options: {
   db: Database.Database;
   sessionEngine: SessionEngine;
   venue: SessionExecutionVenue;
-  mcpDispatch: DesktopMcpDispatch;
+  mcpDispatch: HostMcpDispatch;
   waitForBirth(sessionId: string): Promise<void>;
   toolSurface(): SessionToolSurfacePorts | null;
 }): (sessionId: string) => Promise<PiRuntimeContext | null> {

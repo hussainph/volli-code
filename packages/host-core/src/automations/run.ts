@@ -86,7 +86,7 @@ export type InstructionDeliveryResult = {
   } | null;
 };
 
-export interface AutomationRunnerDeps {
+export interface AutomationRunnerPorts {
   /** The transport-neutral command/event/projection core. */
   engine: AutomationEngine;
   /** Projection reads belong to the host, never to IPC. */
@@ -331,7 +331,7 @@ function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | n
   }
 }
 
-export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRunner {
+export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationRunner {
   const log = deps.log ?? ((message: string) => console.error(message));
   /**
    * A local fast-path latch keeps two clicks in one host from interleaving

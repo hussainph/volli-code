@@ -15,10 +15,10 @@ import { insertProject } from "../db/projects-repo";
 import { getTicket, insertTicket } from "../db/tickets-repo";
 import { listTicketEvents } from "../db/events-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
-import { commitTicketRemaining, publishTicketBranch, type PublishDeps } from "./publish";
+import { commitTicketRemaining, publishTicketBranch, type PublishPorts } from "./publish";
 import { scriptedGit } from "./scripted-git";
 import { netFailure, scriptedNet } from "./scripted-net";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
 let harness: TestDb;
 
@@ -32,7 +32,7 @@ const BRANCH = "volli/VC-1-thing";
 /**
  * The default for these tests: a host with no GUI credential helper, so a push
  * failure reports Git's own stderr and nothing else. Injected rather than
- * defaulted (see `PublishDeps`) precisely so this suite never runs `git config`
+ * defaulted (see `PublishPorts`) precisely so this suite never runs `git config`
  * against whatever the machine running it happens to have configured.
  */
 const NO_HELPERS = async () => [];
@@ -63,7 +63,7 @@ function seedTicket(overrides: { prUrl?: string | null } = {}): {
  * status/add/commit). Both required seams are supplied because the commit probes
  * run on the async runner (VC-383), not on the host repository by accident.
  */
-function commitGit(status: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
+function commitGit(status: string): Pick<WorktreePorts, "git" | "gitAsync"> {
   const scripted = scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return "/repo/.worktrees/VC-1/.git";
     if (args[0] === "status") return status;
@@ -73,7 +73,7 @@ function commitGit(status: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
 }
 
 /** A git that answers every probe with nothing, on both seams. */
-function emptyGit(): Pick<WorktreeDeps, "git" | "gitAsync"> {
+function emptyGit(): Pick<WorktreePorts, "git" | "gitAsync"> {
   const scripted = scriptedGit(() => "");
   return { git: scripted.git, gitAsync: scripted.gitAsync };
 }
@@ -100,7 +100,7 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -136,7 +136,7 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -164,7 +164,7 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -189,7 +189,7 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -219,7 +219,7 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -244,7 +244,7 @@ describe("publishTicketBranch", () => {
       }
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -271,7 +271,7 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("create")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -308,7 +308,7 @@ describe("publishTicketBranch", () => {
       if (file === "gh" && args.includes("list")) return { stdout: `${url}\n` };
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...emptyGit(),
       net: run,
@@ -330,7 +330,7 @@ describe("publishTicketBranch", () => {
     const ticket = testTicket(project.id, { id: "t1", ticketNumber: 1 });
     insertTicket(harness.db, { ...ticket, prUrl: null });
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db: harness.db,
       ...emptyGit(),
       net: run,
@@ -349,7 +349,7 @@ describe("commitTicketRemaining", () => {
   it("commits (via the async runner) and records worktree_committed on a dirty tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...commitGit(" M src/a.ts\n"),
       net: run,
@@ -380,7 +380,7 @@ describe("commitTicketRemaining", () => {
   it("threads the caller's choices through and records the message that actually landed", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...commitGit("M  src/a.ts\n"),
       net: run,
@@ -409,7 +409,7 @@ describe("commitTicketRemaining", () => {
   it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...commitGit(""),
       net: run,
@@ -432,7 +432,7 @@ describe("commitTicketRemaining", () => {
       }
       return {};
     });
-    const deps: PublishDeps = {
+    const deps: PublishPorts = {
       db,
       ...commitGit(" M src/a.ts\n"),
       net: run,

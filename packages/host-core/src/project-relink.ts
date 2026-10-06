@@ -100,7 +100,7 @@ export async function inspectProjectFolder(
   return { ok: true, path: project.path, state: probe.state };
 }
 
-export interface ProjectRelinkDeps {
+export interface ProjectRelinkPorts {
   db: Database.Database;
   /**
    * What a look at a folder finds. A seam for the same reason every other one
@@ -147,7 +147,7 @@ export type ProjectRelinkOutcome =
  * could not follow the row by themselves.
  */
 export async function relinkProject(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   request: ProjectRelinkRequest,
 ): Promise<ProjectRelinkOutcome> {
   const probeFolder = deps.probeFolder ?? probeFolderOnDisk;
@@ -249,7 +249,7 @@ async function identifiedProjects(
  * how many: the destructive guards need the first one to name it in a refusal,
  * and this needs the count to put a number in a warning.
  */
-async function countLiveSessionsIn(deps: ProjectRelinkDeps, directory: string): Promise<number> {
+async function countLiveSessionsIn(deps: ProjectRelinkPorts, directory: string): Promise<number> {
   if (deps.busyWorktreeSites === undefined) return 0;
   const sites = await deps.busyWorktreeSites(directory);
   return sites.filter((site) => busySiteWithin(directory, [site]) !== null).length;
@@ -297,7 +297,7 @@ interface ContainerMove {
  * worktrees where they are costs cleanup, not work.
  */
 async function moveWorktreeContainer(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   project: Project,
   newPath: string,
   now: number,
@@ -366,7 +366,7 @@ async function moveWorktreeContainer(
  * notice tells the person the one command that finishes it.
  */
 async function repairWorktreeLinks(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   projectPath: string,
   found: { worktrees: readonly string[]; relocated: readonly string[] },
 ): Promise<boolean> {

@@ -7,7 +7,7 @@ import {
 } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { desktopMcpDispatch, MCP_QUEUE_WAIT_LOG_MS } from "./dispatch-policy";
+import { hostMcpDispatch, MCP_QUEUE_WAIT_LOG_MS } from "./dispatch-policy";
 import { MCP_PARALLEL_DEV_ENV } from "./parallel-dev-config";
 
 function definition(toolName: string, parallelRead?: true): McpToolDefinition {
@@ -31,10 +31,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("desktopMcpDispatch (VC-454)", () => {
+describe("hostMcpDispatch (VC-454)", () => {
   it("is sequential with the shipped bound when the developer opt-in is absent", () => {
     const log = vi.fn();
-    const dispatch = desktopMcpDispatch({ env: {}, packaged: false, log });
+    const dispatch = hostMcpDispatch({ env: {}, packaged: false, log });
     const smuggled = definition("read", true);
 
     expect(dispatch.parallelMcpReads).toBe(false);
@@ -45,7 +45,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
   });
 
   it("stays off in a packaged build whatever the environment says", () => {
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: devEnv({ reads: ["server-1:read"] }),
       packaged: true,
       log: vi.fn(),
@@ -55,7 +55,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
   });
 
   it("stamps new Sessions from the allowlist and narrows frozen marks to it at attach", () => {
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: devEnv({ reads: ["server-1:read"] }),
       packaged: false,
       log: vi.fn(),
@@ -79,7 +79,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
 
   it("logs a value it could not read and runs as if it were absent", () => {
     const log = vi.fn();
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: { [MCP_PARALLEL_DEV_ENV]: "{not json" },
       packaged: false,
       log,
@@ -89,7 +89,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
   });
 
   it("bounds each server by the developer's limits, else the shipped default", async () => {
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: devEnv({ limits: { "server-1": { maxConcurrent: 1 } } }),
       packaged: false,
       log: vi.fn(),
@@ -131,7 +131,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
   });
 
   it("withdraws the Session's calls before closing its host, and leaves other Sessions alone", async () => {
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: devEnv({ limits: { "server-1": { maxConcurrent: 1 } } }),
       packaged: false,
       log: vi.fn(),
@@ -173,7 +173,7 @@ describe("desktopMcpDispatch (VC-454)", () => {
   it("logs a call that waited long for the bound, and not one that barely did", async () => {
     vi.useFakeTimers();
     const log = vi.fn();
-    const dispatch = desktopMcpDispatch({
+    const dispatch = hostMcpDispatch({
       env: devEnv({ limits: { "server-1": { maxConcurrent: 1 } } }),
       packaged: false,
       log,

@@ -31,7 +31,7 @@ export interface ParkableSession {
   lastActivityAt: number;
 }
 
-export interface ParkControllerDeps {
+export interface ParkControllerPorts {
   config: ParkConfig;
   inspector: ProcessInspector;
   /** The manager's live registry — the SAME Map instance, read-only here. */
@@ -56,7 +56,7 @@ export class ParkController {
   /** Guards against a slow sweep's async stages overlapping the next tick. */
   private sweeping = false;
 
-  constructor(private readonly deps: ParkControllerDeps) {}
+  constructor(private readonly deps: ParkControllerPorts) {}
 
   /**
    * Parks a session: SIGSTOP its whole process tree so macOS compresses/pages

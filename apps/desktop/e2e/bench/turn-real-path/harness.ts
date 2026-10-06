@@ -8,7 +8,7 @@
  * them back, in one Node process with no Electron:
  *
  * - **Session runtime.** `createSessionRuntime` from `@volli/session-engine`,
- *   composed port for port as `createDesktopSessionRuntime` composes it: the
+ *   composed port for port as `createHostSessionRuntime` composes it: the
  *   Session Engine over the desktop's `SqliteSessionLedger`, the file
  *   transcript-artifact store, one checkpoint failure reporter, `Date.now`,
  *   random ids, and the opt-in VC-119 sink. Two ports differ, both listed in
@@ -486,7 +486,7 @@ async function compose(
     read: (reference) => timedArtifact("read", () => innerArtifacts.read(reference)),
   };
 
-  // `createDesktopSessionRuntime`, port for port, except:
+  // `createHostSessionRuntime`, port for port, except:
   // - `locations`: the Electron-free resolver above;
   // - `engine`: composed above so its ledger transactions can be timed. Same
   //   ledger class, clock, ids, reporter and host yield as the desktop's.

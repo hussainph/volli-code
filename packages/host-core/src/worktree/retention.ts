@@ -37,7 +37,7 @@ import type { AgentSiteReleaseReport } from "./agent-sites";
 import { remove, type WorktreeRemoveOptions } from "./remove";
 import { trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
-import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type WorktreePorts, type WorktreeResult } from "./types";
 
 /** The `app_state` key the retention settings JSON lives under. */
 export const RETENTION_SETTINGS_KEY = "volli:retention";
@@ -147,7 +147,7 @@ const USER_ACTOR: TicketEventActor = { kind: "user" };
  * ever PROMPTS, the human disposes.
  */
 export async function archiveAndClean(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
   opts: Pick<WorktreeRemoveOptions, "releaseAgentSites"> = {},
 ): Promise<WorktreeResult<void>> {
@@ -174,8 +174,8 @@ const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The seams {@link reclaimIfStale} needs beyond the worktree bundle. */
-export interface ReclaimDeps {
-  worktree: WorktreeDeps;
+export interface ReclaimPorts {
+  worktree: WorktreePorts;
   now: () => number;
   /** Ends the bindings rooted in the checkout, exactly as the manual remove does. */
   releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
@@ -218,7 +218,7 @@ const SKIP = (reason: string): ReclaimOutcome => ({ kind: "skipped", reason });
  * mid-flight rebase, lock, or unreadable git aborts the whole thing.
  */
 export async function reclaimIfStale(
-  deps: ReclaimDeps,
+  deps: ReclaimPorts,
   ticketId: string,
   prState: "open" | "merged" | "closed" | null,
 ): Promise<ReclaimOutcome> {
@@ -274,8 +274,8 @@ export async function reclaimIfStale(
 // ---- trim on finish (VC-340) -----------------------------------------------
 
 /** The seams {@link trimFinishedWorktree} needs beyond the worktree bundle. */
-export interface TrimFinishDeps {
-  worktree: WorktreeDeps;
+export interface TrimFinishPorts {
+  worktree: WorktreePorts;
   now: () => number;
   /** Where work is genuinely in flight; a busy worktree is never trimmed. */
   busySites?: BusyWorktreeSites;
@@ -306,7 +306,7 @@ const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", rea
  * agent, an open terminal, or a changed tracked file stops it there.
  */
 export async function trimFinishedWorktree(
-  deps: TrimFinishDeps,
+  deps: TrimFinishPorts,
   ticketId: string,
   opts: { prMerged?: boolean } = {},
 ): Promise<TrimFinishOutcome> {

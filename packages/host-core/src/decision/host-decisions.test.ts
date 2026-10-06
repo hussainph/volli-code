@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { createDesktopDecisions, type HostDecisionsOptions } from "./desktop";
+import { createHostDecisions, type HostDecisionsOptions } from "./host-decisions";
 import {
   DECISION_MODEL_APP_STATE_KEY,
   readGlobalDecisionModel,
@@ -115,7 +115,7 @@ afterEach(() => fixture.cleanup());
 
 function decisions(overrides: Partial<HostDecisionsOptions> = {}) {
   const billed: Array<{ sessionId: string; usage: SessionUsage; purpose: string }> = [];
-  const built = createDesktopDecisions({
+  const built = createHostDecisions({
     db: fixture.db,
     models: fakeModels(true),
     catalogReady: Promise.resolve(),

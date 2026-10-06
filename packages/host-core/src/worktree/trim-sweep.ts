@@ -46,11 +46,11 @@ import { canonicalize } from "./paths";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { countIgnoredArtifacts, trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
-import { type WorktreeDeps } from "./types";
+import { type WorktreePorts } from "./types";
 
 /** What the sweep needs beyond the worktree bundle: the one busy question. */
-export interface TrimSweepDeps {
-  worktree: WorktreeDeps;
+export interface TrimSweepPorts {
+  worktree: WorktreePorts;
   /** Absent means nothing structured can be asked, so nothing structured blocks. */
   busySites?: BusyWorktreeSites;
 }
@@ -70,7 +70,7 @@ interface OwnedWorktree {
  * checkout, bare entries, and anything outside our containers are skipped — the
  * same containment gate the launch sweep applies before it deletes anything.
  */
-async function ownedWorktrees(deps: TrimSweepDeps): Promise<OwnedWorktree[]> {
+async function ownedWorktrees(deps: TrimSweepPorts): Promise<OwnedWorktree[]> {
   const db = deps.worktree.db;
   // The listing per project is on the async runner too (VC-383): the counting
   // and trimming beside it already were, and one sync child per project on a
@@ -117,7 +117,7 @@ async function ownedWorktrees(deps: TrimSweepDeps): Promise<OwnedWorktree[]> {
 }
 
 /** Why this worktree is off limits right now, or `null` when it may be trimmed. */
-async function activeReason(deps: TrimSweepDeps, worktree: OwnedWorktree): Promise<string | null> {
+async function activeReason(deps: TrimSweepPorts, worktree: OwnedWorktree): Promise<string | null> {
   // `git worktree lock` is respected absolutely, exactly as dirty detection
   // respects it: a lock is a person saying "leave this alone".
   if (worktree.locked) return "This worktree is locked.";
@@ -134,7 +134,7 @@ async function activeReason(deps: TrimSweepDeps, worktree: OwnedWorktree): Promi
  * action measures.
  */
 export async function scanTrimTargets(
-  deps: TrimSweepDeps,
+  deps: TrimSweepPorts,
 ): Promise<{ worktrees: WorktreeTrimScanEntry[] }> {
   const keepPatterns = getTrimSettings(deps.worktree.db).keepPatterns;
   const gitAsync = deps.worktree.gitAsync;
@@ -162,7 +162,7 @@ export async function scanTrimTargets(
  * a list of a hundred "nothing here" rows is how the two that mattered get lost.
  */
 export async function trimAllWorktrees(
-  deps: TrimSweepDeps,
+  deps: TrimSweepPorts,
   opts: { dryRun?: boolean } = {},
 ): Promise<WorktreeTrimSweepReport> {
   const dryRun = opts.dryRun === true;

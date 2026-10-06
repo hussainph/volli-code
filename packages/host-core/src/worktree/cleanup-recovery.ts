@@ -48,7 +48,7 @@ import type { OrphanCleanupEngine } from "./cleanup-engine";
 import { parseWorktreeList } from "./git";
 import { canonicalize } from "./paths";
 import { readOnlyGit } from "./scan";
-import type { WorktreeDeps } from "./types";
+import type { WorktreePorts } from "./types";
 
 const REMOVED_AFTER_INTERRUPTION =
   "The folder is gone and git no longer lists it. Confirmed at the next launch, after Volli stopped mid-cleanup — the removal itself happened earlier.";
@@ -78,7 +78,7 @@ function onDisk(path: string): boolean | null {
 }
 
 /** Whether git still registers `path` as a live worktree of `projectPath`; `null` if unreadable. */
-function registered(deps: WorktreeDeps, path: string, projectPath: string | null): boolean | null {
+function registered(deps: WorktreePorts, path: string, projectPath: string | null): boolean | null {
   if (projectPath === null) return null;
   try {
     const entries = parseWorktreeList(
@@ -93,7 +93,7 @@ function registered(deps: WorktreeDeps, path: string, projectPath: string | null
 }
 
 /** What the world now says about a worktree directory whose removal was announced. */
-function judgeWorktree(deps: WorktreeDeps, path: string, projectPath: string | null): Verdict {
+function judgeWorktree(deps: WorktreePorts, path: string, projectPath: string | null): Verdict {
   const isRegistered = registered(deps, path, projectPath);
   const present = onDisk(path);
   if (isRegistered === false && present === false) {
@@ -110,7 +110,7 @@ function judgeWorktree(deps: WorktreeDeps, path: string, projectPath: string | n
  * record that is still stale proves the prune did not run; anything else is a
  * state this host cannot attribute to this command.
  */
-function judgeMetadata(deps: WorktreeDeps, path: string, projectPath: string | null): Verdict {
+function judgeMetadata(deps: WorktreePorts, path: string, projectPath: string | null): Verdict {
   if (projectPath === null) return { state: "indeterminate", detail: UNKNOWN_PRUNE };
   try {
     const stillStale = parseWorktreeList(
@@ -134,7 +134,7 @@ function judgeMetadata(deps: WorktreeDeps, path: string, projectPath: string | n
  * (re-review C3).
  */
 export async function reconcileInterruptedCleanups(deps: {
-  worktree: WorktreeDeps;
+  worktree: WorktreePorts;
   engine: OrphanCleanupEngine;
 }): Promise<OrphanCleanupRun[]> {
   const open = await deps.engine.openRuns();

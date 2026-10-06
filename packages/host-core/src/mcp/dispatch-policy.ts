@@ -26,7 +26,7 @@ import { readMcpParallelDevConfig } from "./parallel-dev-config";
 /** A queued call that waited at least this long is worth a log line. */
 export const MCP_QUEUE_WAIT_LOG_MS = 1_000;
 
-export interface DesktopMcpDispatch {
+export interface HostMcpDispatch {
   /** Whether the runtime may honour frozen parallel-read marks at all. */
   readonly parallelMcpReads: boolean;
   /** The process-wide per-server bound every attachment is bound through. */
@@ -42,11 +42,11 @@ export interface DesktopMcpDispatch {
   };
 }
 
-export function desktopMcpDispatch(options: {
+export function hostMcpDispatch(options: {
   env: Readonly<Record<string, string | undefined>>;
   packaged: boolean;
   log: (message: string) => void;
-}): DesktopMcpDispatch {
+}): HostMcpDispatch {
   const opt = readMcpParallelDevConfig(options.env, { packaged: options.packaged });
   if (opt.kind === "invalid") options.log(opt.reason);
   const reads: ReadonlySet<McpToolKey> = opt.kind === "on" ? opt.config.reads : new Set();

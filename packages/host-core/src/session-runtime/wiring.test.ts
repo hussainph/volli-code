@@ -28,8 +28,8 @@ import { insertProject } from "../db/projects-repo";
 import { testProject } from "../db/test-helpers";
 import { SecretStore } from "../secrets";
 import { SecretService } from "../secrets/service";
-import { desktopCodeMode } from "../codemode/dev-config";
-import { desktopMcpDispatch } from "../mcp/dispatch-policy";
+import { hostCodeMode } from "../codemode/dev-config";
+import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import * as control from "../session-control";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly } from "./assembly";
@@ -109,8 +109,8 @@ function assemble({
     decisions: null,
     webAccess: host.runtimeServices.webAccess,
     mcpSettings: null,
-    mcpDispatch: desktopMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
-    codeMode: desktopCodeMode({
+    mcpDispatch: hostMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
+    codeMode: hostCodeMode({
       env: {},
       packaged: true,
       log: vi.fn(),

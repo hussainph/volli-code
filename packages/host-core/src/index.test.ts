@@ -25,7 +25,7 @@ import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
 import * as sessionLedgerModule from "./session-control/sqlite-ledger";
 import * as sessionControl from "./session-control";
-import { createDesktopSessionRuntime, type DesktopSessionRuntimeOptions } from "./session-runtime";
+import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import type { SessionWake } from "./session-control/session-wake";
 import { createHostMaintenance, type HostMaintenanceOptions } from "./maintenance-services";
@@ -81,7 +81,7 @@ vi.mock("./runtime-services", () => ({
 // Consumer construction must not become optional again. These checks run in
 // the package typecheck without making invalid calls against a live database.
 type RuntimeRequiresEngine =
-  {} extends Pick<DesktopSessionRuntimeOptions, "sessionEngine"> ? false : true;
+  {} extends Pick<HostSessionRuntimeOptions, "sessionEngine"> ? false : true;
 const runtimeRequiresEngine: RuntimeRequiresEngine = true;
 type TerminalRequiresEngine = {} extends Pick<PtyManagerOptions, "sessionEngine"> ? false : true;
 const terminalRequiresEngine: TerminalRequiresEngine = true;
@@ -231,7 +231,7 @@ describe("createHostCore", () => {
         throw new Error("This test never attaches an executor");
       }),
     };
-    const runtime = createDesktopSessionRuntime({
+    const runtime = createHostSessionRuntime({
       db,
       events: ports.events,
       dataDir: core.dataDir,

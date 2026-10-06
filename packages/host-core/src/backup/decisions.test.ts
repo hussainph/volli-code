@@ -11,7 +11,7 @@ import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "../secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { volliRuntimePaths } from "../agent-runtime";
+import { volliRuntimePaths } from "../host-profile";
 import { blobsRoot } from "../blob-store";
 import { browserPicturesRoot } from "../browser/picture-disk";
 import { openTestDb } from "../db/test-helpers";

@@ -17,7 +17,7 @@ export { listBranches } from "./state";
 export { scanOrphans, readOnlyGit, lastTouchedAt } from "./scan";
 export type { OrphanScanOptions, OrphanScanReport, WorktreeAge } from "./scan";
 export { cleanupOrphans, preservationRuleIds, OrphanCleanupRefused } from "./cleanup";
-export type { OrphanCleanupDeps, OrphanCleanupRequest } from "./cleanup";
+export type { OrphanCleanupPorts, OrphanCleanupRequest } from "./cleanup";
 // The destructive act's durable core: a UUID-keyed command, an acceptance
 // receipt, immutable per-item facts, and one projection over them (review S1).
 export { createOrphanCleanupEngine, foldCleanupRun, RECENT_CLEANUP_RUNS } from "./cleanup-engine";
@@ -85,7 +85,7 @@ export {
   resolveWorktreeTarget,
 } from "./read";
 export type {
-  WorktreeReadDeps,
+  WorktreeReadPorts,
   WorktreeStatusRead,
   WorktreeDiffRead,
   WorktreeChangeSetRead,
@@ -123,7 +123,7 @@ export type { CollisionScan, ScannedWorktree, SkippedWorktree } from "./collisio
 // `readVenue` resolves the directory by the Session runtime's own rule, so the
 // two can never disagree about which tree a Session is standing in.
 export { readVenue, venueSnapshot } from "./venue";
-export type { VenueReadDeps, VenueSnapshotInput, VenueTarget } from "./venue";
+export type { VenueReadPorts, VenueSnapshotInput, VenueTarget } from "./venue";
 export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";
 export {
   WorktreeChangeWatchManager,
@@ -152,7 +152,7 @@ export type {
   PrStatusReport,
 } from "./net";
 export { publishTicketBranch, commitTicketRemaining } from "./publish";
-export type { PublishDeps, PublishOutcome } from "./publish";
+export type { PublishPorts, PublishOutcome } from "./publish";
 
 // Retention (CONCEPT #16, issue #76): the Done-TTL setting, the Keep-aware
 // archive-readiness verdict, the archive-and-clean composition, and the
@@ -165,7 +165,7 @@ export {
   trimFinishedWorktree,
   DEFAULT_RETENTION_TTL_DAYS,
 } from "./retention";
-export type { ReclaimDeps, ReclaimOutcome, TrimFinishDeps, TrimFinishOutcome } from "./retention";
+export type { ReclaimPorts, ReclaimOutcome, TrimFinishPorts, TrimFinishOutcome } from "./retention";
 
 // Trim (VC-340): the git-ignored artifacts a finished worktree keeps carrying,
 // removed without removing the checkout. Enumerated the way git defines
@@ -191,7 +191,7 @@ export {
 // re-lists the prunable set and refuses unless it is exactly the set the user
 // confirmed (`cleanup.ts`). Running it blind from here would hand that back.
 export { scanTrimTargets, trimAllWorktrees } from "./trim-sweep";
-export type { TrimSweepDeps } from "./trim-sweep";
+export type { TrimSweepPorts } from "./trim-sweep";
 // Worktree OWNERSHIP (VC-113): which containers under the shared
 // `~/.volli/worktrees` root belong to THIS database, and therefore which paths
 // any destructive route may touch.
@@ -210,7 +210,7 @@ export {
   retentionConfigFromEnv,
 } from "./watch";
 export type {
-  RetentionPollDeps,
+  RetentionPollPorts,
   RetentionStore,
   RetentionWatchConfig,
   TicketRetentionState,
@@ -228,7 +228,7 @@ export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 // through a narrow handle (feed output, notify exit) instead of owning the
 // tail-scan / phase-transition / worktree_failed(setup) emission inline.
 export { createSetupRun } from "./setup-run";
-export type { SetupRun, SetupRunDeps, SetupRunParams, SetupFeedResult } from "./setup-run";
+export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from "./setup-run";
 
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads
@@ -238,7 +238,7 @@ export type { SetupRun, SetupRunDeps, SetupRunParams, SetupFeedResult } from "./
 export { runGitCapturing, runGitCapturingAsync, GitError } from "./git";
 
 export type {
-  WorktreeDeps,
+  WorktreePorts,
   WorktreePhase,
   WorktreeResult,
   WorktreeIdentity,
