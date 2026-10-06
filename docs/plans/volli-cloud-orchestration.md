@@ -23,13 +23,15 @@ You are an **orchestrator, not an implementer**:
 |---|---|---|
 | M0 Foundations | VC-540 | Flag exists; protocol and identity specs merged; transaction gate covers every write; Linux CI lane green; ruling on `main`. |
 | M1 Headless host | VC-541 | `hostd` on the Hetzner box runs a CLI-started session to completion while SSH is disconnected. Desktop unchanged. |
-| M2 One host protocol | VC-542 | Desktop attaches to a local or remote `hostd` and feels identical. Close the lid; turns continue. |
+| M2 One host protocol | VC-542 | Desktop uses the Mac's Electron host or a remote `hostd` and feels identical. Close the lid; turns continue. |
 | M3 Workers and venues | VC-543 | Tickets run on the box and the laptop at once; a ticket moves mid-flight. |
-| M4 Workspace mobility | VC-544 | "Move workspace to This Mac" after cancelling the box. |
+| M4 Move the host | VC-544 | Drain, bundle, restore on This Mac, fence and re-pair after cancelling the box; all its Workspaces move together. |
 | M5 Mobile (0.4.0) | VC-545 | Answer an agent's question from a phone, lid closed. |
 | M6 Volli Cloud | VC-546 | Sign in on a new laptop, "Run in cloud", no configuration. (Mostly a private repo.) |
 
-Each milestone ticket lists its work tickets. Work-ticket briefs for M0 and M1 are complete. M2–M6 briefs are **stubs** that you expand before starting them (section 7).
+**Amended 2026-10-06 (post-M1 review), D-A2/A3:** the Mac host remains Electron main in menu-bar mode pending VC-691; M4 moves the host. Per-Workspace databases and replicas are deferred to M6 planning. The milestone order stays unchanged.
+
+Each milestone ticket lists its work tickets. Work-ticket briefs for M0 and M1 are complete. M2–M6 briefs are **stubs** that you expand before starting them (section 7). From M1 onwards, Done includes the [milestone architecture review](#milestone-architecture-review), not just the demo.
 
 ## 3. Rules that do not bend
 
@@ -111,7 +113,7 @@ VC-549 and VC-550 reference each other: tell each Session the other exists and t
 1. Expand the M2 stubs as soon as VC-549 and VC-550 merge.
 2. VC-564 (WebSocket transport) and VC-574 (channel and app_state classification) go first.
 3. Then the area tickets VC-565–VC-573 in parallel lanes. They are the biggest parallel stretch, so use it.
-4. Then VC-575 (pairing), VC-576 (connection UX), VC-577 (local hostd), VC-578 (attention delivery).
+4. Then VC-575 (pairing), VC-576 (connection UX), VC-577 (Mac host/menu-bar mode, pending VC-691), VC-578 (attention delivery). **Amended 2026-10-06 (post-M1 review), D-A2:** VC-691's 1–2 day launchd/keychain/TCC/signing spike precedes VC-577's expanded brief.
 5. VC-637 (throwaway mobile test client served by `hostd`) after VC-564, VC-565, VC-575 and VC-578. Keep it to its three surfaces (board, what needs me, answer a question). Anything it cannot reach without Electron is an M2 protocol bug, not a reason to grow it toward M5.
 6. VC-579 is the owner's dogfood week. VC-637 is done when the owner answers an agent's question from a phone during it.
 7. VC-587 (M4 table classification) can run during M2.
@@ -153,6 +155,7 @@ Before starting a Session on any M2–M6 ticket whose body says **"Brief status:
 6. **Depends on / blocks**: ticket ids.
 7. **Done when**: observable, checkable.
 8. **Model note**: per section 5.
+9. **Hosted-readiness guardrails**: carry the ruling's five rules into every brief (owner decision, 2026-10-06). State how the work keeps the hosted door open; pairing is not the only enrollment path.
 
 Remove the stub line when done. If a stub turns out to be two tickets, file the second one (worktree, `--base main`, label `cloud`, appended to its milestone's list) rather than growing the first.
 
@@ -218,6 +221,18 @@ Bring these to the owner. Batch them into the end-of-pass comment, and use `voll
 - **Milestone demos.** Prepare a short demo script on the milestone ticket. The owner runs it; only the owner marks a milestone done.
 - **Anything needing the Hetzner box, accounts, or credentials.** Sessions never ask for or handle secrets in chat. They use the secure credential field, and the owner provides them.
 
+## Milestone architecture review
+
+**Standing owner rule, 2026-10-06:** after every milestone from M1 onwards, run a fresh-eyes architecture review. A milestone is not Done until the owner demo and this review are recorded on its ticket (VC-542–VC-546 for M2–M6).
+
+1. **One common brief.** Copy [architecture-review-brief.md](architecture-review-brief.md) into the review's scratch directory and refresh the milestone, pinned main SHA/read-only checkout, previous report, merged/in-flight PRs, tickets and settled rulings. The checked-in seed is the historical post-M1 brief; its snapshot paths and decisions are not current instructions. Include the ruling's hosted-readiness guardrails.
+2. **Six cross-family lenses.** Resolve models with `volli model list` (section 5); spread independent reviewers across families. Give each the same brief plus its lens: first principles and industry; module depth; UX; performance; evolvability and upgrades; code quality and tests. Reviews are read-only, with file:line evidence; keep their notes.
+3. **Synthesize HTML.** Use the improve-codebase-architecture format: verdict, decisions that re-open rulings, already-in-motion work, cross-lens convergences/disagreements, candidates with before/after shapes and timing, evidence tables, previous-review follow-up and top recommendations. The post-M1 example is `.scratch/arch-review-m1/architecture-review-post-M1.html`. Check every PR since the previous milestone against the five hosted-readiness guardrails: **does this block hosted?**
+4. **File tickets.** Deduplicate against in-flight work; file actionable findings with evidence, scope, contracts, verification and timing, and link them from the milestone ticket. Follow section 3's worktree/`main` rules.
+5. **Bring only reopened rulings to the owner.** For review findings, surface only decisions that re-open settled rulings, with options and trade-offs; don't ask the owner to triage implementation findings. Record the report, tickets and surfaced decisions on the milestone ticket. Apply approved amendments with dated notes, not rewritten history.
+
+M1's review is the seed: owner decisions D-A1/A2/A3/C1/C2 are recorded on VC-542; the hosted-readiness guardrails are on VC-692. The milestone order remains unchanged.
+
 ## 10. Existing tickets in the program
 
 - **Folded in:** VC-361 and VC-362 (M2), VC-450, VC-315 and VC-394 (M3). Treat them as program tickets: same rules, same review.
@@ -227,3 +242,5 @@ Bring these to the owner. Batch them into the end-of-pass comment, and use `voll
 ## 11. Definition of done for the program
 
 0.3.0 ships when M0–M4 demos have passed, the owner has dogfooded lid-closed on the box for at least two weeks, the default flips (desktop always through a host; per-workspace databases), and the old paths are deleted. M5 (mobile) ships in 0.4.0 (owner ruling, 2026-10-04). M6 follows when the owner says so.
+
+**Amended 2026-10-06 (post-M1 review), D-A3 and standing review rule:** per-Workspace databases are not a 0.3.0 gate; re-decide the split at M6 planning. M4 is move the host. M1–M4 architecture reviews must also be complete; each later milestone likewise requires its review before Done.
