@@ -39,7 +39,7 @@ import {
 } from "@volli/host-core/session-runtime/facade";
 import { createSessionRuntimeLifecycle } from "@volli/host-core/session-runtime/lifecycle";
 import { agentSitesWithin, releaseAgentSites } from "@volli/host-core/worktree/agent-sites";
-import type { BusyWorktreeSites, BusyWorktreeSite } from "@volli/host-core/worktree/activity";
+import { liveShellWorktreeSites, type BusyWorktreeSites } from "@volli/host-core/worktree/activity";
 import type { AgentSiteRuntime } from "@volli/host-core/worktree/agent-sites";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
@@ -278,9 +278,7 @@ export function createHeadlessSessionRuntime(input: {
       const busyWorktreeSites: BusyWorktreeSites = async (target) => {
         // No terminals are composed on this host. When a terminal port lands,
         // its live cwds must join this supplier rather than bypassing the guard.
-        const sites: BusyWorktreeSite[] = shells
-          .liveCwds()
-          .map((directory) => ({ directory, surface: "terminal" }));
+        const sites = liveShellWorktreeSites(shells);
         for (const binding of agentSitesWithin(runtime, target)) {
           // An unreadable Session refuses automatic trim; no fail-open deletion.
           if ((await runtime.projection({ sessionId: binding.sessionId })).projection.turnActive) {

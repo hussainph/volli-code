@@ -49,7 +49,7 @@ export {
 
 // Live work inside a directory — the guard every destructive worktree path
 // asks, shared so the automatic and manual routes cannot answer it differently.
-export { busyRefusal, busySiteWithin } from "./activity";
+export { busyRefusal, busySiteWithin, liveShellWorktreeSites } from "./activity";
 export type { BusyWorktreeSite, BusyWorktreeSites } from "./activity";
 
 // What the structured runtime has open inside a worktree: the directory-scoped

@@ -8,6 +8,7 @@
  * running in there?" is two answers; one module is the only way the automatic
  * path and the manual one can be held to the same protection.
  */
+import type { BackgroundShellHost } from "../shell/background-shell-host";
 import { isInside } from "./paths";
 
 /**
@@ -19,6 +20,17 @@ import { isInside } from "./paths";
 export interface BusyWorktreeSite {
   directory: string;
   surface: "terminal" | "agent";
+}
+
+/**
+ * Background shells hold their cwd between turns, just like terminals. Read the
+ * process set, not the attachment-owned listing: disposed shells still count
+ * while terminating, and only process exit clears their busy evidence.
+ */
+export function liveShellWorktreeSites(
+  shells: Pick<BackgroundShellHost, "liveCwds">,
+): BusyWorktreeSite[] {
+  return shells.liveCwds().map((directory) => ({ directory, surface: "terminal" }));
 }
 
 /** Every directory a local execution surface is working in that could block destroying `target`. */
