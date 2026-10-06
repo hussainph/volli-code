@@ -119,7 +119,7 @@ A workspace entry names its resource with its input schema; `session.snapshot` (
 snapshot: workspaceProcedure(
   "session.snapshot",                      // typed to the catalog's workspace keys
   z.object({ sessionId: nonEmptyString }), // the input validator
-  sessionResource,                         // input -> { sessionId }: what to authorize
+  sessionResource,                         // input -> { kind: "session", id: sessionId }: what to authorize
 ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
 ```
 

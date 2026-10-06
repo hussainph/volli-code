@@ -22,6 +22,7 @@ import {
   ExampleTicketLedger,
   TICKET_RESOURCE,
   type ExampleAreaCatalogBinding,
+  type ExampleAreaContext,
   type ExampleAreaEntry,
 } from "./example-area.test-support";
 import { RpcDiagnosticLog } from "./index";
@@ -346,6 +347,72 @@ describe("the area's builder family", () => {
     }
     expect(handler).not.toHaveBeenCalled();
     await expect(permissive.area.write({ relation: "subject" })).resolves.toBe("done");
+  });
+
+  // VC-564 A2 security verify, kept as regressions: a port that fails, or a
+  // policy that answers anything but `true`, never reaches the handler.
+  describe("ports that fail or answer loosely", () => {
+    const input = { commandId: COMMAND, parentTicketId: "mine", title: "Sub-task" };
+    function withPorts(caller: RouterCaller, ports: Partial<ExampleAreaContext>) {
+      const tickets = ledger();
+      const create = vi.spyOn(tickets, "create");
+      const client = createExampleAreaRouter().createCaller({
+        ...exampleAreaContext(tickets, caller, new RpcDiagnosticLog()),
+        ...ports,
+      });
+      return { client, create };
+    }
+
+    it("refuses when the Workspace port throws or rejects, before the handler", async () => {
+      for (const resourceWorkspace of [
+        () => {
+          throw new Error("Workspace port failed");
+        },
+        async () => {
+          throw new Error("Workspace port failed");
+        },
+      ]) {
+        for (const caller of [person, coordinator]) {
+          const { client, create } = withPorts(caller, { resourceWorkspace });
+          expect(await refusal(client.ticket.create(input))).toEqual({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Workspace port failed",
+          });
+          expect(create).not.toHaveBeenCalled();
+        }
+      }
+    });
+
+    it("refuses when the policy predicate throws or rejects, before the handler", async () => {
+      for (const sessionMayAct of [
+        () => {
+          throw new Error("Policy port failed");
+        },
+        async () => {
+          throw new Error("Policy port failed");
+        },
+      ]) {
+        const { client, create } = withPorts(coordinator, { sessionMayAct });
+        expect(await refusal(client.ticket.create(input))).toEqual({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Policy port failed",
+        });
+        expect(create).not.toHaveBeenCalled();
+      }
+    });
+
+    it("admits a Session only on a policy answer of exactly true", async () => {
+      for (const answer of [1, "yes", {}, [], "true"]) {
+        const { client, create } = withPorts(coordinator, {
+          sessionMayAct: (() => answer) as unknown as ExampleAreaContext["sessionMayAct"],
+        });
+        expect(await refusal(client.ticket.create(input))).toMatchObject({
+          code: "FORBIDDEN",
+          reason: "verb-refused",
+        });
+        expect(create).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("accepts only its own family's procedures, and names its legacy outputs from its catalog", () => {
