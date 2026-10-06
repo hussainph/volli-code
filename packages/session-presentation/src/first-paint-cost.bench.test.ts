@@ -164,7 +164,10 @@ const PROJECTION = {
 };
 
 describe("first paint cost (VC-315)", () => {
-  it("folds the same window however old the Session is", () => {
+  // Building the 10,000-event fixture is most of this test's time, and
+  // coverage instrumentation multiplies it past the default 5 s; the bound
+  // asserted below is on frames, not on the clock.
+  it("folds the same window however old the Session is", { timeout: 60_000 }, () => {
     const rows: { events: number; before: Cost; after: Cost }[] = [];
     for (const events of SIZES) {
       const whole = history(events);
