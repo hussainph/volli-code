@@ -133,3 +133,32 @@ export function isFeedResnapshotRequired(value: unknown): value is FeedResnapsho
     (value as Partial<FeedResnapshotRequired>)[FEED_RESNAPSHOT_REQUIRED] === true
   );
 }
+
+/**
+ * The order of two Workspace change-feed cursors (HP § Workspace change
+ * feed): negative, zero or positive when `a` is before, at or after `b` on
+ * the same feed, and `null` when they come from different feeds (another
+ * feed instance or epoch, a restarted host) and have no order at all.
+ *
+ * A cursor stays opaque to a Client in every other way: it is
+ * `<feed>:<seq>`, where `<feed>` names one feed (one instance of one
+ * Workspace's feed, in one epoch) and `seq` rises within it. A Client keeps
+ * its view monotonic with this (never applying a read or a row older than
+ * what it holds) without reading meaning from a cursor's parts.
+ */
+export function compareBoardCursors(a: string, b: string): number | null {
+  const left = splitCursor(a);
+  const right = splitCursor(b);
+  if (left === null || right === null || left.feed !== right.feed) return null;
+  return left.seq - right.seq;
+}
+
+function splitCursor(cursor: string): { feed: string; seq: number } | null {
+  const at = cursor.lastIndexOf(":");
+  if (at <= 0) return null;
+  const seqText = cursor.slice(at + 1);
+  if (!/^\d+$/u.test(seqText)) return null;
+  const seq = Number(seqText);
+  if (!Number.isSafeInteger(seq)) return null;
+  return { feed: cursor.slice(0, at), seq };
+}
