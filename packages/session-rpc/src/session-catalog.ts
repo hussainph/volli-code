@@ -43,9 +43,6 @@ export const { hostProcedure, workspaceProcedure, catalogRouter, assertCatalogBo
     legacyUnvalidatedOutputs: [
       "sessions.create",
       "sessions.attach",
-      "session.snapshot",
-      "session.projection",
-      "session.command",
       "session.cancelInteraction",
       "session.reconcile",
       "labDiagnostics.list",
