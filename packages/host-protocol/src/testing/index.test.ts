@@ -154,7 +154,9 @@ describe("the harness's own guards", () => {
       router: toyRouter,
       createContext: (host) => ({ ...host, hello: null }),
     }).open({ greeting: "Hi" });
-    const stream = recordSubscription((handlers) => connection.client.forever.subscribe(undefined, handlers));
+    const stream = recordSubscription((handlers) =>
+      connection.client.forever.subscribe(undefined, handlers),
+    );
     expect(await stream.received(1)).toHaveLength(1);
     await connection.close();
     expect(stream.frames).toHaveLength(1);
