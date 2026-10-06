@@ -27,6 +27,9 @@ import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
+import { useExperimentsStore } from "./stores/experiments";
+import { useHostConnectionStore } from "./stores/host-connection";
+import { createThisMacSource } from "./stores/host-sources";
 import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
@@ -189,6 +192,13 @@ async function main() {
     .catch(() => {
       // A failed boot read leaves the icon unrendered; the next push heals it.
     });
+
+  // The host's experiment flags (VC-576): what flagged surfaces such as the
+  // title bar's host chip read. Off until the answer lands; a failure stays off.
+  void useExperimentsStore.getState().ensure();
+  // This Mac, the in-process host, feeds the host-connection store; VC-700's
+  // registry attaches remote hosts beside it. Only flagged surfaces read it.
+  useHostConnectionStore.getState().attach(createThisMacSource());
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement

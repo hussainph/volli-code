@@ -331,6 +331,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        // What each host state SAYS (VC-576): the Island's line and action, the
+        // chip's badge, the switcher's meta and detail, the recovery toasts.
+        // A state that silently says nothing is a read-only board with no
+        // explanation, and no screenshot of one state shows another's words.
+        "src/components/hosts/host-surface-model.ts",
         // Home's tab resolution: which tab is in front AND what the persisted
         // record owes a tab that names nothing on screen (VC-54). The ticket's
         // highest correctness risk, so it is a pure module precisely so the

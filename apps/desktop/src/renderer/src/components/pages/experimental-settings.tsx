@@ -16,6 +16,7 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
+import { useExperimentsStore } from "@renderer/stores/experiments";
 
 type LoadState =
   | { status: "loading" }
@@ -62,6 +63,8 @@ export function ExperimentalSettings() {
     const generation = ++saveGeneration.current;
     try {
       const snapshot = await sessionRpcClient().settings.setExperiment.mutate({ id, enabled });
+      // The host's answer, wherever this page went: flagged surfaces follow it.
+      useExperimentsStore.getState().receive(snapshot);
       if (generation !== saveGeneration.current) return;
       setState({ status: "loaded", snapshot });
     } catch (error) {
