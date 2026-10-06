@@ -1,5 +1,5 @@
 import { getTRPCErrorShape, initTRPC, TRPCError } from "@trpc/server";
-import type { CallerActor } from "@volli/host-protocol";
+import type { HostActor } from "@volli/host-protocol";
 import {
   SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
@@ -74,8 +74,9 @@ function fixture(caller: RouterCaller) {
   return { runtime, createSession, caller: createSessionRouter().createCaller(context) };
 }
 
-function as(actor: CallerActor, current?: () => boolean): RouterCaller {
-  return current === undefined ? { actor } : { actor, current };
+/** A network caller, whose door supplies the grant check every network caller must carry. */
+function as(actor: HostActor, current: () => boolean = () => true): RouterCaller {
+  return { actor, current };
 }
 
 const device = as({ kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE });
@@ -129,6 +130,59 @@ describe("the actor matrix (VC-564)", () => {
     });
     expect(await refusal(caller.settings.experiments())).toMatchObject({ reason: "verb-refused" });
     expect(runtime.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("refuses a network caller whose door supplied no grant check, before the handler", async () => {
+    // Only the type stands between a door and this caller; the router holds too.
+    const unchecked = {
+      actor: { kind: "device", deviceId: DEVICE, workspaceId: WORKSPACE },
+    } as unknown as RouterCaller;
+    const { caller, runtime } = fixture(unchecked);
+    const readExperiments = vi.fn(() => ({ cloud: { enabled: false, source: "default" } }));
+    const settings = createSessionRouter().createCaller({
+      caller: unchecked,
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      readExperiments: readExperiments as never,
+    });
+    for (const call of [
+      caller.session.projection({ sessionId: "session-1" }),
+      settings.settings.experiments(),
+    ]) {
+      expect(hostErrorOf(await refusal(call))).toEqual({
+        code: "UNAUTHORIZED",
+        message: "This connection's credential is no longer valid.",
+        reason: "credential-invalid",
+      });
+    }
+    expect(runtime.projection).not.toHaveBeenCalled();
+    expect(readExperiments).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller whose actor no verifier could have minted", async () => {
+    for (const actor of [
+      { kind: "device", deviceId: DEVICE },
+      { kind: "session", sessionId: "agent" },
+      { kind: "device", deviceId: "local", workspaceId: WORKSPACE },
+    ]) {
+      const { caller, runtime } = fixture({
+        actor,
+        current: () => true,
+      } as unknown as RouterCaller);
+      expect(await refusal(caller.session.projection({ sessionId: "session-1" }))).toMatchObject({
+        code: "UNAUTHORIZED",
+        reason: "credential-invalid",
+      });
+      expect(runtime.projection).not.toHaveBeenCalled();
+    }
+  });
+
+  it("honors a checker the desktop's own window chooses to carry", async () => {
+    const { caller, runtime } = fixture({ ...LOCAL_DESKTOP_CALLER, current: () => false });
+    expect(await refusal(caller.session.projection({ sessionId: "session-1" }))).toMatchObject({
+      reason: "credential-invalid",
+    });
+    expect(runtime.projection).not.toHaveBeenCalled();
   });
 
   it("re-checks the grant at every dispatch, not only at connect", async () => {
@@ -334,11 +388,13 @@ describe("binding procedures to the catalog (D2)", () => {
     // @ts-expect-error -- no Verb Registry entry declares `rogue.verb`: no policy, no procedure.
     expect(() => hostProcedure("rogue.verb")).toThrow("No catalog entry declares rogue.verb");
     // @ts-expect-error -- a workspace entry cannot be built without its resource resolver.
-    expect(() => hostProcedure("session.snapshot")).not.toThrow();
+    expect(() => hostProcedure("session.snapshot")).toThrow(
+      "Catalog entry session.snapshot is workspace-scoped, not host-scoped",
+    );
     expect(() =>
       // @ts-expect-error -- a host entry has no Workspace resource to authorize.
       workspaceProcedure("settings.experiments", z.object({}), () => null),
-    ).not.toThrow();
+    ).toThrow("Catalog entry settings.experiments is host-scoped, not workspace-scoped");
     const rogue = initTRPC.create().procedure.query(() => "unpoliced");
     type WithRogue = ProcedurePaths<AppRouter["_def"]["record"] & { rogue: typeof rogue }>;
     expectTypeOf<CatalogMismatch<WithRogue>>().toEqualTypeOf<"rogue">();
@@ -360,6 +416,66 @@ describe("binding procedures to the catalog (D2)", () => {
     );
   });
 
+  // VC-564 review B1: metadata anyone can set is not provenance.
+  it("refuses a bare procedure that only claims its entry in metadata", () => {
+    const readExperiments = vi.fn();
+    const forged = initTRPC
+      .context<SessionRouterContext>()
+      .meta<{ catalogKey: "settings.experiments" }>()
+      .create()
+      .procedure.meta({ catalogKey: "settings.experiments" })
+      .query(readExperiments);
+    expect(() => catalogRouter({ settings: { experiments: forged } })).toThrow(
+      "Procedure settings.experiments was not built from its catalog entry",
+    );
+    expect(readExperiments).not.toHaveBeenCalled();
+  });
+
+  it("refuses a host procedure retagged as a workspace entry, before any read", () => {
+    const snapshot = vi.fn();
+    const retagged = hostProcedure("modelAccess.inspect")
+      .meta({ catalogKey: "session.snapshot" } as never)
+      .input(z.object({ sessionId: z.string() }))
+      .query(snapshot);
+    expect(() => catalogRouter({ session: { snapshot: retagged } })).toThrow(
+      "Procedure session.snapshot was not built from its catalog entry",
+    );
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
+  it("refuses a chain that runs anything before the entry's policy", () => {
+    const resolver = vi.fn();
+    const prefixed = initTRPC
+      .context<SessionRouterContext>()
+      .create()
+      .procedure.use(({ next }) => next())
+      .concat(hostProcedure("settings.experiments"))
+      .query(resolver);
+    expect(() => catalogRouter({ settings: { experiments: prefixed } })).toThrow(
+      "Procedure settings.experiments was not built from its catalog entry",
+    );
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("demands an output validator of every command but the named legacy ones", () => {
+    expect(() =>
+      catalogRouter({
+        settings: { experiments: hostProcedure("settings.experiments").query(() => null) },
+      }),
+    ).toThrow("Procedure settings.experiments binds no output validator");
+    expect(() =>
+      catalogRouter({
+        session: {
+          projection: workspaceProcedure("session.projection", z.object({}), () => null)
+            .output(z.null())
+            .query(() => null),
+        },
+      }),
+    ).toThrow(
+      "Procedure session.projection binds an output validator; strike it from the legacy exceptions",
+    );
+  });
+
   it("refuses a procedure whose type contradicts its entry's idempotency", () => {
     expect(() =>
       catalogRouter({
@@ -369,7 +485,11 @@ describe("binding procedures to the catalog (D2)", () => {
     expect(() =>
       assertCatalogBound(
         catalogRouter({
-          settings: { setExperiment: hostProcedure("settings.setExperiment").mutation(() => null) },
+          settings: {
+            setExperiment: hostProcedure("settings.setExperiment")
+              .output(z.null())
+              .mutation(() => null),
+          },
         }),
       ),
     ).not.toThrow();

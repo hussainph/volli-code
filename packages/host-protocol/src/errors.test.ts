@@ -140,4 +140,15 @@ describe("identity and actor guards", () => {
     );
     expect(Object.isFrozen(LOCAL_DEVICE_ACTOR)).toBe(true);
   });
+
+  it("never mistakes a malformed actor with no Workspace for the desktop", () => {
+    const malformed = [
+      { kind: "session", sessionId: "agent" },
+      { kind: "worker", workerId: ID },
+      { kind: "device", deviceId: ID },
+    ];
+    for (const actor of malformed) {
+      expect(isLocalDeviceActor(actor as never)).toBe(false);
+    }
+  });
 });

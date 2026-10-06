@@ -6,6 +6,7 @@ import {
   RpcDiagnosticLog,
   type AppRouter,
   type RouterCaller,
+  type SessionRouterContext,
 } from "@volli/session-rpc";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
@@ -17,16 +18,23 @@ import {
 } from "@volli/shared";
 
 import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
+import {
+  assertIdentityConsumed,
+  judgeNextRegistrationAs,
+} from "./session-rpc-harness-identity.test-support";
 import { createSessionRpcClient } from "./session-rpc-ipc-link";
 
 /**
  * Everything a contract case can hand the Session router: who is calling, the
  * runtime and its optional facades. The caller is required here because both
- * links must judge the same actor; production IPC defaults to the desktop's
- * own window, and part B's handshake will mint it on the WebSocket.
+ * links must judge the same actor. Production IPC is always the desktop's own
+ * window and takes no caller, so the IPC link applies this one through the
+ * test's mocked router (`withHarnessIdentity`); part B's handshake will mint
+ * it on the WebSocket.
  */
 export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
   caller: RouterCaller;
+  sessionWorkspace?: SessionRouterContext["sessionWorkspace"];
 };
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
@@ -58,7 +66,10 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
     async open(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
-      const registration = registerSessionRpcIpcHandlers({ ...host });
+      const { caller, sessionWorkspace, ...options } = host;
+      judgeNextRegistrationAs({ caller, sessionWorkspace });
+      const registration = registerSessionRpcIpcHandlers(options);
+      assertIdentityConsumed();
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
       const cancel = fakeElectron.listeners.get(SESSION_RPC_CANCEL_CHANNEL)!;

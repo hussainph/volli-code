@@ -795,14 +795,17 @@ export function createSessionRouter() {
       }),
     },
     settings: {
-      experiments: hostProcedure("settings.experiments").query(({ ctx }) => {
-        if (!ctx.readExperiments) {
-          unavailable("Experimental settings are unavailable on this transport");
-        }
-        return experimentSnapshotSchema.parse(ctx.readExperiments());
-      }),
+      experiments: hostProcedure("settings.experiments")
+        .output(experimentSnapshotSchema)
+        .query(({ ctx }) => {
+          if (!ctx.readExperiments) {
+            unavailable("Experimental settings are unavailable on this transport");
+          }
+          return experimentSnapshotSchema.parse(ctx.readExperiments());
+        }),
       setExperiment: hostProcedure("settings.setExperiment")
         .input(z.object({ id: experimentIdSchema, enabled: z.boolean() }))
+        .output(experimentSnapshotSchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeExperiment) {
             unavailable("Experimental settings are unavailable on this transport");
@@ -813,18 +816,21 @@ export function createSessionRouter() {
     modelAccess: {
       inspect: hostProcedure("modelAccess.inspect")
         .input(z.object({ refresh: z.boolean().optional() }))
+        .output(modelAccessSnapshotSchema)
         .query(async ({ ctx, input }) => {
           if (!ctx.inspectModelAccess) {
             unavailable("Model Access is unavailable on this transport");
           }
           return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
         }),
-      defaults: hostProcedure("modelAccess.defaults").query(({ ctx }) => {
-        if (!ctx.readModelAccessDefaults) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return modelAccessDefaultsSchema.parse(ctx.readModelAccessDefaults());
-      }),
+      defaults: hostProcedure("modelAccess.defaults")
+        .output(modelAccessDefaultsSchema)
+        .query(({ ctx }) => {
+          if (!ctx.readModelAccessDefaults) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return modelAccessDefaultsSchema.parse(ctx.readModelAccessDefaults());
+        }),
       setDefault: hostProcedure("modelAccess.setDefault")
         .input(
           z
@@ -837,6 +843,7 @@ export function createSessionRouter() {
               "The Board default cannot be cleared — choose a model instead",
             ),
         )
+        .output(modelAccessDefaultsSchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeModelAccessDefault) {
             unavailable("Model Access preferences are unavailable on this transport");
@@ -845,14 +852,17 @@ export function createSessionRouter() {
             await ctx.writeModelAccessDefault(input.purpose, input.selection),
           );
         }),
-      hiddenModels: hostProcedure("modelAccess.hiddenModels").query(({ ctx }) => {
-        if (!ctx.readHiddenModels) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return hiddenModelsSchema.parse(ctx.readHiddenModels());
-      }),
+      hiddenModels: hostProcedure("modelAccess.hiddenModels")
+        .output(hiddenModelsSchema)
+        .query(({ ctx }) => {
+          if (!ctx.readHiddenModels) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return hiddenModelsSchema.parse(ctx.readHiddenModels());
+        }),
       setHiddenModels: hostProcedure("modelAccess.setHiddenModels")
         .input(hiddenModelsSchema)
+        .output(hiddenModelsSchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeHiddenModels) {
             unavailable("Model Access preferences are unavailable on this transport");
@@ -860,42 +870,51 @@ export function createSessionRouter() {
           await ctx.writeHiddenModels(input);
           return input;
         }),
-      compactionPolicy: hostProcedure("modelAccess.compactionPolicy").query(({ ctx }) => {
-        if (!ctx.readCompactionPolicy) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return compactionPolicySchema.parse(ctx.readCompactionPolicy());
-      }),
+      compactionPolicy: hostProcedure("modelAccess.compactionPolicy")
+        .output(compactionPolicySchema)
+        .query(({ ctx }) => {
+          if (!ctx.readCompactionPolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return compactionPolicySchema.parse(ctx.readCompactionPolicy());
+        }),
       setCompactionPolicy: hostProcedure("modelAccess.setCompactionPolicy")
         .input(compactionPolicySchema)
+        .output(compactionPolicySchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeCompactionPolicy) {
             unavailable("Model Access preferences are unavailable on this transport");
           }
           return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
         }),
-      codeModePolicy: hostProcedure("modelAccess.codeModePolicy").query(({ ctx }) => {
-        if (!ctx.readCodeModePolicy) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return codeModePolicySchema.parse(ctx.readCodeModePolicy());
-      }),
+      codeModePolicy: hostProcedure("modelAccess.codeModePolicy")
+        .output(codeModePolicySchema)
+        .query(({ ctx }) => {
+          if (!ctx.readCodeModePolicy) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return codeModePolicySchema.parse(ctx.readCodeModePolicy());
+        }),
       setCodeModePolicy: hostProcedure("modelAccess.setCodeModePolicy")
         .input(codeModePolicySchema)
+        .output(codeModePolicySchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeCodeModePolicy) {
             unavailable("Model Access preferences are unavailable on this transport");
           }
           return codeModePolicySchema.parse(await ctx.writeCodeModePolicy(input));
         }),
-      pickerView: hostProcedure("modelAccess.pickerView").query(({ ctx }) => {
-        if (!ctx.readModelPickerView) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return modelPickerViewSchema.parse(ctx.readModelPickerView());
-      }),
+      pickerView: hostProcedure("modelAccess.pickerView")
+        .output(modelPickerViewSchema)
+        .query(({ ctx }) => {
+          if (!ctx.readModelPickerView) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return modelPickerViewSchema.parse(ctx.readModelPickerView());
+        }),
       setPickerView: hostProcedure("modelAccess.setPickerView")
         .input(modelPickerViewSchema)
+        .output(modelPickerViewSchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeModelPickerView) {
             unavailable("Model Access preferences are unavailable on this transport");

@@ -34,7 +34,7 @@
 
 ## Handshake and capabilities
 
-`HOST_PROTOCOL_VERSION = HOST_PROTOCOL_MIN_VERSION = 1`. A breaking semantic or wire change raises the integer; supported ranges must describe versions actually implemented. Additive procedures/optional fields use named features (`sessions`, `terminals.stream`, etc.; lowercase dotted words, ≤128 characters, ≤256 requested features). The first v1 names: the listener (VC-663) advertises `sessions`, `sessions.subscribe` and `verbs.read`; host events and per-connection Clients (VC-664) add `events`, `client.open-external` and `client.clipboard-write`. Names have fixed semantics; incompatible semantics need a new name or protocol version. Absent means unsupported; unknown names are ignored. The welcome grants the deduplicated intersection of requested features and those the host serves **to this actor**. Capability advertisement is not authorization. Features under `client.` run the other way (F2): requesting `client.open-external` declares that this Client performs the intent, and the grant means this host may send it ([The Client is a connection](#the-client-is-a-connection-f2)).
+`HOST_PROTOCOL_VERSION = HOST_PROTOCOL_MIN_VERSION = 1`. A breaking semantic or wire change raises the integer; supported ranges must describe versions actually implemented. Additive procedures/optional fields use named features (`sessions`, `terminals.stream`, etc.; lowercase dotted words, ≤128 characters, ≤256 requested features). The first v1 names: the listener (VC-663) advertises `sessions` and `sessions.subscribe`. `verbs.read` is advertised only by a host that serves read verbs as catalog entries, and it covers only the read verbs present in the catalog: VC-663 adds it with the Session reads (`session.list/show/peek/answer`), and VC-565 widens it with the board reads (`board`, `ticket.list/show/events`). Host events and per-connection Clients (VC-664) add `events`, `client.open-external` and `client.clipboard-write`. Names have fixed semantics; incompatible semantics need a new name or protocol version. Absent means unsupported; unknown names are ignored. The welcome grants the deduplicated intersection of requested features and those the host serves **to this actor**. Capability advertisement is not authorization. Features under `client.` run the other way (F2): requesting `client.open-external` declares that this Client performs the intent, and the grant means this host may send it ([The Client is a connection](#the-client-is-a-connection-f2)).
 
 The client sends `encodeHostHello(hello)` as tRPC `connectionParams`, under `volli-hello` (a JSON string). `HostHello` contains `{protocol:{min,max}, client:{kind,version}, workspaceId, lastSeen, features, credential}`. `client.kind` is desktop/web/mobile/cli/worker, self-description only; it never selects an actor. Missing/malformed hello is `BAD_REQUEST` / `hello-invalid`; missing/expired/revoked credentials are `UNAUTHORIZED` / `credential-invalid`. Credentials are never logged, embedded in URLs, recorded as diagnostics or put in the welcome. Use WSS outside loopback; private-network routing does not remove authentication.
 
@@ -55,7 +55,8 @@ VC-564 implements this in the catalog middleware ([Command catalog](#command-cat
 - **One actor mapping.** `@volli/shared`'s `catalog-actor.ts` maps both door vocabularies onto the policy actor: `HOST_ACTOR_POLICY` (device → `user`, session → `session`, worker → refused) and `DOOR_ACTOR_POLICY` (the VC-623 operator → `user`, as a paired device is). The socket's admission gate and the router read the same tables.
 - **Workers are refused** at every procedure until VC-580/581 give them delegated Session grants.
 - **The desktop's own window** is the reserved local device `{kind:"device", deviceId:"local"}` (`LOCAL_DEVICE_ACTOR`, `@volli/host-protocol`): device-as-user, every Workspace on its host. `isHostActor` refuses `"local"`, so no verifier can mint it from a network handshake.
-- **Grants at dispatch.** The context's caller carries `current()`, asked on every call; `false` is `UNAUTHORIZED` / `credential-invalid`.
+- **Grants at dispatch.** A network caller must carry `current()`, in its type and at runtime; it is asked on every call, and `false`, a missing checker or an actor `isHostActor` refuses is `UNAUTHORIZED` / `credential-invalid`, before the actor, the input or the handler is read. Only the local desktop may omit it, because nothing can revoke it.
+- **Production IPC is the desktop, always.** `registerSessionRpcIpcHandlers` takes no caller option: it binds `LOCAL_DESKTOP_CALLER`. The contract harness judges other actors over that bridge through a test-only router context (`session-rpc-harness-identity.test-support.ts`), never through production options.
 
 Context carries the authorized workspace; inputs cannot override it. Every ticket, Session, terminal, artifact, blob, subscription and worker lookup verifies workspace ownership **before** returning data or mutating. Cross-workspace ids and absent ids have the same `NOT_FOUND` answer (`workspace-unknown`), including subscriptions and bulk-channel grants. Policy denial within the workspace is `FORBIDDEN` / `verb-refused`. A promoted authority rejects old-epoch writes; worker checkout writes additionally carry `(workspaceEpoch, leaseEpoch)`, ordered lexicographically, and must equal the current live, unexpired per-ticket grant for the authenticated worker. A claimed higher token is not authorization. Lease epochs belong on writes, not the hello; a valid workspace connection is not a checkout lease.
 
@@ -78,38 +79,47 @@ Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newl
   - `idempotency`: `command-id` (intent-recording: `HostCommandRequest`, durable receipt), `natural` (a repeat leaves the same state) or `read`;
   - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own;
 - its access modes: `hostApi` is the WebSocket projection; an entry with a `catalog` and no access mode is policed but served by no network door (the lab's `labDiagnostics.*`);
-- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2). JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
+- JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in `LEGACY_UNVALIDATED_OUTPUTS` (`catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
 - exactly one handler: the procedure's resolver, or the socket binding.
 
-**A worked example**, the entry behind `session.snapshot`:
+**A worked example**, the entry behind `settings.setExperiment`, with both validators:
 
 ```ts
 // packages/shared/src/verb-registry.ts, in VERB_REGISTRY
 {
-  key: "session.snapshot",
+  key: "settings.setExperiment",
   accessModes: ["hostApi"],
   actor: "user",
-  handler: { site: "main", id: "session.snapshot" },
+  handler: { site: "main", id: "settings.setExperiment" },
   listed: false,
-  group: "Session",
-  summary: "Read one Session's projection with its transcript frames.",
+  group: "App",
+  summary: "Turn one experimental feature on or off.",
   options: [],
-  catalog: { scope: "workspace", idempotency: "read" },
+  catalog: { scope: "host", idempotency: "natural" },
 },
 
 // packages/session-rpc/src/index.ts, in createSessionRouter's catalogRouter({...})
-session: {
-  snapshot: workspaceProcedure(
-    "session.snapshot",                    // typed to the catalog's workspace keys
-    z.object({ sessionId: nonEmptyString }), // the validator
-    sessionResource,                        // input -> { sessionId }: what to authorize
-  ).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+settings: {
+  setExperiment: hostProcedure("settings.setExperiment")   // typed to the catalog's host keys
+    .input(z.object({ id: experimentIdSchema, enabled: z.boolean() })) // input validator
+    .output(experimentSnapshotSchema)                       // output validator, required
+    .mutation(async ({ ctx, input }) => /* the one handler */),
 },
+```
+
+A workspace entry names its resource with its input schema; `session.snapshot` (a legacy exception: no output schema yet) is:
+
+```ts
+snapshot: workspaceProcedure(
+  "session.snapshot",                      // typed to the catalog's workspace keys
+  z.object({ sessionId: nonEmptyString }), // the input validator
+  sessionResource,                         // input -> { sessionId }: what to authorize
+).query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
 ```
 
 **At dispatch**, every call runs the same checks in this order, before its handler (`packages/session-rpc/src/catalog.ts`):
 
-1. the caller's grant is still current, else `UNAUTHORIZED` / `credential-invalid`;
+1. the caller is the local desktop or a network actor `isHostActor` accepts, and a network caller's `current()` answers `true` now; else `UNAUTHORIZED` / `credential-invalid`;
 2. the caller's actor, mapped through `HOST_ACTOR_POLICY`, meets the entry's `actor`, and a network caller reaches only `hostApi` entries; else `FORBIDDEN` / `verb-refused`;
 3. the input parses (`BAD_REQUEST`);
 4. a withheld intent is refused (`FORBIDDEN` / `verb-refused`);
@@ -122,13 +132,14 @@ After the handler, an engine or runtime command-id conflict becomes `CONFLICT` /
 - `hostProcedure(key)` and `workspaceProcedure(key, input, resource)` take only catalog keys of their scope, so a procedure with no entry, or a workspace procedure with no resource, does not compile.
 - `SessionRouterCatalogBinding` asserts `CatalogMismatch<ProcedurePaths<router>>` is `never`: no procedure without an entry and no entry without a procedure. The keys that disagree are named in the error. When a second area router lands, the assertion takes the union of every router's paths.
 - `HostApiCatalogCoverage` fails a `hostApi` entry with no `catalog`; `catalogEntriesFrom` refuses one at load.
-- `catalogRouter` throws at construction on a procedure the builders did not make, one at another entry's path, or one whose tRPC type contradicts its idempotency (`read` is a query or subscription; anything else is a mutation).
+- `catalogRouter` throws at construction on a procedure the builders did not make, one at another entry's path, one whose tRPC type contradicts its idempotency (`read` is a query or subscription; anything else is a mutation), or a query/mutation with no output schema that is not a named legacy exception.
+- **Provenance is private, never metadata.** Each builder call records, in a module-private `WeakMap`, the middleware that completes its entry's policy (admission for a host entry, Workspace authorization for a workspace entry), bound to that entry's key and to the exact middleware chain it built. `catalogRouter` accepts a procedure only if its chain begins with that chain at that entry's path. tRPC `meta` proves nothing (any module can `initTRPC` and set it): a bare procedure claiming an entry, a host procedure retagged as a workspace one, and a chain that runs anything before the policy are all refused at construction. A builder also refuses a key of the other scope at runtime, for a caller that cast past the types.
 - The tRPC instance never leaves `catalog.ts`, so there is no bare procedure builder.
 
 **Adding a command** (what VC-565 onward copies):
 
 1. Add or extend its Verb Registry entry: `key` = the procedure path, `actor`, `catalog: {scope, idempotency}`, `accessModes: ["hostApi"]` for a WebSocket command (beside `cli`/`tool` when other doors project it too). Add its row to `verb-registry.test.ts`'s tier table and catalog table.
-2. Build its procedure with `hostProcedure` or `workspaceProcedure` in the area's router, inside `catalogRouter`. Put validators in zod beside it, and any new port on the router context.
+2. Build its procedure with `hostProcedure` or `workspaceProcedure` in the area's router, inside `catalogRouter`. Bind both validators in zod beside it, `.input(...)` and `.output(...)`: a new query or mutation with no output schema is refused at construction. Add any new port on the router context.
 3. `pnpm typecheck` names anything missing in either direction. A socket verb keeps its `AGENT_VERB_TABLE` binding; both doors must reach the same host-core function.
 4. Write its cases once in the area's `describeContract` (scope denial, policy denial, replay/conflict for `command-id`), so they run on every link.
 5. Delete the area's old per-channel IPC in the same PR (below).
@@ -145,7 +156,7 @@ A procedure, socket verb or tool without an entry fails compilation, as `AGENT_V
 
 **Migration, area by area.** It deletes per-channel IPC as each area moves:
 
-1. VC-564 lands the entry shape, the policy middleware and the tRPC projection, with the Session router as the first area. The socket projection already dispatches through `AGENT_VERB_TABLE` and is unchanged. VC-608 lands the generic IPC bridge over the same routers.
+1. VC-564 lands the entry shape, the policy middleware and the tRPC projection, with the Session router as the first area. The socket projection already dispatches through `AGENT_VERB_TABLE` and is unchanged. VC-608 lands the generic IPC bridge over the same routers. The socket read verbs are not projected onto `hostApi` in VC-564 (orchestrator ruling on D4): each selects across projects and returns opaque `data`, so serving one over a Workspace-bound connection needs forced Workspace scoping and recursive JSON validation. The Session reads (`session.list/show/peek/answer`) move to VC-663 and the board reads (`board`, `ticket.list/show/events`) to VC-565, each with its `verbs.read` coverage ([Handshake](#handshake-and-capabilities)).
 2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` and its socket verbs into entries. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` already has one handler for both doors (VC-629); VC-565 makes it an entry.
 3. Renderer calls go through the generic bridge: in-process IPC with the flag off, WebSocket with it on, the same procedures either way.
 4. The same PR deletes the area's channels from `contract.ts`, `ipc-descriptors.ts` and `preload/index.ts`, with their handlers. No area keeps per-channel IPC beside its router.
@@ -303,7 +314,7 @@ The grant is single-use, bound to its flow and connection, and ends with the flo
 
 Entry point: `@volli/host-protocol/testing` → `describeContract(title, links, cases)`. Each case runs unchanged against every `ContractLink<Host,Router>`; `connect(host)` returns a typed client and teardown closes all its connections/subscriptions. `webSocketContractLink` serves the real router with stock tRPC adapters on an ephemeral loopback socket, JSON on the wire. It is not a fake serializer or production listener. The package root has no Node/Electron transport imports; `/testing` is dev/test-only and has no Electron dependency either.
 
-The desktop's `session-rpc-contract.test-support.ts` composes today's **real** `registerSessionRpcIpcHandlers` and renderer `createSessionRpcClient`, using mocked ipcMain/WebContents with structured clone, plus the WS link to the same router. `session-rpc-contract.test.ts` covers strict query equality, model facade/unavailability, receipt passthrough, BAD_REQUEST, tracked ids/resume, overflow and source failure **on both links**, and since VC-564: a Session in another Workspace answering exactly as an absent one on query, mutation and subscribe; policy denial; `session.command`'s start kinds refused; command-id replay and conflict; and the identical `HostError` reason on each link. Both links take the case's caller: the IPC registration accepts one for this purpose (production passes none and gets the desktop's own window), and the WebSocket link takes it from the host until the VC-663 handshake mints it. Existing direct-router tests remain the unit layer; this is the portable transport contract layer. Deliberately main-only lab diagnostics are not claimed to be portable host procedures.
+The desktop's `session-rpc-contract.test-support.ts` composes today's **real** `registerSessionRpcIpcHandlers` and renderer `createSessionRpcClient`, using mocked ipcMain/WebContents with structured clone, plus the WS link to the same router. `session-rpc-contract.test.ts` covers strict query equality, model facade/unavailability, receipt passthrough, BAD_REQUEST, tracked ids/resume, overflow and source failure **on both links**, and since VC-564: a Session in another Workspace answering exactly as an absent one on query, mutation and subscribe; policy denial; `session.command`'s start kinds refused; command-id replay and conflict; and the identical `HostError` reason on each link. Both links judge the case's caller. Production IPC registration takes no caller and always binds the desktop's own window, so the IPC link applies the case's caller through a test-only router context: the contract test mocks `@volli/session-rpc` with `withHarnessIdentity` (`session-rpc-harness-identity.test-support.ts`), and the link refuses to open if that mock is missing. The WebSocket link takes the caller from the host until the VC-663 handshake mints it. Existing direct-router tests remain the unit layer; this is the portable transport contract layer. Deliberately main-only lab diagnostics are not claimed to be portable host procedures.
 
 An M2 ticket adds its typed router/context and IPC adapter, then writes cases once:
 

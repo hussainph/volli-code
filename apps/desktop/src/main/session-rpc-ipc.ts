@@ -6,7 +6,6 @@ import {
   hostErrorOf,
   LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
-  type RouterCaller,
   type RpcProcedurePerformanceObserver,
   type SessionAttachInput,
   type SessionCreateInput,
@@ -113,16 +112,14 @@ export type SessionRpcIpcCoverage = AssertNever<
   Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
 >;
 
+/**
+ * What main wires into the bridge. There is deliberately no caller here: this
+ * window is the desktop's own, `LOCAL_DESKTOP_CALLER`, in every Workspace
+ * (VC-564 D7), and no option can make it anyone else. The contract harness
+ * judges other actors over this link by wrapping the router in the test
+ * (`session-rpc-contract.test-support.ts`), never through production options.
+ */
 export interface RegisterSessionRpcIpcOptions {
-  /**
-   * Who this window is to the router: the desktop's own, in every Workspace,
-   * unless a caller is named (VC-564 D7). Naming one is how the contract
-   * harness proves the router's actor policy and Workspace scope on this link
-   * exactly as on the WebSocket; production never does.
-   */
-  caller?: RouterCaller;
-  /** Which Workspace owns a Session, for a caller bound to one; see `SessionRouterContext`. */
-  sessionWorkspace?: (sessionId: string) => string | null | Promise<string | null>;
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
   readModelAccessDefaults?: () => ModelAccessDefaults;
@@ -173,7 +170,6 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   close(): Promise<void>;
 } {
   const diagnostics = options.diagnostics ?? new RpcDiagnosticLog();
-  const caller = options.caller ?? LOCAL_DESKTOP_CALLER;
   const router = createSessionRouter();
   const active = new Map<string, ActiveSubscription>();
 
@@ -195,8 +191,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           return await startSubscription(request.input, event.sender);
         }
         const procedures = router.createCaller({
-          caller,
-          sessionWorkspace: options.sessionWorkspace,
+          caller: LOCAL_DESKTOP_CALLER,
           runtime: options.runtime,
           inspectModelAccess: options.inspectModelAccess,
           readModelAccessDefaults: options.readModelAccessDefaults,
@@ -238,8 +233,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const abort = new AbortController();
     const procedures = router.createCaller(
       {
-        caller,
-        sessionWorkspace: options.sessionWorkspace,
+        caller: LOCAL_DESKTOP_CALLER,
         runtime: options.runtime,
         inspectModelAccess: options.inspectModelAccess,
         diagnostics,

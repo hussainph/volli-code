@@ -20,6 +20,12 @@ import {
 } from "./session-rpc-contract.test-support";
 
 vi.mock("electron", () => fakeElectron);
+// Production IPC is always the desktop's own window; the harness judges its
+// own caller over the same bridge through a test-only router context.
+vi.mock("@volli/session-rpc", async (importOriginal) => {
+  const { withHarnessIdentity } = await import("./session-rpc-harness-identity.test-support");
+  return withHarnessIdentity(await importOriginal());
+});
 
 const selection = { providerId: "test", modelId: "model", reasoningLevel: "high" as const };
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
@@ -31,6 +37,7 @@ const device: RouterCaller = {
     deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
     workspaceId: WORKSPACE,
   },
+  current: () => true,
 };
 /** Which Workspace owns each Session the host knows; any other id is absent. */
 const OWNERS: Readonly<Record<string, string>> = {
@@ -282,6 +289,7 @@ describeContract("Session router", sessionRouterContractLinks(), ({ connect }) =
     const f = fixture();
     const agent: RouterCaller = {
       actor: { kind: "session", sessionId: "agent-session", workspaceId: WORKSPACE },
+      current: () => true,
     };
     const client = await connect({ ...f.host, caller: agent });
     expect(
