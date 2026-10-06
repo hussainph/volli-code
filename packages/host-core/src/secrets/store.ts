@@ -4,7 +4,13 @@ import {
   SecretKeyUnavailableError,
   type SecretKeyPort,
 } from "../ports/secret-key";
-import { credentialLockFor, CredentialLockBusyError, type CredentialLock } from "./credential-lock";
+import {
+  CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS,
+  credentialLockFor,
+  CredentialLockBusyError,
+  retryWhileBusy,
+  type CredentialLock,
+} from "./credential-lock";
 import {
   archiveSealedStore,
   CREDENTIALS_EMPTY,
@@ -17,6 +23,7 @@ import {
   type CredentialStatus,
   type SealedStoreArchive,
 } from "./credential-state";
+import { waitForCredentialRead } from "./credential-wait";
 import { pendingNoticeSecretStart } from "./pending-notice-secret";
 import {
   isSealedOpenFailure,
@@ -319,6 +326,27 @@ export class SecretStore {
     return this.#select(this.#read().records, sessionId, projectId).has(name);
   }
 
+  /** Try-once Session-use check: unlike a UI poll, busy is not evidence of absence. */
+  availableForUse(name: string, sessionId: string, projectId: string): boolean {
+    const { records, status } = this.#read();
+    if (status.reason === "busy") throw new CredentialLockBusyError();
+    return this.#select(records, sessionId, projectId).has(name);
+  }
+
+  /** Session-use availability: contention must not trigger a needless credential prompt. */
+  availableAsync(
+    name: string,
+    sessionId: string,
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return retryWhileBusy(
+      () => this.availableForUse(name, sessionId, projectId),
+      CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS,
+      signal,
+    );
+  }
+
   #select(
     persistent: readonly SecretRecord[],
     sessionId: string,
@@ -472,6 +500,15 @@ export class SecretStore {
    */
   status(): CredentialStatus {
     return this.#read().status;
+  }
+
+  /** Explicit open/read door: waits asynchronously for contention, then reports busy at the bound. */
+  statusAsync(timeoutMs = CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS): Promise<CredentialStatus> {
+    return waitForCredentialRead(
+      () => this.status(),
+      (status) => status,
+      timeoutMs,
+    );
   }
 
   /**

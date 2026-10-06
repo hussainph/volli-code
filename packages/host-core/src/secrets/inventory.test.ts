@@ -22,7 +22,7 @@ import {
   validValue,
 } from "./credential-families";
 import { credentialKeyId, CredentialKeySet, isCredentialKeyId } from "./credential-key-id";
-import { CredentialLock } from "./credential-lock";
+import { CredentialLock, retryWhileBusy } from "./credential-lock";
 import { fileCredentialKeyring } from "./file-key";
 import {
   CREDENTIAL_INVENTORY_FILE_NAME,
@@ -215,7 +215,7 @@ describe("file credential keyring", () => {
   });
 });
 
-describe("SealedInventory", { timeout: 30_000 }, () => {
+describe("SealedInventory", () => {
   it("starts empty, makes no key and no file until a save", () => {
     const store = open();
     expect(store.status()).toEqual({ state: "empty", reason: null, unavailable: [] });
@@ -528,6 +528,7 @@ describe("SealedInventory", { timeout: 30_000 }, () => {
     try {
       await child.next();
       expect(open().status()).toEqual(busy);
+      expect(await open().statusAsync(30)).toEqual(busy);
       expect(store.get("web-search", WEB)).toBeNull();
       // A store that was ready says busy, not ready, and its records and status agree.
       expect(store.status()).toEqual(busy);
@@ -546,7 +547,7 @@ describe("SealedInventory", { timeout: 30_000 }, () => {
       records: [{ selector: WEB }],
       status: { state: "ready" },
     });
-  });
+  }, 30_000);
 
   it("never offers a reset over a lock file it cannot use, and says how to fix it", () => {
     const store = open();
@@ -570,7 +571,7 @@ describe("SealedInventory", { timeout: 30_000 }, () => {
   });
 });
 
-describe("SealedInventory across processes", { timeout: 30_000 }, () => {
+describe("SealedInventory across processes", () => {
   const command = (kind: string, extra: Record<string, unknown>) => ({
     kind,
     path,
@@ -582,17 +583,44 @@ describe("SealedInventory across processes", { timeout: 30_000 }, () => {
   it("merges concurrent writers' records: no update is lost", async () => {
     const parent = open();
     parent.put("web-search", { provider: "parent" }, "p");
+    const gate = join(dir, "report-status");
     const writers = [0, 1, 2, 3].map((n) =>
       startChild(
         command("put", {
           selectors: Array.from({ length: 10 }, (_, i) => ({ provider: `w${n}-${i}` })),
           value: `from-${n}`,
+          reportAfter: gate,
         }),
       ),
     );
-    for (let i = 0; i < 10; i += 1) parent.put("web-search", { provider: `parent-${i}` }, "p");
-    for (const writer of writers) expect(await writer.next()).toEqual({ status: "ready" });
-    await Promise.all(writers.map((writer) => writer.exited));
+    let statusHolder: ReturnType<typeof startChild> | undefined;
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        await retryWhileBusy(
+          () => parent.put("web-search", { provider: `parent-${i}` }, "p"),
+          10_000,
+        );
+      }
+      for (const writer of writers) expect(await writer.next()).toEqual({ saved: true });
+      // Every save succeeded. Force the final read to meet another holder:
+      // the old try-once status() deterministically reported locked here.
+      statusHolder = startChild({
+        kind: "hold",
+        lock: join(dir, "host-credentials.lock"),
+      });
+      expect(await statusHolder.next()).toEqual({ held: true });
+      writeFileSync(gate, "go");
+      for (const child of writers) expect(await child.next()).toEqual({ busy: true });
+      statusHolder.process.kill("SIGKILL");
+      await statusHolder.exited;
+      for (const writer of writers) expect(await writer.next()).toEqual({ status: "ready" });
+      for (const writer of writers) expect((await writer.exited).code).toBe(0);
+    } finally {
+      for (const child of [...writers, ...(statusHolder === undefined ? [] : [statusHolder])]) {
+        child.process.kill("SIGKILL");
+        await child.exited;
+      }
+    }
     const providers = parent.list("web-search").map((record) => record.selector["provider"]);
     expect(providers).toHaveLength(51);
     expect(new Set(providers).size).toBe(51);
@@ -610,7 +638,7 @@ describe("SealedInventory across processes", { timeout: 30_000 }, () => {
     expect(await runChild(command("get", { selector: WEB }))).toMatchObject({
       record: { value: "second", id: second.id, revision: second.revision },
     });
-  });
+  }, 30_000);
 
   it("survives a writer killed at every step: old or new, never torn, then writable", async () => {
     const parent = open();

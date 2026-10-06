@@ -13,6 +13,8 @@
  * possible to drop a caller's cancellation by omission.
  */
 
+import { addAbortListener } from "node:events";
+
 import {
   NodeExecutionEnv,
   type Context,
@@ -79,8 +81,10 @@ export interface PiExecutionEnvOptions {
    * therefore cannot be shadowed from here.
    */
   environment?: Readonly<Record<string, string>>;
-  /** Read at each exec, so credentials supplied after attach reach later commands. */
-  secretEnvironment?: () => Readonly<Record<string, string>>;
+  /** Awaited at each exec, so credentials supplied after attach reach later commands. */
+  secretEnvironment?: (
+    signal?: AbortSignal,
+  ) => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
   /**
    * Runs exactly once when the attachment cleans this environment up. Main
    * uses it to revoke the per-attachment Session token exported above; keeping
@@ -209,7 +213,7 @@ export interface SessionCommandEnvironmentOptions {
   identity?: PiSessionEnvIdentity;
   /** See {@link PiExecutionEnvOptions.environment}. */
   environment?: Readonly<Record<string, string>>;
-  /** See {@link PiExecutionEnvOptions.secretEnvironment}; evaluated for each command. */
+  /** Synchronous record-builder hook; async callers resolve credentials before building. */
   secretEnvironment?: () => Readonly<Record<string, string>>;
   /**
    * The caller's own variables, believed over the sanitized set and the
@@ -252,6 +256,18 @@ export function sessionCommandEnvironment(
   return { ...merged, PATH: prefixedPath(merged.PATH ?? "", options.pathPrefixes ?? []) };
 }
 
+/** Withdraw even when a host hook ignores cancellation; release the listener on every outcome. */
+async function untilAborted<T>(pending: T | Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return pending;
+  const aborted = Promise.withResolvers<never>();
+  const listener = addAbortListener(signal, () => aborted.reject(signal.reason));
+  try {
+    return await Promise.race([pending, aborted.promise]);
+  } finally {
+    listener[Symbol.dispose]();
+  }
+}
+
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identity: PiSessionEnvIdentity | undefined;
@@ -280,13 +296,21 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
    * implementation untouched.
    */
   override async exec(command: string, options: ShellExecOptions | undefined, context: Context) {
+    // Resolve credentials before building the record or starting a child;
+    // a failed read must never run a command with missing credentials.
+    context.abortSignal?.throwIfAborted();
+    const secrets = await untilAborted(
+      this.#secretEnvironment?.(context.abortSignal),
+      context.abortSignal,
+    );
+    context.abortSignal?.throwIfAborted();
     // The one record builder, so what `execute` hands a command and what a
     // background shell is spawned with cannot differ (VC-270).
     const env = sessionCommandEnvironment(process.env, {
       pathPrefixes: this.#pathPrefixes,
       identity: this.#identity,
       environment: this.#environment,
-      secretEnvironment: this.#secretEnvironment,
+      secretEnvironment: () => secrets ?? {},
       overrides: options?.env,
     });
     return super.exec(command, { ...options, env, inheritEnv: false }, context);

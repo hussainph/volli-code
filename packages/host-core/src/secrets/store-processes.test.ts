@@ -39,36 +39,53 @@ const always = (name: string, value: string) => ({ name, value, scope: "always" 
 const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
 const temporaries = () => readdirSync(dir).filter((name) => name.endsWith(".tmp"));
 
-describe("Session secrets across processes", { timeout: 30_000 }, () => {
+describe("Session secrets across processes", () => {
   it("merges saves and last-use updates from several processes: none is lost", async () => {
     const parent = open();
     parent.put(always("PARENT_0", "parent-0"));
+    const gate = join(dir, "report-status");
     const children = [0, 1, 2].map((n) =>
       startChild({
         kind: "secret-put",
+        reportAfter: gate,
         path,
         key,
         inputs: Array.from({ length: 8 }, (_, i) => always(`CHILD_${n}_${i}`, `child-${n}-${i}`)),
       }),
     );
-    // Meanwhile the parent saves, and injects (which commits last use).
-    // Each synchronous attempt refuses at once while a child holds the lock;
-    // the parent retries asynchronously, as the person's door does.
-    for (let i = 1; i <= 8; i += 1) {
-      await retryWhileBusy(
-        () =>
-          parent.put({
-            name: `PARENT_${i}`,
-            value: `parent-${i}`,
-            scope: "project",
-            projectId: "p",
-          }),
-        10_000,
-      );
-      await retryWhileBusy(() => parent.environment("s", "p"), 10_000);
+    let statusHolder: ReturnType<typeof startChild> | undefined;
+    try {
+      for (let i = 1; i <= 8; i += 1) {
+        await retryWhileBusy(
+          () =>
+            parent.put({
+              name: `PARENT_${i}`,
+              value: `parent-${i}`,
+              scope: "project",
+              projectId: "p",
+            }),
+          10_000,
+        );
+        await retryWhileBusy(() => parent.environment("s", "p"), 10_000);
+      }
+      for (const child of children) expect(await child.next()).toEqual({ saved: true });
+      statusHolder = startChild({
+        kind: "hold",
+        lock: join(dir, CREDENTIAL_LOCK_FILE_NAME),
+      });
+      expect(await statusHolder.next()).toEqual({ held: true });
+      writeFileSync(gate, "go");
+      for (const child of children) expect(await child.next()).toEqual({ busy: true });
+      statusHolder.process.kill("SIGKILL");
+      await statusHolder.exited;
+      for (const child of children) expect(await child.next()).toEqual({ status: "ready" });
+      for (const child of children) expect((await child.exited).code).toBe(0);
+    } finally {
+      for (const child of [...children, ...(statusHolder === undefined ? [] : [statusHolder])]) {
+        child.process.kill("SIGKILL");
+        await child.exited;
+      }
     }
-    for (const child of children) expect(await child.next()).toEqual({ status: "ready" });
-    await Promise.all(children.map((child) => child.exited));
     const names = parent.list().map((item) => item.name);
     expect(names).toHaveLength(9 + 24);
     expect(new Set(names).size).toBe(33);
@@ -93,7 +110,7 @@ describe("Session secrets across processes", { timeout: 30_000 }, () => {
     expect(parent.list()).toEqual([]);
     // Output an earlier command printed stays scrubbed.
     expect(parent.redact("leaked sk-revoked-sentinel")).toBe("leaked ‹secret:STRIPE_KEY›");
-  });
+  }, 30_000);
 
   it("injects, and redacts, what another process saved", async () => {
     const parent = open();
@@ -113,7 +130,7 @@ describe("Session secrets across processes", { timeout: 30_000 }, () => {
     expect(
       await runChild({ kind: "secret-env", path, key, sessionId: "s", projectId: "p" }),
     ).toEqual({ env: {} });
-  });
+  }, 30_000);
 
   it("survives a writer killed at every step: the old file or the new, never torn", async () => {
     const parent = open();
@@ -143,7 +160,7 @@ describe("Session secrets across processes", { timeout: 30_000 }, () => {
   }, 30_000);
 });
 
-describe("a key lost while the host runs (VC-641's known limit)", { timeout: 30_000 }, () => {
+describe("a key lost while the host runs (VC-641's known limit)", () => {
   it("locks stored secrets at the next read, not the next launch, and keeps the file", () => {
     const store = open();
     store.put(always("STORED", "stored-sentinel"));
@@ -236,6 +253,7 @@ describe("a key lost while the host runs (VC-641's known limit)", { timeout: 30_
       // Momentary: never remembered as a lock, even on a store's first read.
       const fresh = open();
       expect(fresh.status()).toEqual(busy);
+      expect(await fresh.statusAsync(30)).toEqual(busy);
       expect(fresh.hasValues()).toBe(false);
     } finally {
       child.process.kill("SIGKILL");
@@ -243,7 +261,7 @@ describe("a key lost while the host runs (VC-641's known limit)", { timeout: 30_
     }
     expect(store.snapshot().credentials.state).toBe("ready");
     expect(store.environment("s", "p")).toEqual({ STORED: "stored-sentinel" });
-  });
+  }, 30_000);
 
   it("refuses, and moves nothing, when a reset finds another process holding the lock", async () => {
     const store = open();
@@ -261,7 +279,7 @@ describe("a key lost while the host runs (VC-641's known limit)", { timeout: 30_
     }
     expect(digest()).toBe(before);
     expect(store.reset().status.state).toBe("empty");
-  });
+  }, 30_000);
 
   it("keeps the lock file's problem distinct: no reset over a good store, and the fix named", () => {
     const store = open();
