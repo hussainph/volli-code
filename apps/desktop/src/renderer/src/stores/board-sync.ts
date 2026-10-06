@@ -1,7 +1,7 @@
 /**
  * The board, read and written through the host protocol (VC-565), with the
  * `cloud` flag on. One code path for this Mac's in-process host (over the
- * desktop's board bridge) and a remote one (over a host link): it speaks a
+ * desktop's generic IPC bridge) and a remote one (over a host link): it speaks a
  * {@link BoardSyncTransport}, built from either board client.
  *
  * **What is on screen is the host's confirmed board plus this window's

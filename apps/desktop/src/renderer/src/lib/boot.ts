@@ -220,7 +220,7 @@ async function readCloudFlag(): Promise<boolean> {
 
 /**
  * With `cloud` on, moves the board onto the host protocol (VC-565): starts
- * the board client and sync engine over the desktop's board bridge, and opens
+ * the board client and sync engine over the desktop's IPC bridge, and opens
  * every Workspace boot hydrated, from its snapshot, following its feed. With
  * it off (or unreadable) the board stays on the legacy IPC, exactly as before.
  * Resolves whether the protocol path started.

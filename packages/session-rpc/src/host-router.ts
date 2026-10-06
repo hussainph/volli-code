@@ -7,7 +7,8 @@
  * already refused anything its builders did not make. This module joins the
  * families' procedure records under one tRPC instance that answers with the
  * same error envelope ({@link catalogErrorFormatter}), so a door (hostd's
- * WebSocket, the desktop's board bridge) serves one router. It adds no
+ * WebSocket) serves one router; the desktop's generic IPC bridge serves the
+ * same families side by side (`DESKTOP_IPC_EXPOSURE`). It adds no
  * procedure and no middleware of its own.
  *
  * The assertions below are over the union of every family's paths: every

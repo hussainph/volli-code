@@ -5,8 +5,10 @@
  * board change feed that the map's commands stamp and the host's event bus
  * feeds, is served through both production doors:
  *
- * - `electron-ipc`: main's board bridge (`registerBoardRpcIpcHandlers`) and
- *   the renderer's board link (`createBoardIpcClient`), joined the way
+ * - `electron-ipc`: main's real generic IPC bridge registration
+ *   (`registerSessionRpcIpcHandlers`, which serves the board router beside
+ *   the Session router, VC-608) behind a fake `ipcMain`, and the generic
+ *   bridge's real client link, joined by `servedIpcContractLink` the way
  *   Electron joins them: structured clone both ways, pushes a microtask later;
  * - `websocket`: the production host protocol listener serving the composed
  *   host router (`board.read`/`board.write`, a verifier minting a device of
@@ -19,6 +21,8 @@
  * feed cursors each fresh host mints.
  */
 import { readHostError } from "@volli/host-protocol";
+import type { IpcEvent, IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
+import { servedIpcContractLink } from "@volli/host-protocol/testing";
 import { createHostLink, hostLinkTrpcLink, type HostLink } from "@volli/host-protocol/client-link";
 import {
   boardResourceWorkspace,
@@ -44,18 +48,25 @@ import {
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/testing";
 import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
-import { createHostRouter, RpcDiagnosticLog } from "@volli/session-rpc";
+import { createHostRouter, RpcDiagnosticLog, type DesktopIpcRouter } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
-import type { DataChangeScope, Label, Project, Ticket } from "@volli/shared";
+import {
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
+  type DataChangeScope,
+  type Label,
+  type Project,
+  type Ticket,
+} from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { BoardRpcIpcEvent, BoardRpcIpcRequest, BoardRpcIpcResponse } from "../ipc/contract";
 import {
   boardSyncTransport,
   createBoardClient,
   protocolBoardApi,
+  type BoardClient,
 } from "../renderer/src/lib/board-protocol";
-import { createBoardIpcClient, type BoardClient } from "../renderer/src/lib/board-rpc-link";
 import { BoardSync, type BoardSyncView } from "../renderer/src/stores/board-sync";
 
 const electron = vi.hoisted(() => ({
@@ -163,60 +174,62 @@ interface Door {
 interface FakeSender {
   readonly id: number;
   isDestroyed(): boolean;
-  send(channel: string, event: BoardRpcIpcEvent): void;
+  send(channel: string, event: IpcEvent): void;
   once(event: "destroyed", listener: () => void): void;
-  removeListener(event: "destroyed", listener: () => void): void;
+  on(event: string, listener: (...args: never[]) => void): void;
+  removeListener(event: string, listener: (...args: never[]) => void): void;
 }
 
-let nextSenderId = 1;
+/** The WebContents Electron would hand main's handlers for this peer. */
+function senderFor(peer: IpcPeer): FakeSender {
+  const detach = new Map<() => void, () => void>();
+  return {
+    id: peer.id,
+    isDestroyed: () => peer.isDestroyed(),
+    send: (channel, event) => {
+      expect(channel).toBe(SESSION_RPC_EVENT_CHANNEL);
+      peer.send(event);
+    },
+    once: (_event, listener) => void detach.set(listener, peer.onDestroyed(listener)),
+    on: () => {},
+    removeListener: (_event, listener) => {
+      detach.get(listener as () => void)?.();
+      detach.delete(listener as () => void);
+    },
+  };
+}
 
-/** Main's real bridge and the renderer's real link, joined the way Electron joins them. */
+/** Main's real generic bridge and the generic bridge's real link (VC-608). */
+const ipcLink = servedIpcContractLink<Host, DesktopIpcRouter>({
+  async serve(host) {
+    const { registerSessionRpcIpcHandlers } = await import("./session-rpc-ipc");
+    // As main registers it: the map through the router's policy.
+    const registration = registerSessionRpcIpcHandlers({
+      handlers: admittedHandlers(host.map, ROUTER_POLICY),
+    });
+    const invoke = electron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
+    const cancel = electron.listeners.get(SESSION_RPC_CANCEL_CHANNEL)!;
+    const senders = new Map<IpcPeer, FakeSender>();
+    const sender = (peer: IpcPeer): FakeSender => {
+      const known = senders.get(peer) ?? senderFor(peer);
+      senders.set(peer, known);
+      return known;
+    };
+    return {
+      request: async (peer, request) =>
+        (await invoke({ sender: sender(peer) }, request)) as IpcResponse,
+      cancel: (peer, subscriptionId) => void cancel({ sender: sender(peer) }, subscriptionId),
+      close: () => registration.close(),
+    };
+  },
+});
+
 const electronIpc: Door = {
   name: "electron-ipc",
   async open(host) {
-    const { registerBoardRpcIpcHandlers } = await import("./board-rpc-ipc");
-    // As main registers it: the map through the router's policy.
-    const registration = registerBoardRpcIpcHandlers({
-      handlers: admittedHandlers(host.map, ROUTER_POLICY),
-    });
-    const invoke = electron.handlers.get("volli:board-rpc")!;
-    const cancel = electron.listeners.get("volli:board-rpc-cancel")!;
-    const pushes = new Set<(event: BoardRpcIpcEvent) => void>();
-    const teardown = new Set<() => void>();
-    let destroyed = false;
-    const sender: FakeSender = {
-      id: nextSenderId++,
-      isDestroyed: () => destroyed,
-      // Electron delivers a push later, as a copy; a microtask keeps the order.
-      send: (channel, event) => {
-        expect(channel).toBe("volli:board-rpc-event");
-        const copy = structuredClone(event);
-        queueMicrotask(() => {
-          for (const push of pushes) push(copy);
-        });
-      },
-      once: (_event, listener) => void teardown.add(listener),
-      removeListener: (_event, listener) => void teardown.delete(listener),
-    };
-    const client = createBoardIpcClient({
-      request: async (request: BoardRpcIpcRequest) =>
-        structuredClone(
-          (await invoke({ sender }, structuredClone(request))) as BoardRpcIpcResponse,
-        ),
-      onEvent: (listener) => {
-        pushes.add(listener);
-        return () => pushes.delete(listener);
-      },
-      cancel: (subscriptionId) => void cancel({ sender }, subscriptionId),
-    });
-    return {
-      client,
-      async close() {
-        destroyed = true;
-        for (const listener of teardown) listener();
-        await registration.close();
-      },
-    };
+    const connection = await ipcLink.open(host);
+    // The desktop window's client serves the board router beside the Session one.
+    return { client: connection.client as unknown as BoardClient, close: () => connection.close() };
   },
 };
 

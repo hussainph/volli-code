@@ -88,7 +88,7 @@ async function main() {
   );
 
   // With the `cloud` flag on, the board moves onto the host protocol: the
-  // board router over this window's board bridge, its change feed, and the
+  // board router over this window's IPC bridge, its change feed, and the
   // pending layer (VC-565). The board boot painted stays on screen until each
   // Workspace's snapshot lands. With the flag off this reads the flag and
   // does nothing else.

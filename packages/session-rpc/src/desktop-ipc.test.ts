@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { DESKTOP_IPC_EXPOSURE, DESKTOP_IPC_PATHS } from "./desktop-ipc";
+import { createBoardRouter } from "./board-router";
 import { createSessionRouter } from "./index";
 
 describe("the desktop's IPC exposure", () => {
@@ -9,13 +10,18 @@ describe("the desktop's IPC exposure", () => {
   // path that does not exist.
   it("classifies every procedure the desktop's routers publish, and nothing else", () => {
     // oxlint-disable-next-line no-underscore-dangle -- tRPC's introspection door.
-    const published = Object.keys(createSessionRouter()._def.procedures).toSorted();
+    const published = [
+      // oxlint-disable-next-line no-underscore-dangle -- as above.
+      ...Object.keys(createSessionRouter()._def.procedures),
+      // oxlint-disable-next-line no-underscore-dangle -- as above.
+      ...Object.keys(createBoardRouter()._def.procedures),
+    ].toSorted();
     expect(Object.keys(DESKTOP_IPC_EXPOSURE).toSorted()).toEqual(published);
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge
-  // became router-generic, and nothing more.
-  it("serves the window exactly its Session, settings and Model Access procedures", () => {
+  // became router-generic, plus the board router VC-565 serves beside it.
+  it("serves the window exactly its Session, settings, Model Access and board procedures", () => {
     expect(Object.isFrozen(DESKTOP_IPC_PATHS)).toBe(true);
     expect(DESKTOP_IPC_PATHS).toEqual([
       "settings.experiments",
@@ -42,6 +48,33 @@ describe("the desktop's IPC exposure", () => {
       "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
+      // The board (VC-565): what the window reads and writes with `cloud` on.
+      "board.snapshot",
+      "board.roster",
+      "board.changes",
+      "board.projectFolder",
+      "board.ticketBody",
+      "board.archivedTickets",
+      "board.ticketEvents",
+      "board.latestSignals",
+      "board.statusEntries",
+      "board.comments",
+      "ticket.move",
+      "board.updateProject",
+      "board.setSkillModes",
+      "board.setSessionDefaults",
+      "board.createTicket",
+      "board.moveTickets",
+      "board.setPriority",
+      "board.updateTicket",
+      "board.setLabels",
+      "board.archiveTicket",
+      "board.unarchiveTicket",
+      "board.deleteTicket",
+      "board.createComment",
+      "board.updateComment",
+      "board.removeComment",
+      "board.setLabelColor",
     ]);
   });
 
