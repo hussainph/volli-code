@@ -1458,7 +1458,7 @@ describe("the host protocol listener (VC-663)", () => {
       await vi.waitFor(() => expect(answers.at(-1)!.text).toMatch(/^HTTP\/1\.1 503/u));
       expect(answers.slice(0, -1).every((answer) => answer.text === "")).toBe(true);
       expect(log.warn).toHaveBeenCalledWith("host protocol: connection-refused", {
-        reason: expect.stringMatching(/^(connection-limit|handshake-rate)$/u),
+        reason: "connection-limit",
       });
     } finally {
       for (const socket of sockets) socket.destroy();
