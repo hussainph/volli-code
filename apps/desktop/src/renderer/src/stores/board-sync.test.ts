@@ -1222,7 +1222,9 @@ describe("each write", () => {
     // A first attempt that finds nothing is a refusal, as it always was.
     host.fail("deleteTicket", notFound);
     expect(await sync.deleteTicket("p1", "Q")).toBe(false);
-    expect(view.failed).toHaveBeenCalledWith("Couldn't delete ticket: Not found in this Workspace.");
+    expect(view.failed).toHaveBeenCalledWith(
+      "Couldn't delete ticket: Not found in this Workspace.",
+    );
   });
 
   it("reads the archive, and says so when the read fails", async () => {
