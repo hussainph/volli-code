@@ -573,11 +573,6 @@ export interface VenueSnapshotInput {
   ticketId: string | null;
 }
 
-export interface LabelSetColorInput {
-  labelId: string;
-  color: string | null;
-}
-
 export interface WorktreeRemoveInput {
   ticketId: string;
   force: boolean;
@@ -869,8 +864,6 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
-  /** One ticket's Markdown body — read by the ticket that is OPEN, since the refresh roster no longer carries it (VC-387). */
-  "volli:ticket-body": { args: [input: TicketIdInput]; result: TicketBodyResult };
   /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
   "volli:ticket-latest-signals": {
     args: [input: ProjectIdInput];
@@ -960,7 +953,6 @@ export interface VolliDataIpcContract {
    * main checkout.
    */
   "volli:venue-snapshot": { args: [input: VenueSnapshotInput]; result: VenueSnapshotResult };
-  "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
   // Ticket worktrees. `ensure` runs implicitly
@@ -2930,16 +2922,13 @@ export type BootstrapResult = Result<{ data: BootstrapPayload }>;
  * {@link TicketSummary}: bodies are ~90% of a board's bytes (measured: 1056 KiB
  * of payload becomes 123 KiB without them) and no board surface renders one, so
  * a body rides in once on the boot payload and after that only the OPEN ticket
- * reads its own through {@link TicketBodyResult}.
+ * reads its own through `ticket.body` (the desktop-only tier, VC-608).
  *
  * `labels` is the project's label set, which a label rename/retire moves in step
  * with the tickets that carry it, so the two travel together exactly as they do
  * in the boot payload.
  */
 export type ProjectRosterResult = Result<{ tickets: TicketSummary[]; labels: Label[] }>;
-
-/** One ticket's Markdown body — what the roster no longer carries (VC-387). */
-export type TicketBodyResult = Result<{ body: string }>;
 
 export interface LegacyImportRequest {
   projects: LegacyProject[];

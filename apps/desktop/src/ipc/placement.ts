@@ -26,7 +26,13 @@
  * corollary 2): host packages never import it. The `app_state` key registry
  * is its sibling in `@volli/shared` (`app-state-keys.ts`).
  */
-import type { CloudPlacement, CloudPlacementOwner, CloudPlacementSplit } from "@volli/shared";
+import type {
+  CloudPlacement,
+  CloudPlacementOwner,
+  CloudPlacementSplit,
+  DesktopEntry,
+  DesktopKey,
+} from "@volli/shared";
 import type { VolliIpcChannel, VolliIpcEvent } from "./contract";
 import type { CursorOverlayChannel } from "./cursor-contract";
 
@@ -244,7 +250,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:ticket-delete": { placement: "workspace", owner: "VC-565", reason: "Board write." },
   "volli:ticket-list-archived": { placement: "workspace", owner: "VC-565", reason: "Board read." },
   "volli:ticket-events": { placement: "workspace", owner: "VC-565", reason: "Board read." },
-  "volli:ticket-body": { placement: "workspace", owner: "VC-565", reason: "Board read." },
   "volli:ticket-latest-signals": {
     placement: "workspace",
     owner: "VC-565",
@@ -333,7 +338,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-566",
     reason: "Measures a ticket or board checkout on the host.",
   },
-  "volli:label-set-color": { placement: "workspace", owner: "VC-565", reason: "Board write." },
   "volli:app-state-set": {
     placement: "split",
     owner: "VC-577",
@@ -1425,3 +1429,45 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason: "Overlay button; main forwards it to the browser hold command (VC-571).",
   },
 };
+
+/** One channel moved onto the bridge's desktop-only tier: its key, and the placement it carried there. */
+type BridgedChannel = {
+  [Key in DesktopKey]: {
+    readonly key: Key;
+    /** The row's placement, which IS the entry's whole policy (`desktopCatalogEntry`). */
+    readonly placement: Extract<DesktopEntry, { key: Key }>["placement"];
+    readonly owner: AreaOwner;
+    readonly reason: string;
+  };
+}[DesktopKey];
+
+/**
+ * Channels moved off per-channel IPC onto the router-generic bridge's
+ * desktop-only tier (VC-608; `DESKTOP_ENTRIES`, `@volli/shared`). The channel
+ * is gone from the catalog, and so from {@link CHANNEL_PLACEMENT}; its row
+ * moved here, beside the key that replaced it, so the area ticket that owns it
+ * still finds it. The type holds each row's placement to its entry's, so the
+ * policy a desktop-only command runs under is the placement VC-574 gave its
+ * channel, and nothing else.
+ */
+export const BRIDGED_CHANNELS = {
+  "volli:ticket-body": {
+    key: "ticket.body",
+    placement: "workspace",
+    owner: "VC-565",
+    reason: "Board read.",
+  },
+  "volli:label-set-color": {
+    key: "label.setColor",
+    placement: "workspace",
+    owner: "VC-565",
+    reason: "Board write.",
+  },
+} as const satisfies Readonly<Record<`volli:${string}`, BridgedChannel>>;
+
+type AssertNever<Type extends never> = Type;
+
+/** A bridged channel is no live one: the area moved it, and deleted it, in one PR. */
+export type BridgedChannelsRetired = AssertNever<
+  Extract<keyof typeof BRIDGED_CHANNELS, PlacedChannel>
+>;

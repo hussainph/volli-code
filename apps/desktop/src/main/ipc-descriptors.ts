@@ -788,11 +788,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },
-  "volli:ticket-body": {
-    guard: (args): args is IpcArgs<"volli:ticket-body"> =>
-      args.length === 1 && isTicketIdInput(args[0]),
-    invalidError: "Invalid ticket",
-  },
   "volli:ticket-latest-signals": {
     guard: (args): args is IpcArgs<"volli:ticket-latest-signals"> =>
       args.length === 1 && isProjectIdInput(args[0]),
@@ -1016,18 +1011,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       );
     },
     invalidError: "Invalid session peek",
-  },
-  "volli:label-set-color": {
-    guard: (args): args is IpcArgs<"volli:label-set-color"> => {
-      if (args.length !== 1) return false;
-      const [input] = args;
-      return (
-        isRecord(input) &&
-        typeof input["labelId"] === "string" &&
-        (input["color"] === null || typeof input["color"] === "string")
-      );
-    },
-    invalidError: "Invalid label color",
   },
   "volli:app-state-set": {
     guard: (args): args is IpcArgs<"volli:app-state-set"> =>

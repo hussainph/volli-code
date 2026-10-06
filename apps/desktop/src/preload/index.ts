@@ -152,8 +152,6 @@ import type {
   HarnessTrustSetInput,
   IpcArgs,
   IpcResult,
-  LabelResult,
-  LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
   ListDirectoryResult,
@@ -223,7 +221,6 @@ import type {
   ThemeSetProjectResult,
   ThemeStateInput,
   ThemeStateResult,
-  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -632,8 +629,6 @@ const api = {
     /** A ticket's full event history, chronological — backs the Activity feed. */
     events: (input: TicketIdInput): Promise<TicketEventsResult> =>
       invoke("volli:ticket-events", input),
-    /** One ticket's Markdown body — read by the OPEN ticket, since the refresh roster no longer carries it (VC-387). */
-    body: (input: TicketIdInput): Promise<TicketBodyResult> => invoke("volli:ticket-body", input),
     /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
     latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
       invoke("volli:ticket-latest-signals", input),
@@ -965,10 +960,6 @@ const api = {
      */
     set: (enabled: boolean, endpoint: string): Promise<AgentObservabilityResult> =>
       invoke("volli:agent-observability-set", enabled, endpoint),
-  },
-  labels: {
-    setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
-      invoke("volli:label-set-color", input),
   },
   /**
    * Automations (VC-112, tracer VC-126): the saved record's CRUD and the one

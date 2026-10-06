@@ -901,8 +901,6 @@ describe("DATA_IPC descriptor table", () => {
       ["volli:ticket-unarchive", "Invalid ticket"],
       ["volli:ticket-delete", "Invalid ticket"],
       ["volli:ticket-events", "Invalid ticket"],
-      // The per-open-ticket body read the steady-state roster traded away (VC-387).
-      ["volli:ticket-body", "Invalid ticket"],
     ] as const;
 
     for (const [channel, expectedError] of cases) {
@@ -1580,38 +1578,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:label-set-color", () => {
-    const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
-
-    it("accepts a valid payload with a string color", () => {
-      expect(guard([{ labelId: "l1", color: "#fff" }])).toBe(true);
-    });
-
-    it("accepts a null color", () => {
-      expect(guard([{ labelId: "l1", color: null }])).toBe(true);
-    });
-
-    it("rejects a non-object payload", () => {
-      expect(guard([null])).toBe(false);
-    });
-
-    it("rejects a non-string labelId", () => {
-      expect(guard([{ labelId: 1, color: null }])).toBe(false);
-    });
-
-    it("rejects a color of the wrong type", () => {
-      expect(guard([{ labelId: "l1", color: 1 }])).toBe(false);
-    });
-
-    it("rejects a wrong arity", () => {
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid label color");
-    });
-  });
-
   describe("volli:app-state-set (positional string pair)", () => {
     const { guard, invalidError } = DATA_IPC["volli:app-state-set"];
 
@@ -2179,8 +2145,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 83 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(83);
+    it("covers all 81 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(81);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
@@ -2188,10 +2154,10 @@ describe("DATA_IPC descriptor table", () => {
       // where every Session it starts will run.
       expect(DATA_CHANNELS).toContain("volli:project-folder-check");
       expect(DATA_CHANNELS).toContain("volli:project-relink");
-      // The steady-state refresh pair (VC-387): one project's board without
-      // bodies, and one ticket's body for the ticket that is open.
+      // The steady-state refresh read (VC-387): one project's board without
+      // bodies. The open ticket's body is `ticket.body` on the bridge (VC-608).
       expect(DATA_CHANNELS).toContain("volli:data-project-roster");
-      expect(DATA_CHANNELS).toContain("volli:ticket-body");
+      expect(DATA_CHANNELS).not.toContain("volli:ticket-body");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
       // agent verb behind it, because the agent must not author the policy that

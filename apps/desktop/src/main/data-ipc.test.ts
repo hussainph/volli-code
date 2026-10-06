@@ -20,7 +20,6 @@ import type {
   SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
-  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -1226,29 +1225,6 @@ describe("volli:data-project-roster — the steady-state refresh read (VC-387)",
     });
 
     expect(roster).toEqual({ ok: false, error: "Unknown project" });
-  });
-});
-
-describe("volli:ticket-body — the per-ticket body read (VC-387)", () => {
-  it("answers the body the roster no longer carries", () => {
-    const projectId = createProject();
-    const created = invoke<TicketResult>("volli:ticket-create", {
-      projectId,
-      status: "todo",
-      title: "With a body",
-      body: "# Scope\n\nDo the thing.",
-    });
-    if (!created.ok) throw new Error(created.error);
-
-    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: created.ticket.id });
-
-    expect(read).toEqual({ ok: true, body: "# Scope\n\nDo the thing." });
-  });
-
-  it("refuses a ticket that is gone rather than answering an empty body", () => {
-    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: "no-such-ticket" });
-
-    expect(read).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
 

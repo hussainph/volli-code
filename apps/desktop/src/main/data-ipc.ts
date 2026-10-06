@@ -19,7 +19,6 @@ import {
   listTicketStatusEntries,
   listAllLabels,
   listLabelsByProject,
-  setLabelColor,
   countProjects,
   deleteProject,
   getProjectById,
@@ -35,7 +34,6 @@ import {
   writeSessionUnread,
   prepared,
   getTicket,
-  getTicketBody,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
@@ -110,8 +108,6 @@ import type {
   DatabaseAction,
   DatabaseResult,
   DataIpcChannel,
-  LabelResult,
-  LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
   McpProjectInput,
@@ -156,7 +152,6 @@ import type {
   ProjectRosterResult,
   UsageReportInput,
   UsageReportResult,
-  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -1013,17 +1008,6 @@ export function registerDataIpcHandlers(
       return { ok: true, events: listTicketEvents(db, input.ticketId) };
     },
 
-    /**
-     * One ticket's body — what the refresh roster stopped carrying (VC-387).
-     * Read by the ticket that is OPEN, on arrival and on each planning change
-     * that names it, which is the only place a body is ever rendered.
-     */
-    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => {
-      const body = getTicketBody(db, input.ticketId);
-      if (body === undefined) return { ok: false, error: "Unknown ticket" };
-      return { ok: true, body };
-    },
-
     "volli:ticket-latest-signals": async (
       input: ProjectIdInput,
     ): Promise<TicketLatestSignalsResult> => {
@@ -1337,12 +1321,6 @@ export function registerDataIpcHandlers(
         });
       }
       return { ok: true };
-    },
-
-    "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {
-      const label = setLabelColor(db, input.labelId, input.color, Date.now());
-      if (!label) return { ok: false, error: "Unknown label" };
-      return { ok: true, label };
     },
 
     "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
