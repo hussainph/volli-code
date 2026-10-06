@@ -28,6 +28,10 @@ const seam = vi.hoisted(() => ({
   release: vi.fn(),
   modelAccess: vi.fn(),
   observability: { start: vi.fn(), shutdown: vi.fn() },
+  handlers: vi.fn(),
+}));
+vi.mock("../../../packages/host-core/src/handlers/host-handlers", () => ({
+  createHostHandlers: seam.handlers,
 }));
 vi.mock("@volli/agent-runtime", () => ({ piOwnedModelAccess: seam.modelAccess }));
 vi.mock("../../../packages/host-core/src/db/projects-repo", () => ({
@@ -253,8 +257,20 @@ describe("headless runtime ownership", () => {
       automationsAvailable: true,
       venue: f.input.options.venue,
     });
-    ready.onDeliberateMove({} as never);
-    expect(f.automations.execution.pendingArmedRuns.noteDeliberateMove).toHaveBeenCalled();
+    // The host's one handler map, from the recovered services: the move's
+    // armed arrival and its trim's drain are the handler's (VC-668).
+    expect(seam.handlers).toHaveBeenCalledExactlyOnceWith(
+      f.input.ports,
+      expect.objectContaining({
+        db: f.input.host.database.db,
+        runtime: f.runtime,
+        experiments: null,
+        automations: f.automations,
+        busyWorktreeSites: expect.any(Function),
+        detachedWork: f.input.host.detachedWork,
+      }),
+    );
+    expect(ready.handlers).toBe(seam.handlers.mock.results[0]!.value);
     const caller = {} as never;
     const request = {} as never;
     await input.callVerb(caller, request, new AbortController().signal, undefined);
@@ -306,9 +322,10 @@ describe("headless runtime ownership", () => {
     expect(seam.release).not.toHaveBeenCalled();
     const ready = await owner.ready();
     seam.shells.liveCwds.mockReturnValue(["/tree/shell"]);
-    expect(await owner.reclaim.busyWorktreeSites("/tree")).toEqual(
-      await ready.busyWorktreeSites("/tree"),
-    );
+    void ready;
+    expect(await owner.reclaim.busyWorktreeSites("/tree")).toEqual([
+      { surface: "shell", directory: "/tree/shell" },
+    ]);
     seam.release.mockResolvedValueOnce({ released: ["s"], stillOpen: [] });
     expect(await owner.reclaim.releaseAgentSites("/tree")).toEqual({
       released: ["s"],
@@ -326,7 +343,9 @@ describe("headless runtime ownership", () => {
   });
   it("supplies busy Sessions and background shells, and fails closed on unreadable activity", async () => {
     const f = fixture();
-    const ready = await f.launch().ready();
+    const owner = f.launch();
+    await owner.ready();
+    const ready = { busyWorktreeSites: owner.reclaim.busyWorktreeSites };
     seam.shells.liveCwds.mockReturnValue(["/tree/shell"]);
     seam.sites.mockReturnValue([{ sessionId: "s", directory: "/tree/agent" }]);
     const sites = await ready.busyWorktreeSites("/tree");
@@ -354,16 +373,8 @@ describe("headless runtime ownership", () => {
     f.automations.execution = { kind: "idle" } as never;
     const ready = await owner.ready();
     expect(ready.automationsAvailable).toBe(false);
-    ready.onDeliberateMove({} as never);
     f.automations.kind = "degraded";
     expect((await owner.ready()).automationsAvailable).toBe(false);
-    ready.onDeliberateMove({} as never);
-    f.automations.kind = "live";
-    f.automations.execution = {
-      kind: "unavailable",
-      pendingArmedRuns: { noteDeliberateMove: vi.fn() },
-    } as never;
-    ready.onDeliberateMove({} as never);
   });
   it("resolves the host's model access from the service account's own environment", () => {
     seam.modelAccess.mockReturnValue({ models: "owned" });

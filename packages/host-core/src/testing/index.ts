@@ -21,6 +21,7 @@ export {
   testSession,
   testTicket,
 } from "../db/test-helpers";
+export { testHostHandlers, type TestHandlerPorts } from "./host-handlers";
 export { resetOrphanScanForTest } from "../orphan-scan";
 export { resetRetentionWatcherForTest } from "../retention-runtime";
 export { SecretStore as N1SecretStore } from "../secrets/test-support/n1/secrets/store";

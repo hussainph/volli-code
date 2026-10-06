@@ -10,6 +10,7 @@ import {
   type HostAgentWatchesOptions,
 } from "./agent-services";
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
 import { createAgentSocketLifecycle } from "./agent-socket";
 import { createAgentToolDoor } from "./agent-tool-door";
 import { createWatches } from "./watches";
@@ -54,7 +55,7 @@ it("uses the same event bus and attention delivery for socket commands without a
     const commands = createHostAgentCommands(
       { events: { publish }, attention: { ...HEADLESS_ATTENTION, deliver } },
       {
-        busyWorktreeSites: async () => [],
+        handlers: testHostHandlers({ db: ctx.db }),
         db: ctx.db,
         sessionEngine: createTestSessionEngine(ctx.db),
         appVersion: "0.2.1",
@@ -115,20 +116,20 @@ it("keeps event and attention routing out of every caller's options", () => {
   expectTypeOf<HostAgentWatchesOptions>().not.toHaveProperty("subscribeTicketWake");
 });
 
-it("requires a busy-worktree supplier at both the typed and JavaScript doors", () => {
-  expectTypeOf<undefined>().not.toExtend<HostAgentCommandOptions["busyWorktreeSites"]>();
+it("requires the host's handler map at both the typed and JavaScript doors", () => {
+  expectTypeOf<undefined>().not.toExtend<HostAgentCommandOptions["handlers"]>();
   expect(() =>
     createHostAgentCommands(
       { events: { publish: vi.fn() }, attention: HEADLESS_ATTENTION },
       {} as HostAgentCommandOptions,
     ),
-  ).toThrow("busy-worktree supplier is required");
+  ).toThrow("The host's handler map is required.");
 });
 
 it("owns no shutdown step for the verb door: the socket lifecycle drains requests", () => {
   const commands = createHostAgentCommands(
     { events: { publish: vi.fn() }, attention: HEADLESS_ATTENTION },
-    { busyWorktreeSites: async () => [] } as unknown as HostAgentCommandOptions,
+    { handlers: { "ticket.move": vi.fn() } } as unknown as HostAgentCommandOptions,
   );
   expect(Object.keys(commands)).toEqual(["execute"]);
 });
@@ -136,7 +137,7 @@ it("owns no shutdown step for the verb door: the socket lifecycle drains request
 it("publishes Session starts and harness notices from the verb door on the host bus", () => {
   const publish = vi.fn();
   createHostAgentCommands({ events: { publish }, attention: HEADLESS_ATTENTION }, {
-    busyWorktreeSites: async () => [],
+    handlers: { "ticket.move": vi.fn() },
   } as unknown as HostAgentCommandOptions);
   const ports = vi.mocked(createAgentCommandService).mock.lastCall![0];
   const started = { sessionId: "s" } as unknown as Parameters<

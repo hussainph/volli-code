@@ -15,6 +15,8 @@ export * from "./token-list";
 export * from "./verb-registry";
 export * from "./catalog-actor";
 export * from "./command-intent-conflict";
+export * from "./operation-unavailable";
+export * from "./handler-keys";
 export * from "./agent-surface";
 export * from "./agent-product";
 export * from "./agent-plan";

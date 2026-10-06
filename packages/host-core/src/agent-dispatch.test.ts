@@ -38,13 +38,22 @@
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { AGENT_COMMAND_BINDINGS, AGENT_COMMANDS, VERB_REGISTRY } from "@volli/shared";
+import {
+  AGENT_COMMAND_BINDINGS,
+  AGENT_COMMANDS,
+  HOST_HANDLER_KEYS,
+  OperationUnavailableError,
+  VERB_REGISTRY,
+} from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
+import { projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
+import { getTicket, insertTicket } from "./db/tickets-repo";
 import { insertProject } from "./db/projects-repo";
 import { insertSession } from "./session-control/test-support";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
 import { createSessionTokenRegistry } from "./session-tokens";
@@ -77,13 +86,13 @@ function scenario() {
     token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
   };
   const service = createAgentCommandService({
-    busyWorktreeSites: async () => [],
+    handlers: testHostHandlers({ db: ctx.db }),
     db: ctx.db,
     sessionEngine,
     appVersion: "1.2.3",
     verifySessionToken: tokens.verify,
   });
-  return { service, listSessions, getSession, env };
+  return { service, listSessions, getSession, env, verify: tokens.verify };
 }
 
 describe("the dispatch table (VC-167)", () => {
@@ -131,13 +140,108 @@ describe("the dispatch table (VC-167)", () => {
   });
 
   it("names each handler for the verb it answers", () => {
-    // Exhaustiveness cannot catch a table that binds `ticket.move` to the
+    // Exhaustiveness cannot catch a table that binds `ticket.create` to the
     // archive handler. The handler names can: every one of them is its verb's
-    // key in camelCase, suffixed `Verb`.
+    // key in camelCase, suffixed `Verb`. A catalog command's binding has no
+    // handler of its own to name; it is checked as a projection below.
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
+      if (projectedHandlerKey(binding) !== undefined) continue;
       const expected = `${id.replaceAll(/\.([a-z])/g, (_, initial: string) => initial.toUpperCase())}Verb`;
       expect(binding.handle.name).toBe(expected);
     }
+  });
+});
+
+describe("a catalog command's socket verb is a projection of the host's map (VC-668)", () => {
+  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE);
+
+  it("binds exactly the both-door commands as projections, each of its own key", () => {
+    expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move"]);
+    for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
+      expect(projectedHandlerKey(binding), id).toBe(
+        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : undefined,
+      );
+    }
+  });
+
+  it("reaches handlers[key] with the decoded input and the attributed actor, and nothing else", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const reached: string[] = [];
+    const move = vi.fn(async () => [{ ...getTicket(ctx.db, "ticket-one")!, status: "done" }]);
+    const handlers = new Proxy({ "ticket.move": move } as Record<string, unknown>, {
+      get(target, key) {
+        reached.push(String(key));
+        return target[String(key)];
+      },
+    });
+    const projected = createAgentCommandService({
+      handlers: handlers as never,
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+    });
+    reached.length = 0;
+    const response = await projected.execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response).toMatchObject({ ok: true, data: { ticket: { id: "VC-1", status: "done" } } });
+    expect(reached).toEqual(["ticket.move"]);
+    expect(move).toHaveBeenCalledExactlyOnceWith(
+      { projectId: "project-one", ticketId: "ticket-one", toStatus: "done" },
+      { actor: { kind: "session", sessionId: SESSION_ID, ticketId: null } },
+    );
+  });
+
+  it("answers a handler's unavailable as retryable, and any other throw as a failed write", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const answer = async (thrown: unknown) =>
+      createAgentCommandService({
+        handlers: {
+          "ticket.move": () => {
+            throw thrown;
+          },
+        },
+        db: ctx.db,
+        sessionEngine: createTestSessionEngine(ctx.db),
+        appVersion: "1.2.3",
+        verifySessionToken: verify,
+      }).execute({
+        v: 1,
+        cmd: "ticket.move",
+        args: { id: "VC-1", to: "done" },
+        ctx: { cwd: "/repo/volli", env },
+      });
+    await expect(answer(new OperationUnavailableError("No board here"))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE", message: expect.stringContaining("No board here") },
+    });
+    await expect(answer(new Error("Unknown ticket"))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: expect.stringContaining("Unknown ticket") },
+    });
+  });
+
+  it("refuses to build without the map, for a JavaScript caller too", () => {
+    ctx = openTestDb();
+    expect(() =>
+      createAgentCommandService({
+        db: ctx.db,
+        sessionEngine: createTestSessionEngine(ctx.db),
+        appVersion: "1.2.3",
+      } as never),
+    ).toThrow("The host's handler map is required.");
   });
 });
 

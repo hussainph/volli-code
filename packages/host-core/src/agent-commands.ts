@@ -50,9 +50,10 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
-  // JS callers must fail closed too; the type alone cannot guard a missing supplier.
-  if (typeof options.busyWorktreeSites !== "function") {
-    throw new Error("The busy-worktree supplier is required.");
+  // JS callers must fail closed too: without the map there is no move, and
+  // a socket that answered one some other way would be a second handler.
+  if (typeof options.handlers?.["ticket.move"] !== "function") {
+    throw new Error("The host's handler map is required.");
   }
   const now = options.now ?? Date.now;
   /**

@@ -7,24 +7,8 @@ import {
   LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
   type RpcProcedurePerformanceObserver,
-  type SessionAttachInput,
-  type SessionCreateInput,
-  type SessionCreateResult,
+  type SessionRouterHandlers,
 } from "@volli/session-rpc";
-import type { SessionRuntime } from "@volli/session-engine";
-import type {
-  CodeModePolicy,
-  CompactionPolicy,
-  ExperimentId,
-  ExperimentSnapshot,
-  HiddenModelRef,
-  ModelAccessDefaults,
-  ModelAccessSnapshot,
-  ModelPickerView,
-  ModelPurpose,
-  ModelSelection,
-  SessionStartResult,
-} from "@volli/shared";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -120,31 +104,12 @@ export type SessionRpcIpcCoverage = AssertNever<
  * (`session-rpc-contract.test-support.ts`), never through production options.
  */
 export interface RegisterSessionRpcIpcOptions {
-  runtime: SessionRuntime;
-  inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readModelAccessDefaults?: () => ModelAccessDefaults;
-  writeModelAccessDefault?: (
-    purpose: ModelPurpose,
-    selection: ModelSelection | null,
-  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
-  readHiddenModels?: () => readonly HiddenModelRef[];
-  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
-  readCompactionPolicy?: () => CompactionPolicy;
-  writeCompactionPolicy?: (
-    policy: CompactionPolicy,
-  ) => CompactionPolicy | Promise<CompactionPolicy>;
-  readCodeModePolicy?: () => CodeModePolicy;
-  writeCodeModePolicy?: (policy: CodeModePolicy) => CodeModePolicy | Promise<CodeModePolicy>;
-  readModelPickerView?: () => ModelPickerView;
-  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
-  readExperiments?: () => ExperimentSnapshot;
-  writeExperiment?: (
-    id: ExperimentId,
-    enabled: boolean,
-  ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
-  /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
-  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
-  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /**
+   * The host's one handler map (`@volli/host-core/handlers`, VC-668), as far
+   * as the Session router projects it. The bridge forwards this one object;
+   * it carries no per-behaviour port of its own.
+   */
+  handlers: SessionRouterHandlers;
   diagnostics?: RpcDiagnosticLog;
   /** Optional payload-free timing tap for benchmark runs. */
   performanceObserver?: RpcProcedurePerformanceObserver;
@@ -192,22 +157,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         }
         const procedures = router.createCaller({
           caller: LOCAL_DESKTOP_CALLER,
-          runtime: options.runtime,
-          inspectModelAccess: options.inspectModelAccess,
-          readModelAccessDefaults: options.readModelAccessDefaults,
-          writeModelAccessDefault: options.writeModelAccessDefault,
-          readHiddenModels: options.readHiddenModels,
-          writeHiddenModels: options.writeHiddenModels,
-          readCompactionPolicy: options.readCompactionPolicy,
-          writeCompactionPolicy: options.writeCompactionPolicy,
-          readCodeModePolicy: options.readCodeModePolicy,
-          writeCodeModePolicy: options.writeCodeModePolicy,
-          readModelPickerView: options.readModelPickerView,
-          writeModelPickerView: options.writeModelPickerView,
-          readExperiments: options.readExperiments,
-          writeExperiment: options.writeExperiment,
-          createSession: options.createSession,
-          attachSession: options.attachSession,
+          handlers: options.handlers,
           diagnostics,
           transport: "electron-ipc",
           performanceObserver: options.performanceObserver,
@@ -234,8 +184,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const procedures = router.createCaller(
       {
         caller: LOCAL_DESKTOP_CALLER,
-        runtime: options.runtime,
-        inspectModelAccess: options.inspectModelAccess,
+        handlers: options.handlers,
         diagnostics,
         transport: "electron-ipc",
         performanceObserver: options.performanceObserver,

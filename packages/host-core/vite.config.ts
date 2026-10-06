@@ -22,6 +22,11 @@ export default defineConfig({
         "src/detached-work.ts",
         "src/automation-services.ts",
         "src/agent-services.ts",
+        // The host's one handler map and the socket's projection of it
+        // (VC-668): every door reaches a command through these, so a branch
+        // nobody drove is a door that behaves differently from the others.
+        "src/handlers/host-handlers.ts",
+        "src/agent-dispatch/projection.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",
         "src/blob-collect.ts",

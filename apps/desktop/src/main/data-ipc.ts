@@ -61,7 +61,6 @@ import {
   setTicketPriorityCommand,
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
-  executeTicketMove,
   trimFinishedTicketInBackground,
   withTicketWake,
 } from "@volli/host-core/board";
@@ -164,7 +163,6 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
-  TicketMovedNotice,
   TicketMoveRequest,
   TicketResult,
   TicketSetLabelsInput,
@@ -254,6 +252,11 @@ import {
   worktreeHomeDir,
 } from "@volli/host-core/worktree";
 import { worktreeDeps } from "./worktree-host";
+import type { HostHandlers } from "@volli/host-core/handlers";
+import type { HandlerCall } from "@volli/shared";
+
+/** The person at this desktop's own window, whose reply carries the board. */
+const DESKTOP_WINDOW_CALL: HandlerCall = { actor: { kind: "user" }, origin: "desktop-window" };
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
@@ -450,18 +453,13 @@ export function registerDataIpcHandlers(
      */
     releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
     /**
-     * Interrupts every live agent attachment of a ticket after a committed
-     * backward move. The manager records intent and confirmed Esc delivery in
-     * each Session ledger; it does not close the attachment or emit a planner
-     * lifecycle event. Absent (tests, degraded boot) means a no-op.
+     * The host's handler map (VC-668), as far as this legacy channel table
+     * still serves catalog commands: `volli:ticket-move` is the IPC projection
+     * of `handlers["ticket.move"]`, the one move every door reaches, its
+     * interrupts and armed arrival included. VC-565 deletes the channel when
+     * the renderer moves onto the board router.
      */
-    interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
-    /**
-     * Reports a renderer move only after its status change committed. Main's
-     * pending-arrival coordinator is the production consumer; absent tests are
-     * a no-op.
-     */
-    onDeliberateMove?: (notice: TicketMovedNotice) => void;
+    handlers: Pick<HostHandlers, "ticket.move">;
     /** The app's single durable Session Engine. */
     sessionEngine: SessionEngine | null;
     /**
@@ -595,13 +593,12 @@ export function registerDataIpcHandlers(
     }
   };
 
-  const movePorts = () => ({
+  // An archive's best-effort trim: the move's own lives in its handler.
+  const archiveTrimPorts = () => ({
     worktree: worktreeDeps(db),
     now: () => Date.now(),
     detachedWork: options.detachedWork,
     ...busySeam(),
-    interruptTicketSessions: options.interruptTicketSessions,
-    onDeliberateMove: options.onDeliberateMove,
     // The board projection travels in the IPC reply. Only the detached trim
     // needs a push; preserve flag-off renderer invalidation behavior.
     onMutation: (change: Omit<DataChangedEvent, "entity">) => {
@@ -887,11 +884,10 @@ export function registerDataIpcHandlers(
       };
     },
 
+    // The desktop window's projection of the host's move: the reply carries
+    // the committed board, so the handler echoes it no board change.
     "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
-      const moved = executeTicketMove(movePorts(), input, {
-        now: Date.now(),
-        actor: { kind: "user" },
-      });
+      const moved = options.handlers["ticket.move"](input, DESKTOP_WINDOW_CALL);
       return moved instanceof Promise
         ? moved.then((tickets) => ({ ok: true, tickets }))
         : { ok: true, tickets: moved };
@@ -972,7 +968,7 @@ export function registerDataIpcHandlers(
       releaseTicketToolOutput(input.ticketId);
       // An archive KEEPS the checkout, which makes an archived ticket the
       // longest-lived carrier of a dead dependency tree in the app (VC-340).
-      trimFinishedTicketInBackground(movePorts(), input.ticketId, ticket?.project_id);
+      trimFinishedTicketInBackground(archiveTrimPorts(), input.ticketId, ticket?.project_id);
       return { ok: true };
     },
 
