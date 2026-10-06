@@ -189,6 +189,8 @@ async function serve(
     /** A source that keeps replaying after it was cancelled. */
     ignoresCancel?: boolean;
     requestScope?: HostProtocolRequestScope;
+    /** The host's recent log (VC-699). */
+    logs?: Pick<Parameters<typeof sessionHandlersFrom>[0], "readLogs" | "followLogs">;
   } = {},
 ) {
   // The production refusal window (1 s) unless a test asks otherwise. The
@@ -215,7 +217,10 @@ async function serve(
       const changed = options.context?.(source);
       return {
         // The map over the ledger, as a root hands its router (VC-668).
-        handlers: sessionHandlersFrom({ runtime: changed?.runtime ?? source.runtime }),
+        handlers: sessionHandlersFrom({
+          runtime: changed?.runtime ?? source.runtime,
+          ...options.logs,
+        }),
         diagnostics: new RpcDiagnosticLog(),
         resourceWorkspace:
           changed?.resourceWorkspace ?? (({ id }) => (id === SESSION ? WORKSPACE : null)),
@@ -1433,5 +1438,72 @@ describe("every request in its own trace (VC-699)", () => {
         frame: { params: { path: 3 } },
       },
     ]);
+  });
+});
+
+describe("host.logs: the person's, never a Session's (VC-699)", () => {
+  const page = {
+    entries: [
+      {
+        cursor: "ring:1",
+        record: { ts: "2026-10-07T00:00:00.000Z", level: "info" as const, component: "c", msg: "m" },
+      },
+    ],
+    gap: false,
+    cursor: "ring:1",
+  };
+  const sessionActor: HostActor = { kind: "session", sessionId: SESSION, workspaceId: WORKSPACE };
+
+  it("answers a paired device, and refuses a Session's credential with verb-refused", async () => {
+    const reads: unknown[] = [];
+    const { listener } = await serve({
+      grants: {
+        "device-token": credential(device).grant,
+        "session-token": credential(sessionActor).grant,
+      },
+      logs: {
+        readLogs: (query) => {
+          reads.push(query);
+          return page;
+        },
+      },
+    });
+    const person = connect(listener.url, { features: ["host.logs"] });
+    expect(await person.client.logs.tail.query({ limit: 5 })).toStrictEqual(page);
+    const agent = connect(listener.url, { credential: "session-token", features: ["host.logs"] });
+    expect(await expectHostError(agent.client.logs.tail.query({}))).toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
+    });
+    // A connection that did not negotiate the feature reaches neither operation.
+    const ungranted = connect(listener.url, { features: ["sessions"] });
+    expect(await expectHostError(ungranted.client.logs.tail.query({}))).toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
+    });
+    expect(reads).toStrictEqual([{ limit: 5 }]);
+  });
+
+  it("follows the log over the wire, tracked by its newest line, and resumes after it", async () => {
+    let emit!: (batch: typeof page) => void;
+    const follows: unknown[] = [];
+    const { listener } = await serve({
+      logs: {
+        followLogs: (query, listener) => {
+          follows.push(query);
+          emit = listener as (batch: typeof page) => void;
+          return () => undefined;
+        },
+      },
+    });
+    const { client } = connect(listener.url, { features: ["host.logs"] });
+    const stream = recordSubscription((handlers) =>
+      client.logs.follow.subscribe({ minLevel: "info", lastEventId: "ring:0" }, handlers),
+    );
+    await stream.started;
+    emit(page);
+    expect(await stream.received(1)).toStrictEqual([{ id: "ring:1", data: page }]);
+    stream.unsubscribe();
+    expect(follows).toStrictEqual([{ minLevel: "info", after: "ring:0" }]);
   });
 });

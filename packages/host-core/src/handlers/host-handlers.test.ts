@@ -160,6 +160,10 @@ describe("the map", () => {
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
     ).toBe("Session reads are unavailable on this transport");
+    // A host that keeps no recent log says so (VC-699).
+    expect(await unavailable(() => empty["logs.tail"]({}, USER))).toBe(
+      "This host keeps no log to read",
+    );
     // A default needs Model Access as well as the database.
     expect(
       await unavailable(() =>
@@ -438,5 +442,28 @@ describe("ticket.move, the whole command", () => {
     const map = handlers({ interruptTicketSessions, worktree: undefined, now: undefined });
     await map["ticket.move"]({ projectId: PROJECT, ticketId: "t-1", toStatus: "todo" }, USER);
     expect(interruptTicketSessions).toHaveBeenCalledWith("t-1");
+  });
+});
+
+describe("the host's log (VC-699)", () => {
+  it("reads a page and follows the ring a host keeps", async () => {
+    const { createLogRing } = await import("../log/ring");
+    const ring = createLogRing();
+    const record = { ts: "2026-10-07T00:00:00.000Z", level: "info", component: "c", msg: "m" } as const;
+    ring.write(record, JSON.stringify(record));
+    const map = handlers({ logs: ring });
+    const page = await map["logs.tail"]({ limit: 5 }, USER);
+    expect(page.entries.map(({ record: { msg } }) => msg)).toEqual(["m"]);
+    const emitted: unknown[] = [];
+    const stop = await map["logs.follow"]({ after: page.cursor }, USER, {
+      emit: (batch) => {
+        emitted.push(batch);
+      },
+      fail: () => undefined,
+    });
+    ring.write({ ...record, msg: "next" }, "{}");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(emitted).toMatchObject([{ entries: [{ record: { msg: "next" } }], gap: false }]);
+    stop();
   });
 });

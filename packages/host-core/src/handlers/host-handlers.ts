@@ -49,6 +49,8 @@ import {
   type HandlerCall,
   type HiddenModelRef,
   type HostHandler,
+  type HostLogsBatch,
+  type HostLogsQuery,
   type HostHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -61,6 +63,7 @@ import {
 
 import type { DetachedWorkPort } from "../detached-work";
 import { withLogContext } from "../log/context";
+import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
@@ -184,6 +187,10 @@ export interface HostHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  /** The host's recent log, redacted and bounded (VC-699): a page after a cursor. */
+  readonly "logs.tail": HostHandler<HostLogsQuery, HostLogsBatch>;
+  /** The host's log as it is written, after a cursor's backlog. */
+  readonly "logs.follow": HostSubscriptionHandler<HostLogsQuery, HostLogsBatch>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -259,6 +266,8 @@ export interface HostHandlerOptions {
    * passes a forwarder.
    */
   readonly sessionReads?: SessionReadPort | null;
+  /** The host's in-memory recent log (VC-699), or null where this host keeps none. */
+  readonly logs?: LogRing | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -269,6 +278,7 @@ const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport"
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
+const LOGS_UNAVAILABLE = "This host keeps no log to read";
 
 /**
  * Runs a handler with the ids its input names joined to the operation's log
@@ -318,6 +328,7 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
+  const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
 
   return {
     "ticket.move": (input, call) =>
@@ -459,5 +470,8 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    "logs.tail": (query) => logs().read(query),
+    "logs.follow": async (query, _call, sink) =>
+      logs().follow(query, (batch) => void sink.emit(batch)),
   };
 }

@@ -3162,3 +3162,96 @@ describe("Session tRPC router", () => {
     expect(await diagnosticsPending).toEqual({ done: true, value: undefined });
   });
 });
+
+describe("host.logs on the router (VC-699)", () => {
+  const batch = (cursor: string) => ({
+    entries: [
+      {
+        cursor,
+        record: { ts: "2026-10-07T00:00:00.000Z", level: "info" as const, component: "c", msg: cursor },
+      },
+    ],
+    gap: false,
+    cursor,
+  });
+
+  it("follows from a cursor, and ends subscription-overflow when it falls behind", async () => {
+    const follows: unknown[] = [];
+    let unsubscribed = 0;
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: (query, listener) => {
+          follows.push(query);
+          // A burst past the stream's queue before the reader takes anything.
+          for (let index = 0; index < 300; index += 1) listener(batch(`r:${index}`));
+          return () => {
+            unsubscribed += 1;
+          };
+        },
+      }),
+    );
+    const stream = await caller.logs.follow({});
+    const seen: string[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of stream) seen.push((tracked as unknown as [string])[0]);
+      })(),
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(seen).toHaveLength(256);
+    expect(follows).toStrictEqual([{}]);
+    expect(unsubscribed).toBe(1);
+  });
+
+  it("ends subscription-source-failed when the host's log stops, after what it held", async () => {
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: (_query, listener, fail) => {
+          listener(batch("r:1"));
+          fail(new Error("ring gone"));
+          return () => undefined;
+        },
+      }),
+    );
+    const seen: unknown[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of await caller.logs.follow({})) seen.push(tracked);
+      })(),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("opens nothing for a caller that already left", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    let opened = false;
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: () => {
+          opened = true;
+          return () => undefined;
+        },
+      }),
+      { signal: abort.signal },
+    );
+    const stream = await caller.logs.follow({ after: "r:1" });
+    for await (const _ of stream) throw new Error("nothing should arrive");
+    expect(opened).toBe(false);
+  });
+
+  it("answers unavailable on a host that keeps no log", async () => {
+    const caller = createSessionRouter().createCaller(
+      sessionContext({ caller: LOCAL_DESKTOP_CALLER, runtime: {}, diagnostics: new RpcDiagnosticLog() }),
+    );
+    await expect(caller.logs.tail({})).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+  });
+});

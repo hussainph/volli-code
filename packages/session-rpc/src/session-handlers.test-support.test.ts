@@ -142,7 +142,7 @@ describe("sessionHandlersFrom", () => {
       performanceObserver: { record: () => {} },
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
-    // 21 existing router handlers, three queue operations, and four Session reads.
-    expect(Object.keys(context.handlers)).toHaveLength(28);
+    // 21 existing router handlers, three queue operations, four Session reads and two log reads.
+    expect(Object.keys(context.handlers)).toHaveLength(30);
   });
 });

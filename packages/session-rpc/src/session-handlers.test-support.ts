@@ -23,6 +23,8 @@ import {
   type ModelPurpose,
   type ModelSelection,
   type SessionReadVerb,
+  type HostLogsBatch,
+  type HostLogsQuery,
 } from "@volli/shared";
 
 import type {
@@ -66,6 +68,13 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
     workspaceId: string,
     args: Record<string, unknown>,
   ) => Promise<AgentResponse>;
+  /** The host's recent log (VC-699): host-core's ring. */
+  readLogs?: (query: HostLogsQuery) => HostLogsBatch;
+  followLogs?: (
+    query: HostLogsQuery,
+    listener: (batch: HostLogsBatch) => void,
+    fail: (error: unknown) => void,
+  ) => () => void;
 }
 
 function need<Port>(port: Port | undefined, message: string): Port {
@@ -78,6 +87,7 @@ const EXPERIMENTS = "Experimental settings are unavailable on this transport";
 const MODEL_ACCESS = "Model Access is unavailable on this transport";
 const PREFERENCES = "Model Access preferences are unavailable on this transport";
 const RUNTIME = "The Session runtime is unavailable on this host";
+const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
@@ -124,6 +134,13 @@ export function sessionHandlersFrom(ports: Omit<LegacySessionPorts, keyof Sessio
         (error) => sink.fail(error),
       ),
     "session.command": (request) => runtime("command")(request),
+    "logs.tail": (query) => need(ports.readLogs, LOGS)(query),
+    "logs.follow": async (query, _call, sink) =>
+      need(ports.followLogs, LOGS)(
+        query,
+        (batch) => void sink.emit(batch),
+        (error) => sink.fail(error),
+      ),
     "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
       runtime("command")({
         commandId,

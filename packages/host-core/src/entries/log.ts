@@ -31,5 +31,12 @@ export {
   type LogSink,
   MAX_LOG_LINE_BYTES,
 } from "../log/logger";
+export {
+  createLogRing,
+  LOG_PAGE_LIMIT,
+  LOG_RING_BOUNDS,
+  type LogRing,
+  type LogRingBounds,
+} from "../log/ring";
 export { hostLogger, hostLogLevel, installHostLog } from "../log/root";
 export { consoleSink, jsonLineSink, teeSinks } from "../log/sinks";

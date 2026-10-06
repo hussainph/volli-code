@@ -49,8 +49,8 @@ export type LogValue =
   | boolean
   | number
   | string
-  | readonly LogValue[]
-  | { readonly [field: string]: LogValue };
+  | LogValue[]
+  | { [field: string]: LogValue };
 
 /** One line, parsed. The four named keys are always present and never forged by a field. */
 export interface LogRecord {
@@ -234,6 +234,36 @@ function redactError(error: Error, depth: number): LogValue {
   if (typeof code === "string" || typeof code === "number")
     out["code"] = redactLogValue(code, depth);
   return out;
+}
+
+/* ------------------------------------------------------- host.logs (wire) */
+
+/** One line a host kept, with the cursor that names it (`<instance>:<seq>`, opaque to readers). */
+export interface HostLogEntry {
+  readonly cursor: string;
+  readonly record: LogRecord;
+}
+
+/** What a reader asks of a host's recent log: lines after a cursor, at or above a level. */
+export interface HostLogsQuery {
+  /** Strictly after this cursor; absent, the newest lines. */
+  readonly after?: string;
+  /** At most this many (the host caps it). */
+  readonly limit?: number;
+  /** Lines at or above this level only. */
+  readonly minLevel?: LogLevel;
+}
+
+/**
+ * Lines, oldest first. `gap` says lines after the reader's cursor are gone
+ * (evicted from the host's bounded memory, the host restarted, or more than
+ * one answer holds): a reader never mistakes a gap for silence. `cursor` is
+ * the newest line the host holds, to follow from.
+ */
+export interface HostLogsBatch {
+  readonly entries: readonly HostLogEntry[];
+  readonly gap: boolean;
+  readonly cursor: string;
 }
 
 /* ------------------------------------------------- the renderer's lines */
