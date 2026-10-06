@@ -9,6 +9,7 @@ import {
   createSessionProjectionCheckpoint,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   QUEUE_REVISION_CONFLICT,
+  type BoardEntry,
   type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
@@ -562,11 +563,11 @@ describe("binding procedures to the catalog (D2)", () => {
     expectTypeOf<
       CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>, CatalogKeyOf<SessionRouterEntry>>
     >().toEqualTypeOf<never>();
-    // Alone, the Session router leaves the board's command unserved; the union
+    // Alone, the Session router leaves the board's commands unserved; the union
     // over every router (host-router.ts) is the catalog exactly.
-    expectTypeOf<
-      CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>
-    >().toEqualTypeOf<"ticket.move">();
+    expectTypeOf<CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>>().toEqualTypeOf<
+      CatalogKeyOf<BoardEntry>
+    >();
     expectTypeOf<HostRouterCatalogBinding>().toEqualTypeOf<never>();
     expectTypeOf<HostRouterPathsDisjoint>().toEqualTypeOf<never>();
   });
