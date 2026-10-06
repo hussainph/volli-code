@@ -14,14 +14,18 @@
  *   Workspace-checked but needing no authority).
  *
  * In production the entries are Verb Registry rows, the router lives in
- * `packages/session-rpc/src/<area>-router.ts`, and the ledger is a host-core
- * function the composition root wires into the context ports.
+ * `packages/session-rpc/src/<area>-router.ts` (`board-router.ts` is the real
+ * one), and the ledger is a host-core handler in the host's one handler map
+ * (`@volli/host-core/handlers`), which the composition root hands to every
+ * door as one object.
  */
 import type { SessionId, WorkspaceId } from "@volli/host-protocol";
 import {
   COMMAND_INTENT_CONFLICT,
   type CatalogKeyOf,
   type CommandIntentConflict,
+  type HostHandler,
+  type HostHandlerKeyOf,
   type VerbEntry,
 } from "@volli/shared";
 import { z } from "zod";
@@ -32,6 +36,7 @@ import {
   type CatalogMismatch,
   type ProcedurePaths,
   type ResourceRelation,
+  type RouterContextPorts,
   type WorkspaceResource,
 } from "./catalog";
 
@@ -102,8 +107,9 @@ const receiptSchema = z.object({
 export type ExampleReceipt = z.output<typeof receiptSchema>;
 
 /**
- * The area's handler half: in production a host-core function, the SAME one
- * the socket verb calls (HP step 3). Idempotent by command id: the same
+ * The area's command half: in production the host-core handlers behind
+ * `handlers["ticket.create"]` and `handlers["ticket.move"]`, the SAME ones
+ * the socket verbs project (HP step 2). Idempotent by command id: the same
  * intent answers its receipt again; another intent under that id is a
  * branded conflict.
  */
@@ -162,10 +168,34 @@ export class ExampleTicketLedger {
   }
 }
 
-/** The area router's context: the catalog's ports, plus the area's own. */
-export interface ExampleAreaContext extends CatalogCallerContext {
-  tickets: ExampleTicketLedger;
+/**
+ * The slice of the host's handler map the area projects, keyed by catalog
+ * key: declared structurally, because session-rpc cannot import host-core.
+ */
+export interface ExampleAreaHandlers {
+  readonly "ticket.create": HostHandler<
+    { commandId: string; parentTicketId: string; title: string },
+    ExampleReceipt
+  >;
+  readonly "ticket.move": HostHandler<
+    { commandId: string; ticketId: string; afterTicketId: string },
+    ExampleReceipt
+  >;
 }
+
+type AssertNever<Type extends never> = Type;
+
+/** Every key the family projects has a handler, and no handler lacks a key. */
+export type ExampleAreaHandlersCoverage = AssertNever<
+  CatalogMismatch<keyof ExampleAreaHandlers & string, HostHandlerKeyOf<ExampleAreaEntry>>
+>;
+
+/** The area router's context: the catalog's ports, plus the one map. No other port. */
+export interface ExampleAreaContext extends CatalogCallerContext {
+  handlers: ExampleAreaHandlers;
+}
+
+export type ExampleAreaContextPorts = AssertNever<RouterContextPorts<ExampleAreaContext>>;
 
 // ---- Step 2: the procedures, from the area's own builder family -----------
 
@@ -187,7 +217,7 @@ export function createExampleAreaRouter() {
         (input) => ticketResource(input.parentTicketId),
       )
         .output(receiptSchema)
-        .mutation(({ ctx, input }) => ctx.tickets.create(input)),
+        .mutation(({ ctx, input }) => ctx.handlers["ticket.create"](input, ctx.call)),
       move: workspaceProcedure(
         "ticket.move",
         z.object({ commandId, ticketId, afterTicketId: ticketId }),
@@ -200,7 +230,7 @@ export function createExampleAreaRouter() {
         ],
       )
         .output(receiptSchema)
-        .mutation(({ ctx, input }) => ctx.tickets.move(input)),
+        .mutation(({ ctx, input }) => ctx.handlers["ticket.move"](input, ctx.call)),
     },
   });
 }
@@ -209,7 +239,6 @@ export type ExampleAreaRouter = ReturnType<typeof createExampleAreaRouter>;
 
 // ---- Step 3: the binding assertion (production: the composition root's) ---
 
-type AssertNever<Type extends never> = Type;
 /** Every example procedure has its entry, and every entry its procedure. */
 export type ExampleAreaCatalogBinding = AssertNever<
   CatalogMismatch<
@@ -218,7 +247,7 @@ export type ExampleAreaCatalogBinding = AssertNever<
   >
 >;
 
-/** The context ports, wired as a composition root wires them to host-core. */
+/** The context, wired as a composition root wires it: the policy ports and one map. */
 export function exampleAreaContext(
   tickets: ExampleTicketLedger,
   caller: CatalogCallerContext["caller"],
@@ -226,7 +255,10 @@ export function exampleAreaContext(
 ): ExampleAreaContext {
   return {
     caller,
-    tickets,
+    handlers: {
+      "ticket.create": (input) => tickets.create(input),
+      "ticket.move": (input) => tickets.move(input),
+    },
     diagnostics,
     resourceWorkspace: (resource) =>
       resource.kind === TICKET_RESOURCE ? tickets.workspaceOf(resource.id) : null,

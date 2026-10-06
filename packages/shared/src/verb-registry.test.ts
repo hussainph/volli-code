@@ -6,6 +6,7 @@ import {
   AGENT_COMMANDS,
   agentCommandBindingsFrom,
   agentCommandsFrom,
+  BOARD_ENTRIES,
   CATALOG_ENTRIES,
   catalogActorOf,
   catalogEntriesFrom,
@@ -25,6 +26,7 @@ import {
 } from "./verb-registry";
 import type {
   CatalogKey,
+  CatalogKeyOf,
   CatalogKeyScopedTo,
   HostApiCatalogCoverage,
   HostApiKey,
@@ -1252,7 +1254,13 @@ describe("the host-protocol command catalog (VC-564)", () => {
     expect(catalogActorOf(declared!)).toBe("session-own");
     expect(declared!.actor).toBe("session");
     expect(verbTier(socketVerb)).toBe("coordination");
-    for (const entry of CATALOG_ENTRIES) expect(catalogActorOf(entry)).toBe(entry.actor);
+    // Every Session-router row judges its own `actor`; `ticket.move` keeps
+    // `session` for the socket and admits only the person on a router.
+    for (const entry of CATALOG_ENTRIES) {
+      expect(catalogActorOf(entry), entry.key).toBe(
+        entry.key === "ticket.move" ? "user" : entry.actor,
+      );
+    }
   });
 
   it("looks a key up in any checked catalog", () => {
@@ -1286,9 +1294,20 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.reconcile": ["workspace", "natural"],
     "labDiagnostics.list": ["host", "read"],
     "labDiagnostics.subscribe": ["host", "read"],
-  } as const satisfies Record<CatalogKey, readonly [string, string]>;
+  } as const satisfies Record<
+    Exclude<CatalogKey, CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>>,
+    readonly [string, string]
+  >;
 
-  it("declares every Session-router procedure, with its scope and idempotency", () => {
+  /** The board router: the first command both kinds of door serve (VC-668). */
+  const BOARD_ROUTER = {
+    "ticket.move": ["workspace", "natural"],
+  } as const satisfies Record<
+    CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>,
+    readonly [string, string]
+  >;
+
+  it("declares every router procedure, with its scope and idempotency", () => {
     expect(
       Object.fromEntries(
         CATALOG_ENTRIES.map((entry) => [
@@ -1296,8 +1315,14 @@ describe("the host-protocol command catalog (VC-564)", () => {
           [entry.catalog.scope, entry.catalog.idempotency],
         ]),
       ),
-    ).toEqual(SESSION_ROUTER);
-    for (const entry of CATALOG_ENTRIES) {
+    ).toEqual({ ...BOARD_ROUTER, ...SESSION_ROUTER });
+    expectTypeOf<
+      Exclude<
+        CatalogKey,
+        CatalogKeyOf<(typeof BOARD_ENTRIES)[number]> | keyof typeof SESSION_ROUTER
+      >
+    >().toEqualTypeOf<never>();
+    for (const entry of CATALOG_ENTRIES.filter(({ key }) => key in SESSION_ROUTER)) {
       expect(VERB_SCOPES).toContain(entry.catalog.scope);
       expect(VERB_IDEMPOTENCIES).toContain(entry.catalog.idempotency);
       // The person's, on no agent surface (D3, D8).
@@ -1308,12 +1333,14 @@ describe("the host-protocol command catalog (VC-564)", () => {
 
   it("projects onto the WebSocket every entry but the lab's", () => {
     const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("hostApi"));
-    expect(projected.map((entry) => entry.key)).toEqual(
-      Object.keys(SESSION_ROUTER).filter((key) => !key.startsWith("labDiagnostics.")),
-    );
+    expect(projected.map((entry) => entry.key)).toEqual([
+      ...Object.keys(BOARD_ROUTER),
+      ...Object.keys(SESSION_ROUTER).filter((key) => !key.startsWith("labDiagnostics.")),
+    ]);
     expectTypeOf<HostApiCatalogCoverage>().toEqualTypeOf<never>();
     expectTypeOf<Exclude<HostApiKey, CatalogKey>>().toEqualTypeOf<never>();
     expectTypeOf<CatalogKeyScopedTo<"workspace">>().toEqualTypeOf<
+      | "ticket.move"
       | "sessions.create"
       | "sessions.attach"
       | "session.snapshot"

@@ -17,7 +17,11 @@ import {
   type SessionRpcIpcResponse,
 } from "@volli/shared";
 
-import type { RegisterSessionRpcIpcOptions } from "../../../main/session-rpc-ipc";
+import {
+  sessionContext,
+  sessionHandlersFrom,
+  type LegacySessionPorts,
+} from "@volli/session-rpc/testing";
 import {
   assertIdentityConsumed,
   judgeNextRegistrationAs,
@@ -32,9 +36,10 @@ import { createSessionRpcClient } from "./session-rpc-ipc-link";
  * test's mocked router (`withHarnessIdentity`); part B's handshake will mint
  * it on the WebSocket.
  */
-export type SessionRouterHost = Omit<RegisterSessionRpcIpcOptions, "performanceObserver"> & {
+export type SessionRouterHost = Omit<LegacySessionPorts, "diagnostics" | "performanceObserver"> & {
   caller: RouterCaller;
   resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
+  diagnostics?: RpcDiagnosticLog;
 };
 
 type Handler = (event: { sender: FakeSender }, ...args: unknown[]) => unknown;
@@ -66,9 +71,13 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
     async open(host) {
       // Import after the test's Electron mock and this module's fake are initialized.
       const { registerSessionRpcIpcHandlers } = await import("../../../main/session-rpc-ipc");
-      const { caller, resourceWorkspace, ...options } = host;
+      const { caller, resourceWorkspace, diagnostics, ...ports } = host;
       judgeNextRegistrationAs({ caller, resourceWorkspace });
-      const registration = registerSessionRpcIpcHandlers(options);
+      // One object, as main hands it: the map over the ports the case states.
+      const registration = registerSessionRpcIpcHandlers({
+        handlers: sessionHandlersFrom(ports),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+      });
       assertIdentityConsumed();
       // Taken now: the next registration replaces the fake's map entries.
       const invoke = fakeElectron.handlers.get(SESSION_RPC_IPC_CHANNEL)!;
@@ -122,11 +131,12 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
 export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRouter> {
   return webSocketContractLink({
     router: createSessionRouter(),
-    createContext: (host) => ({
-      ...host,
-      diagnostics: host.diagnostics ?? new RpcDiagnosticLog(),
-      transport: "unknown",
-    }),
+    createContext: (host) =>
+      sessionContext({
+        ...host,
+        diagnostics: host.diagnostics ?? new RpcDiagnosticLog(),
+        transport: "unknown",
+      }),
   });
 }
 

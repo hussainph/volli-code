@@ -10,6 +10,7 @@ import {
   isSessionStreamFrame,
 } from "@volli/session-engine";
 import { createSessionRouter, LOCAL_DESKTOP_CALLER, RpcDiagnosticLog } from "./index";
+import { sessionContext } from "./session-handlers.test-support";
 
 async function fixture(
   options: {
@@ -114,12 +115,14 @@ async function fixture(
       provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
     });
   }
-  const caller = createSessionRouter().createCaller({
-    caller: LOCAL_DESKTOP_CALLER,
-    runtime,
-    diagnostics: new RpcDiagnosticLog(),
-    transport: "electron-ipc",
-  });
+  const caller = createSessionRouter().createCaller(
+    sessionContext({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "electron-ipc",
+    }),
+  );
   const stop = (commandId = "stop", reason?: string) =>
     caller.session.command({
       commandId,
