@@ -127,9 +127,17 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
  * window would otherwise exist nowhere but a renderer that is about to go.
  */
 export async function flushAllPendingAppState(): Promise<boolean> {
-  flushPendingAppState();
-  const results = await Promise.all(writesInFlight.values());
-  return results.every(Boolean);
+  let ok = true;
+  // Each key's in-flight write is the TAIL of its in-order chain
+  // (`persistInOrder`), so awaiting it waits out an older write's slow ack
+  // and then the latest value's own. Repeated until nothing is pending, so a
+  // write scheduled while this waited is answered for too.
+  do {
+    flushPendingAppState();
+    const results = await Promise.all(writesInFlight.values());
+    ok = ok && results.every(Boolean);
+  } while (pendingWrites.size > 0);
+  return ok;
 }
 
 /** Answers main's flush request through the preload bridge, when there is one. */

@@ -10,24 +10,35 @@
  * in a renderer that is about to go.
  *
  * So main asks first: it pushes `volli:client-state-flush` with a request id
- * to every window, each renderer sends its pending writes and answers
- * `volli:client-state-flushed` once main has acknowledged them, and main
- * destroys the windows when every answer is in — or when the bound runs out,
- * because a wedged renderer must not keep a quit waiting forever. A window
- * that never answers is logged, and destroyed anyway.
+ * to every window, and each renderer sends its pending writes, waits for its
+ * in-order write chain (the LATEST value, even behind an older write's slow
+ * ack), and answers `volli:client-state-flushed`. Each target hears its own
+ * ack through {@link FlushTarget.onAcked} — at once, and even after the
+ * caller's bound has run out — so the two callers can choose differently:
+ *
+ * - **Menu-bar entry** is not power-off. It destroys a window only from its
+ *   ack. Past {@link MENU_BAR_FLUSH_OVERDUE_MS} it logs and keeps the window
+ *   hidden; a window is never destroyed unflushed.
+ * - **System shutdown** must not stall power-off. Its accepted quit joins the
+ *   flush and waits at most {@link SHUTDOWN_FLUSH_TIMEOUT_MS} before exiting.
  *
  * No Electron import: the windows are a port, so the whole barrier is tested
  * under plain Node.
  */
 
-/** How long main waits for every renderer's ack before destroying regardless. */
-export const CLIENT_STATE_FLUSH_TIMEOUT_MS = 1_000;
+/** Menu-bar entry: past this with no ack, log and keep the window hidden (never destroyed). */
+export const MENU_BAR_FLUSH_OVERDUE_MS = 10_000;
+
+/** System shutdown: the longest the accepted quit waits for renderers before exiting. */
+export const SHUTDOWN_FLUSH_TIMEOUT_MS = 2_000;
 
 /** The one thing main needs of a window's renderer here. */
 export interface FlushTarget {
   isDestroyed(): boolean;
   /** `webContents.send("volli:client-state-flush", requestId)`. */
   requestFlush(requestId: string): void;
+  /** This renderer acked: every pending write reached main. Called once, even after the bound. */
+  onAcked?(): void;
 }
 
 export interface ClientStateFlushPorts {
@@ -41,14 +52,18 @@ export interface ClientStateFlushPorts {
 
 export interface FlushOutcome {
   readonly acked: number;
-  /** Renderers that did not answer inside the bound. */
+  /** Renderers that had not answered when the bound ran out. */
   readonly unanswered: number;
 }
 
 export interface ClientStateFlush {
-  /** Ask every live target to flush; resolves when all acked or the bound ran out. Never rejects. */
-  flush(targets: readonly FlushTarget[], timeoutMs?: number): Promise<FlushOutcome>;
-  /** One renderer's `volli:client-state-flushed`. Unknown or late ids are ignored. */
+  /**
+   * Ask every live target to flush; resolves when all acked or `timeoutMs`
+   * ran out, whichever is first. Never rejects. A target's late ack still
+   * reaches its {@link FlushTarget.onAcked}.
+   */
+  flush(targets: readonly FlushTarget[], timeoutMs: number): Promise<FlushOutcome>;
+  /** One renderer's `volli:client-state-flushed`. Unknown or repeated ids are ignored. */
   acknowledge(requestId: unknown): void;
 }
 
@@ -60,47 +75,48 @@ const realTimers = {
 export function createClientStateFlush(ports: ClientStateFlushPorts): ClientStateFlush {
   const timers = ports.timers ?? realTimers;
   const log = ports.log ?? ((line: string) => console.warn(line));
-  /** Request id → the ack it settles. */
+  /** Request id → what its ack settles. Kept past the bound, so a late ack still lands. */
   const waiting = new Map<string, () => void>();
 
   return {
-    flush(targets, timeoutMs = CLIENT_STATE_FLUSH_TIMEOUT_MS) {
+    flush(targets, timeoutMs) {
       const live = targets.filter((target) => !target.isDestroyed());
       if (live.length === 0) return Promise.resolve({ acked: 0, unanswered: 0 });
       return new Promise<FlushOutcome>((resolve) => {
-        const ids: string[] = [];
         let acked = 0;
         let outstanding = live.length;
         let settled = false;
         let timer: unknown = null;
         // Called once: by the last answer (which clears the bound) or by the
-        // bound (after which no answer is waited on any more).
+        // bound (after which answers only reach their targets).
         const finish = (): void => {
           settled = true;
           if (timer !== null) timers.clearTimeout(timer);
-          for (const requestId of ids) waiting.delete(requestId);
           const unanswered = live.length - acked;
           if (unanswered > 0) {
             log(
-              `[menu-bar] ${unanswered} window(s) did not confirm their drafts were saved; closing anyway`,
+              `[client-state] ${unanswered} window(s) had not confirmed their drafts were saved after ${timeoutMs}ms`,
             );
           }
           resolve({ acked, unanswered });
         };
         const answered = (ok: boolean): void => {
+          if (settled) return;
           if (ok) acked += 1;
           outstanding -= 1;
           if (outstanding === 0) finish();
         };
         for (const target of live) {
           const requestId = ports.newRequestId();
-          ids.push(requestId);
-          waiting.set(requestId, () => answered(true));
+          waiting.set(requestId, () => {
+            target.onAcked?.();
+            answered(true);
+          });
           try {
             target.requestFlush(requestId);
           } catch (error) {
             // A renderer gone between the check and the send has nothing to flush.
-            log(`[menu-bar] could not ask a window to flush: ${String(error)}`);
+            log(`[client-state] could not ask a window to flush: ${String(error)}`);
             waiting.delete(requestId);
             answered(false);
           }

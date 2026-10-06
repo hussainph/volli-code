@@ -217,7 +217,11 @@ import {
   electronMenuBarPower,
   electronMenuBarTray,
 } from "./menu-bar-electron";
-import { createClientStateFlush } from "./client-state-flush";
+import {
+  createClientStateFlush,
+  MENU_BAR_FLUSH_OVERDUE_MS,
+  SHUTDOWN_FLUSH_TIMEOUT_MS,
+} from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -1472,6 +1476,12 @@ const appStartup = app.whenReady().then(async () => {
   let abortRepack = noQuitAction;
   /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
   let systemShutdownTeardown = noQuitAction;
+  /**
+   * The flag-on shutdown's draft flush (VC-577), joined into the accepted
+   * quit's host shutdown below so `app.exit` waits for it — bounded, so
+   * power-off is never stalled. Resolved unless a shutdown teardown ran.
+   */
+  let systemShutdownFlush: Promise<unknown> = Promise.resolve();
   let hostClosing = false;
   /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
   let menuBarHost: MenuBarHost | null = null;
@@ -1508,7 +1518,7 @@ const appStartup = app.whenReady().then(async () => {
       registerAcceptedQuitCoordinator({
         lifecycle: app,
         shutdownNativeSessions: async () => {
-          await hostCore.stop("quit");
+          await Promise.all([hostCore.stop("quit"), systemShutdownFlush]);
         },
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
@@ -1873,7 +1883,12 @@ const appStartup = app.whenReady().then(async () => {
   // and the windows' draft flush, with nothing that could refuse power-off.
   systemShutdownTeardown = () => {
     ptyManager.killAll();
-    void flushWindowState(liveWindows());
+    // Every window, a hidden menu-bar one included; joined by the accepted
+    // quit's shutdown above, never longer than the bound.
+    systemShutdownFlush = flushWindowState(
+      BrowserWindow.getAllWindows(),
+      SHUTDOWN_FLUSH_TIMEOUT_MS,
+    );
   };
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
@@ -1988,13 +2003,19 @@ const appStartup = app.whenReady().then(async () => {
       clientStateFlush.acknowledge(args[0]);
     },
   );
-  const flushWindowState = (windows: readonly BrowserWindow[]) =>
+  const flushWindowState = (
+    windows: readonly BrowserWindow[],
+    timeoutMs: number,
+    onAcked?: (window: BrowserWindow) => void,
+  ) =>
     clientStateFlush.flush(
       windows.map((window) => ({
         isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
         requestFlush: (requestId: string) =>
           window.webContents.send("volli:client-state-flush" satisfies VolliIpcEvent, requestId),
+        ...(onAcked === undefined ? {} : { onAcked: () => onAcked(window) }),
       })),
+      timeoutMs,
     );
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
@@ -2251,22 +2272,42 @@ const appStartup = app.whenReady().then(async () => {
       // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
       // confirms already answered, and a window `close` would ask again.
       // `destroy` skips `beforeunload`, so each renderer is asked to flush
-      // its pending drafts first and the windows go once it has acked
-      // (bounded). Hidden at once, so the person sees the quit take effect.
+      // its pending drafts first, and each window is destroyed only from its
+      // own ack. Hidden at once, so the person sees the quit take effect.
+      // Menu-bar entry is not power-off: a window that has not acked is never
+      // destroyed — past the overdue mark it is logged and stays hidden until
+      // a reveal reuses it or a real quit tears it down.
       closeAll: () => {
         const closing = liveWindows();
         for (const window of closing) {
           retiringWindows.add(window);
           window.hide();
         }
-        void flushWindowState(closing).finally(() => {
-          for (const window of closing) {
-            if (!window.isDestroyed()) window.destroy();
+        void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
+          // A reveal that reused this window took it back: keep it.
+          if (!retiringWindows.has(window) || window.isDestroyed()) return;
+          retiringWindows.delete(window);
+          window.destroy();
+        }).then(({ unanswered }) => {
+          if (unanswered > 0) {
+            console.warn(
+              `[menu-bar] ${unanswered} window(s) still saving drafts; kept hidden, not destroyed`,
+            );
           }
         });
       },
+      // A hidden window still waiting on its flush is reused rather than
+      // duplicated: its renderer, and its unsaved drafts, are still there.
       open: () => {
-        createOwnedWindow();
+        const retained = BrowserWindow.getAllWindows().find(
+          (window) => !window.isDestroyed() && retiringWindows.has(window),
+        );
+        if (retained === undefined) {
+          createOwnedWindow();
+          return;
+        }
+        retiringWindows.delete(retained);
+        revealWindow(retained, nativeWindowPolicy);
       },
     },
     dock: {
@@ -2830,8 +2871,9 @@ const appStartup = app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open. A menu-bar host (VC-577)
     // also leaves menu-bar mode and shows its Dock icon again; otherwise the
-    // reveal is exactly this re-creation.
-    if (BrowserWindow.getAllWindows().length === 0) {
+    // reveal is exactly this re-creation. A window menu-bar entry hid while
+    // its drafts flush does not count as open (flag off: there is none).
+    if (liveWindows().length === 0) {
       menuBar.reveal();
     }
   });

@@ -20,6 +20,12 @@ import { readFileSync } from "node:fs";
 import { parseSync, transformSync } from "vite/rolldown/utils";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostRuntimeOwner } from "@volli/host-core";
+import {
+  createClientStateFlush,
+  MENU_BAR_FLUSH_OVERDUE_MS,
+  SHUTDOWN_FLUSH_TIMEOUT_MS,
+  type FlushTarget,
+} from "./client-state-flush";
 import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import {
   planUnsavedQuit,
@@ -162,6 +168,13 @@ function liftedQuitPath(options: {
   declineUnsaved: boolean;
   cloud?: boolean;
   menuBar?: ReturnType<typeof menuBarFake> | null;
+  /**
+   * How each window's renderer answers a draft flush, through the REAL
+   * `createClientStateFlush`: after `answerAfterMs` (it sends its draft,
+   * then acks), or never.
+   */
+  renderer?: { answerAfterMs: number } | "silent";
+  shutdownFlushTimeoutMs?: number;
 }) {
   const calls: string[] = [];
   const listeners: Array<(event: QuitEvent) => void> = [];
@@ -229,19 +242,40 @@ function liftedQuitPath(options: {
       }),
     },
     console: { error: vi.fn() },
-    // Menu-bar entry's flush barrier (VC-577), as index.ts names it.
-    liveWindows: () => ["window"],
-    flushWindowState: (windows: unknown[]) => {
+    // The draft flush barrier (VC-577), as index.ts names and builds it:
+    // the real barrier, over renderers this test scripts.
+    BrowserWindow: { getAllWindows: () => ["window"] },
+    SHUTDOWN_FLUSH_TIMEOUT_MS: options.shutdownFlushTimeoutMs ?? SHUTDOWN_FLUSH_TIMEOUT_MS,
+    flushWindowState: (windows: unknown[], timeoutMs: number) => {
       calls.push(`windows.flush:${windows.length}`);
-      return Promise.resolve();
+      const renderer = options.renderer ?? { answerAfterMs: 0 };
+      return flusher.flush(
+        windows.map((): FlushTarget => ({
+          isDestroyed: () => false,
+          requestFlush: (requestId) => {
+            if (renderer === "silent") return;
+            setTimeout(() => {
+              calls.push("renderer.draft-sent");
+              flusher.acknowledge(requestId);
+            }, renderer.answerAfterMs);
+          },
+        })),
+        timeoutMs,
+      );
     },
   };
+  let nextRequest = 0;
+  const flusher = createClientStateFlush({
+    newRequestId: () => `flush-${++nextRequest}`,
+    log: (line) => calls.push(`flush.log:${line}`),
+  });
   // Boot order as in index.ts: the gates start as no-ops, prepareHostQuit and
   // the quit hold are created, and only later does each gate get its body.
   scope["terminalQuit"] = evaluate(initializerOf("terminalQuit"), scope);
   scope["unsavedQuit"] = evaluate(initializerOf("unsavedQuit"), scope);
   scope["abortRepack"] = evaluate(initializerOf("abortRepack"), scope);
   scope["systemShutdownTeardown"] = evaluate(initializerOf("systemShutdownTeardown"), scope);
+  scope["systemShutdownFlush"] = evaluate(initializerOf("systemShutdownFlush"), scope);
   scope["prepareHostQuit"] = evaluate(initializerOf("prepareHostQuit"), scope);
   const lifecycleCall = exactlyOne(
     callsTo("createSessionRuntimeLifecycle"),
@@ -398,6 +432,44 @@ describe("index.ts quit wiring", () => {
     expect(quitAlreadyRefused(event)).toBe(false);
     expect(await quit.exited).toBe(0);
     expect(quit.hostCore.stop).toHaveBeenCalledOnce();
+    // The flush is joined: the renderer's draft went out before the exit.
+    expect(quit.calls).toContain("renderer.draft-sent");
+  });
+
+  it("flag on, system shutdown: exit waits for a responsive renderer's draft (the re-check probe)", async () => {
+    const quit = liftedQuitPath({
+      declineUnsaved: true,
+      cloud: true,
+      renderer: { answerAfterMs: 50 },
+    });
+    quit.scope["menuBarHost"] = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    let draftSentAtExit = false;
+    const exited = quit.exited.then((code) => {
+      draftSentAtExit = quit.calls.includes("renderer.draft-sent");
+      return code;
+    });
+    quit.listeners[0]?.({ preventDefault: vi.fn() });
+    // The host stops at once; the renderer answers 50ms later, inside the bound.
+    expect(await exited).toBe(0);
+    expect(draftSentAtExit).toBe(true);
+  });
+
+  it("flag on, system shutdown: a silent renderer never stalls power-off past the bound", async () => {
+    const quit = liftedQuitPath({
+      declineUnsaved: true,
+      cloud: true,
+      renderer: "silent",
+      shutdownFlushTimeoutMs: 30,
+    });
+    quit.scope["menuBarHost"] = menuBarFake("menu-bar", quit.calls, { shuttingDown: true });
+    const event = { preventDefault: vi.fn() };
+    quit.listeners[0]?.(event);
+    expect(await quit.exited).toBe(0);
+    expect(quitAlreadyRefused(event)).toBe(false);
+    expect(quit.calls).not.toContain("renderer.draft-sent");
+    expect(quit.calls).toEqual(
+      expect.arrayContaining([expect.stringContaining("flush.log:[client-state] 1 window(s)")]),
+    );
   });
 
   it("flag off, system shutdown noted: today's confirms, and a decline still refuses", async () => {
@@ -467,7 +539,8 @@ function windowsFake(count: number) {
     restore,
     focus,
   }));
-  return { BrowserWindow: { getAllWindows: () => all }, restore, focus };
+  // Flag off nothing is ever retiring, so the live windows are all of them.
+  return { BrowserWindow: { getAllWindows: () => all }, liveWindows: () => all, restore, focus };
 }
 
 describe("index.ts window-return wiring (VC-577)", () => {
@@ -523,35 +596,142 @@ describe("index.ts window-return wiring (VC-577)", () => {
   });
 });
 
+/** A window as closeAll and open touch it. */
+function fakeWindow(name: string, calls: string[]) {
+  let destroyed = false;
+  return {
+    name,
+    hide: () => calls.push(`${name}.hide`),
+    isDestroyed: () => destroyed,
+    destroy: () => {
+      destroyed = true;
+      calls.push(`${name}.destroy`);
+    },
+  };
+}
+
 describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
-  it("hides the windows, waits for every renderer's flush ack, and only then destroys them", async () => {
+  function liftedEntry() {
     const ports = argument(exactlyOne(callsTo("createMenuBarHost"), "createMenuBarHost(...)"), 0);
-    const closeAll = objectProperty(objectProperty(ports, "windows"), "closeAll");
+    const windowsPort = objectProperty(ports, "windows");
     const calls: string[] = [];
-    const window = (name: string) => ({
-      hide: () => calls.push(`${name}.hide`),
-      isDestroyed: () => false,
-      destroy: () => calls.push(`${name}.destroy`),
-    });
-    const windows = [window("a"), window("b")];
+    const a = fakeWindow("a", calls);
+    const b = fakeWindow("b", calls);
+    const all = [a, b];
     const retiringWindows = new WeakSet<object>();
-    const flushed = Promise.withResolvers<void>();
-    evaluate<() => void>(closeAll, {
-      liveWindows: () => windows,
-      retiringWindows,
-      flushWindowState: (closing: unknown[]) => {
-        calls.push(`flush:${closing.length}`);
-        return flushed.promise;
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    let nextRequestId = 0;
+    const flusher = createClientStateFlush({
+      newRequestId: () => `req-${++nextRequestId}`,
+      timers: {
+        setTimeout: (run) => {
+          nextTimer += 1;
+          timers.set(nextTimer, run);
+          return nextTimer;
+        },
+        clearTimeout: (handle) => {
+          timers.delete(handle as number);
+        },
       },
-    })();
-    expect(calls).toEqual(["a.hide", "b.hide", "flush:2"]);
-    // Retired at once: a reopen during the flush builds a fresh window.
-    expect(windows.every((each) => retiringWindows.has(each))).toBe(true);
+      log: () => {},
+    });
+    const requests = new Map<string, string>();
+    const createOwnedWindow = vi.fn();
+    const revealWindow = vi.fn();
+    const warn = vi.fn();
+    const scope = {
+      liveWindows: () => all.filter((each) => !each.isDestroyed() && !retiringWindows.has(each)),
+      retiringWindows,
+      MENU_BAR_FLUSH_OVERDUE_MS,
+      // index.ts's flushWindowState over the real barrier; each request id
+      // is remembered per window so the test answers as that renderer.
+      flushWindowState: (
+        closing: ReturnType<typeof fakeWindow>[],
+        timeoutMs: number,
+        onAcked: (window: ReturnType<typeof fakeWindow>) => void,
+      ) => {
+        calls.push(`flush:${closing.length}:${timeoutMs}`);
+        return flusher.flush(
+          closing.map((window) => ({
+            isDestroyed: () => window.isDestroyed(),
+            requestFlush: (requestId: string) => requests.set(window.name, requestId),
+            onAcked: () => onAcked(window),
+          })),
+          timeoutMs,
+        );
+      },
+      console: { warn },
+      BrowserWindow: { getAllWindows: () => all.filter((each) => !each.isDestroyed()) },
+      createOwnedWindow,
+      revealWindow,
+      nativeWindowPolicy: { kind: "native" },
+    };
+    return {
+      closeAll: evaluate<() => void>(objectProperty(windowsPort, "closeAll"), scope),
+      open: evaluate<() => void>(objectProperty(windowsPort, "open"), scope),
+      count: evaluate<() => number>(objectProperty(windowsPort, "count"), scope),
+      ack: (name: string) => flusher.acknowledge(requests.get(name)),
+      overdue: () => {
+        for (const [id, run] of timers) {
+          timers.delete(id);
+          run();
+        }
+      },
+      calls,
+      a,
+      b,
+      retiringWindows,
+      createOwnedWindow,
+      revealWindow,
+      warn,
+    };
+  }
+
+  it("hides every window, then destroys each one only from its own renderer's flush ack", async () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    expect(entry.calls).toEqual(["a.hide", "b.hide", `flush:2:${MENU_BAR_FLUSH_OVERDUE_MS}`]);
+    // Retired at once: hidden windows no longer count as open.
+    expect(entry.count()).toBe(0);
+    entry.ack("a");
+    expect(entry.calls.at(-1)).toBe("a.destroy");
+    expect(entry.b.isDestroyed()).toBe(false);
+    entry.ack("b");
+    expect(entry.calls.at(-1)).toBe("b.destroy");
     await new Promise((resolve) => setImmediate(resolve));
-    expect(calls).not.toContain("a.destroy");
-    flushed.resolve();
+    expect(entry.warn).not.toHaveBeenCalled();
+  });
+
+  it("never destroys an unflushed window: overdue logs and keeps it hidden until its ack", async () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.overdue();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(calls.slice(-2)).toEqual(["a.destroy", "b.destroy"]);
+    expect(entry.warn).toHaveBeenCalledWith(expect.stringContaining("kept hidden, not destroyed"));
+    expect(entry.b.isDestroyed()).toBe(false);
+    expect(entry.retiringWindows.has(entry.b)).toBe(true);
+    // The slow renderer finally saved its latest draft: now it may go.
+    entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(true);
+  });
+
+  it("a reveal reuses a window still saving its drafts, and its late ack then keeps it", () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.open();
+    expect(entry.createOwnedWindow).not.toHaveBeenCalled();
+    expect(entry.revealWindow).toHaveBeenCalledExactlyOnceWith(entry.b, { kind: "native" });
+    expect(entry.retiringWindows.has(entry.b)).toBe(false);
+    expect(entry.count()).toBe(1);
+    entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(false);
+    // With nothing retained, a reveal builds a fresh window.
+    entry.b.destroy();
+    entry.open();
+    expect(entry.createOwnedWindow).toHaveBeenCalledOnce();
   });
 
   it("closes agent Browser Tabs with a model-readable reason, and reopens them on reveal", () => {
