@@ -18,6 +18,7 @@ describe("what hostd offers", () => {
       "sessions",
       "sessions.queue",
       "sessions.subscribe",
+      "sessions.history",
       "session.read",
     ]);
   });

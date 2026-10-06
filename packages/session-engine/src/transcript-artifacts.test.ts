@@ -18,6 +18,22 @@ function artifact(message: UIMessage): SessionTranscriptArtifact {
 }
 
 describe("in-memory transcript artifacts", () => {
+  it("says an artifact's canonical size, and null for one it does not hold (VC-315)", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const value = artifact({
+      id: "sized",
+      role: "assistant",
+      parts: [{ type: "text", text: "é" }],
+    });
+    const reference = await artifacts.write(value);
+    await expect(artifacts.byteLength!(reference)).resolves.toBe(
+      new TextEncoder().encode(canonicalJson(value)).length,
+    );
+    await expect(
+      artifacts.byteLength!({ ...reference, id: "fnv1a64:0000000000000000" }),
+    ).resolves.toBeNull();
+  });
+
   it("returns independent values and validates content-addressed references", async () => {
     const artifacts = createInMemoryTranscriptArtifactStore();
     const reference = await artifacts.write(
