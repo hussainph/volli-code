@@ -96,16 +96,36 @@ async function main() {
       async () => {
         // Nothing is running, so this entry starts the drain-exit's settle
         // window (5s) at once: checks 2 and 3 read fast and reopen inside it.
-        const state = await app.evaluate(({ BrowserWindow }) => {
+        // Entry hides every window at once, asks each renderer to flush its
+        // pending drafts, and destroys the windows only after the ack
+        // (bounded at 1s; `client-state-flush.ts`), so the count is polled.
+        const entered = await app.evaluate(({ BrowserWindow }) => {
           const host = globalThis.volliMenuBarHost;
+          const startedAt = Date.now();
           host.enter();
-          return { windows: BrowserWindow.getAllWindows().length, resident: host.isResident() };
+          globalThis.volliMenuBarEnteredAt = startedAt;
+          return {
+            visible: BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length,
+            resident: host.isResident(),
+          };
         });
+        const destroyedAfterMs = await waitUntil(
+          "windows destroyed after the draft flush",
+          () =>
+            app.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows().length === 0
+                ? Date.now() - globalThis.volliMenuBarEnteredAt
+                : null,
+            ),
+          { timeout: 5000 },
+        ).catch(() => -1);
         const socket = await identifies();
         const alive = !childHasExited(child);
         return {
-          ok: state.windows === 0 && state.resident && socket && alive,
-          detail: `windows=${state.windows} resident=${state.resident} socket=${socket} alive=${alive}`,
+          ok: entered.visible === 0 && entered.resident && destroyedAfterMs >= 0 && socket && alive,
+          detail:
+            `visibleAfterEnter=${entered.visible} resident=${entered.resident} ` +
+            `destroyedAfterMs=${destroyedAfterMs} socket=${socket} alive=${alive}`,
         };
       },
     );

@@ -128,14 +128,21 @@ async function main() {
       const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
         electronApp.quit();
         return {
-          windows: BrowserWindow.getAllWindows().length,
+          visible: BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length,
           resident: globalThis.volliMenuBarHost?.isResident() ?? false,
         };
       });
+      // Windows hide at once and are destroyed after their renderers ack the
+      // draft flush (bounded at 1s; `client-state-flush.ts`).
+      const destroyed = await waitUntil(
+        "windows destroyed after the draft flush",
+        () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length === 0),
+        { timeout: 5000 },
+      ).catch(() => false);
       const alive = !childHasExited(child);
       return {
-        ok: alive && state.windows === 0 && state.resident,
-        detail: `alive=${alive} windows=${state.windows} resident=${state.resident}`,
+        ok: alive && state.visible === 0 && destroyed && state.resident,
+        detail: `alive=${alive} visibleAfterQuit=${state.visible} destroyed=${destroyed} resident=${state.resident}`,
       };
     });
 
