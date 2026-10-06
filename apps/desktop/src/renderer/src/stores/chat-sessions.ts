@@ -26,11 +26,11 @@ import { create } from "zustand";
 
 import {
   applyProjection,
-  dequeueSlice,
+  applyQueue,
   disposeChatClient,
-  enqueueSlice,
   foldStreamBatch,
   getOrCreateChatClient,
+  getChatClient,
   markAttaching,
   markDelivered,
   retitleSlice,
@@ -40,13 +40,19 @@ import {
   type ChatSessionTransport,
   type ChatSessionWrites,
   type QueuedMessage,
+  type MessageDelivery,
 } from "@volli/session-presentation";
 import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { browserChatTransport } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
-import { useChatDraftsStore, type ChatDraft } from "@renderer/stores/chat-drafts";
+import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
+import {
+  CHAT_DRAFTS_APP_STATE_KEY,
+  useChatDraftsStore,
+  type ChatDraft,
+} from "@renderer/stores/chat-drafts";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -90,7 +96,7 @@ export interface ChatSessionsState extends ChatSessionWrites {
   adoptChatSession(sessionId: string): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
-  enqueue(sessionId: string, message: QueuedMessage): void;
+  enqueue(sessionId: string, message: QueuedMessage): Promise<MessageDelivery>;
   /**
    * Retitles a Session on this surface ahead of its stream.
    *
@@ -553,12 +559,28 @@ export function createChatSessionsStore(
         update(sessionId, (slice) => settleSlice(slice, error));
       },
 
-      enqueue(sessionId, message) {
-        update(sessionId, (slice) => enqueueSlice(slice, message));
+      async enqueue(sessionId, message) {
+        const client = getChatClient(sessionId);
+        if (client === undefined) {
+          toast.error("Message not queued: Session is no longer open");
+          return Promise.resolve("refused");
+        }
+        const drafts = useChatDraftsStore.getState();
+        // Creator kickoffs need the same crash-safe recovery as composer sends.
+        if (!drafts.drafts[sessionId]?.held.some((row) => row.id === message.id))
+          drafts.holdMessage(sessionId, message);
+        if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) {
+          drafts.markHeld(sessionId, message.id, "unsent");
+          return "refused";
+        }
+        const outcome = await client.submit(message, "queue");
+        if (outcome === "refused") drafts.markHeld(sessionId, message.id, "unsent");
+        else drafts.dropHeld(sessionId, message.id);
+        await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+        return outcome;
       },
-
-      dequeue(sessionId, id) {
-        update(sessionId, (slice) => dequeueSlice(slice, id));
+      setQueue(sessionId, queue, revision) {
+        update(sessionId, (slice) => applyQueue(slice, queue, revision));
       },
 
       retitle(sessionId, title) {

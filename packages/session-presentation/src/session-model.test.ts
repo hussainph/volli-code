@@ -4,11 +4,13 @@ import {
   composerIntent,
   enqueueMessage,
   isUntitledChatSession,
-  nextRelease,
   removeQueued,
   takeQueued,
   unqueueLast,
+  queuedMessageFromHost,
 } from "./session-model";
+
+import { queuedWireMessage } from "./client";
 
 describe("composer delivery", () => {
   it("reads ⏎ against session state, not a delivery control", () => {
@@ -114,17 +116,6 @@ describe("composer delivery", () => {
       attachments,
     });
   });
-
-  it("drains one message, and only into an idle attached Session", () => {
-    const queue = [
-      { id: "a", text: "first" },
-      { id: "b", text: "second" },
-    ];
-    expect(nextRelease(queue, { working: false, ready: true })).toEqual({ id: "a", text: "first" });
-    expect(nextRelease(queue, { working: true, ready: true })).toBeNull();
-    expect(nextRelease(queue, { working: false, ready: false })).toBeNull();
-    expect(nextRelease([], { working: false, ready: true })).toBeNull();
-  });
 });
 
 describe("isUntitledChatSession", () => {
@@ -132,5 +123,70 @@ describe("isUntitledChatSession", () => {
     expect(isUntitledChatSession(null)).toBe(true);
     expect(isUntitledChatSession("Chat 1")).toBe(false);
     expect(isUntitledChatSession("Migration plan")).toBe(false);
+  });
+});
+
+describe("host queued message projection", () => {
+  const attachment = {
+    linkId: "link",
+    blobHash: "ab".repeat(32),
+    label: "shot",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 12,
+  };
+  it("round trips skills, files, and the guarded launch title for every Client", () => {
+    const message = {
+      id: "q1",
+      text: "look /skill",
+      resources: [{ name: "skill", text: "body" }],
+      attachments: [attachment],
+      autoTitleBaseline: "Launch",
+    };
+    expect(
+      queuedMessageFromHost({
+        id: "q1",
+        commandId: "c1",
+        message: queuedWireMessage(message),
+        state: "releasing",
+      }),
+    ).toEqual({ ...message, commandId: "c1", queueState: "releasing" });
+  });
+  it("reads files from another Client without desktop metadata", () => {
+    const message = {
+      id: "q1",
+      role: "user" as const,
+      parts: [
+        {
+          type: "file" as const,
+          url: `volli-blob:${attachment.blobHash}`,
+          mediaType: "image/png",
+          filename: "shot.png",
+        },
+        { type: "file" as const, url: `volli-blob:${"cd".repeat(32)}`, mediaType: "image/png" },
+        { type: "file" as const, url: "https://example.com/shot.png", mediaType: "image/png" },
+      ],
+    };
+    const row = queuedMessageFromHost({ id: "q1", commandId: "c1", message, state: "queued" });
+    expect(row.attachments).toMatchObject([
+      { linkId: null, originalName: "shot.png" },
+      { linkId: null, originalName: "cd".repeat(32) },
+    ]);
+    expect(
+      queuedMessageFromHost({
+        id: "q1",
+        commandId: "c1",
+        message: { ...message, metadata: null },
+        state: "queued",
+      }),
+    ).toEqual(row);
+    expect(
+      queuedMessageFromHost({
+        id: "q1",
+        commandId: "c1",
+        message: { ...message, metadata: { attachments: [null] } },
+        state: "queued",
+      }),
+    ).toEqual(row);
   });
 });

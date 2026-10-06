@@ -1,6 +1,13 @@
 /* ---------------------------------------------------------------- composer */
 
-import type { BlobLinkView, PromptResource } from "@volli/shared";
+import {
+  isBlobLinkView,
+  parseBlobUrl,
+  readSkillResources,
+  type BlobLinkView,
+  type PromptResource,
+} from "@volli/shared";
+import type { UIMessage } from "ai";
 
 /**
  * What ⏎ means right now.
@@ -19,6 +26,8 @@ export function composerIntent(state: { working: boolean; steer: boolean }): Com
 
 export interface QueuedMessage {
   id: string;
+  commandId?: string;
+  queueState?: "queued" | "releasing";
   text: string;
   /**
    * A non-null launch title this opening message is allowed to refine.
@@ -110,19 +119,6 @@ export function takeQueued(queue: readonly QueuedMessage[], id: string): TakenQu
   };
 }
 
-/**
- * The queued message to release now, if any. A queue drains only into an idle
- * Session and only one at a time: the release starts the next turn, which makes
- * the Session busy again and re-arms this rule for the one after it.
- */
-export function nextRelease(
-  queue: readonly QueuedMessage[],
-  state: { working: boolean; ready: boolean },
-): QueuedMessage | null {
-  if (state.working || !state.ready) return null;
-  return queue[0] ?? null;
-}
-
 /* ------------------------------------------------------------- the title */
 
 /**
@@ -132,4 +128,51 @@ export function nextRelease(
  */
 export function isUntitledChatSession(title: string | null): boolean {
   return title === null;
+}
+
+/** Project the host message, not a device-local copy. */
+export function queuedMessageFromHost(entry: {
+  id: string;
+  commandId: string;
+  message: UIMessage;
+  state: "queued" | "releasing";
+}): QueuedMessage {
+  const metadata =
+    typeof entry.message.metadata === "object" && entry.message.metadata !== null
+      ? (entry.message.metadata as Record<string, unknown>)
+      : {};
+  const views = Array.isArray(metadata.attachments)
+    ? metadata.attachments.filter(isBlobLinkView)
+    : [];
+  const attachments = [...views];
+  for (const part of entry.message.parts) {
+    if (part.type !== "file") continue;
+    const blobHash = parseBlobUrl(part.url);
+    if (blobHash === null || attachments.some((view) => view.blobHash === blobHash)) continue;
+    // Other Clients may submit file parts without desktop link-view metadata.
+    // Preserve the file on edit/resend; a missing link id cannot detach a link.
+    const name = part.filename ?? blobHash;
+    attachments.push({
+      linkId: null,
+      blobHash,
+      label: name,
+      originalName: name,
+      mime: part.mediaType,
+      sizeBytes: 0,
+    });
+  }
+  const resources = readSkillResources(entry.message.parts);
+  return {
+    id: entry.id,
+    commandId: entry.commandId,
+    queueState: entry.state,
+    text: entry.message.parts
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n"),
+    ...(attachments.length === 0 ? {} : { attachments }),
+    ...(resources.length === 0 ? {} : { resources }),
+    ...(typeof metadata.autoTitleBaseline === "string"
+      ? { autoTitleBaseline: metadata.autoTitleBaseline }
+      : {}),
+  };
 }

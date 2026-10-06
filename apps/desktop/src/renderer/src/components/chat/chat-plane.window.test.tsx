@@ -23,20 +23,28 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  QueueRevisionConflictError,
+  blobUrl,
+  type BlobLinkView,
   type ModelAccessSnapshot,
   type ModelSelection,
 } from "@volli/shared";
-import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
+import {
+  EMPTY_TRANSCRIPT,
+  type ChatSessionTransport,
+  type ChatSessionProjection,
+  type ChatCommandRequest,
+} from "@volli/session-presentation";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { createChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
-import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { CHAT_DRAFTS_APP_STATE_KEY, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 import { ChatPlane } from "./chat-plane";
 import {
@@ -130,6 +138,7 @@ afterEach(async () => {
     root?.unmount();
   });
   root = null;
+  for (const store of hostStores.splice(0)) store.getState().closeChatSession(SESSION);
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
@@ -142,7 +151,7 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
     () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
   );
   const promoteChatSession = vi.fn(promote);
-  const enqueue = vi.fn();
+  const enqueue = vi.fn<ChatSessionsState["enqueue"]>().mockResolvedValue("delivered");
   store.setState({ promoteChatSession, enqueue } as never);
   useChatDraftsStore.getState().openProvisional(SESSION, {
     projectId: PROJECT,
@@ -194,6 +203,119 @@ function chatStore(
     },
   } as never);
   return store;
+}
+
+const hostStores: ReturnType<typeof createChatSessionsStore>[] = [];
+
+interface CancelInput {
+  commandId: string;
+  sessionId: string;
+  messageId: string;
+  expectedRevision?: number;
+}
+
+type HostQueueRow = NonNullable<ChatSessionProjection["queue"]>[number];
+
+function hostRow(
+  text: string,
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+): HostQueueRow {
+  const attachments = options.attachments ?? [];
+  return {
+    id: "q1",
+    commandId: "q1",
+    state: options.state ?? "queued",
+    message: {
+      id: "q1",
+      role: "user",
+      ...(attachments.length === 0 ? {} : { metadata: { attachments } }),
+      parts: [
+        { type: "text", text },
+        ...attachments.map((attachment) => ({
+          type: "file" as const,
+          url: blobUrl(attachment.blobHash),
+          mediaType: attachment.mime,
+          filename: attachment.originalName,
+        })),
+      ],
+    },
+  };
+}
+
+function hostChatStore(
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+) {
+  const commands: ChatCommandRequest[] = [];
+  let projection: ChatSessionProjection = {
+    session: {
+      id: SESSION,
+      projectId: PROJECT,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Chat",
+      createdAt: 0,
+    },
+    status: "open",
+    signal: null,
+    modelSelection: DEFAULT_SELECTION,
+    modelTier: null,
+    turnActive: false,
+    lastActivityAt: 0,
+    bornTicketless: true,
+    scheduledResume: null,
+    attention: { active: [], primary: null },
+    interactions: { active: [], resolved: [] },
+    liveExecutor: null,
+    queue: [hostRow("host follow-up", options)],
+    queueRevision: 1,
+  };
+  const cancel = vi.fn(async (_input: CancelInput): Promise<boolean> => true);
+  const store = createChatSessionsStore(() => ({
+    rpc: {
+      session: {
+        snapshot: { query: async () => ({ projection, frames: [], throughSequence: 0 }) },
+        projection: { query: async () => ({ projection }) },
+        subscribe: { subscribe: () => ({ unsubscribe: () => {} }) },
+        command: {
+          mutate: async (input) => {
+            commands.push(input);
+            return { sessionId: SESSION };
+          },
+        },
+        cancelQueued: {
+          mutate: async (input: CancelInput) => {
+            const accepted = await cancel(input);
+            if (accepted) projection = { ...projection, queue: [], queueRevision: 2 };
+            return {
+              sessionId: SESSION,
+              receipt: { status: accepted ? "accepted" : "rejected", detail: "already releasing" },
+            };
+          },
+        },
+        editQueued: { mutate: async () => ({ sessionId: SESSION }) },
+        cancelInteraction: { mutate: async () => ({ sessionId: SESSION }) },
+        reconcile: { mutate: async () => ({ sessionId: SESSION }) },
+      },
+    },
+    scheduler: { schedule: () => () => {} },
+    newCommandId: () => crypto.randomUUID(),
+    createSession: async () => ({ sessionId: SESSION }),
+    attachSession: async () => {
+      throw new Error("renderer must not attach for the queue");
+    },
+  }));
+  store.getState().adoptChatSession(SESSION);
+  hostStores.push(store);
+  /** Another Client edits the row: the host's revision moves and the stream says so. */
+  const editElsewhere = (text: string) => {
+    const revision = (projection.queueRevision ?? 0) + 1;
+    projection = { ...projection, queue: [hostRow(text, options)], queueRevision: revision };
+    store.getState().setQueue(SESSION, projection.queue ?? [], revision);
+  };
+  /** A cancel the host judges by its own revision, as the ledger does. */
+  const hostRevision = () => projection.queueRevision ?? 0;
+  return { store, cancel, commands, editElsewhere, hostRevision };
 }
 
 async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
@@ -343,6 +465,34 @@ describe("a provisional chat plane", () => {
       SESSION,
       expect.objectContaining({ text: "first durable words" }),
     );
+  });
+
+  it("retains the persisted first message until the host accepts its queued command", async () => {
+    const { enqueue, store } = provisionalChatStore();
+    let accept!: (outcome: "delivered" | "refused") => void;
+    enqueue.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () => {
+      type(box, "keep these words");
+    });
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledOnce());
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "sending" },
+    ]);
+    await act(async () => accept("refused"));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "unsent" },
+    ]);
   });
 
   it("keeps an import already in flight with the first held message", async () => {
@@ -621,6 +771,275 @@ describe("a provisional chat plane", () => {
 
     expect(enqueue).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+  });
+});
+
+describe("host-owned rows with cloud off", () => {
+  it("waits for cancellation before Backspace restores text and preserves typing during the wait", async () => {
+    const { store, cancel } = hostChatStore();
+    let accept!: (accepted: boolean) => void;
+    cancel.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { id: "q1", state: "sending" },
+    ]);
+    await act(async () => type(box, "new typing"));
+    await act(async () => accept(true));
+    expect(box.value).toBe("host follow-up\nnew typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toEqual([]);
+  });
+
+  it("leaves the draft unchanged when host release beats Backspace", async () => {
+    const { store, cancel } = hostChatStore();
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+  });
+
+  // An unproven release at the head of the FIFO would otherwise be stuck: the
+  // host now cancels it, and refuses one in flight. Remove is offered; the row
+  // leaves only once the host accepts — never optimistically.
+  it("offers Remove on a releasing row and keeps it until the host accepts", async () => {
+    const { store, cancel } = hostChatStore({ state: "releasing" });
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() =>
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", queueState: "releasing" },
+      ]),
+    );
+    const remove = () =>
+      container?.querySelector<HTMLButtonElement>(
+        '[aria-label="Remove queued message: host follow-up"]',
+      ) ?? null;
+    const actions = container?.querySelector<HTMLButtonElement>(
+      '[aria-label="Queued message actions: host follow-up"]',
+    );
+    expect(remove()?.disabled).toBe(false);
+    expect(actions?.disabled).toBe(false);
+
+    // Refused: an in-flight (or proven) release. Nothing moves.
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    expect(remove()).not.toBeNull();
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
+    expect(composer()?.value).toBe("");
+
+    // Accepted: an unproven release the host withdrew.
+    cancel.mockResolvedValue(true);
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(remove()).toBeNull();
+  });
+
+  // Cross-Client edit safety: cancel-to-composer persists its recovery copy
+  // before asking the host, and that wait is long enough for another Client to
+  // edit the row. The cancel must carry the revision of the strip the person
+  // acted on — not the one observed after the wait — so the host answers with a
+  // typed conflict instead of cancelling words this composer never showed.
+  it("cancels with the rendered revision across the durability wait and keeps everything on conflict", async () => {
+    const attachment: BlobLinkView = {
+      linkId: "link-1",
+      blobHash: "ab".repeat(32),
+      label: "shot.png",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    let gating = false;
+    let persist!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      persist = resolve;
+    });
+    let gatedWrites = 0;
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "appState.set": async (...args: unknown[]) => {
+          if (gating && args[0] === CHAT_DRAFTS_APP_STATE_KEY) {
+            gatedWrites += 1;
+            await persisted;
+          }
+          return { ok: true };
+        },
+      }),
+    );
+    const { store, cancel, editElsewhere, hostRevision } = hostChatStore({
+      attachments: [attachment],
+    });
+    cancel.mockImplementation(async (input) => {
+      if (input.expectedRevision !== undefined && input.expectedRevision !== hostRevision())
+        throw new QueueRevisionConflictError(input.expectedRevision, hostRevision());
+      return true;
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queueRevision).toBe(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+
+    gating = true;
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(gatedWrites).toBeGreaterThan(0));
+    expect(cancel).not.toHaveBeenCalled();
+
+    // Mid-wait: another Client rewrites the row, and this plane re-renders it.
+    await act(async () => editElsewhere("edited elsewhere"));
+    expect(store.getState().sessions[SESSION]?.queueRevision).toBe(2);
+    expect(container?.textContent).toContain("edited elsewhere");
+    await act(async () => type(box, "new typing"));
+
+    await act(async () => persist());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    // The conflict refuses like any refusal: no words or files come back, and
+    // the host's (edited) row is still the one on screen. The recovery copy is
+    // retired only by that positive host ownership, once the mutation is over.
+    await vi.waitFor(() => expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]));
+    expect(box.value).toBe("new typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments ?? []).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+      { id: "q1", text: "edited elsewhere", attachments: [attachment] },
+    ]);
+    expect(
+      container?.querySelectorAll('[aria-label="Queued message: edited elsewhere"]'),
+    ).toHaveLength(1);
+    expect(container?.textContent).not.toContain("host follow-up");
+  });
+
+  // Edit's recovery copy is a hold, and a hold empties the box — right for Send,
+  // wrong here: the box holds words typed BEFORE Edit, and neither the wait for
+  // the host nor its refusal may take them.
+  describe("Edit with words already typed", () => {
+    const staged: BlobLinkView = {
+      linkId: "link-staged",
+      blobHash: "cd".repeat(32),
+      label: "staged.png",
+      originalName: "staged.png",
+      mime: "image/png",
+      sizeBytes: 7,
+    };
+    const rowFile: BlobLinkView = {
+      linkId: "link-row",
+      blobHash: "ef".repeat(32),
+      label: "row.png",
+      originalName: "row.png",
+      mime: "image/png",
+      sizeBytes: 9,
+    };
+
+    /** Opens the row's actions menu the way a keyboard does, and picks Edit. */
+    async function editFromMenu(text: string): Promise<void> {
+      const trigger = container?.querySelector<HTMLButtonElement>(
+        `[aria-label="Queued message actions: ${text}"]`,
+      );
+      if (trigger === null || trigger === undefined) throw new Error("expected row actions");
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+      );
+      const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (node) => node.textContent?.includes("Edit message"),
+      );
+      if (item === undefined) throw new Error("expected Edit message");
+      await act(async () => item.click());
+    }
+
+    async function mountWithTyping(state: HostQueueRow["state"]) {
+      useChatDraftsStore.getState().setDraftAttachments(SESSION, [staged]);
+      const host = hostChatStore({ state, attachments: [rowFile] });
+      let answer!: (accepted: boolean) => void;
+      host.cancel.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      await mountPlane(host.store, modelClient(DEFAULT_SELECTION));
+      await vi.waitFor(() =>
+        expect(host.store.getState().sessions[SESSION]?.queue).toMatchObject([
+          { id: "q1", queueState: state },
+        ]),
+      );
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      await act(async () => type(box, "already typed"));
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      return { ...host, box, answer: (accepted: boolean) => answer(accepted) };
+    }
+
+    it("keeps the typed words and files, and the host row, when the host refuses a releasing row", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("releasing");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      // Mid-wait: the recovery copy is held, and the box still says what it said.
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+        { id: "q1", state: "sending" },
+      ]);
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+
+      await act(async () => answer(false));
+      await vi.waitFor(() =>
+        expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+      );
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged]);
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", text: "host follow-up", queueState: "releasing", attachments: [rowFile] },
+      ]);
+      expect(
+        container?.querySelectorAll('[aria-label="Queued message: host follow-up"]'),
+      ).toHaveLength(1);
+    });
+
+    it("puts the recovered words ahead of the typed ones when the host accepts", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("queued");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      expect(box.value).toBe("already typed");
+
+      await act(async () => answer(true));
+      await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+      expect(box.value).toBe("host follow-up\nalready typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(
+        "host follow-up\nalready typed",
+      );
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged, rowFile]);
+    });
   });
 });
 

@@ -15,12 +15,12 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   isDeliverable,
   isWorking,
-  queueNeedsExecutor,
   racingFlushScheduler,
   settledLifecycle,
   type ChatCommandRequest,
   type ChatSessionRpc,
   type ChatSessionSlice,
+  type ChatSessionProjection,
   type ChatStreamCursor,
   type ChatStreamRecovery,
   type FlushHost,
@@ -261,17 +261,19 @@ class FakeRpc implements ChatSessionRpc {
   readonly commands: ChatCommandRequest[] = [];
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
+  readonly queueCancels: Parameters<ChatSessionRpc["session"]["cancelQueued"]["mutate"]>[0][] = [];
+  readonly queueEdits: Parameters<ChatSessionRpc["session"]["editQueued"]["mutate"]>[0][] = [];
   readonly streams: FakeStream[] = [];
   readonly attaches: Array<{ operationId: string; sessionId: string }> = [];
   projectionQueries = 0;
 
   snapshotFrames: readonly unknown[] = [];
   snapshotThrough = 0;
-  snapshotProjection = projectionFor(null);
+  snapshotProjection: ChatSessionProjection = projectionFor(null);
   snapshotGate: Promise<unknown> = Promise.resolve();
   snapshotError: Error | null = null;
 
-  liveProjection = projectionFor(null);
+  liveProjection: ChatSessionProjection = projectionFor(null);
   projectionGate: Promise<unknown> = Promise.resolve();
   projectionError: Error | null = null;
 
@@ -321,6 +323,18 @@ class FakeRpc implements ChatSessionRpc {
         mutate: async (input) => {
           this.commands.push(input);
           return this.answer(input);
+        },
+      },
+      cancelQueued: {
+        mutate: async (input) => {
+          this.queueCancels.push(input);
+          return this.answerCancel();
+        },
+      },
+      editQueued: {
+        mutate: async (input) => {
+          this.queueEdits.push(input);
+          return this.answerCancel();
         },
       },
       cancelInteraction: {
@@ -600,28 +614,6 @@ describe("session derivations", () => {
   // VC-367. `isDeliverable` answers "can this leave now", which is false for
   // both a Session coming up and a Session whose executor is gone. Only the
   // second never ends on its own, and only the second is worth a process.
-  it("tells a queue nothing is coming for from one that is merely waiting", () => {
-    const dead = { projection: projectionFor(null), queue: [{ id: "q1", text: "hi" }] };
-
-    expect(queueNeedsExecutor(sliceOf(dead))).toBe(true);
-    // An attach already in flight needs no second one.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "starting" }))).toBe(false);
-    // A refused attach does not become a wall: sending again asks again.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "error" }))).toBe(true);
-    // Nothing to attach to.
-    expect(
-      queueNeedsExecutor(
-        sliceOf({ ...dead, projection: { ...projectionFor(null), status: "archived" } }),
-      ),
-    ).toBe(false);
-    // A live executor is already the answer, and an empty queue asks nothing.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, projection: projectionFor("attach-1") }))).toBe(
-      false,
-    );
-    expect(queueNeedsExecutor(sliceOf({ projection: projectionFor(null) }))).toBe(false);
-    // A client that has not read the Session yet knows nothing to act on.
-    expect(queueNeedsExecutor(sliceOf({ queue: [{ id: "q1", text: "hi" }] }))).toBe(false);
-  });
 
   it("holds starting and error against anything the stream says", () => {
     const before = sliceOf({ lifecycle: "starting" });
@@ -868,6 +860,39 @@ const RESNAPSHOT = Object.assign(new Error("That cursor is gone"), {
 });
 
 describe("stream recovery behind a client host link", () => {
+  it.each(["host-link", "resume-once"] as const)(
+    "uses the negotiated queue-aware path only for network recovery (%s)",
+    async (recovery) => {
+      let queueSubscriptions = 0;
+      const { stream, slice, sessionId } = await adopted((rpc) => {
+        const legacy = rpc.session.subscribe;
+        rpc.session.subscribeQueue = {
+          subscribe: (input, handlers) => {
+            queueSubscriptions += 1;
+            return legacy.subscribe(input, handlers);
+          },
+        };
+      }, recovery);
+      expect(queueSubscriptions).toBe(recovery === "host-link" ? 1 : 0);
+      stream().send("0", {
+        kind: "queue",
+        sessionId,
+        throughSequence: 0,
+        revision: 7,
+        queue: [
+          {
+            id: "q",
+            commandId: "queued",
+            state: "releasing",
+            message: { id: "q", role: "user", parts: [{ type: "text", text: "later" }] },
+          },
+        ],
+      });
+      expect(slice()!.queueRevision).toBe(7);
+      expect(slice()!.queue).toMatchObject([{ id: "q", text: "later", queueState: "releasing" }]);
+    },
+  );
+
   it("retries nothing itself: a stream the link ended surfaces at once", async () => {
     const { rpc, stream, slice, notifications } = await adopted(undefined, "host-link");
     const started = stream();
@@ -2141,7 +2166,7 @@ describe("submit", () => {
   it("marks the Session working once the harness took it", async () => {
     const { client, slice } = await ready();
 
-    await client.submit({ id: "m1", text: "go" }, "queue");
+    await client.submit({ id: "m1", text: "go" });
 
     expect(slice()!.lifecycle).toBe("working");
   });
@@ -2156,7 +2181,7 @@ describe("submit", () => {
   it("refuses while there is nowhere to deliver", async () => {
     const { client, rpc } = await adopted();
 
-    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
@@ -2177,7 +2202,7 @@ describe("submit", () => {
       fake.answer = (request) => (request.command.kind === "message.submit" ? REFUSED : ACCEPTED);
     });
 
-    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("recorded");
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("recorded");
     expect(slice()!.sessionError).toBe("Message not delivered: Pi is unavailable");
   });
 
@@ -2289,29 +2314,10 @@ describe("auto-title on delivery", () => {
     ]);
   });
 
-  it("fires through a queue release too — the one choke point both paths share", async () => {
-    // No live executor yet, so the message queues; setProjection below is what
-    // the queue's release rule reacts to, exactly as it would off a stream
-    // frame that just brought one up.
-    const { store, sessionId, renames } = await adopted((fake) => {
-      fake.snapshotProjection = {
-        ...projectionFor(null),
-        session: { ...SESSION, title: null },
-      };
-    });
-    store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
-    expect(renames).toEqual([]);
-
-    store.getState().setProjection(sessionId, projectionWithTitle(null));
-    await settle();
-
-    expect(renames).toEqual([
-      {
-        sessionId,
-        title: "Fix the parser",
-        refineFrom: "Fix the parser",
-      },
-    ]);
+  it("titles a message durably accepted before an executor exists", async () => {
+    const { client, sessionId, renames } = await adopted();
+    await client.submit({ id: "q1", text: "Fix the parser" }, "queue");
+    expect(renames).toEqual([{ sessionId, title: "Fix the parser", refineFrom: "Fix the parser" }]);
   });
 
   it("refines a composed start's seeded fallback from its opening message", async () => {
@@ -2491,433 +2497,209 @@ describe("resolveInteraction", () => {
   });
 });
 
-/* ----------------------------------------------------------------- the queue */
-
-describe("the queued message", () => {
-  async function pending(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    return adopted(prepare);
-  }
-
-  it("holds a message written before an executor was live, and releases it once", async () => {
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    store.getState().enqueue(sessionId, { id: "q1", text: "start on the parser" });
-    expect(rpc.submissions()).toHaveLength(0);
-
-    store.getState().setProjection(sessionId, projectionFor("attach-1"));
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue).toEqual([]);
-    expect(slice()!.lifecycle).toBe("working");
-  });
-
-  it("releases nothing twice however much the store churns underneath it", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    for (let churn = 0; churn < 5; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor("attach-1"));
-    }
-    gate.release();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-  });
-
-  it("does not let an explicit steer claim the row resident drain is submitting", async () => {
-    const gate = deferred();
-    const { client, rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
-    expect(client.claimQueued("q1")).toBe(false);
-
-    gate.release();
-    await settle();
-    expect(slice()!.queue).toEqual([]);
-  });
-
-  it("stops when the Session closes mid-release", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId, close } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    close();
-    gate.release();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-  });
-
-  it("holds the queue behind a failure rather than feeding a harness that just refused", async () => {
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = () => REFUSED;
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("keeps the current queue row recoverable when transport fails before recording", async () => {
-    let attempts = 0;
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("socket hang up");
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(rpc.submissions()[0]).toMatchObject({
-      commandId: "q1",
-      command: { message: { id: "q1" } },
-    });
-    // The legacy renderer already drained this row; do not enqueue it again
-    // on a host that supports durable follow-ups.
-    expect(rpc.submissions()[0]?.command).not.toHaveProperty("delivery");
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
-
-    store.getState().settle(sessionId, null);
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-    expect(rpc.submissions()[1]).toMatchObject({
-      commandId: "q1",
-      command: { message: { id: "q1" } },
-    });
-    expect(rpc.submissions()[1]?.command).not.toHaveProperty("delivery");
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("releases the next one when the turn it started completes", async () => {
-    const { rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-  });
-
-  it("does not auto-release a queued message while an explicit steer owns it", async () => {
-    const { client, rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    expect(rpc.submissions()).toHaveLength(0);
-
-    expect(client.claimQueued("q2")).toBe(true);
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(0);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
-    client.releaseQueuedClaim("q2");
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("resumes earlier neighbors when a claimed target vanished before consumption", async () => {
-    const { client, rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    expect(client.claimQueued("q2")).toBe(true);
-    store.getState().dequeue(sessionId, "q2");
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(client.dequeueClaimed("q2")).toBe(false);
-    client.releaseQueuedClaim("q2");
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(rpc.submissions()[0]!.command).toMatchObject({
-      message: { parts: [{ type: "text", text: "first" }] },
-    });
-  });
-
-  it("consumes exactly one claimed row and rejects missing or duplicate claims", async () => {
-    const { client, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-
-    expect(client.claimQueued("missing")).toBe(false);
-    expect(client.claimQueued("q1")).toBe(true);
-    expect(client.claimQueued("q1")).toBe(false);
-    expect(client.dequeueClaimed("missing")).toBe(false);
-    expect(client.dequeueClaimed("q1")).toBe(true);
-    expect(slice()!.queue).toEqual([]);
-    client.releaseQueuedClaim("q1");
-  });
-
-  it("refuses queue claims after the owning surface closes", async () => {
-    const { client, scheduler, store, sessionId, stream, close } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    expect(client.claimQueued("q1")).toBe(true);
-
-    close();
-
-    expect(client.claimQueued("q1")).toBe(false);
-    expect(client.dequeueClaimed("q1")).toBe(false);
-    client.releaseQueuedClaim("q1");
-  });
-
-  it("releases the next one when the whole turn arrived in a single fold", async () => {
-    // A turn can begin and end inside one batch — a fast refusal, an occluded
-    // window folding 50ms at a time, a reconnect replaying what it missed. The
-    // Session reads idle at both ends of that fold, and taking that for silence
-    // left the rest of the queue stranded behind a turn already over.
-    const { rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-
-    stream().send("1", frameOf(1, "turn.started"));
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-    expect(slice()!.queue).toEqual([]);
-  });
+const queued = (id: string) => ({
+  id,
+  commandId: id,
+  state: "queued" as const,
+  message: { id, role: "user" as const, parts: [{ type: "text" as const, text: id }] },
 });
 
-/* ------------------------------------------------- the Session that crashed */
+describe("the host-owned follow-up queue", () => {
+  it("sends observed or explicitly captured revisions, without optimistic mutation", async () => {
+    const { client, rpc, store, sessionId, slice } = await adopted();
+    store.getState().setQueue(sessionId, [queued("q1")], 4);
+    await client.editQueued({ id: "q1", text: "changed" });
+    await client.cancelQueued("q1", 2);
+    await client.editQueued({ id: "q1", text: "changed again" }, 3);
+    await client.cancelQueued("q1");
+    expect(rpc.queueEdits.map(({ expectedRevision }) => expectedRevision)).toEqual([4, 3]);
+    expect(rpc.queueCancels.map(({ expectedRevision }) => expectedRevision)).toEqual([2, 4]);
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+  });
 
-/**
- * VC-367. A relaunch closes the attachment of every Session whose process died,
- * so `liveExecutor` reads null and the composer routes every later message to
- * the queue. Before this, nothing ever came for it: the release rule waits on
- * an executor and no path produced one, so the app accepted the words and the
- * Session simply never started. The one unacceptable outcome is the silent
- * queue — either the message brings the executor back, or the refusal is on
- * screen with the way out beside it.
- */
-describe("a message sent to a Session whose executor died", () => {
-  /** Exactly what boot recovery leaves behind: open Session, no attachment. */
-  async function crashed(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    return adopted((fake) => {
-      fake.snapshotProjection = projectionFor(null);
-      fake.liveProjection = projectionFor(null);
-      prepare(fake);
+  it("omits revisions if no host queue baseline was observed", async () => {
+    const { client, rpc } = await adopted();
+    await client.cancelQueued("missing");
+    await client.editQueued({ id: "missing", text: "changed" });
+    expect(rpc.queueCancels[0]).not.toHaveProperty("expectedRevision");
+    expect(rpc.queueEdits[0]).not.toHaveProperty("expectedRevision");
+  });
+
+  it("keeps queue-only title metadata out of immediate messages", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
     });
-  }
-
-  it("reattaches and delivers rather than queueing into the void", async () => {
-    const { rpc, store, sessionId, slice } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "carry on where you left off" });
-    await settle();
-
-    // The send itself asked for the executor back. Nothing else in the app was
-    // ever going to.
-    expect(rpc.attaches).toEqual([{ operationId: "cmd-1", sessionId }]);
-
-    // The attachment the reattach opened, arriving the way it does in the app:
-    // off the stream frame that reports it.
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
+    const attachments = [
+      {
+        linkId: "l1",
+        blobHash: "a".repeat(64),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 12,
+      },
+    ];
+    const resources = [{ name: "logos", text: "# Logos" }];
+    await client.submit({
+      id: "immediate",
+      text: "now",
+      autoTitleBaseline: "Chat",
+      attachments,
+      resources,
+    });
+    await client.submit(
+      { id: "later", text: "later", autoTitleBaseline: "Chat", attachments, resources },
+      "queue",
+    );
     expect(rpc.submissions()[0]).toMatchObject({
-      commandId: "q1",
-      command: { message: { parts: [{ type: "text", text: "carry on where you left off" }] } },
+      command: {
+        message: {
+          parts: [
+            { type: "text", text: "now" },
+            { type: "data-skill-resource" },
+            { type: "file", filename: "shot.png", mediaType: "image/png" },
+          ],
+        },
+      },
+    });
+    expect(rpc.submissions()[0]?.command).not.toHaveProperty("message.metadata");
+    expect(rpc.submissions()[1]).toMatchObject({
+      command: { message: { metadata: { autoTitleBaseline: "Chat", attachments } } },
+    });
+  });
+
+  it("accepts while busy without demoting or starting a turn", async () => {
+    const { client, slice, stream, scheduler, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await client.submit({ id: "q1", text: "later" }, "queue");
+    expect(slice()!.lifecycle).toBe("working");
+    expect(rpc.submissions()[0]?.command).toMatchObject({ delivery: "queue" });
+  });
+
+  it("accepts without an executor and never performs a client attach or release", async () => {
+    const { client, rpc, store, sessionId, slice, stream } = await adopted();
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("delivered");
+    stream().send("0", {
+      kind: "queue",
+      sessionId,
+      throughSequence: 0,
+      revision: 1,
+      queue: [queued("q1"), queued("q2")],
+    });
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q1", "q2"]);
+    store.getState().setProjection(sessionId, projectionFor("attach-1"));
+    store.getState().settle(sessionId, null);
+    await settle();
+    expect(rpc.attaches).toEqual([]);
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(slice()!.lifecycle).toBe("ready");
+  });
+
+  it("orders queue updates by revision even at the same transcript cursor", async () => {
+    const { slice, stream, sessionId } = await adopted();
+    const emit = (revision: number, queue: ReturnType<typeof queued>[]) =>
+      stream().send("0", { kind: "queue", sessionId, throughSequence: 0, revision, queue });
+    emit(2, [queued("q2")]);
+    emit(1, [queued("q1")]);
+    emit(2, []);
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q2"]);
+    emit(3, []);
+    expect(slice()!.queue).toEqual([]);
+  });
+
+  it("keeps the projected row when cancellation loses release and surfaces the refusal", async () => {
+    const { client, rpc, slice, store, sessionId, notifications } = await adopted();
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    rpc.answerCancel = () => REFUSED;
+    await expect(client.cancelQueued("q1")).resolves.toBe(false);
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q1"]);
+    expect(notifications).toEqual(["Message not removed: Pi is unavailable"]);
+  });
+
+  it("preserves locally recoverable words when durable queue admission is refused", async () => {
+    const { client, rpc, slice, notifications } = await adopted();
+    rpc.answer = () => REFUSED;
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(slice()!.sessionError).toContain("Pi is unavailable");
+    expect(notifications).toEqual(["Message not queued: Pi is unavailable"]);
+    expect(rpc.projectionQueries).toBe(0);
+    rpc.answerCancel = () => REFUSED;
+    await expect(client.editQueued({ id: "q1", text: "changed" })).resolves.toBe(false);
+    expect(rpc.projectionQueries).toBe(0);
+  });
+
+  it("ignores a queue addressed to another Session", async () => {
+    const { stream, slice } = await adopted();
+    stream().send("0", {
+      kind: "queue",
+      sessionId: "other",
+      throughSequence: 0,
+      revision: 1,
+      queue: [queued("q1")],
     });
     expect(slice()!.queue).toEqual([]);
-    expect(slice()!.sessionError).toBeNull();
   });
 
-  it("refuses visibly when the reattach cannot happen, and never swallows the words", async () => {
-    const { rpc, store, sessionId, slice } = await crashed((fake) => {
-      fake.answerAttach = () => REFUSED;
+  it("steers through message.submit without cancelling or optimistically removing the row", async () => {
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = { ...projectionFor("attach-1"), turnActive: true };
+      fake.liveProjection = { ...projectionFor("attach-1"), turnActive: true };
     });
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    await expect(client.steerQueued("q1")).resolves.toBe("delivered");
+    expect(rpc.submissions()[0]).toMatchObject({
+      commandId: "cmd-1",
+      command: {
+        kind: "message.submit",
+        delivery: "steer",
+        message: queued("q1").message,
+      },
+    });
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+    expect(rpc.projectionQueries).toBe(1);
+    expect(notifications).toEqual([]);
+  });
 
-    store.getState().enqueue(sessionId, { id: "q1", text: "are you there" });
-    await settle();
+  it("retains the row and reports a queued steering refusal or lost transport", async () => {
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = { ...projectionFor("attach-1"), turnActive: true };
+    });
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    rpc.answer = () => REFUSED;
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(notifications.at(-1)).toBe("Message not steered: Pi is unavailable");
+    rpc.answer = () => {
+      throw new Error("transport lost");
+    };
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(notifications.at(-1)).toBe("Message not steered: transport lost");
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+    expect(rpc.projectionQueries).toBe(0);
+  });
 
-    expect(rpc.attaches).toHaveLength(1);
-    // Nothing was sent, and the person is told so rather than left watching a
-    // composer that looked like it worked. `recover()` behind the band is the
-    // reattach offered inline.
+  it("does not steer a claimed row or an ended turn", async () => {
+    const { client, rpc, store, sessionId } = await adopted();
+    store.getState().setQueue(sessionId, [{ ...queued("q1"), state: "releasing" }], 1);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    store.getState().setQueue(sessionId, [queued("q1")], 2);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
     expect(rpc.submissions()).toEqual([]);
-    expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toContain("Could not start Session");
-    // And the words are still held, so the refusal costs nothing typed.
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
   });
 
-  it("asks again when a person sends again after a refusal", async () => {
-    const { rpc, store, sessionId } = await crashed((fake) => {
-      fake.answerAttach = () => REFUSED;
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+  it("refreshes after host edit/cancel and refuses steering a missing row", async () => {
+    const { client, rpc, notifications } = await adopted();
+    await expect(client.editQueued({ id: "q1", text: "changed" })).resolves.toBe(true);
     await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await expect(client.cancelQueued("q1")).resolves.toBe(true);
     await settle();
-
-    // A person sending again is asking again: a latch that ignored them would
-    // be the same silence in a different place.
-    expect(rpc.attaches).toHaveLength(2);
-  });
-
-  it("spends exactly one attach on a queue however much the store churns", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    for (let churn = 0; churn < 5; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor(null));
-    }
-    await settle();
-
-    // The drain re-enters on every store write; an unlatched arm would spend a
-    // process per frame.
-    expect(rpc.attaches).toHaveLength(1);
-  });
-
-  it("attaches nothing for a Session nobody is trying to talk to", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    for (let churn = 0; churn < 3; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor(null));
-    }
-    await settle();
-
-    expect(rpc.attaches).toEqual([]);
-  });
-
-  it("re-arms after the executor it brought back dies again", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    // The second death, and the second message into it.
-    store.getState().setProjection(sessionId, projectionFor(null));
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.attaches).toHaveLength(2);
-  });
-
-  it("picks up a message typed while the reattach was still in flight", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId, slice } = await crashed((fake) => {
-      fake.answerAttach = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    // Typed while the attach is still open. The drain latch is held, so this
-    // write re-enters and is refused — it must be remembered, not dropped.
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    gate.release();
-    await settle();
-
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    expect(rpc.submissions().map((sent) => sent.commandId)).toEqual(["q1"]);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("leaves an archived Session alone — there is nothing to attach to", async () => {
-    const { rpc, store, sessionId } = await crashed((fake) => {
-      fake.snapshotProjection = { ...projectionFor(null), status: "archived" };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "hello?" });
-    await settle();
-
-    expect(rpc.attaches).toEqual([]);
+    expect(rpc.projectionQueries).toBe(2);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(rpc.submissions()).toEqual([]);
+    expect(notifications[0]).toContain("no longer available");
   });
 });
 
