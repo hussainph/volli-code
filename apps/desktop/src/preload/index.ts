@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   CredentialsResult,
   SecretReplaceInput,
@@ -47,9 +48,6 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  SessionRpcIpcEvent,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -601,9 +599,6 @@ const api = {
       invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
-    /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-    reorder: (orderedIds: string[]): Promise<ProjectMutationResult> =>
-      invoke("volli:project-reorder", orderedIds),
   },
   tickets: {
     create: (input: TicketCreateInput): Promise<TicketResult> =>
@@ -837,8 +832,8 @@ const api = {
    * called instead.
    */
   sessionRpc: {
-    /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
-    request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
+    /** Runs one served procedure; a subscription acknowledges with the id its frames will carry. */
+    request: (request: IpcRequest): Promise<IpcResponse> =>
       invoke("volli:session-rpc" satisfies typeof SESSION_RPC_IPC_CHANNEL, request),
     /**
      * Subscribes to the frames of EVERY live subscription; returns the
@@ -846,9 +841,8 @@ const api = {
      * because the id main acknowledged with is what tells them apart, and it
      * can arrive after the first frame does.
      */
-    onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
-        callback(payload);
+    onEvent: (callback: (event: IpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) => callback(payload);
       const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
@@ -1305,9 +1299,6 @@ const api = {
      */
     trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
     trim: (): Promise<WorktreeTrimResult> => invoke("volli:worktree-trim"),
-    /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-    trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
-      invoke("volli:worktree-trim-settings-get"),
     setTrimSettings: (input: WorktreeTrimSettingsInput): Promise<WorktreeTrimSettingsResult> =>
       invoke("volli:worktree-trim-settings-set", input),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */

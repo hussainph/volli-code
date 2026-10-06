@@ -13,6 +13,18 @@ import type {
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { StoragePane } from "./storage-pane";
 
+// The build-artifact section reads its setting on mount over the Session RPC
+// client (`worktree.trimSettings`, VC-608).
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    worktree: {
+      trimSettings: {
+        query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+  }),
+}));
+
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 
@@ -161,13 +173,6 @@ beforeEach(() => {
         orphans,
         cleanupOrphans,
         deleteOrphan: vi.fn(),
-        // The build-artifact section reads its setting on mount and scans only
-        // when asked (VC-340); this suite is about the orphan cleanup, so the
-        // trim door answers empty.
-        trimSettings: async () => ({
-          ok: true,
-          settings: { keepPatterns: [".env"], trimOnFinish: true },
-        }),
         trimScan: async () => ({ ok: true, worktrees: [] }),
         trim: vi.fn(),
         setTrimSettings: vi.fn(),

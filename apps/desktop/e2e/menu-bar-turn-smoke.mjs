@@ -75,7 +75,11 @@ async function chatSessionIds(page, projectId) {
 async function turnFacts(page, sessionId) {
   const response = await page.evaluate(
     (id) =>
-      window.api.sessionRpc.request({ procedure: "session.snapshot", input: { sessionId: id } }),
+      window.api.sessionRpc.request({
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: id },
+      }),
     sessionId,
   );
   if (!response.ok) throw new Error(`snapshot failed: ${JSON.stringify(response).slice(0, 200)}`);

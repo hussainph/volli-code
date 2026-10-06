@@ -3,6 +3,7 @@
 export * from "./actor";
 export * from "./commands";
 export * from "./credentials";
+export * from "./device-credential";
 export * from "./errors";
 export * from "./features";
 export * from "./handshake";

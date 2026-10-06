@@ -435,7 +435,8 @@ async function installLiveActivityProbe(page, sessionId) {
       };
       probe.detach = window.api.sessionRpc.onEvent(receive);
       const reply = await window.api.sessionRpc.request({
-        procedure: "session.subscribe",
+        path: "session.subscribe",
+        type: "subscription",
         input: { sessionId: id, afterSequence: 0 },
       });
       if (!reply.ok || typeof reply.subscriptionId !== "string") {
@@ -520,7 +521,8 @@ function durableUserTextParts(frame) {
 async function readSessionEvidence(page, sessionId) {
   const response = await page.evaluate(async (id) => {
     return window.api.sessionRpc.request({
-      procedure: "session.snapshot",
+      path: "session.snapshot",
+      type: "query",
       input: { sessionId: id },
     });
   }, sessionId);
@@ -595,7 +597,8 @@ async function hasDurableUserMessage(page, sessionId, text) {
   return page.evaluate(
     async ({ id, expected }) => {
       const response = await window.api.sessionRpc.request({
-        procedure: "session.snapshot",
+        path: "session.snapshot",
+        type: "query",
         input: { sessionId: id },
       });
       if (!response.ok) throw new Error(`Session snapshot failed: ${JSON.stringify(response)}`);
