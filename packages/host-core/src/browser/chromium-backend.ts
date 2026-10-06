@@ -290,6 +290,8 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   #engine: Promise<ChromiumEngine> | null = null;
   /** The engine {@link #engine} resolved to, while it is live. */
   #live: ChromiumEngine | null = null;
+  /** Shutdowns of browsers already gone or going, which dispose waits for. */
+  readonly #retiring = new Set<Promise<void>>();
   readonly #bySession = new Map<string, ChromiumTabEntry>();
   /** Out-of-process iframe sessions, to the tab whose page they are in. */
   readonly #byFrameSession = new Map<string, ChromiumTabEntry>();
@@ -373,6 +375,10 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
    * launches a new browser.
    */
   #engineGone(engine: ChromiumEngine, description: string): void {
+    // Its shutdown is under way; a dispose that follows waits for it to end.
+    const retiring = engine.process.close();
+    this.#retiring.add(retiring);
+    void retiring.finally(() => this.#retiring.delete(retiring));
     if (this.#live === engine) {
       this.#live = null;
       this.#engine = null;
@@ -487,6 +493,28 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     this.#byTarget.set(targetId, entry);
     const send = (method: string, params: object = {}): Promise<unknown> =>
       engine.connection.send(method, params, sessionId);
+    try {
+      await this.#initializeTarget(entry, target, send);
+    } catch (error) {
+      // A page that could not be set up (its guard above all) never runs:
+      // close it now, since `close` waits on a ready that will not come.
+      if (entry.target === target) entry.target = null;
+      this.#bySession.delete(sessionId);
+      this.#byTarget.delete(targetId);
+      for (const frame of entry.frameSessions) this.#byFrameSession.delete(frame);
+      entry.frameSessions.clear();
+      void engine.connection.send("Target.closeTarget", { targetId }).catch(() => undefined);
+      throw error;
+    }
+    return target;
+  }
+
+  /** Enables the tab's domains and its document guard, sizes it, then lets it run. */
+  async #initializeTarget(
+    entry: ChromiumTabEntry,
+    target: ChromiumTarget,
+    send: (method: string, params?: object) => Promise<unknown>,
+  ): Promise<void> {
     await Promise.all([
       send("Page.enable"),
       send("Runtime.enable"),
@@ -501,7 +529,6 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     await send("Target.setAutoAttach", PAUSED_AUTO_ATTACH);
     await this.#applyViewport(target, entry.bounds);
     await send("Runtime.runIfWaitingForDebugger");
-    return target;
   }
 
   /**
@@ -1355,8 +1382,8 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     const engine = this.#engine;
     this.#engine = null;
     this.#live = null;
-    if (engine === null) return;
-    const live = await engine.catch(() => null);
+    const live = engine === null ? null : await engine.catch(() => null);
     await live?.process.close();
+    await Promise.all(this.#retiring);
   }
 }

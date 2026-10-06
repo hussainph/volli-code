@@ -23,15 +23,19 @@ unit="$here/../packaging/volli-hostd.service"
 [[ -f $unit ]] || unit="$here/systemd/volli-hostd.service"
 
 # The AppArmor profile grants user namespaces to this binary's path. If the
-# service user can replace the binary (or its directory), the grant covers
-# whatever that user puts there: refuse, rather than prove a sandbox on a
-# grant that is not scoped safely.
+# service user can replace the binary, or any directory on its path (renaming
+# a writable ancestor replaces the whole subtree), the grant covers whatever
+# that user puts there: refuse, rather than prove a sandbox on a grant that is
+# not scoped safely.
 resolved="$(readlink -f "$chrome")"
-for path in "$resolved" "$(dirname "$resolved")"; do
+path="$resolved"
+while :; do
   if runuser -u "$user" -- test -w "$path"; then
-    echo "probe: $path is writable by $user; the AppArmor grant must not cover a path the service user can replace (chown -R root:root it)" >&2
+    echo "probe: $path is writable by $user; the AppArmor grant must not cover a path the service user can replace (keep it root-owned)" >&2
     exit 1
   fi
+  [[ $path == / ]] && break
+  path="$(dirname "$path")"
 done
 
 properties=()

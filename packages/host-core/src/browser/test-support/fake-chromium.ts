@@ -26,6 +26,8 @@ export interface FakeChromium {
   release(method: string, result?: object): void;
   /** Never answer this method at all. */
   ignore(method: string): void;
+  /** Answer this method with a protocol error from now on. */
+  fail(method: string): void;
   reply(id: number, result?: object): void;
   event(method: string, params: object, sessionId?: string): void;
   /** How many browsers were spawned. */
@@ -46,6 +48,7 @@ export function fakeChromium(): FakeChromium {
   let targetCount = 0;
   const holding = new Set<string>();
   const ignoring = new Set<string>();
+  const failing = new Set<string>();
   const fake: FakeChromium = {
     commands: [],
     held: new Map(),
@@ -63,6 +66,9 @@ export function fakeChromium(): FakeChromium {
     },
     ignore(method) {
       ignoring.add(method);
+    },
+    fail(method) {
+      failing.add(method);
     },
     reply(id, result = {}) {
       read?.write(`${JSON.stringify({ id, result })}\0`);
@@ -117,6 +123,12 @@ export function fakeChromium(): FakeChromium {
 
   const answer = (command: FakeCommand, exit: () => void): void => {
     if (ignoring.has(command.method)) return;
+    if (failing.has(command.method)) {
+      read?.write(
+        `${JSON.stringify({ id: command.id, error: { code: -32000, message: "injected failure" } })}\0`,
+      );
+      return;
+    }
     if (holding.has(command.method)) {
       const list = fake.held.get(command.method) ?? [];
       list.push(command);

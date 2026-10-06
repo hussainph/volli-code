@@ -131,8 +131,14 @@ export class CdpPipeConnection {
   readonly #pending = new Map<number, Pending>();
   readonly #listeners = new Set<(event: CdpEvent) => void>();
   readonly #closeListeners = new Set<(reason: string) => void>();
-  #chunks: Buffer[] = [];
-  #chunkBytes = 0;
+  /**
+   * The unterminated frame so far, copied into one buffer that grows by
+   * doubling (never past the frame bound). One allocation however finely the
+   * browser fragments its writes: memory is at most about twice the bytes
+   * held, never a Buffer view per fragment.
+   */
+  #partial: Buffer = Buffer.alloc(0);
+  #partialBytes = 0;
   #closed: string | null = null;
   readonly #limits: CdpPipeLimits;
 
@@ -256,12 +262,17 @@ export class CdpPipeConnection {
       each.settle();
       each.reject(error);
     }
-    this.#chunks = [];
-    this.#chunkBytes = 0;
+    this.#partial = Buffer.alloc(0);
+    this.#partialBytes = 0;
     const listeners = [...this.#closeListeners];
     this.#closeListeners.clear();
     this.#listeners.clear();
     for (const listener of listeners) listener(reason);
+  }
+
+  /** Bytes reserved for the unterminated frame now; for tests and diagnostics. */
+  get inboundCapacity(): number {
+    return this.#partial.length;
   }
 
   #receive(chunk: Buffer): void {
@@ -269,27 +280,38 @@ export class CdpPipeConnection {
     let start = 0;
     let end = chunk.indexOf(0, start);
     while (end !== -1) {
-      if (this.#chunkBytes + (end - start) > this.#limits.maxInboundFrameBytes) {
-        this.close("the browser sent a frame larger than the pipe accepts");
-        return;
-      }
-      this.#chunks.push(chunk.subarray(start, end));
-      const frame = Buffer.concat(this.#chunks).toString("utf8");
-      this.#chunks = [];
-      this.#chunkBytes = 0;
+      if (!this.#hold(chunk.subarray(start, end))) return;
+      const frame = this.#partial.toString("utf8", 0, this.#partialBytes);
+      this.#partialBytes = 0;
       this.#dispatch(frame);
       if (this.#closed !== null) return;
       start = end + 1;
       end = chunk.indexOf(0, start);
     }
-    if (start < chunk.length) {
-      this.#chunkBytes += chunk.length - start;
-      if (this.#chunkBytes > this.#limits.maxInboundFrameBytes) {
-        this.close("the browser sent a frame larger than the pipe accepts");
-        return;
-      }
-      this.#chunks.push(chunk.subarray(start));
+    if (start < chunk.length) this.#hold(chunk.subarray(start));
+    // A frame that ended exactly at a chunk's end leaves nothing to keep big.
+    if (this.#partialBytes === 0 && this.#partial.length > 64 * 1_024) {
+      this.#partial = Buffer.alloc(0);
     }
+  }
+
+  /** Appends to the unterminated frame; false (and closed) past the frame bound. */
+  #hold(bytes: Buffer): boolean {
+    const needed = this.#partialBytes + bytes.length;
+    if (needed > this.#limits.maxInboundFrameBytes) {
+      this.close("the browser sent a frame larger than the pipe accepts");
+      return false;
+    }
+    if (needed > this.#partial.length) {
+      let capacity = Math.max(this.#partial.length, 4_096);
+      while (capacity < needed) capacity *= 2;
+      const grown = Buffer.allocUnsafe(Math.min(capacity, this.#limits.maxInboundFrameBytes));
+      this.#partial.copy(grown, 0, 0, this.#partialBytes);
+      this.#partial = grown;
+    }
+    bytes.copy(this.#partial, this.#partialBytes);
+    this.#partialBytes = needed;
+    return true;
   }
 
   #dispatch(frame: string): void {

@@ -339,7 +339,14 @@ export async function launchChromium(
     if (exited === null) await Promise.race([exitedPromise, delay(ms)]);
   };
   const finalize = (description: string, graceful: boolean): Promise<void> => {
-    finalizing ??= (async () => {
+    // The latch is set before any of the body runs: the body closes the
+    // connection, whose close listener calls back in here.
+    if (finalizing !== null) return finalizing;
+    let finished!: () => void;
+    finalizing = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    void (async () => {
       gone = description;
       const listeners = [...goneListeners];
       goneListeners.clear();
@@ -367,7 +374,9 @@ export async function launchChromium(
       await exitWithin(CHROMIUM_KILL_GRACE_MS);
       for (const stream of [write, read, child.stderr]) stream?.destroy();
       await removeProfile();
-    })();
+    })()
+      .catch((error: unknown) => console.error("[volli] The Chromium shutdown failed:", error))
+      .finally(finished);
     return finalizing;
   };
 
