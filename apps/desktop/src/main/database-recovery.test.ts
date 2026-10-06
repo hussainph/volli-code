@@ -12,7 +12,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import type { DatabaseRecoveryListResult, DatabaseRecoveryRestoreResult } from "../ipc/contract";
 
 function fullDiskFailure() {
@@ -68,15 +77,34 @@ import { DatabaseRecovery, NO_CLEAN_BACKUP } from "@volli/host-core/maintenance"
 import { beginDatabaseRecovery, recoveryPendingPath } from "@volli/host-core/testing";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 
+const head = MIGRATIONS.at(-1)!.version;
+const headBackupName = `volli.db.backup-v${head}`;
+const templates = new Map<number, Buffer>();
+let templateDirectory: string;
+let damagedTemplate: Buffer;
 let directory: string;
 let dbPath: string;
 let recovery: DatabaseRecovery;
 
-beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "volli-recovery-test-"));
-  dbPath = join(directory, "volli.db");
-  Object.assign(faults, { dbPath, publish: false, rollback: false, moveWal: false, finish: false });
-  const damaged = new Database(dbPath);
+// Build real, empty SQLite schemas once; each test writes its own independent
+// copy. Closing the WAL-mode handles checkpoints the templates but retains the
+// WAL header flags, so integrity verification still exercises deserialization.
+// The one remaining full template migration can be I/O-bound on loaded CI.
+beforeAll(() => {
+  templateDirectory = mkdtempSync(join(tmpdir(), "volli-recovery-templates-"));
+  for (const version of [1, 2, head]) {
+    const path = join(templateDirectory, `template-v${version}.db`);
+    const db = new Database(path);
+    try {
+      db.pragma("journal_mode = WAL");
+      migrate(db, path, { toVersion: version });
+    } finally {
+      db.close();
+    }
+    templates.set(version, readFileSync(path));
+  }
+  const damagedPath = join(templateDirectory, "damaged.db");
+  const damaged = new Database(damagedPath);
   damaged.exec(
     "CREATE TABLE damaged_probe(value TEXT); CREATE INDEX damaged_probe_idx ON damaged_probe(value); INSERT INTO damaged_probe VALUES ('evidence')",
   );
@@ -85,9 +113,20 @@ beforeEach(() => {
     .get() as { rootpage: number };
   const pageSize = damaged.pragma("page_size", { simple: true }) as number;
   damaged.close();
-  const bytes = readFileSync(dbPath);
-  bytes.fill(0, (rootpage - 1) * pageSize, rootpage * pageSize);
-  writeFileSync(dbPath, bytes);
+  damagedTemplate = readFileSync(damagedPath);
+  damagedTemplate.fill(0, (rootpage - 1) * pageSize, rootpage * pageSize);
+}, 15000);
+
+afterAll(() => {
+  templates.clear();
+  rmSync(templateDirectory, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), "volli-recovery-test-"));
+  dbPath = join(directory, "volli.db");
+  Object.assign(faults, { dbPath, publish: false, rollback: false, moveWal: false, finish: false });
+  writeFileSync(dbPath, damagedTemplate);
   recovery = new DatabaseRecovery({ dbPath, userData: directory });
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -99,14 +138,19 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-function backup(version: number, value = "saved", modifiedAt = 1000): string {
+function writeTemplate(path: string, version = head): void {
+  const bytes = templates.get(version);
+  if (!bytes) throw new Error(`Missing recovery template for schema ${version}`);
+  writeFileSync(path, bytes);
+}
+
+// Swap, checkpoint, integrity and IPC tests need real schemas, not repeated
+// full upgrades. Only the explicit upgrade tests below use old-version copies.
+function backup(version = head, value = "saved", modifiedAt = 1000): string {
   const path = `${dbPath}.backup-v${version}`;
+  writeTemplate(path, version);
   const db = new Database(path);
   try {
-    // Production migration safety copies retain WAL-mode header flags even
-    // after checkpoint; default rollback fixtures would miss deserialize bugs.
-    db.pragma("journal_mode = WAL");
-    migrate(db, path, { toVersion: version });
     db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)").run(
       "recovery-test",
       value,
@@ -117,6 +161,13 @@ function backup(version: number, value = "saved", modifiedAt = 1000): string {
   }
   utimesSync(path, modifiedAt, modifiedAt);
   return path;
+}
+
+// Buffer.equals checks every byte and the length in native code. Generic deep
+// equality enumerates hundreds of thousands of byte properties for head-schema
+// images, which can consume most of the default test timeout under CI load.
+function expectFileBytes(path: string, bytes: Buffer): void {
+  expect(readFileSync(path).equals(bytes), path).toBe(true);
 }
 
 function bundle(): Record<string, Buffer> {
@@ -163,6 +214,8 @@ describe("DatabaseRecovery", () => {
     expect(readdirSync(directory).some((name) => name.endsWith("-shm"))).toBe(false);
   });
 
+  // This upgrade must run real migrations, safety-copy fsyncs and integrity
+  // checks rather than a head template; allow for loaded CI disk latency.
   it("restores the newest clean backup, upgrades and rechecks it, preserving all other copies", () => {
     const old = backup(1, "old", 100);
     const chosen = backup(2, "chosen", 200);
@@ -171,7 +224,7 @@ describe("DatabaseRecovery", () => {
     utimesSync(bad, 300, 300);
     const originalCopies = [old, chosen, bad].map((path) => [path, readFileSync(path)] as const);
     expect(recovery.restore()).toBe("volli.db.backup-v2");
-    for (const [path, bytes] of originalCopies) expect(readFileSync(path)).toEqual(bytes);
+    for (const [path, bytes] of originalCopies) expectFileBytes(path, bytes);
     const restored = database.openVolliDb(dbPath);
     try {
       expect(restored.pragma("quick_check", { simple: true })).toBe("ok");
@@ -183,10 +236,10 @@ describe("DatabaseRecovery", () => {
       restored.close();
     }
     expect(readdirSync(directory).some((name) => name.startsWith("volli.db.restore-"))).toBe(false);
-  });
+  }, 15000);
 
   it("preserves the damaged database and its original WAL/SHM byte-for-byte before checkpoint", () => {
-    backup(1);
+    backup();
     writeFileSync(`${dbPath}-wal`, "damaged WAL evidence");
     writeFileSync(`${dbPath}-shm`, "damaged SHM evidence");
     const original = ["", "-wal", "-shm"].map(
@@ -195,8 +248,8 @@ describe("DatabaseRecovery", () => {
     recovery.restore();
     const saved = preservedDirectory();
     for (const [suffix, bytes] of original)
-      expect(readFileSync(join(saved, "before-checkpoint", `volli.db${suffix}`))).toEqual(bytes);
-    expect(readFileSync(join(saved, "volli.db"))).toEqual(original[0]?.[1]);
+      expectFileBytes(join(saved, "before-checkpoint", `volli.db${suffix}`), bytes);
+    expectFileBytes(join(saved, "volli.db"), original[0]![1]);
     expect(existsSync(`${dbPath}-wal`)).toBe(false);
   });
 
@@ -212,7 +265,7 @@ describe("DatabaseRecovery", () => {
   );
 
   it("detects a zeroed index page in an otherwise valid SQLite image", () => {
-    const path = backup(1);
+    const path = backup();
     const db = new Database(path);
     db.exec(
       "CREATE TABLE integrity_probe (value TEXT); CREATE INDEX integrity_probe_idx ON integrity_probe(value); INSERT INTO integrity_probe VALUES ('saved')",
@@ -227,43 +280,43 @@ describe("DatabaseRecovery", () => {
     writeFileSync(path, bytes);
     expect(recovery.list()[0]?.integrity).toBe("damaged");
     expect(() => recovery.restore()).toThrow(NO_CLEAN_BACKUP);
-    expect(readFileSync(path)).toEqual(bytes);
+    expectFileBytes(path, bytes);
   });
 
   it("accepts empty verification WAL/SHM caches without modifying or following them", () => {
-    const path = backup(1);
+    const path = backup();
     const bytes = readFileSync(path);
     writeFileSync(`${path}-wal`, "");
     writeFileSync(`${path}-shm`, Buffer.alloc(32768));
     const shm = readFileSync(`${path}-shm`);
     expect(recovery.list()[0]?.integrity).toBe("clean");
-    expect(recovery.restore()).toBe("volli.db.backup-v1");
-    expect(readFileSync(path)).toEqual(bytes);
-    expect(readFileSync(`${path}-shm`)).toEqual(shm);
+    expect(recovery.restore()).toBe(headBackupName);
+    expectFileBytes(path, bytes);
+    expectFileBytes(`${path}-shm`, shm);
     expect(readFileSync(`${path}-wal`).length).toBe(0);
   });
 
   it("offers a clean same-version original preserved by migration safety checks", () => {
-    const path = backup(1);
-    const name = "volli.db.backup-v1.preserved-01234567-89ab-cdef-0123-456789abcdef";
+    const path = backup();
+    const name = `${headBackupName}.preserved-01234567-89ab-cdef-0123-456789abcdef`;
     renameSync(path, join(directory, name));
     const bytes = readFileSync(join(directory, name));
     expect(recovery.list()[0]).toMatchObject({ name, integrity: "clean" });
     expect(recovery.restore()).toBe(name);
-    expect(readFileSync(join(directory, name))).toEqual(bytes);
+    expectFileBytes(join(directory, name), bytes);
   });
 
   it("checks real WAL-mode migration copies without modifying their bytes", () => {
-    const path = backup(1);
+    const path = backup();
     const bytes = readFileSync(path);
     expect([bytes[18], bytes[19]]).toEqual([2, 2]);
     expect(recovery.list()[0]?.integrity).toBe("clean");
-    expect(readFileSync(path)).toEqual(bytes);
+    expectFileBytes(path, bytes);
   });
 
   it("rejects an empty file and a backup with a journal rather than checking only its base", () => {
-    backup(1);
-    writeFileSync(`${dbPath}.backup-v1-wal`, "uncheckpointed data");
+    backup();
+    writeFileSync(`${dbPath}.backup-v${head}-wal`, "uncheckpointed data");
     writeFileSync(`${dbPath}.backup-v2`, "");
     expect(
       recovery
@@ -275,7 +328,7 @@ describe("DatabaseRecovery", () => {
   });
 
   it("rolls back to the original bundle if re-opening the installed database fails", () => {
-    backup(1);
+    backup();
     writeFileSync(`${dbPath}-wal`, "original WAL");
     const original = readFileSync(dbPath);
     const originalWal = readFileSync(`${dbPath}-wal`);
@@ -287,10 +340,8 @@ describe("DatabaseRecovery", () => {
       },
     });
     expect(() => failing.restore()).toThrow("Restore failed");
-    expect(readFileSync(dbPath)).toEqual(original);
-    expect(readFileSync(join(preservedDirectory(), "before-checkpoint", "volli.db-wal"))).toEqual(
-      originalWal,
-    );
+    expectFileBytes(dbPath, original);
+    expectFileBytes(join(preservedDirectory(), "before-checkpoint", "volli.db-wal"), originalWal);
     expect(existsSync(join(preservedDirectory(), "failed-restore"))).toBe(true);
     expect(recovery.list()[0]?.integrity).toBe("clean");
   });
@@ -308,7 +359,7 @@ describe("DatabaseRecovery", () => {
   });
 
   it("refuses out-of-userData paths and linked current databases", () => {
-    backup(1);
+    backup();
     const other = new DatabaseRecovery({ dbPath, userData: join(directory, "other") });
     expect(() => other.list()).toThrow("local user-data database");
     const linked = join(directory, "linked.db");
@@ -318,9 +369,11 @@ describe("DatabaseRecovery", () => {
     );
   });
 
+  // Real lock refusal waits for SQLite's 5 s busy timeout; leave room for CI load.
   it("refuses a WAL reader before marking or displacing the current DB", () => {
-    backup(1);
+    backup();
     rmSync(dbPath);
+    writeTemplate(dbPath);
     const writer = database.openVolliDb(dbPath);
     writer
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
@@ -359,7 +412,7 @@ describe("DatabaseRecovery", () => {
   it.each(["publication", "rollback", "sidecar-move"] as const)(
     "fails closed across a full-disk %s boundary and can resume",
     (boundary) => {
-      const path = backup(1);
+      const path = backup();
       const backupBytes = readFileSync(path);
       const damagedBytes = readFileSync(dbPath);
       writeFileSync(`${dbPath}-wal`, "preserved WAL evidence");
@@ -369,23 +422,23 @@ describe("DatabaseRecovery", () => {
       expect(() => recovery.restore()).toThrow("Restore failed");
       expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
       // The live path never went empty: the damaged base stayed in place.
-      expect(readFileSync(dbPath)).toEqual(damagedBytes);
+      expectFileBytes(dbPath, damagedBytes);
       expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
       const saved = preservedDirectory();
-      expect(readFileSync(join(saved, "before-checkpoint", "volli.db"))).toEqual(damagedBytes);
+      expectFileBytes(join(saved, "before-checkpoint", "volli.db"), damagedBytes);
       expect(readFileSync(join(saved, "before-checkpoint", "volli.db-wal")).toString()).toBe(
         "preserved WAL evidence",
       );
-      expect(readFileSync(path)).toEqual(backupBytes);
+      expectFileBytes(path, backupBytes);
       Object.assign(faults, { publish: false, rollback: false, moveWal: false });
-      expect(recovery.restore()).toBe("volli.db.backup-v1");
+      expect(recovery.restore()).toBe(headBackupName);
       expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
-      expect(readFileSync(path)).toEqual(backupBytes);
+      expectFileBytes(path, backupBytes);
     },
   );
 
   it("refuses a malformed header without letting SQLite delete its WAL or SHM", () => {
-    const path = backup(1);
+    const path = backup();
     writeFileSync(dbPath, "damaged header evidence");
     writeFileSync(`${dbPath}-wal`, "WAL evidence");
     writeFileSync(`${dbPath}-shm`, "SHM evidence");
@@ -393,21 +446,22 @@ describe("DatabaseRecovery", () => {
       (file) => [file, readFileSync(file)] as const,
     );
     expect(() => recovery.restore()).toThrow("Restore failed");
-    for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
+    for (const [file, bytes] of files) expectFileBytes(file, bytes);
     // Header validation now precedes intent. No swap began, but damaged files
     // still refuse boot and their raw evidence remains available for recovery.
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
     const saved = preservedDirectory();
     for (const suffix of ["", "-wal", "-shm"])
-      expect(readFileSync(join(saved, "before-checkpoint", `volli.db${suffix}`))).toEqual(
+      expectFileBytes(
+        join(saved, "before-checkpoint", `volli.db${suffix}`),
         readFileSync(`${dbPath}${suffix}`),
       );
     expect(() => database.openVolliDb(dbPath)).toThrow("damaged header");
-    for (const [file, bytes] of files) expect(readFileSync(file)).toEqual(bytes);
+    for (const [file, bytes] of files) expectFileBytes(file, bytes);
   });
 
   it("does not undo a verified publication when marker cleanup fails", () => {
-    const path = backup(1);
+    const path = backup();
     const original = readFileSync(dbPath);
     faults.finish = true;
     expect(() => recovery.restore()).toThrow("restored and checked");
@@ -418,17 +472,17 @@ describe("DatabaseRecovery", () => {
       restored.prepare("SELECT value FROM app_state WHERE key = 'recovery-test'").get(),
     ).toEqual({ value: "saved" });
     restored.close();
-    expect(readFileSync(join(preservedDirectory(), "before-checkpoint", "volli.db"))).toEqual(
-      original,
-    );
+    expectFileBytes(join(preservedDirectory(), "before-checkpoint", "volli.db"), original);
     expect(existsSync(path)).toBe(true);
     faults.finish = false;
-    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(recovery.restore()).toBe(headBackupName);
   });
 
+  // The real startup fence waits up to 5 s; the timeout also covers loaded CI I/O.
   it("blocks restoration while another boot has a dormant uninitialized DB handle", () => {
-    backup(1);
+    backup();
     rmSync(dbPath);
+    writeTemplate(dbPath);
     const seeded = database.openVolliDb(dbPath);
     seeded
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
@@ -465,9 +519,11 @@ describe("DatabaseRecovery", () => {
     }
   }, 15000);
 
+  // Real exclusive-ownership refusal waits for SQLite's 5 s busy timeout.
   it("refuses an idle existing writer, not just an active WAL reader", () => {
-    backup(1);
+    backup();
     rmSync(dbPath);
+    writeTemplate(dbPath);
     const writer = database.openVolliDb(dbPath);
     writer.exec(
       "CREATE TABLE idle_writer_probe (value TEXT); INSERT INTO idle_writer_probe VALUES ('before')",
@@ -498,7 +554,7 @@ describe("DatabaseRecovery", () => {
   }, 15000);
 
   it("resumes an interrupted switch without allowing boot to create an empty database", () => {
-    backup(1);
+    backup();
     const original = readFileSync(dbPath);
     const preserved = join(directory, "prior-preserved.db");
     writeFileSync(preserved, original);
@@ -507,15 +563,15 @@ describe("DatabaseRecovery", () => {
     expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
     expect(existsSync(dbPath)).toBe(false);
     expect(recovery.list()[0]?.integrity).toBe("clean");
-    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(recovery.restore()).toBe(headBackupName);
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
-    expect(readFileSync(preserved)).toEqual(original);
+    expectFileBytes(preserved, original);
     const reopened = database.openVolliDb(dbPath);
     reopened.close();
   });
 
   it("keeps interrupted-recovery intent when a publication re-open fails", () => {
-    backup(1);
+    backup();
     const failing = new DatabaseRecovery({
       dbPath,
       userData: directory,
@@ -526,25 +582,24 @@ describe("DatabaseRecovery", () => {
     expect(() => failing.restore()).toThrow("Restore failed");
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(true);
     expect(() => database.openVolliDb(dbPath)).toThrow("interrupted");
-    expect(recovery.restore()).toBe("volli.db.backup-v1");
+    expect(recovery.restore()).toBe(headBackupName);
     expect(existsSync(recoveryPendingPath(dbPath))).toBe(false);
   });
 
   it("refuses a linked damaged WAL and preserves its target", () => {
-    const clean = backup(1);
+    const clean = backup();
     const bytes = readFileSync(clean);
     const original = readFileSync(dbPath);
     symlinkSync(clean, `${dbPath}-wal`);
     expect(() => recovery.restore()).toThrow("Restore failed");
-    expect(readFileSync(dbPath)).toEqual(original);
-    expect(readFileSync(clean)).toEqual(bytes);
+    expectFileBytes(dbPath, original);
+    expectFileBytes(clean, bytes);
   });
 });
 
 describe("a safety copy from a newer Volli (VC-602)", () => {
   /** A clean copy stamped past this build's head, with the given floor. */
   function newerBackup(floor: number, modifiedAt: number): string {
-    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
     const path = backup(head, "newer", modifiedAt);
     const db = new Database(path);
     try {
@@ -564,8 +619,9 @@ describe("a safety copy from a newer Volli (VC-602)", () => {
     return renamed;
   }
 
+  // Keep a real v1 -> head restore after rejecting the newer copy. Its full
+  // migration, checkpoint and fsync work needs headroom on loaded CI.
   it("is listed as newer and passed over for the newest copy this build can open", () => {
-    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
     backup(1, "older", 1000);
     const newer = newerBackup(head + 1, 3000);
     const bytes = readFileSync(newer);
@@ -575,11 +631,10 @@ describe("a safety copy from a newer Volli (VC-602)", () => {
       { name: "volli.db.backup-v1", integrity: "clean" },
     ]);
     expect(recovery.restore()).toBe("volli.db.backup-v1");
-    expect(readFileSync(newer)).toEqual(bytes);
-  });
+    expectFileBytes(newer, bytes);
+  }, 15000);
 
   it("is clean, and restorable, when its floor admits this build", () => {
-    const head = MIGRATIONS[MIGRATIONS.length - 1]!.version;
     newerBackup(head, 3000);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(recovery.list()[0]?.integrity).toBe("clean");
@@ -629,7 +684,7 @@ describe("database recovery IPC", () => {
   });
 
   it("lists and restores despite degraded data IPC, then requests restart only on success", () => {
-    backup(1);
+    backup();
     const restart = register();
     expect(invoke<DatabaseRecoveryListResult>("volli:database-recovery-list")).toMatchObject({
       ok: true,
@@ -637,7 +692,7 @@ describe("database recovery IPC", () => {
     });
     expect(invoke<DatabaseRecoveryRestoreResult>("volli:database-recovery-restore")).toEqual({
       ok: true,
-      restoredBackup: "volli.db.backup-v1",
+      restoredBackup: headBackupName,
     });
     expect(restart).toHaveBeenCalledOnce();
     expect(invoke<DatabaseRecoveryRestoreResult>("volli:database-recovery-restore")).toMatchObject({
@@ -657,7 +712,7 @@ describe("database recovery IPC", () => {
   });
 
   it("refuses healthy-mode recovery and renderer-supplied paths", () => {
-    backup(1);
+    backup();
     const restart = register(false);
     expect(invoke<DatabaseRecoveryListResult>("volli:database-recovery-list")).toMatchObject({
       ok: false,
