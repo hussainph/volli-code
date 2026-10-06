@@ -18,8 +18,10 @@
  * 4. Rewrites `package.json` `exports` to the root, the clusters and `./testing`.
  *
  * Only specifiers and import lists change: every name still binds to the
- * declaration it bound to. Test-only modules (TESTING) and the Session
- * writer's constructors (PRIVATE) are served by `./testing` alone.
+ * declaration it bound to. Test-only modules (TESTING), the Session writer's
+ * constructors and the `*ForTest` resets (PRIVATE) are served by `./testing`
+ * alone. A client import of a name that became PRIVATE after its importer was
+ * migrated is reported, and moved to `@volli/host-core/testing` by hand.
  *
  * Mocks (`vi.mock`, `importActual`, `typeof import(…)`) are rewritten to the
  * cluster entry too; a factory that replaced a whole file module must then
@@ -155,6 +157,12 @@ export const PRIVATE = {
   "session-control/sqlite-ledger.ts": ["createSqliteSessionLedger", "SqliteSessionLedger"],
   // The database-file fence (VC-628): only `database-file.ts` sequences a swap.
   "db/recovery-pending.ts": ["beginDatabaseRecovery", "recoveryPendingPath"],
+  // Test-only resets of module state: test support, so `./testing` serves them.
+  "worktree/deletion-lease.ts": ["resetDeletionLeasesForTest"],
+  "worktree/index.ts": ["resetDeletionLeasesForTest"],
+  "worktree/snapshot.ts": ["resetWorktreeSnapshotsForTest"],
+  "orphan-scan.ts": ["resetOrphanScanForTest"],
+  "retention-runtime.ts": ["resetRetentionWatcherForTest"],
 };
 
 const ROOT_OWN = "index.ts";
@@ -364,7 +372,19 @@ for (const file of consumers) {
       if (cluster === "." || clause.startsWith("*")) continue;
       const entry = relative(SRC, entryFile(cluster)).split("\\").join("/");
       for (const spec of parseSpecifiers(clause).list) {
+        if (cluster !== "testing" && Object.values(PRIVATE).some((n) => n.includes(spec.name))) {
+          unresolved.push(`${file}: ${spec.name} is served by ${NAME}/testing; import it from there`);
+          continue;
+        }
         if (exportKind(entry, spec.name)) continue;
+        const privately =
+          cluster === "testing"
+            ? Object.entries(PRIVATE).find(([, names]) => names.includes(spec.name))?.[0]
+            : undefined;
+        if (privately !== undefined) {
+          want("testing", privately, spec.name, exportKind(privately, spec.name) ?? "value");
+          continue;
+        }
         const old = OLD_EXPORTS[`./${cluster}`];
         if (!old) {
           unresolved.push(
@@ -493,7 +513,9 @@ for (const cluster of [...Object.keys(CLUSTERS), "testing"]) {
         .replace(/^type\s+/, "")
         .split(/\s+as\s+/)
         .at(-1);
-      want(cluster, real, exported, isType ? "type" : "value");
+      // A name that has since become private moves to `./testing`.
+      const served = PRIVATE[real]?.includes(exported) ? "testing" : cluster;
+      want(served, real, exported, isType ? "type" : "value");
     }
   }
 }

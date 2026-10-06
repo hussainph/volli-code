@@ -22,7 +22,6 @@ export {
 export {
   invalidateOrphanScan,
   orphanScanReport,
-  resetOrphanScanForTest,
   resolveCleanupPlan,
   startOrphanScan,
 } from "../orphan-scan";
@@ -35,9 +34,5 @@ export {
   revealWindow,
   sealQuietAppActivation,
 } from "../quiet-windows";
-export {
-  getRetentionWatcher,
-  resetRetentionWatcherForTest,
-  type RetentionReclaimSeams,
-} from "../retention-runtime";
+export { getRetentionWatcher, type RetentionReclaimSeams } from "../retention-runtime";
 export { settleShutdownBeforeDeadline } from "../shutdown-deadline";

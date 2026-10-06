@@ -281,6 +281,7 @@ const isWriterConstructor = (name: string) =>
   SESSION_WRITER_CONSTRUCTORS.includes(name) ||
   name === externalStar(SESSION_ENGINE_PACKAGE) ||
   name.startsWith(`${externalStar(SESSION_ENGINE_PACKAGE)}/`);
+const isTestReset = (name: string) => /ForTest$/.test(name);
 
 describe("host-core's package interface", () => {
   it("flags a self-name import in every quoting form, in a scanned source file", () => {
@@ -441,5 +442,17 @@ describe("host-core's package interface", () => {
     expect(productionExportsMatching(PACKAGE, isWriterConstructor)).toEqual([]);
     const testing = surfaceOf(join(SRC, "testing/index.ts"));
     expect(testing.has("createSqliteSessionLedger")).toBe(true);
+  });
+
+  it("serves test-only resets from ./testing alone", () => {
+    expect(productionExportsMatching(PACKAGE, isTestReset)).toEqual([]);
+    const testing = surfaceOf(join(SRC, "testing/index.ts"));
+    for (const reset of [
+      "resetDeletionLeasesForTest",
+      "resetWorktreeSnapshotsForTest",
+      "resetOrphanScanForTest",
+      "resetRetentionWatcherForTest",
+    ])
+      expect(testing.has(reset), reset).toBe(true);
   });
 });

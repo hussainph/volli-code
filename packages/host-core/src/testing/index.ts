@@ -20,6 +20,8 @@ export {
   testSession,
   testTicket,
 } from "../db/test-helpers";
+export { resetOrphanScanForTest } from "../orphan-scan";
+export { resetRetentionWatcherForTest } from "../retention-runtime";
 export { SecretStore as N1SecretStore } from "../secrets/test-support/n1/secrets/store";
 export { startChild } from "../secrets/test-support/processes";
 export { createCheckpointFailureReporter } from "../session-control";
@@ -31,3 +33,5 @@ export {
   listTicketSessions,
 } from "../session-control/test-support";
 export { createTestSessionEngine } from "./session-engine";
+export { resetDeletionLeasesForTest } from "../worktree/deletion-lease";
+export { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";

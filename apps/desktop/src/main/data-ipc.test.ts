@@ -243,8 +243,10 @@ import {
   testProject,
   testSession,
   type TestDb,
+  resetOrphanScanForTest,
+  resetWorktreeSnapshotsForTest,
+  resetDeletionLeasesForTest,
 } from "@volli/host-core/testing";
-import { resetOrphanScanForTest } from "@volli/host-core/maintenance";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
 import {
   worktreesHome,
@@ -267,10 +269,8 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-  resetWorktreeSnapshotsForTest,
   orphanCleanupEngine,
   acquireDeletionLease,
-  resetDeletionLeasesForTest,
 } from "@volli/host-core/worktree";
 import {
   updateTicketFieldsCommand,

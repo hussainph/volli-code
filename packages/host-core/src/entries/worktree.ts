@@ -20,7 +20,7 @@ export {
 } from "../worktree/agent-sites";
 export { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "../worktree/coalesce";
 export { isOwnedWorktreePath, ownedContainers, projectContainerName } from "../worktree/containers";
-export { acquireDeletionLease, resetDeletionLeasesForTest } from "../worktree/deletion-lease";
+export { acquireDeletionLease } from "../worktree/deletion-lease";
 export {
   type AgentSiteReleaseReport,
   agentTurnOpenWithin,
@@ -56,4 +56,4 @@ export {
   WorktreeChangeWatchManager,
 } from "../worktree";
 export { canonicalize, isInside } from "../worktree/paths";
-export { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "../worktree/snapshot";
+export { getWorktreeSnapshots } from "../worktree/snapshot";
