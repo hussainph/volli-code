@@ -17,6 +17,7 @@ describe("chromiumLaunchArgs", () => {
   const args = chromiumLaunchArgs({
     userDataDir: "/private/profile",
     noSandbox: false,
+    deviceScaleFactor: 1,
   });
 
   it("speaks CDP over the pipe and never opens a debugging port or address (VC-110)", () => {
@@ -33,8 +34,17 @@ describe("chromiumLaunchArgs", () => {
     expect(args.at(-1)).toBe("about:blank");
   });
 
+  it("draws at the scale the host states", () => {
+    expect(args).toContain("--force-device-scale-factor=1");
+    expect(
+      chromiumLaunchArgs({ userDataDir: "/p", noSandbox: false, deviceScaleFactor: 2 }),
+    ).toContain("--force-device-scale-factor=2");
+  });
+
   it("drops the sandbox only when the host says so", () => {
-    expect(chromiumLaunchArgs({ userDataDir: "/p", noSandbox: true })).toContain("--no-sandbox");
+    expect(
+      chromiumLaunchArgs({ userDataDir: "/p", noSandbox: true, deviceScaleFactor: 1 }),
+    ).toContain("--no-sandbox");
   });
 });
 
@@ -70,7 +80,7 @@ describe("launchChromium", () => {
     let seen: { args: readonly string[]; stdio: unknown } | null = null;
     let profileMode = 0;
     const launch = launchChromium(
-      { executablePath: "/bin/chromium", profileRoot, noSandbox: false },
+      { executablePath: "/bin/chromium", profileRoot, noSandbox: false, deviceScaleFactor: 1 },
       (_command, args, options) => {
         seen = { args, stdio: options.stdio };
         const dir = args
@@ -100,6 +110,7 @@ describe("launchChromium", () => {
         executablePath: "/bin/chromium",
         profileRoot: root(),
         noSandbox: true,
+        deviceScaleFactor: 1,
       },
       () => {
         const child = silentChild();
@@ -117,7 +128,7 @@ describe("launchChromium", () => {
   it("refuses a child spawned without its pipe", async () => {
     const profileRoot = root();
     const launch = launchChromium(
-      { executablePath: "/bin/chromium", profileRoot, noSandbox: false },
+      { executablePath: "/bin/chromium", profileRoot, noSandbox: false, deviceScaleFactor: 1 },
       () => {
         const child = silentChild();
         (child as unknown as { stdio: unknown[] }).stdio = [null, null, null];

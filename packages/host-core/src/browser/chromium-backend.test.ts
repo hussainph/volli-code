@@ -1,7 +1,8 @@
 /**
  * The Chromium backend against a real Chrome for Testing (VC-619): the shared
  * browser tool suite, then what only this engine has — browser contexts per
- * scope, denied permissions, the page-navigation guard and dialogs. Skips without a browser unless
+ * scope, denied permissions, the page-navigation guard, dialogs, the
+ * screencast and the viewer's input. Skips without a browser unless
  * `VOLLI_REQUIRE_CHROMIUM=1` (CI's "Test (packages)" lane) makes that a failure.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,16 +20,19 @@ import {
   suitePorts,
 } from "./test-support/backend-suite";
 import { testChromium } from "./test-support/chromium";
+import { jpegSize } from "./test-support/jpeg";
 import { startBrowserFixture, type BrowserFixture } from "./test-support/fixture-server";
 
 const chromium = testChromium();
 const profileRoot = mkdtempSync(join(tmpdir(), "volli-chromium-test-"));
 
-function chromiumBackend(): ChromiumBrowserBackend {
+function chromiumBackend(deviceScaleFactor = 1): ChromiumBrowserBackend {
   return new ChromiumBrowserBackend(suitePorts(), {
     executablePath: chromium!.executablePath,
     profileRoot,
     noSandbox: chromium!.noSandbox,
+    deviceScaleFactor,
+    screencastQuality: 70,
   });
 }
 
@@ -41,6 +45,8 @@ describeBrowserBackendSuite(
           executablePath: chromium.executablePath,
           profileRoot,
           noSandbox: chromium.noSandbox,
+          deviceScaleFactor: 1,
+          screencastQuality: 70,
         });
         return { backend, dispose: () => backend.dispose() };
       },
@@ -55,7 +61,8 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
 
   beforeAll(async () => {
     fixture = await startBrowserFixture();
-    backend = chromiumBackend();
+    // Drawn at 2x, so one browser can serve a Retina viewer and a 1x one.
+    backend = chromiumBackend(2);
   });
 
   afterAll(async () => {
@@ -279,6 +286,153 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     // Closing the tab runs no unload veto: the way out is always open.
     backend.close(nav.tabId);
     expect(backend.list({ projectId: PROJECT }).some((tab) => tab.tabId === nav.tabId)).toBe(false);
+    driver.dispose();
+  });
+
+  it("serves a shown tab's frames at 1x and 2x, latest wins, and ends them when it goes headless", async () => {
+    const driver = port("viewer", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/latency") },
+      signal: signal(),
+    });
+    expect(() => backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 })).toThrow(/Headless/);
+    backend.setPresentation(nav.tabId, "preview");
+    expect(() => backend.attachScreencast(nav.tabId, { deviceScaleFactor: 4 })).toThrow(RangeError);
+
+    const one = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 });
+    expect(one.metadata()).toEqual({
+      encoding: "image/jpeg",
+      width: 1_280,
+      height: 720,
+      deviceScaleFactor: 1,
+    });
+    const first = await one.next(AbortSignal.timeout(5_000));
+    expect(first?.seq).toBe(1);
+    expect(jpegSize(first!.bytes)).toEqual({ width: 1_280, height: 720 });
+
+    // A Retina viewer: the page is drawn at 2x for every attachment, and both are told.
+    const scales: number[] = [];
+    one.onMetadata((metadata) => scales.push(metadata.deviceScaleFactor));
+    const two = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 2 });
+    expect(two.metadata().deviceScaleFactor).toBe(2);
+    // The first viewer hears the new shape only once frames of it can follow.
+    await eventually(
+      async () => scales,
+      (heard) => heard.length === 1,
+    );
+    expect(scales).toEqual([2]);
+    // The person's click reaches the page, and closes the camera for the quiet window.
+    for (const type of ["pressed", "released"] as const) {
+      await backend.viewerInput(nav.tabId, {
+        kind: "mouse",
+        type,
+        x: 50,
+        y: 50,
+        button: "left",
+        buttons: type === "pressed" ? 1 : 0,
+        clickCount: 1,
+        modifiers: 0,
+      });
+    }
+    // Every frame a 2x attachment is given is drawn at 2x: none from before.
+    const sharp = jpegSize((await two.next(AbortSignal.timeout(5_000)))!.bytes);
+    expect(sharp).toEqual({ width: 2_560, height: 1_440 });
+    expect(await backend.capturePicture(nav.tabId)).toBeNull();
+
+    two.detach();
+    await eventually(
+      async () => scales,
+      (heard) => heard.length === 2,
+    );
+    expect(scales).toEqual([2, 1]);
+    backend.setPresentation(nav.tabId, "headless");
+    await expect(one.next()).resolves.toBeNull();
+    await expect(backend.viewerInput(nav.tabId, { kind: "text", text: "x" })).rejects.toThrow(
+      /Headless/,
+    );
+    driver.dispose();
+  }, 30_000);
+
+  it("drags with the pressed button held: the page sees event.buttons and selects text (B7)", async () => {
+    const driver = port("drag", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/drag") },
+      signal: signal(),
+    });
+    backend.setPresentation(nav.tabId, "preview");
+    const holder = backend.heldBy(nav.tabId);
+    const mouse = (
+      type: "pressed" | "moved" | "released",
+      x: number,
+      buttons: number,
+    ): Promise<void> =>
+      backend.viewerInput(nav.tabId, {
+        kind: "mouse",
+        type,
+        x,
+        y: 24,
+        button: type === "moved" ? "none" : "left",
+        buttons,
+        clickCount: type === "moved" ? 0 : 1,
+        modifiers: 0,
+      });
+    await mouse("moved", 12, 0);
+    await mouse("pressed", 12, 1);
+    for (const x of [80, 160, 240, 320]) await mouse("moved", x, 1);
+    await mouse("released", 320, 0);
+    const settled = await eventually(
+      () => driver.snapshot({ tabId: nav.tabId, signal: signal() }),
+      (snap) => snap.title.startsWith("buttons:"),
+    );
+    expect(settled.title).toMatch(/^buttons:1 selected:Select these/);
+    // The person's drag neither took nor moved the agent hold.
+    expect(backend.heldBy(nav.tabId)).toEqual(holder);
+    driver.dispose();
+  });
+
+  it("lets the person answer a shown tab's dialogs through the viewer seam (B8)", async () => {
+    const driver = port("person-dialogs", null);
+    const nav = await driver.navigate({
+      navigation: { kind: "url", url: fixture.url("/dialogs") },
+      signal: signal(),
+    });
+    backend.setPresentation(nav.tabId, "preview");
+    const viewer = backend.attachScreencast(nav.tabId, { deviceScaleFactor: 1 });
+    const heard: string[] = [];
+    viewer.onDialog((dialog) => heard.push(dialog === null ? "gone" : dialog.type));
+    const answer = async (button: string, response: { accept: boolean; promptText?: string }) => {
+      const snap = await driver.snapshot({ tabId: nav.tabId, signal: signal() });
+      // The person's click: an agent's would wait on the open dialog.
+      const clicked = driver.act({
+        tabId: nav.tabId,
+        generation: snap.generation,
+        kind: "click",
+        ref: refNamed(snap.snapshotText, button),
+        signal: signal(),
+      });
+      const dialog = await eventually(
+        async () => backend.pendingDialog(nav.tabId),
+        (pending) => pending !== null,
+      );
+      expect(backend.respondToDialog(nav.tabId, dialog!.dialogId, response)).toBe(true);
+      await clicked;
+      return dialog!;
+    };
+    const confirmDialog = await answer("Ask confirm", { accept: true });
+    expect(confirmDialog).toMatchObject({ type: "confirm", message: "Sure?" });
+    const promptDialog = await answer("Ask prompt", { accept: true, promptText: "Ada" });
+    expect(promptDialog).toMatchObject({
+      type: "prompt",
+      message: "Name?",
+      defaultPrompt: "default",
+    });
+    const settled = await eventually(
+      () => driver.snapshot({ tabId: nav.tabId, signal: signal() }),
+      (snap) => snap.title === "prompt:Ada",
+    );
+    expect(settled.title).toBe("prompt:Ada");
+    expect(heard).toEqual(["confirm", "gone", "prompt", "gone"]);
+    viewer.detach();
     driver.dispose();
   });
 

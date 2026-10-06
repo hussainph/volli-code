@@ -89,6 +89,34 @@ const PAGES: Record<string, string> = {
   </script>`,
   "/dialog": `<!doctype html><title>Dialog page</title>
     <button onclick="alert('fixture alert'); document.title = 'Dialog dismissed'">Raise alert</button>`,
+  // Input-to-frame and frame-rate probes for the parity bench. Static until
+  // touched, with no caret, so the first screencast frame after an input is
+  // the input's own effect.
+  "/latency": `<!doctype html><html><head><meta charset="utf-8"><title>Latency</title>
+<style>
+  body { margin: 0; font: 32px sans-serif; caret-color: transparent; }
+  #target { position: absolute; left: 0; top: 0; width: 400px; height: 300px; background: #222; border: 0; }
+  #field { position: absolute; left: 0; top: 320px; width: 600px; font: 32px monospace; outline: none; }
+</style></head>
+<body>
+  <button id="target" aria-label="Paint target"></button>
+  <input id="field" aria-label="Latency field" />
+  <script>
+    let n = 0;
+    document.getElementById("target").addEventListener("mousedown", () => {
+      n += 1;
+      document.getElementById("target").style.background = n % 2 ? "#e33" : "#3e3";
+    });
+  </script>
+</body></html>`,
+  "/animate": `<!doctype html><html><head><meta charset="utf-8"><title>Animate</title>
+<style>body { margin: 0; } #box { width: 200px; height: 200px; background: #36c;
+animation: slide 1s linear infinite alternate; } @keyframes slide { to { margin-left: 800px; } }</style>
+</head><body><div id="box"></div></body></html>`,
+  "/scroll": `<!doctype html><html><head><meta charset="utf-8"><title>Scroll</title>
+<style>body { margin: 0; } .row { height: 40px; font: 24px sans-serif; }
+.row:nth-child(odd) { background: #ddd; }</style></head>
+<body>${Array.from({ length: 1_000 }, (_, i) => `<div class="row">Row ${i}</div>`).join("")}</body></html>`,
   "/dialogs": `<!doctype html><title>Dialogs</title>
     <button onclick="alert('fixture alert'); document.title = 'alert:done'">Raise alert</button>
     <button onclick="document.title = 'confirm:' + confirm('Sure?')">Ask confirm</button>
@@ -122,6 +150,16 @@ const PAGES: Record<string, string> = {
     frame("/redirect-long");
     frame("/redirect-ok");
   </script></body>`,
+  // A viewer's drag: what buttons the page saw while the pointer moved, and what it selected.
+  "/drag": `<!doctype html><html><head><meta charset="utf-8"><title>drag</title>
+<style>body { margin: 0; font: 24px monospace; } p { margin: 0; padding: 10px; }</style></head>
+<body><p>Select these words by dragging across them</p><script>
+  const moves = [];
+  addEventListener("mousemove", (event) => moves.push(event.buttons));
+  addEventListener("mouseup", () => {
+    document.title = "buttons:" + Math.max(0, ...moves) + " selected:" + getSelection().toString();
+  });
+</script></body></html>`,
   "/external": `<!doctype html><title>External opener</title>
     <button onclick="location.href = 'volli-test-scheme:hello'">Go external</button>`,
 };

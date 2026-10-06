@@ -605,6 +605,12 @@ tab and keeps it until `dispose()`. Every option is the host's to state:
   container that cannot, and a launch without the sandbox logs a warning
   every time. CI runs sandboxed.
 
+- **`deviceScaleFactor`**: device pixels per CSS pixel every page is drawn
+  at (`--force-device-scale-factor`). 2 makes a high-DPI viewer's screencast
+  sharp, at four times the pixels for every tab and agent screenshots at 2×
+  (as a Retina desktop's are); 1 on a host no high-DPI viewer looks at.
+- **`screencastQuality`**: the JPEG quality of screencast frames.
+
 What the backend owns, beyond the registry's policy:
 
 - **One shutdown, however the browser ends.** The browser leads its own
@@ -663,6 +669,36 @@ What the backend owns, beyond the registry's policy:
   work. Each is recorded in the console with its outcome, and a refused
   departure also sets the tab's error, which every agent answer carries.
   Closing a tab runs no unload veto.
+- **A frame source for viewers** (`attachScreencast`, `browser/screencast.ts`),
+  by host-protocol.md § Binary framing; VC-571 carries it over the binary
+  channel, never the event bus or a tRPC subscription. Per-tab attach and
+  detach; JPEG, with encoding, viewport and device scale factor as attach
+  metadata (re-stated when they change); latest wins, at most one unsent frame
+  per attachment, stale frames dropped whole before they are numbered;
+  Chromium's frames acked on arrival; `next(signal)` cancels, and the tab
+  closing or going headless ends every attachment. A viewer asks for a scale
+  (2 on Retina) and gets the highest any attachment asked for, up to the
+  browser's own. Each tab's cast is reconfigured by one serial, coalescing
+  worker: from a request (attach, detach, resize, scale) no frame is offered
+  until a cast of the new shape has started, and only then do attachments
+  hear the new metadata; every frame's real JPEG size is checked against the
+  live cast, and one from before (or of another scale) is dropped, though
+  every frame is still acked. A zero-viewer stop is always the last word. The
+  person's input arrives through `viewerInput` (pointer with the DOM
+  `buttons` mask, so a drag is a drag; wheel, keys, committed text and IME
+  composition) and closes the transcript camera for desktop's quiet window;
+  it never takes or moves the agent hold. A shown tab's JavaScript dialog,
+  while a viewer is attached, waits for the person: `pendingDialog`,
+  `respondToDialog` and each attachment's `onDialog` carry it, and nobody
+  answering within `CHROMIUM_DIALOG_ANSWER_TIMEOUT_MS` (or the last viewer
+  leaving) gets the safe answer. These are optional `BrowserBackend`
+  members, refused for a headless tab: the seam stays open to capabilities
+  one engine has and another does not.
+- **The parity bench** (`chromium-parity.test.ts`) measures, at 1× and 2×,
+  input-to-frame latency (p50, p95) for a click and for typing and frames per
+  second while scrolling and animating, at the frame-source level on loopback.
+  It always prints `[volli] chromium parity`; `VOLLI_CHROMIUM_PARITY_ASSERT=1`
+  holds it to the bar (p95 ≤ 100 ms, ≥ 30 fps).
 - **No wake policy.** Each tab is its own window, never occluded, and the
   launch turns background throttling off.
 

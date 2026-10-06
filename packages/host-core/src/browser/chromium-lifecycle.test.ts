@@ -108,6 +108,7 @@ describe.skipIf(process.platform === "win32")(
         executablePath: fakeBrowserExecutable(dir, "serve"),
         profileRoot,
         noSandbox: false,
+        deviceScaleFactor: 1,
       });
       const survivor = survivorOf(dir);
       expect(isAlive(survivor)).toBe(true);
@@ -136,6 +137,7 @@ describe.skipIf(process.platform === "win32")(
         executablePath: fakeBrowserExecutable(dir, "crash"),
         profileRoot,
         noSandbox: false,
+        deviceScaleFactor: 1,
       });
       const survivor = survivorOf(dir);
       const gone = await new Promise<string>((resolve) => browser.onExit(resolve));
@@ -162,6 +164,7 @@ describe.skipIf(process.platform === "win32")(
         executablePath: fakeBrowserExecutable(dir, "pipe-error"),
         profileRoot,
         noSandbox: false,
+        deviceScaleFactor: 1,
       });
       const survivor = survivorOf(dir);
       const leader = browser.pid!;
@@ -183,7 +186,7 @@ describe("launchChromium's spawn", () => {
   it("starts the browser in its own process group with only the allowlisted environment", async () => {
     const fake = fakeChromium();
     const browser = await launchChromium(
-      { executablePath: "/fake", profileRoot: root(), noSandbox: false },
+      { executablePath: "/fake", profileRoot: root(), noSandbox: false, deviceScaleFactor: 1 },
       fake.spawn,
     );
     expect(fake.lastOptions?.detached).toBe(process.platform !== "win32");
@@ -220,7 +223,7 @@ describe("sweepStaleChromiumProfiles (N10)", () => {
     const profileRoot = root();
     const fake = fakeChromium();
     const browser = await launchChromium(
-      { executablePath: "/fake", profileRoot, noSandbox: false },
+      { executablePath: "/fake", profileRoot, noSandbox: false, deviceScaleFactor: 1 },
       fake.spawn,
     );
     expect(await sweepStaleChromiumProfiles(profileRoot)).toEqual([]);
@@ -244,6 +247,8 @@ function backendOver(fake: FakeChromium, profileRoot = root()) {
     executablePath: "/fake",
     profileRoot,
     noSandbox: false,
+    deviceScaleFactor: 1,
+    screencastQuality: 70,
     spawn: fake.spawn,
   });
   return {
@@ -596,7 +601,7 @@ describe("launchChromium's shutdown runs once", () => {
     const fake = fakeChromium();
     const profileRoot = root();
     const browser = await launchChromium(
-      { executablePath: "/fake", profileRoot, noSandbox: false },
+      { executablePath: "/fake", profileRoot, noSandbox: false, deviceScaleFactor: 1 },
       fake.spawn,
     );
     const child = fake.child();

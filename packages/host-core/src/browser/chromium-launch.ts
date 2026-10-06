@@ -40,6 +40,14 @@ export interface ChromiumLaunchOptions {
    * user namespaces; a launch with it logs a warning. No default.
    */
   noSandbox: boolean;
+  /**
+   * Device pixels per CSS pixel every page is drawn at
+   * (`--force-device-scale-factor`). 2 lets a high-DPI viewer's screencast be
+   * sharp, at four times the pixels for every tab, viewed or not, and agent
+   * screenshots at that scale (as a Retina desktop's are). 1 on a host no
+   * high-DPI viewer looks at. No default.
+   */
+  deviceScaleFactor: number;
 }
 
 /** How long a launch may take before the browser is declared unable to start. */
@@ -53,7 +61,11 @@ const STDERR_TAIL_CHARS = 4_096;
  * The browser's command line. Pure, so a test can hold the security-relevant
  * shape — the pipe, and never a port or an address — without a browser.
  */
-export function chromiumLaunchArgs(input: { userDataDir: string; noSandbox: boolean }): string[] {
+export function chromiumLaunchArgs(input: {
+  userDataDir: string;
+  noSandbox: boolean;
+  deviceScaleFactor: number;
+}): string[] {
   return [
     // New headless: the full browser without a window, not the old shell.
     "--headless",
@@ -79,6 +91,7 @@ export function chromiumLaunchArgs(input: { userDataDir: string; noSandbox: bool
     "--mute-audio",
     "--hide-scrollbars",
     "--window-size=1280,720",
+    `--force-device-scale-factor=${input.deviceScaleFactor}`,
     ...(input.noSandbox ? ["--no-sandbox"] : []),
     "about:blank",
   ];
@@ -300,7 +313,11 @@ export async function launchChromium(
   try {
     child = spawnImpl(
       options.executablePath,
-      chromiumLaunchArgs({ userDataDir, noSandbox: options.noSandbox }),
+      chromiumLaunchArgs({
+        userDataDir,
+        noSandbox: options.noSandbox,
+        deviceScaleFactor: options.deviceScaleFactor,
+      }),
       {
         // fd 3 is what Chromium reads commands from, fd 4 what it writes to.
         stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
