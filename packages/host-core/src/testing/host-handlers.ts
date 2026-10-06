@@ -10,9 +10,21 @@
  * drives reaches the one production handler.
  */
 import type Database from "better-sqlite3";
-import type { DataChangedEvent, NotificationRequest, TicketMovedNotice } from "@volli/shared";
+import {
+  HOST_HANDLER_KEYS,
+  type DataChangedEvent,
+  type HandlerCall,
+  type HostHandlerKey,
+  type NotificationRequest,
+  type TicketMovedNotice,
+} from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import {
+  sealHostHandlers,
+  type AdmissionObserver,
+  type HostHandlerMap,
+} from "../handlers/handler-map";
 import { createHostHandlers, type HostHandlers } from "../handlers/host-handlers";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import type { HostSessionPorts } from "../session-services";
@@ -31,6 +43,14 @@ export interface TestHandlerPorts {
   readonly git?: RunGit;
   readonly gitAsync?: RunGitAsync;
   readonly now?: () => number;
+  /** Sees every policy verdict at the map, before the handler it admits. */
+  readonly onAdmission?: AdmissionObserver;
+  /**
+   * Builds the Done trim's worktree bundle the way production does
+   * (`worktreeDeps`), with attachments under this data directory, instead
+   * of the test's `git`/`gitAsync` bundle.
+   */
+  readonly productionWorktree?: { readonly dataDir: string };
 }
 
 /**
@@ -38,7 +58,7 @@ export interface TestHandlerPorts {
  * experiments (those handlers answer unavailable), and the board's effects
  * routed to the test's callbacks.
  */
-export function testHostHandlers(ports: TestHandlerPorts): HostHandlers {
+export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
   const hostPorts = {
     events: {
       publish: (topic: string, payload: unknown) => {
@@ -65,7 +85,7 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlers {
   } as unknown as RuntimeAutomations;
   return createHostHandlers(hostPorts, {
     db: ports.db,
-    dataDir: "",
+    dataDir: ports.productionWorktree?.dataDir ?? "",
     runtime: null,
     sessions: null,
     modelAccess: null,
@@ -77,11 +97,41 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlers {
       : { interruptTicketSessions: ports.interruptTicketSessions }),
     ...(ports.detachedWork === undefined ? {} : { detachedWork: ports.detachedWork }),
     ...(ports.now === undefined ? {} : { now: ports.now }),
-    worktree: {
-      db: ports.db,
-      git: ports.git ?? runGitCapturing,
-      gitAsync: ports.gitAsync ?? runGitCapturingAsync,
-      blobsRoot: "",
-    },
+    ...(ports.onAdmission === undefined ? {} : { onAdmission: ports.onAdmission }),
+    ...(ports.productionWorktree === undefined
+      ? {
+          worktree: {
+            db: ports.db,
+            git: ports.git ?? runGitCapturing,
+            gitAsync: ports.gitAsync ?? runGitCapturingAsync,
+            blobsRoot: "",
+          },
+        }
+      : {}),
   });
+}
+
+/** A test's stand-in for some entries; called the way a door calls the real one. */
+export type TestHandlerEntries = {
+  readonly [Key in HostHandlerKey]?: (input: never, call: HandlerCall, ...rest: never[]) => unknown;
+};
+
+/**
+ * A sealed map over a test's own entries, so a door under test reaches them
+ * exactly as it reaches the host's: through its policy. An entry the test
+ * left out throws if a door calls it.
+ */
+export function sealTestHandlers(
+  entries: TestHandlerEntries,
+  onAdmission?: AdmissionObserver,
+): HostHandlerMap {
+  const total: Record<string, unknown> = {};
+  for (const key of HOST_HANDLER_KEYS) {
+    total[key] =
+      entries[key] ??
+      (() => {
+        throw new Error(`This test states no ${key} handler.`);
+      });
+  }
+  return sealHostHandlers(total as unknown as HostHandlers, onAdmission);
 }

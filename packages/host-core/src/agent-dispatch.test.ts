@@ -41,14 +41,17 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
+  DEFAULT_AUTHORITY_POLICY,
   HOST_HANDLER_KEYS,
   OperationUnavailableError,
   VERB_REGISTRY,
 } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
-import { testHostHandlers } from "./testing/host-handlers";
-import { projectedHandlerKey } from "./agent-dispatch/projection";
+import { socketHandlerPolicy } from "./agent-dispatch/admission";
+import { refused } from "./handlers/handler-map";
+import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
+import { projectedHandlerKey, projectHandler } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { getTicket, insertTicket } from "./db/tickets-repo";
 import { insertProject } from "./db/projects-repo";
@@ -164,28 +167,26 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
     }
   });
 
-  it("reaches handlers[key] with the decoded input and the attributed actor, and nothing else", async () => {
+  it("reaches handlers[key] with the decoded input and the attributed actor, admitted first", async () => {
     const { env, verify } = scenario();
     insertTicket(
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
     );
-    const reached: string[] = [];
-    const move = vi.fn(async () => [{ ...getTicket(ctx.db, "ticket-one")!, status: "done" }]);
-    const handlers = new Proxy({ "ticket.move": move } as Record<string, unknown>, {
-      get(target, key) {
-        reached.push(String(key));
-        return target[String(key)];
-      },
+    const log: string[] = [];
+    const move = vi.fn(async () => {
+      log.push("handler ticket.move");
+      return [{ ...getTicket(ctx.db, "ticket-one")!, status: "done" as const }];
     });
     const projected = createAgentCommandService({
-      handlers: handlers as never,
+      handlers: sealTestHandlers({ "ticket.move": move }, ({ door, key, admitted }) =>
+        log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
       db: ctx.db,
       sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "1.2.3",
       verifySessionToken: verify,
     });
-    reached.length = 0;
     const response = await projected.execute({
       v: 1,
       cmd: "ticket.move",
@@ -193,11 +194,103 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
       ctx: { cwd: "/repo/volli", env },
     });
     expect(response).toMatchObject({ ok: true, data: { ticket: { id: "VC-1", status: "done" } } });
-    expect(reached).toEqual(["ticket.move"]);
+    // The socket's coordination policy, judged at the map, before the handler.
+    expect(log).toEqual(["agent-socket admitted ticket.move", "handler ticket.move"]);
     expect(move).toHaveBeenCalledExactlyOnceWith(
       { projectId: "project-one", ticketId: "ticket-one", toStatus: "done" },
       { actor: { kind: "session", sessionId: SESSION_ID, ticketId: null } },
     );
+  });
+
+  it("judges the coordination policy again at the map, and a refusal there never reaches the handler", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    // The project narrows its Sessions between the dispatch's admission line
+    // and the handler: the map's own judgement is what still stops the move.
+    const narrowed = {
+      ...DEFAULT_AUTHORITY_POLICY,
+      actors: {
+        ...DEFAULT_AUTHORITY_POLICY.actors,
+        session: { ...DEFAULT_AUTHORITY_POLICY.actors.session, coordinationVerbs: [] },
+      },
+    };
+    let reads = 0;
+    const log: string[] = [];
+    const move = vi.fn(() => []);
+    const response = await createAgentCommandService({
+      handlers: sealTestHandlers({ "ticket.move": move }, ({ door, key, admitted }) =>
+        log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+      readAuthorityPolicy: () => (reads++ === 0 ? DEFAULT_AUTHORITY_POLICY : narrowed),
+    }).execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "FORBIDDEN_ACTOR",
+        message: expect.stringContaining(
+          "ticket.move is not among the coordination-tier verbs this project allows a session caller to run.",
+        ),
+      },
+    });
+    expect(log).toEqual(["agent-socket refused ticket.move"]);
+    expect(move).not.toHaveBeenCalled();
+    expect(getTicket(ctx.db, "ticket-one")?.status).toBe("todo");
+  });
+
+  it("answers a refusal at the map with the socket's own refusal, hint or not", async () => {
+    const move = vi.fn(() => []);
+    const binding = projectHandler("ticket.move", {
+      envSession: "resolve",
+      decode: () => ({
+        input: { projectId: "p", ticketId: "t", toStatus: "done" },
+        call: { actor: { kind: "user" } },
+        reply: () => ({ v: 1, ok: true, data: null }),
+      }),
+    });
+    const request = { v: 1, cmd: "ticket.move", args: {}, ctx: { cwd: "/", env: {} } } as const;
+    for (const hint of [null, "Ask a person to change the project's policy."]) {
+      const response = await binding.handle(
+        {
+          options: { handlers: sealTestHandlers({ "ticket.move": move }) },
+          handlerPolicy: { door: "agent-socket", admit: () => refused("Not here.", hint) },
+        } as never,
+        request,
+      );
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "FORBIDDEN_ACTOR",
+          message: "Not here.",
+          next: hint ?? expect.any(String),
+        },
+      });
+    }
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("admits at the map only the key the request's own verb projects", () => {
+    const policy = socketHandlerPolicy(
+      { v: 1, cmd: "ticket.show", args: {}, ctx: { cwd: "/", env: {} } },
+      () => null,
+    );
+    expect(policy.door).toBe("agent-socket");
+    expect(policy.admit("ticket.move", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: false,
+      message: "ticket.show does not reach ticket.move.",
+      hint: null,
+    });
   });
 
   it("answers a handler's unavailable as retryable, and any other throw as a failed write", async () => {
@@ -208,11 +301,11 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
     );
     const answer = async (thrown: unknown) =>
       createAgentCommandService({
-        handlers: {
+        handlers: sealTestHandlers({
           "ticket.move": () => {
             throw thrown;
           },
-        },
+        }),
         db: ctx.db,
         sessionEngine: createTestSessionEngine(ctx.db),
         appVersion: "1.2.3",

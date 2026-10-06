@@ -57,6 +57,7 @@ import {
   catalogLookup,
   HOST_ACTOR_POLICY,
   isCommandIntentConflict,
+  isHandlerRefused,
   isOperationUnavailable,
   isolatePerformanceObserver,
   readOptionalPerformanceClock,
@@ -213,13 +214,16 @@ export function handlerCallOf(actor: CallerActor): HandlerCall {
 
 /**
  * Runs a handler outside the policy middleware (a subscription's body, which
- * tRPC starts after the chain has returned) and maps its "unavailable" the
- * way the middleware maps a query's or mutation's.
+ * tRPC starts after the chain has returned) and maps its "unavailable" and a
+ * refusal at the map the way the middleware maps a query's or mutation's.
  */
 export async function hostAnswer<Answer>(run: () => Answer | Promise<Answer>): Promise<Answer> {
   try {
     return await run();
   } catch (error) {
+    if (isHandlerRefused(error)) {
+      throw new HostProcedureError("verb-refused", error.message, error);
+    }
     if (isOperationUnavailable(error)) {
       throw new HostProcedureError(
         "operation-unavailable",
@@ -548,6 +552,11 @@ export function createCatalogBuilders<
       // was. Any area's ledger opts in by the shared brand.
       if (!result.ok && isCommandIntentConflict(result.error.cause)) {
         throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
+      }
+      // The map judged the call again under the door's policy and refused it
+      // before its handler ran (VC-668): the same refusal this middleware gives.
+      if (!result.ok && isHandlerRefused(result.error.cause)) {
+        throw new HostProcedureError("verb-refused", result.error.message, result.error.cause);
       }
       // What this host cannot do now is the handler's answer (VC-668).
       if (!result.ok && isOperationUnavailable(result.error.cause)) {

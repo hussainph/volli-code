@@ -161,7 +161,12 @@ import {
   createAttachmentIdentities,
 } from "@volli/host-core/session-runtime";
 import type { OpenNativeBinding } from "@volli/session-engine";
-import { createHostHandlers, type HostHandlers } from "@volli/host-core/handlers";
+import {
+  admittedHandlers,
+  createHostHandlers,
+  ROUTER_POLICY,
+  type HostHandlerMap,
+} from "@volli/host-core/handlers";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
 import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
 import {
@@ -1308,14 +1313,18 @@ const appStartup = app.whenReady().then(async () => {
   /**
    * The host's one handler map (VC-668), built once from the recovered
    * services and handed to every door: the Session RPC bridge, the
-   * `volli:ticket-move` channel and the agent socket each project it. What
+   * `volli:ticket-move` channel and the agent socket each project it, under
+   * that door's own policy (the map is sealed: no door can call it without
+   * one). What
    * this root used to write around each call (reconciling preferences on a
    * refresh, the availability check before a default, the Role a ticket
    * implies, resuming an Automation's delivery after attach, a deliberate
    * move's armed arrival) is the handler's now.
    */
-  let hostHandlers: HostHandlers | undefined;
-  const createHandlers = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlers => {
+  let hostHandlers: HostHandlerMap | undefined;
+  const createHandlers = (
+    ready: RecoveredSessionServices<RuntimeSessionFacade>,
+  ): HostHandlerMap => {
     const { runtime, sessions } = recoveredRuntimeSessionServices(ready);
     return createHostHandlers(hostPorts, {
       db: sessionDb,
@@ -1331,7 +1340,7 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
-  const handlersFor = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlers =>
+  const handlersFor = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlerMap =>
     (hostHandlers ??= createHandlers(ready));
   const runtimeSessionAgents = preparedSessionFacade.agents({
     host: hostCore,
@@ -2682,9 +2691,10 @@ registerAgentSocketWillQuit({
 /** No runtime, no bridge: the degraded Session RPC handlers answer instead. */
 function createSessionRpc(
   ready: RecoveredSessionServices<RuntimeSessionFacade>,
-  handlers: HostHandlers,
+  handlers: HostHandlerMap,
 ): ReturnType<typeof registerSessionRpcIpcHandlers> | null {
   return recoveredRuntimeSessionServices(ready).runtime === null
     ? null
-    : registerSessionRpcIpcHandlers({ handlers });
+    : // The router's projection of the map: its policy at the map, then the handler.
+      registerSessionRpcIpcHandlers({ handlers: admittedHandlers(handlers, ROUTER_POLICY) });
 }

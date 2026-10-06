@@ -11,6 +11,7 @@
 import { LOCAL_DEVICE_ACTOR, type HostActor } from "@volli/host-protocol";
 import {
   DOOR_LOCAL_CATALOG_KEYS,
+  HandlerRefusedError,
   HOST_HANDLER_KEYS,
   OperationUnavailableError,
   type HandlerCall,
@@ -200,6 +201,36 @@ describe("what a handler is told about the call", () => {
     const stream = await session.session.subscribe(SESSION);
     await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
       reason: "operation-unavailable",
+    });
+  });
+});
+
+/** What the map throws when a door's policy refuses, before any handler runs. */
+function refusedAtMap(): never {
+  throw new HandlerRefusedError("settings.experiments is not open to this caller.");
+}
+
+describe("a refusal at the map", () => {
+  it("answers FORBIDDEN / verb-refused, the router's own refusal, in a stream too", async () => {
+    // The map judges the door's policy again before any handler; when it
+    // refuses, the router says what its own middleware would have said.
+    const { session, board } = routerCallers({
+      "settings.experiments": refusedAtMap,
+      "session.subscribe": refusedAtMap,
+      "ticket.move": refusedAtMap,
+    } as never);
+    await expect(session.settings.experiments()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
+      message: "settings.experiments is not open to this caller.",
+    });
+    await expect(
+      board.ticket.move({ projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+    const stream = await session.session.subscribe(SESSION);
+    await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
     });
   });
 });

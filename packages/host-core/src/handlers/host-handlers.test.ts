@@ -21,6 +21,7 @@ import { getTicketRow } from "../db/tickets-repo";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
 import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
   type HostHandlerCoverage,
@@ -74,7 +75,14 @@ function automations(kind: "ready" | "idle" | "degraded" = "ready"): RuntimeAuto
   } as unknown as RuntimeAutomations;
 }
 
+/** Admits everything: these cases are about what each handler does, not who may call it. */
+const OPEN: HandlerPolicy = { door: "test", admit: () => ADMITTED };
+
 function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
+  return admittedHandlers(sealedMap(options), OPEN);
+}
+
+function sealedMap(options: Partial<HostHandlerOptions> = {}) {
   return createHostHandlers(
     {
       events: { publish },

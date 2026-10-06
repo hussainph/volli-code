@@ -20,6 +20,7 @@ import {
   type Ticket,
   type TicketStatus,
 } from "@volli/shared";
+import type { JsonUnsafeProcedures } from "@volli/host-protocol";
 import { z } from "zod";
 
 import {
@@ -103,3 +104,6 @@ export type BoardRouter = ReturnType<typeof createBoardRouter>;
 export type BoardRouterCatalogBinding = AssertNever<
   CatalogMismatch<ProcedurePaths<BoardRouter["_def"]["record"]>, CatalogKeyOf<BoardEntry>>
 >;
+
+/** Every board procedure's input and output survive JSON (docs/BOUNDARIES.md, rule 3). */
+export type BoardRouterJsonSafety = AssertNever<JsonUnsafeProcedures<BoardRouter>>;

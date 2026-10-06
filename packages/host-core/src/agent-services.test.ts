@@ -10,7 +10,7 @@ import {
   type HostAgentWatchesOptions,
 } from "./agent-services";
 import { createAgentCommandService } from "./agent-commands";
-import { testHostHandlers } from "./testing/host-handlers";
+import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
 import { createAgentSocketLifecycle } from "./agent-socket";
 import { createAgentToolDoor } from "./agent-tool-door";
 import { createWatches } from "./watches";
@@ -129,7 +129,9 @@ it("requires the host's handler map at both the typed and JavaScript doors", () 
 it("owns no shutdown step for the verb door: the socket lifecycle drains requests", () => {
   const commands = createHostAgentCommands(
     { events: { publish: vi.fn() }, attention: HEADLESS_ATTENTION },
-    { handlers: { "ticket.move": vi.fn() } } as unknown as HostAgentCommandOptions,
+    {
+      handlers: sealTestHandlers({ "ticket.move": vi.fn() }),
+    } as unknown as HostAgentCommandOptions,
   );
   expect(Object.keys(commands)).toEqual(["execute"]);
 });
@@ -137,7 +139,7 @@ it("owns no shutdown step for the verb door: the socket lifecycle drains request
 it("publishes Session starts and harness notices from the verb door on the host bus", () => {
   const publish = vi.fn();
   createHostAgentCommands({ events: { publish }, attention: HEADLESS_ATTENTION }, {
-    handlers: { "ticket.move": vi.fn() },
+    handlers: sealTestHandlers({ "ticket.move": vi.fn() }),
   } as unknown as HostAgentCommandOptions);
   const ports = vi.mocked(createAgentCommandService).mock.lastCall![0];
   const started = { sessionId: "s" } as unknown as Parameters<

@@ -105,9 +105,12 @@ export type SessionRpcIpcCoverage = AssertNever<
  */
 export interface RegisterSessionRpcIpcOptions {
   /**
-   * The host's one handler map (`@volli/host-core/handlers`, VC-668), as far
-   * as the Session router projects it. The bridge forwards this one object;
-   * it carries no per-behaviour port of its own.
+   * The host's one handler map (`@volli/host-core/handlers`, VC-668), as the
+   * Session router projects it: production hands the router policy's view,
+   * `admittedHandlers(map, ROUTER_POLICY)`, so each handler is admitted at the
+   * map as well as by the router's middleware (a sealed map has no other
+   * callable form). The bridge forwards this one object; it carries no
+   * per-behaviour port of its own.
    */
   handlers: SessionRouterHandlers;
   diagnostics?: RpcDiagnosticLog;

@@ -8,15 +8,18 @@
  * malformed argument's refusal), and the handler's answer out (the wire
  * shape `volli` prints). The command itself, with every effect it has, is
  * `handlers[key]`, the same function the routers and any legacy IPC channel
- * call. {@link projectHandler} is the only way to bind such a verb in
+ * call, invoked through the map's one path under this request's socket
+ * policy (`context.handlerPolicy`), so the handler runs only once that
+ * policy admits it. {@link projectHandler} is the only way to bind such a verb in
  * `AGENT_VERB_TABLE`: the table's type demands the brand it mints for every
  * {@link SocketHandlerKey}, and the private registry below lets a test prove
  * at runtime that each such binding reaches exactly its own key.
  */
-import { errorMessage, isOperationUnavailable } from "@volli/shared";
+import { errorMessage, isHandlerRefused, isOperationUnavailable } from "@volli/shared";
 import type { AgentRequest, AgentResponse, HandlerCall, SocketHandlerKey } from "@volli/shared";
 
-import type { HostHandlerInput, HostHandlerOutput } from "../handlers/host-handlers";
+import { invokeHandler } from "../handlers/handler-map";
+import type { HostHandlerInput, HostHandlerOutput, HostHandlers } from "../handlers/host-handlers";
 import { failure, type AgentCommandContext } from "./context";
 import type { AgentVerbBinding } from "./table";
 
@@ -52,9 +55,11 @@ export function projectedHandlerKey(binding: AgentVerbBinding): SocketHandlerKey
 }
 
 /**
- * Binds `key`'s socket verb to `handlers[key]`. A handler's throw is the
- * verb's failure: `APP_UNREACHABLE` when this host cannot answer it now
- * (retryable), `MUTATION_FAILED` otherwise, with the handler's own message.
+ * Binds `key`'s socket verb to `handlers[key]`, under the request's policy.
+ * A refusal at the map is `FORBIDDEN_ACTOR`, and the handler never ran. A
+ * handler's throw is the verb's failure: `APP_UNREACHABLE` when this host
+ * cannot answer it now (retryable), `MUTATION_FAILED` otherwise, with the
+ * handler's own message.
  */
 export function projectHandler<Key extends SocketHandlerKey>(
   key: Key,
@@ -65,13 +70,19 @@ export function projectHandler<Key extends SocketHandlerKey>(
     async handle(context, request) {
       const decoded = binding.decode(context, request);
       if (!("reply" in decoded)) return decoded;
-      const handler = context.options.handlers[key] as (
-        input: HostHandlerInput<Key>,
-        call: HandlerCall,
-      ) => HostHandlerOutput<Key> | Promise<HostHandlerOutput<Key>>;
+      const args = [decoded.input, decoded.call] as unknown as Parameters<HostHandlers[Key]>;
       try {
-        return decoded.reply(await handler(decoded.input, decoded.call));
+        const output = await invokeHandler(
+          context.options.handlers,
+          context.handlerPolicy,
+          key,
+          ...args,
+        );
+        return decoded.reply(output as HostHandlerOutput<Key>);
       } catch (error) {
+        if (isHandlerRefused(error)) {
+          return failure("FORBIDDEN_ACTOR", error.message, error.hint ?? undefined);
+        }
         return failure(
           isOperationUnavailable(error) ? "APP_UNREACHABLE" : "MUTATION_FAILED",
           errorMessage(error),

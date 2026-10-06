@@ -26,6 +26,10 @@ export default defineConfig({
         // (VC-668): every door reaches a command through these, so a branch
         // nobody drove is a door that behaves differently from the others.
         "src/handlers/host-handlers.ts",
+        // Its one invocation path and the catalog doors' policies: a branch
+        // nobody drove is a way to a handler no policy judged.
+        "src/handlers/handler-map.ts",
+        "src/handlers/policies.ts",
         "src/agent-dispatch/projection.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",

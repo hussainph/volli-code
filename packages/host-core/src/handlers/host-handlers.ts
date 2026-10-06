@@ -2,13 +2,17 @@
  * The host's one handler map: catalog key → the whole command (VC-668; HP §
  * Command catalog, "One handler map").
  *
- * Every door is a projection of this object. The tRPC routers (IPC and
- * WebSocket) call `ctx.handlers[key]`; the agent socket's `AGENT_VERB_TABLE`
- * binds a both-door key only as a projection of `handlers[key]`
- * (`agent-dispatch/table.ts`); a legacy per-channel IPC handler that still
- * serves a catalog command calls the same entry until its area moves. So
- * "both doors reach the same function" is a fact of the type, not a
- * convention each composition root wires port by port.
+ * Every door is a projection of this object, and every projection runs the
+ * door's policy before the handler: the map a root holds is sealed
+ * ({@link HostHandlerMap}), and its only invocation path takes a policy
+ * (`./handler-map`). The tRPC routers (IPC and WebSocket) call
+ * `ctx.handlers[key]` on the router policy's view; the agent socket's
+ * `AGENT_VERB_TABLE` binds a both-door key only as a projection of
+ * `handlers[key]` under its coordination policy (`agent-dispatch/table.ts`);
+ * a legacy per-channel IPC handler that still serves a catalog command
+ * invokes the same entry under the desktop window's policy until its area
+ * moves. So "both doors reach the same function, admitted" is a fact of the
+ * type, not a convention each composition root wires port by port.
  *
  * Each composition root builds this once ({@link createHostHandlers}) from
  * the host's services and hands the one object to every door. The behaviour a
@@ -53,6 +57,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -192,6 +197,8 @@ export interface HostHandlerOptions {
   readonly now?: () => number;
   /** Test seam: the worktree bundle a Done trim runs through. Defaults to the host's. */
   readonly worktree?: WorktreePorts;
+  /** Sees every policy verdict at the map, before the handler it admits. */
+  readonly onAdmission?: AdmissionObserver;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -208,10 +215,18 @@ function present<Service>(service: Service | null, message: string): Service {
 }
 
 /**
- * Builds the host's handler map. Call it once per composition root, with the
- * recovered services, and hand the same object to every door.
+ * Builds the host's handler map, sealed behind policy. Call it once per
+ * composition root, with the recovered services, and hand the same object to
+ * every door; each door invokes it through its own policy.
  */
 export function createHostHandlers(
+  ports: Pick<HostSessionPorts, "events" | "attention">,
+  options: HostHandlerOptions,
+): HostHandlerMap {
+  return sealHostHandlers(hostHandlerEntries(ports, options), options.onAdmission);
+}
+
+function hostHandlerEntries(
   ports: Pick<HostSessionPorts, "events" | "attention">,
   options: HostHandlerOptions,
 ): HostHandlers {

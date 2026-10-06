@@ -252,7 +252,11 @@ import {
   worktreeHomeDir,
 } from "@volli/host-core/worktree";
 import { worktreeDeps } from "./worktree-host";
-import type { HostHandlers } from "@volli/host-core/handlers";
+import {
+  DESKTOP_WINDOW_POLICY,
+  invokeHandler,
+  type HostHandlerMap,
+} from "@volli/host-core/handlers";
 import type { HandlerCall } from "@volli/shared";
 
 /** The person at this desktop's own window, whose reply carries the board. */
@@ -456,10 +460,11 @@ export function registerDataIpcHandlers(
      * The host's handler map (VC-668), as far as this legacy channel table
      * still serves catalog commands: `volli:ticket-move` is the IPC projection
      * of `handlers["ticket.move"]`, the one move every door reaches, its
-     * interrupts and armed arrival included. VC-565 deletes the channel when
-     * the renderer moves onto the board router.
+     * interrupts and armed arrival included, invoked under the desktop
+     * window's policy. VC-565 deletes the channel when the renderer moves onto
+     * the board router.
      */
-    handlers: Pick<HostHandlers, "ticket.move">;
+    handlers: HostHandlerMap;
     /** The app's single durable Session Engine. */
     sessionEngine: SessionEngine | null;
     /**
@@ -884,10 +889,18 @@ export function registerDataIpcHandlers(
       };
     },
 
-    // The desktop window's projection of the host's move: the reply carries
-    // the committed board, so the handler echoes it no board change.
+    // The desktop window's projection of the host's move, admitted by the
+    // desktop window's policy before the handler runs (synchronously, so the
+    // reply stays synchronous where the move's is). The reply carries the
+    // committed board, so the handler echoes it no board change.
     "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
-      const moved = options.handlers["ticket.move"](input, DESKTOP_WINDOW_CALL);
+      const moved = invokeHandler(
+        options.handlers,
+        DESKTOP_WINDOW_POLICY,
+        "ticket.move",
+        input,
+        DESKTOP_WINDOW_CALL,
+      );
       return moved instanceof Promise
         ? moved.then((tickets) => ({ ok: true, tickets }))
         : { ok: true, tickets: moved };

@@ -24,50 +24,42 @@ export type TestDataIpcOptions = Omit<Options, "handlers"> & {
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
 };
 
-/** A database that never opened answers every channel unavailable; it needs no map. */
-const NO_BOARD: Options["handlers"] = {
-  "ticket.move": () => {
-    throw new Error("No board: the database did not open");
-  },
-};
-
 export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOptions): void {
   const { interruptTicketSessions, onDeliberateMove, handlers, ...rest } = options;
   register(handle, {
     ...rest,
     handlers:
       handlers ??
-      (handle.ok
-        ? createHostHandlers(
-            {
-              events: windowEventBus,
-              attention: { deliver: () => ({ delivered: true }) },
-            } as never,
-            {
-              db: handle.db,
-              dataDir: "/volli-test-userdata",
-              runtime: null,
-              sessions: null,
-              modelAccess: null,
-              experiments: null,
-              // Only the armed-arrival half of the Automations service is read.
-              automations: {
-                kind: "live",
-                execution: {
-                  kind: "unavailable",
-                  pendingArmedRuns: {
-                    noteDeliberateMove: (notice: TicketMovedNotice) => onDeliberateMove?.(notice),
-                  },
-                },
-              } as never,
-              // A case that states no busy supplier ran no Done trim before
-              // the map; reporting the whole tree busy keeps it that way.
-              busyWorktreeSites:
-                rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
-              ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
-              ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),
+      createHostHandlers(
+        {
+          events: windowEventBus,
+          attention: { deliver: () => ({ delivered: true }) },
+        } as never,
+        {
+          // A database that never opened: the map answers unavailable.
+          db: handle.ok ? handle.db : null,
+          dataDir: "/volli-test-userdata",
+          runtime: null,
+          sessions: null,
+          modelAccess: null,
+          experiments: null,
+          // Only the armed-arrival half of the Automations service is read.
+          automations: {
+            kind: "live",
+            execution: {
+              kind: "unavailable",
+              pendingArmedRuns: {
+                noteDeliberateMove: (notice: TicketMovedNotice) => onDeliberateMove?.(notice),
+              },
             },
-          )
-        : NO_BOARD),
+          } as never,
+          // A case that states no busy supplier ran no Done trim before
+          // the map; reporting the whole tree busy keeps it that way.
+          busyWorktreeSites:
+            rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
+          ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
+          ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),
+        },
+      ),
   });
 }

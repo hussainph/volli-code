@@ -38,7 +38,6 @@ import type {
   SessionRole,
   SessionEnvRepair,
   SessionEnvReport,
-  SocketHandlerKey,
   TicketEventActor,
   TranscriptReference,
 } from "@volli/shared";
@@ -52,12 +51,9 @@ import type {
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
-import type { HostHandlers } from "../handlers/host-handlers";
+import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGit, RunGitAsync } from "../worktree";
 import type { VerifyOperatorToken } from "./resolution";
-
-/** The slice of the host's handler map the agent socket projects. */
-export type SocketHandlers = Pick<HostHandlers, SocketHandlerKey>;
 
 export interface AgentCommandServiceOptions {
   /** Execution venue for host-issued Session facts; desktop keeps local. */
@@ -191,9 +187,10 @@ export interface AgentCommandServiceOptions {
    * verb that is also a catalog command is bound in `table.ts` as a
    * projection of `handlers[key]`, never as a handler of its own. A Done
    * move's trim, its interrupts and its armed arrival therefore belong to the
-   * handler, which the composition root built once for every door.
+   * handler, which the composition root built once for every door. The
+   * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
    */
-  handlers: SocketHandlers;
+  handlers: HostHandlerMap;
   /**
    * Called after a socket command COMMITS a planning mutation, with the exact
    * ticket it resolved and touched — the scope index.ts broadcasts as
@@ -442,6 +439,13 @@ export interface AgentCommandContext {
    * judged them: that runs off the token alone.
    */
   readonly actor: TicketEventActor | null;
+  /**
+   * This request's policy at the handler map (VC-668): a projected verb
+   * reaches `handlers[key]` only through it. It judges the socket's own
+   * coordination policy for this request again, at the map, and admits only
+   * the key this request's verb projects.
+   */
+  readonly handlerPolicy: HandlerPolicy;
 }
 
 /**
