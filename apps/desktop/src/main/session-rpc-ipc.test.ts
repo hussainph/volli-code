@@ -87,9 +87,16 @@ interface FakeSender {
   readonly send: ReturnType<typeof vi.fn>;
   isDestroyed(): boolean;
   once(event: string, listener: () => void): void;
-  removeListener(event: string, listener: () => void): void;
+  on(event: string, listener: (...args: never[]) => void): void;
+  removeListener(event: string, listener: (...args: never[]) => void): void;
   /** Fires whatever `once("destroyed", …)` registered — the WebContents teardown path. */
   destroy(): void;
+  /** Emits `did-start-navigation` with these details; the WebContents lives on. */
+  navigate(details: { isMainFrame: boolean; isSameDocument: boolean }): void;
+  /** Emits `render-process-gone`; the WebContents lives on. */
+  crash(): void;
+  /** How many navigation and crash listeners are still attached. */
+  liveListeners(): number;
 }
 
 function runtimeFixture(): {
@@ -188,6 +195,8 @@ function frame(sequence: number): SessionStreamFrame {
 
 function sender(id = 1): FakeSender {
   const destroyedListeners: (() => void)[] = [];
+  const attached = new Map<string, Set<(...args: never[]) => void>>();
+  const on = (event: string) => attached.get(event) ?? new Set();
   let destroyed = false;
   return {
     id,
@@ -196,11 +205,25 @@ function sender(id = 1): FakeSender {
     once: vi.fn((event: string, listener: () => void) => {
       if (event === "destroyed") destroyedListeners.push(listener);
     }),
-    removeListener: vi.fn(),
+    on: vi.fn((event: string, listener: (...args: never[]) => void) => {
+      attached.set(event, on(event).add(listener));
+    }),
+    removeListener: vi.fn((event: string, listener: (...args: never[]) => void) => {
+      on(event).delete(listener);
+    }),
     destroy: () => {
       destroyed = true;
       for (const listener of destroyedListeners.splice(0)) listener();
     },
+    navigate: (details) => {
+      for (const listener of on("did-start-navigation")) {
+        (listener as (value: typeof details) => void)(details);
+      }
+    },
+    crash: () => {
+      for (const listener of on("render-process-gone")) (listener as () => void)();
+    },
+    liveListeners: () => on("did-start-navigation").size + on("render-process-gone").size,
   };
 }
 
@@ -586,6 +609,58 @@ describe("registerSessionRpcIpcHandlers", () => {
     expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(owner.send).not.toHaveBeenCalled();
     await registration.close();
+  });
+
+  // The WebContents outlives a reload, a main-frame navigation and a dead
+  // render process: the document that opened the stream is gone all the same,
+  // so its subscription is too, and nothing of it stays attached.
+  it("drops a subscription whose document reloaded, navigated away or crashed", async () => {
+    for (const leave of [
+      (owner: FakeSender) => owner.navigate({ isMainFrame: true, isSameDocument: false }),
+      (owner: FakeSender) => owner.crash(),
+    ]) {
+      const fixture = runtimeFixture();
+      const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+      const owner = sender();
+      await invoke(owner, {
+        path: "session.subscribe",
+        type: "subscription",
+        input: { sessionId: "session-1", afterSequence: 0 },
+      });
+      await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+      expect(owner.liveListeners()).toBe(2);
+
+      leave(owner);
+      await vi.waitFor(() => expect(fixture.isListening()).toBe(false));
+
+      expect(owner.liveListeners()).toBe(0);
+      expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+      expect(owner.send).not.toHaveBeenCalled();
+      await registration.close();
+    }
+  });
+
+  // A fragment change or a subframe navigation leaves the document that
+  // subscribed in place, and its stream with it.
+  it("keeps a subscription across a same-document or subframe navigation", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    await invoke(owner, {
+      path: "session.subscribe",
+      type: "subscription",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.navigate({ isMainFrame: true, isSameDocument: true });
+    owner.navigate({ isMainFrame: false, isSameDocument: false });
+    fixture.emit(frame(1));
+
+    await vi.waitFor(() => expect(owner.send).toHaveBeenCalledTimes(1));
+    expect(fixture.isListening()).toBe(true);
+    await registration.close();
+    expect(owner.liveListeners()).toBe(0);
   });
 
   // The teardown announcement is an event, so it can still be queued when a

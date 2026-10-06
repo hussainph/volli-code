@@ -63,7 +63,9 @@ interface FakeSender {
   isDestroyed(): boolean;
   send(channel: string, event: IpcEvent): void;
   once(event: "destroyed", listener: () => void): void;
-  removeListener(event: "destroyed", listener: () => void): void;
+  /** A reload or crash never happens over this link: closing destroys the peer. */
+  on(event: string, listener: (...args: never[]) => void): void;
+  removeListener(event: string, listener: (...args: never[]) => void): void;
 }
 
 /** The WebContents Electron would hand main's handlers for this peer. */
@@ -76,9 +78,10 @@ function senderFor(peer: IpcPeer): FakeSender {
       if (channel === SESSION_RPC_EVENT_CHANNEL) peer.send(event);
     },
     once: (_event, listener) => void detach.set(listener, peer.onDestroyed(listener)),
+    on: () => {},
     removeListener: (_event, listener) => {
-      detach.get(listener)?.();
-      detach.delete(listener);
+      detach.get(listener as () => void)?.();
+      detach.delete(listener as () => void);
     },
   };
 }

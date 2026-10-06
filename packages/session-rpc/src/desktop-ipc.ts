@@ -15,14 +15,16 @@
  */
 import type { IpcClientRouter } from "@volli/host-protocol/ipc";
 
-import type { ProcedurePaths } from "./catalog";
+import type { AnyRouter } from "@trpc/server";
+
+import type { RouterProcedurePaths } from "./catalog";
 import type { AppRouter } from "./index";
 
 /** The routers the desktop's IPC bridge serves, composed by `src/main/session-rpc-ipc.ts`. */
 export type DesktopIpcRouters = AppRouter;
 
-/** Every procedure path those routers publish. */
-export type DesktopIpcRouterPath = ProcedurePaths<DesktopIpcRouters["_def"]["record"]>;
+/** Every procedure path those routers publish: each router's, together. */
+export type DesktopIpcRouterPath = RouterProcedurePaths<DesktopIpcRouters>;
 
 /**
  * How one procedure crosses the desktop's IPC bridge:
@@ -36,6 +38,15 @@ export type DesktopIpcRouterPath = ProcedurePaths<DesktopIpcRouters["_def"]["rec
  *   Session reads, Workspace-scoped). The renderer keeps its own listing.
  */
 export type DesktopIpcExposure = "ipc" | "lab-only" | "websocket-only";
+
+/**
+ * A total classification of every path some routers publish: a path with no
+ * row, or a row naming no path, fails `pnpm typecheck` (an object literal
+ * checked against it with `satisfies`).
+ */
+export type IpcExposureTable<Routers extends AnyRouter> = {
+  readonly [Path in RouterProcedurePaths<Routers>]: DesktopIpcExposure;
+};
 
 export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "settings.experiments": "ipc",
@@ -70,7 +81,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "protocol.welcome": "websocket-only",
   "labDiagnostics.list": "lab-only",
   "labDiagnostics.subscribe": "lab-only",
-} satisfies { readonly [Path in DesktopIpcRouterPath]: DesktopIpcExposure });
+} satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;
 
