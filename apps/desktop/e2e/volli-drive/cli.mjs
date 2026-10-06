@@ -20,6 +20,7 @@ import {
   BUILT_MAIN,
   DEFAULT_IDLE_MS,
   REPO,
+  assertLaunchable,
   bundleCarriesGuard,
   createRegistry,
   driveHome,
@@ -28,8 +29,13 @@ import {
   findInSnapshot,
   instanceLayout,
   isInstanceId,
+  killExactly,
+  launchProblems,
   newInstanceId,
+  ownedProcesses,
   pidAlive,
+  processIdentity,
+  processTable,
   readOnlySql,
   supervisorEnv,
 } from "./lib/core.mjs";
@@ -39,9 +45,10 @@ const execFileAsync = promisify(execFile);
 
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
-  launch [--fixture basic|empty] [--model fake|env] [--build dev|packed]
-         [--app <packaged binary>] [--idle-min 20] [--no-build] [--json]
-                                   start an instance; prints its id + evidence dir
+  launch [--fixture basic|empty] [--model fake|env] [--idle-min 20]
+         [--no-build] [--json]     start an instance (dev build only; packed
+                                   apps are refused until VC-705); prints its
+                                   id + evidence dir
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -130,10 +137,13 @@ async function gitFacts() {
   };
 }
 
+/** Builds when the bundle lacks the harness or predates its sources. */
 async function ensureBuilt(flags) {
-  if (bundleCarriesGuard()) return;
+  if (launchProblems({ build: "dev", bundle: BUILT_MAIN }).length === 0) return;
   if (flags.noBuild)
-    fail(`${BUILT_MAIN} is missing or predates the keychain guard; run \`pnpm run build\``);
+    fail(
+      `${BUILT_MAIN} is missing, lacks the harness, or is stale; run \`pnpm run build\``,
+    );
   process.stderr.write("volli-drive: building the app (pnpm run build)…\n");
   await new Promise((resolve, reject) => {
     const child = spawn("pnpm", ["run", "build"], { cwd: REPO, stdio: ["ignore", 2, 2] });
@@ -141,8 +151,6 @@ async function ensureBuilt(flags) {
       code === 0 ? resolve() : reject(new Error(`build exited ${code}`)),
     );
   });
-  if (!bundleCarriesGuard())
-    fail("the fresh build still lacks the keychain guard; refusing to launch");
 }
 
 async function launch(flags) {
@@ -150,14 +158,12 @@ async function launch(flags) {
   const model = flags.model ?? "fake";
   const build = flags.build ?? "dev";
   if (!["fake", "env"].includes(model)) fail("--model is fake or env");
-  if (!["dev", "packed"].includes(build)) fail("--build is dev or packed");
-  if (build === "packed" && !flags.app)
-    fail("--build packed needs --app <…/Volli Code.app/Contents/MacOS/Volli Code>");
-  if (build === "dev") {
-    await ensureBuilt(flags);
-    if (!existsSync(ELECTRON))
-      fail(`Electron is not installed at ${ELECTRON}; run \`pnpm run ensure:electron\``);
-  }
+  // Packed mode is disabled: a packaged app's bundle cannot be validated
+  // before it runs, so it could start without the guard (VC-705).
+  if (build !== "dev" || flags.app) fail(`--build ${build}${flags.app ? " --app" : ""}: not yet safe; dev builds only`);
+  await ensureBuilt(flags);
+  if (!existsSync(ELECTRON))
+    fail(`Electron is not installed at ${ELECTRON}; run \`pnpm run ensure:electron\``);
   const started = performance.now();
   const home = driveHome();
   ensurePrivateDir(home);
@@ -178,12 +184,20 @@ async function launch(flags) {
     fixture,
     model,
     build,
-    appBinary: flags.app ?? null,
+    appBinary: null,
     bundle: BUILT_MAIN,
     idleMs,
     ...(await gitFacts()),
     launchedAt: new Date().toISOString(),
   };
+  // THE gate, before anything is reserved or spawned (the supervisor checks
+  // it again before Electron starts).
+  try {
+    assertLaunchable(spec);
+  } catch (error) {
+    await fs.rm(scratch, { recursive: true, force: true });
+    fail(error.message);
+  }
   try {
     await registry.reserve({
       id,
@@ -214,7 +228,10 @@ async function launch(flags) {
     },
   );
   child.unref();
-  await registry.update(id, { supervisorPid: child.pid });
+  // Identity, not just a pid: stop signals it only while pid AND start time
+  // still match. Detached, so it leads its own process group.
+  const supervisor = await processIdentity(child.pid).catch(() => null);
+  await registry.update(id, { supervisorPid: child.pid, supervisor });
 
   const layout = instanceLayout(scratch, evidence);
   const deadline = Date.now() + 240_000;
@@ -264,17 +281,10 @@ async function launch(flags) {
  * Static only — nothing is launched and no keychain is asked anything.
  */
 async function preflight() {
-  const problems = [];
   const carries = bundleCarriesGuard();
-  if (!carries)
-    problems.push(`${BUILT_MAIN} is missing or lacks the keychain guard (run \`pnpm run build\`)`);
-  const guardSource = join(REPO, "apps/desktop/src/main/harness/keychain-guard.ts");
-  const [bundleStat, sourceStat] = await Promise.all([
-    fs.stat(BUILT_MAIN).catch(() => null),
-    fs.stat(guardSource).catch(() => null),
-  ]);
-  if (bundleStat && sourceStat && sourceStat.mtimeMs > bundleStat.mtimeMs)
-    problems.push("keychain-guard.ts is newer than the bundle: rebuild");
+  // The same gate launch uses, so preflight cannot pass what launch refuses.
+  const problems = launchProblems({ build: "dev", bundle: BUILT_MAIN });
+  const bundleStat = await fs.stat(BUILT_MAIN).catch(() => null);
   if (!existsSync(ELECTRON)) problems.push(`Electron is not installed at ${ELECTRON}`);
   const entries = (await createRegistry().list()).filter((e) => e.live);
   const facts = await gitFacts();
@@ -283,7 +293,7 @@ async function preflight() {
     `  build: ${facts.commit.slice(0, 12)}${facts.dirty ? " (dirty)" : ""}; bundle built ${bundleStat ? bundleStat.mtime.toISOString() : "never"}`,
   );
   out(
-    `  keychain guard in bundle: ${carries ? "yes (marker, installer and mock-keychain switch present)" : "NO"}`,
+    `  harness in bundle: ${carries ? "yes (keychain guard, home containment, shell recorder)" : "NO"}`,
   );
   out(`  live instances: ${entries.length}/3`);
   for (const p of problems) out(`  ✗ ${p}`);
@@ -388,6 +398,53 @@ async function stateCmd(id, rest) {
     return;
   }
   fail('state takes `sql "<SELECT …>"` or `cli <volli args…>`');
+}
+
+// ---- stop without a supervisor --------------------------------------------------
+
+/** Waits for the recorded supervisor to exit; SIGTERM→SIGKILL it if it does not. */
+async function reapSupervisor(entry) {
+  if (!entry.supervisor) return [];
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const table = await processTable();
+    const still = ownedProcesses(table, [entry.supervisor]).filter(
+      (p) => p.pid === entry.supervisor.pid,
+    );
+    if (still.length === 0) return [];
+    if (Date.now() > deadline) return killExactly(still, { signal: "SIGTERM", graceMs: 3_000 });
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+async function stopUnreachable(entry, keepScratch, error) {
+  const roots = [entry.supervisor, entry.electron].filter(Boolean);
+  const table = await processTable();
+  const targets = ownedProcesses(table, roots);
+  const supervisor = targets.filter((p) => p.pid === entry.supervisor?.pid);
+  // Supervisor first, gracefully: its SIGTERM handler closes Electron.
+  const signalled = await killExactly(supervisor, { signal: "SIGTERM", graceMs: 15_000 });
+  // Then everything else we owned, by the identity seen before any kill.
+  signalled.push(
+    ...(await killExactly(
+      targets.filter((p) => p.pid !== entry.supervisor?.pid),
+      { signal: "SIGTERM", graceMs: 5_000 },
+    )),
+  );
+  const unverified = roots.filter(
+    (r) => !table.some((p) => p.pid === r.pid && p.started === r.started) && pidAlive(r.pid),
+  );
+  if (!keepScratch) await fs.rm(entry.scratch, { recursive: true, force: true });
+  await createRegistry().remove(entry.id);
+  return {
+    evidence: entry.evidence,
+    leftovers: signalled,
+    note:
+      `supervisor unreachable (${error.message}); signalled only recorded, identity-verified processes` +
+      (unverified.length > 0
+        ? `; left alone pid ${unverified.map((r) => r.pid).join(", ")} (reused by another process)`
+        : ""),
+  };
 }
 
 // ---- dispatch ----------------------------------------------------------------------
@@ -546,33 +603,23 @@ async function main() {
           { keepScratch: Boolean(flags.keepScratch) },
           { timeoutMs: 60_000 },
         );
+        // It exits on its own once it has answered; make sure it did, and
+        // reap it (by identity) if it lingers.
+        const lingering = await reapSupervisor(entry);
+        result = { ...result, leftovers: [...(result.leftovers ?? []), ...lingering] };
       } catch (error) {
-        // The supervisor is gone: clean up what it left, and only that — the
-        // exact Electron pid it recorded, and only if that pid still names our
-        // scratch path (a reused pid belongs to someone else).
-        const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,command="]);
-        const ours = stdout
-          .split("\n")
-          .map((line) => /^\s*(\d+)\s+(.*)$/.exec(line))
-          .filter((m) => m && m[2].includes(entry.scratch))
-          .map((m) => Number(m[1]));
-        for (const pid of ours) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {}
-        }
-        if (!flags.keepScratch) await fs.rm(entry.scratch, { recursive: true, force: true });
-        await createRegistry().remove(id);
-        result = {
-          evidence: entry.evidence,
-          leftovers: ours.map((pid) => ({ pid, killed: true })),
-          note: `supervisor unreachable (${error.message})`,
-        };
+        // The supervisor did not answer. Stop what we can PROVE we started —
+        // the recorded supervisor and Electron, each only while its pid still
+        // has the start time recorded at launch, plus their process groups
+        // and descendants — and nothing matched by name or path. The
+        // supervisor gets SIGTERM first so it can still write its manifest.
+        result = await stopUnreachable(entry, Boolean(flags.keepScratch), error);
       }
       out(`stopped ${id}`);
       if (result.note) out(`  ${result.note}`);
       out(`  evidence kept: ${result.evidence}`);
-      out(`  stragglers killed: ${result.leftovers.length}`);
+      out(`  processes signalled: ${result.leftovers.length}`);
+      for (const p of result.leftovers) out(`    ${p.signal} ${p.pid} ${String(p.command ?? "").slice(0, 100)}`);
       break;
     }
     default:

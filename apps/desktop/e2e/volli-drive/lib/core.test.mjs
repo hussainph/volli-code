@@ -3,14 +3,29 @@
  * Electron, touches a keychain or reads a real profile.
  */
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import { checkHarnessContainment } from "../../../src/main/harness/containment.ts";
 import {
   MAX_INSTANCES,
+  assertScratchRemotes,
   bundleCarriesGuard,
+  launchProblems,
+  makeScratchRepo,
+  ownedProcesses,
+  parseProcessTable,
   createRegistry,
   electronExtraEnv,
   ensurePrivateDir,
@@ -76,6 +91,9 @@ describe("electronExtraEnv", () => {
     assert.equal(env.VOLLI_QUIET_WINDOWS, "1");
     assert.equal(env.VOLLI_SKIP_AGENT_TOOLS, "1");
     assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
+    assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+    assert.equal(env.SSH_AUTH_SOCK, undefined);
+    assert.equal(env.VOLLI_HARNESS_SCRATCH, "/tmp/vd-abc123-XYZ");
     assert.equal(env.AZURE_OPENAI_API_KEY, "volli-drive-fake-key");
     for (const key of [
       "HOME",
@@ -222,15 +240,181 @@ describe("registry", () => {
 });
 
 describe("bundleCarriesGuard", () => {
-  it("needs the marker, the installer and the Chromium switch together", () => {
+  it("needs the guard, containment, the recorder, the installer and the switch together", () => {
     const bundle = join(dir, "main.cjs");
     writeFileSync(bundle, "volli-harness-keychain-guard:v1");
     assert.equal(bundleCarriesGuard(bundle), false);
+    // A first-round (guard-only, pre-containment) bundle is refused too.
     writeFileSync(
       bundle,
       'installHarnessGuard(); "volli-harness-keychain-guard:v1"; "use-mock-keychain"',
     );
+    assert.equal(bundleCarriesGuard(bundle), false);
+    writeFileSync(bundle, GUARDED);
     assert.equal(bundleCarriesGuard(bundle), true);
     assert.equal(bundleCarriesGuard(join(dir, "missing.cjs")), false);
+  });
+});
+
+const GUARDED =
+  'installHarnessGuard(); "volli-harness-keychain-guard:v1"; "use-mock-keychain"; ' +
+  '"volli-harness-containment:v1"; "volli-harness-shell-recorder:v1"';
+
+describe("launchProblems (the one launch gate)", () => {
+  function fixture() {
+    const appDir = join(dir, "app");
+    mkdirSync(join(appDir, "dist-electron"), { recursive: true });
+    writeFileSync(join(appDir, "package.json"), JSON.stringify({ main: "dist-electron/main.cjs" }));
+    const bundle = join(appDir, "dist-electron", "main.cjs");
+    writeFileSync(bundle, GUARDED);
+    const source = join(appDir, "src.ts");
+    writeFileSync(source, "");
+    utimesSync(source, new Date(1_000_000), new Date(1_000_000));
+    return { appDir, bundle, source, opts: { env: {}, bundle, appDir, sources: [source] } };
+  }
+  const dev = (bundle) => ({ build: "dev", appBinary: null, bundle });
+
+  it("passes a current, guarded dev bundle", () => {
+    const { bundle, opts } = fixture();
+    assert.deepEqual(launchProblems(dev(bundle), opts), []);
+  });
+
+  it("refuses packed mode in every form", () => {
+    const { bundle, opts } = fixture();
+    assert.match(
+      launchProblems({ ...dev(bundle), build: "packed" }, opts).join(),
+      /not yet safe; dev builds only/,
+    );
+    assert.match(
+      launchProblems({ ...dev(bundle), appBinary: "/Applications/Volli Code.app" }, opts).join(),
+      /dev builds only/,
+    );
+    assert.match(
+      launchProblems(dev(bundle), { ...opts, env: { VOLLI_SMOKE_APP_BINARY: "/x" } }).join(),
+      /VOLLI_SMOKE_APP_BINARY/,
+    );
+  });
+
+  it("refuses an unguarded, stale or mismatched bundle", () => {
+    const { bundle, source, opts, appDir } = fixture();
+    writeFileSync(bundle, 'installHarnessGuard(); "volli-harness-keychain-guard:v1"');
+    assert.match(launchProblems(dev(bundle), opts).join(), /lacks the harness/);
+    writeFileSync(bundle, GUARDED);
+    utimesSync(source, new Date(), new Date(Date.now() + 60_000));
+    assert.match(launchProblems(dev(bundle), opts).join(), /predates .*src\.ts/);
+    utimesSync(source, new Date(1_000_000), new Date(1_000_000));
+    writeFileSync(join(appDir, "package.json"), JSON.stringify({ main: "other.cjs" }));
+    assert.match(launchProblems(dev(bundle), opts).join(), /package\.json main/);
+  });
+});
+
+describe("electronExtraEnv ↔ the app's containment check", () => {
+  it("is exactly what the app's boot-time containment accepts", () => {
+    const scratch = realpathSync(dir);
+    const layout = instanceLayout(scratch, join(scratch, "evidence"));
+    const env = electronExtraEnv(layout, { loginShell: "/bin/sh", path: "/usr/bin" });
+    const result = checkHarnessContainment({
+      env,
+      userDataDir: layout.userDataDir,
+      isPackaged: false,
+      ownerHome: "/Users/volli-owner-not-real",
+    });
+    assert.deepEqual(result.ok ? [] : result.problems, []);
+    assert.equal(result.containment.agentHome, layout.home);
+  });
+});
+
+describe("scratch fixture repos", () => {
+  // The repo's own git must read none of this machine's config either.
+  const gitEnv = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  let saved;
+  beforeEach(() => {
+    saved = { ...process.env };
+    Object.assign(process.env, gitEnv);
+  });
+  afterEach(() => {
+    for (const key of Object.keys(gitEnv)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it("are created in scratch with only a local bare origin, pushed", async () => {
+    const scratch = realpathSync(dir);
+    const { dir: repo, origin } = await makeScratchRepo(scratch, "drive-project");
+    assert.ok(repo.startsWith(`${scratch}/`) && origin.startsWith(`${scratch}/`));
+    const remotes = execFileSync("git", ["remote", "-v"], { cwd: repo, encoding: "utf8" });
+    assert.deepEqual(
+      [...new Set(remotes.trim().split("\n").map((l) => l.split(/\s+/).slice(0, 2).join(" ")))],
+      [`origin ${origin}`],
+    );
+    const head = execFileSync("git", ["rev-parse", "main"], { cwd: origin, encoding: "utf8" });
+    assert.match(head, /^[0-9a-f]{40}/);
+    await assertScratchRemotes(repo, scratch);
+  });
+
+  it("refuse any remote that is not a scratch path", async () => {
+    const scratch = realpathSync(dir);
+    const { dir: repo } = await makeScratchRepo(scratch, "drive-project");
+    for (const url of [
+      "https://github.com/someone/real.git",
+      "git@github.com:someone/real.git",
+      "/Users/someone/code/real",
+    ]) {
+      execFileSync("git", ["remote", "add", "extra", url], { cwd: repo });
+      await assert.rejects(assertScratchRemotes(repo, scratch), /non-scratch remotes/);
+      execFileSync("git", ["remote", "remove", "extra"], { cwd: repo });
+    }
+  });
+});
+
+describe("ownedProcesses (identity, never name or path)", () => {
+  const T0 = "Tue Oct 6 21:00:00 2026";
+  const T1 = "Tue Oct 6 21:00:05 2026";
+  const BEFORE = "Tue Oct 6 20:00:00 2026";
+  const row = (pid, ppid, pgid, started, command = "x") => ({ pid, ppid, pgid, started, command });
+
+  it("owns a verified root, its group and its descendants", () => {
+    const table = [
+      row(100, 1, 100, T0, "node supervisor.mjs /tmp/vd-1/spec.json"),
+      row(101, 100, 100, T0, "Electron"),
+      row(102, 101, 102, T1, "zsh (own session, a pty)"),
+      row(103, 102, 102, T1, "sleep"),
+      row(200, 50, 50, T0, "tail -f /tmp/vd-1/logs/main.log"),
+    ];
+    const pids = ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }], { self: 1 })
+      .map((p) => p.pid)
+      .toSorted();
+    assert.deepEqual(pids, [100, 101, 102, 103]);
+  });
+
+  it("leaves a reused pid, and its group, alone", () => {
+    const table = [row(100, 1, 100, T1, "someone else's process"), row(101, 100, 100, T1)];
+    assert.deepEqual(ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }]), []);
+  });
+
+  it("owns an exited leader's group members only if they started after it", () => {
+    const table = [row(101, 1, 100, T1, "orphaned helper"), row(102, 1, 100, BEFORE)];
+    assert.deepEqual(
+      ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }]).map((p) => p.pid),
+      [101],
+    );
+  });
+
+  it("never owns itself", () => {
+    const table = [row(100, 1, 100, T0), row(101, 100, 100, T0)];
+    assert.deepEqual(
+      ownedProcesses(table, [{ pid: 100, pgid: 100, started: T0 }], { self: 101 }).map(
+        (p) => p.pid,
+      ),
+      [100],
+    );
+  });
+
+  it("parses ps's lstart rows", () => {
+    assert.deepEqual(
+      parseProcessTable("  12    1   12 Tue Oct  6 21:00:00 2026 /bin/sleep 100\n"),
+      [row(12, 1, 12, "Tue Oct 6 21:00:00 2026", "/bin/sleep 100")],
+    );
   });
 });

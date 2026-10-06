@@ -283,11 +283,14 @@ import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
-// `volli-drive` sets. When on, every safeStorage method becomes a trap that
-// fails the run, Chromium is told to use a mock keychain, and the secret ports
-// below seal with per-instance key files instead. First, before anything else
-// in this module can reach safeStorage or the command line is frozen at ready.
-const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage });
+// `volli-drive` sets. When on, the boot is refused unless every home-derived
+// path sits in the instance's scratch root (and the build is a dev build);
+// every safeStorage method becomes a trap that fails the run, Chromium is told
+// to use a mock keychain, the secret ports below seal with per-instance key
+// files instead, and shell.openExternal & co. only record. First, before
+// anything else in this module can reach safeStorage or the shell, or the
+// command line is frozen at ready.
+const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage, shell });
 const harnessPorts = harnessGuard.active ? harnessSecretPorts(harnessGuard.paths) : null;
 
 // Monaco's language services require web workers, which Chromium does not
@@ -2178,8 +2181,11 @@ const appStartup = app.whenReady().then(async () => {
   // headless installer-idempotency e2e cannot redirect it into a throwaway
   // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
   // exactly that. Unset in production, so the real home is used unchanged.
-  const agentToolsHome =
-    (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
+  // Harness mode makes the contained scratch home authoritative (VC-703): the
+  // boot was refused above unless it sits inside the instance's scratch root.
+  const agentToolsHome = harnessGuard.active
+    ? harnessGuard.containment.agentHome
+    : ((isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home"));
   // The one other shim this install may claim a link from: the packaged app
   // repoints a dev profile's link (the dev shim dies with its checkout), never
   // the reverse — a dev boot must not steal the install the user actually uses.

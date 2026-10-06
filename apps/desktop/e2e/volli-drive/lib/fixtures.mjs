@@ -8,7 +8,8 @@
  * behaviour under test is then driven through the UI.
  */
 import { createTicketViaBridge } from "../../lib/agent-kit.mjs";
-import { makeGitRepo, seedDefaultModel, seedProjects } from "../../lib/smoke-kit.mjs";
+import { seedDefaultModel, seedProjects } from "../../lib/smoke-kit.mjs";
+import { makeScratchRepo } from "./core.mjs";
 
 export const FIXTURES = ["basic", "empty"];
 
@@ -45,9 +46,11 @@ export async function seedFixture(page, name, layout, modelPin) {
   }
   if (name === "empty") return seeded;
 
-  const path = await makeGitRepo(layout.projectsDir, "drive-project-");
+  // Scratch-created, never a clone: its only remote is a local bare repo in
+  // scratch, so nothing an agent does with it can reach a credential.
+  const { dir: path, origin } = await makeScratchRepo(layout.projectsDir, "drive-project");
   await seedProjects(page, [{ ...DRIVE_PROJECT, path }]);
-  seeded.project = { ...DRIVE_PROJECT, path };
+  seeded.project = { ...DRIVE_PROJECT, path, origin };
   for (const ticket of BASIC_TICKETS) {
     const created = await createTicketViaBridge(page, DRIVE_PROJECT.name, ticket);
     seeded.tickets.push({ ...created, title: ticket.title, status: ticket.status });

@@ -7,18 +7,18 @@
  *
  *   node supervisor.mjs <evidence>/spec.json
  *
- * It refuses to launch a build that does not carry the keychain guard, and
+ * It launches only through `assertLaunchable` (dev builds carrying the guard,
+ * home containment and the shell recorder; packed apps are refused), and
  * stops the instance (keeping the evidence) the moment the live process does
  * not prove the guard active. It stops itself after `idleMs` without a
- * command. It only ever signals the exact Electron child it launched, plus
- * stragglers whose command line names its own unique scratch path.
+ * command. It only ever signals processes it can prove it started: the
+ * Electron child by pid AND start time, that child's process group and its
+ * descendants — never anything matched by name or path.
  */
-import { execFile } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { promisify } from "node:util";
 
 import {
   assertProfileIsolated,
@@ -29,21 +29,28 @@ import {
   writeFakeLoginShell,
 } from "../lib/smoke-kit.mjs";
 import {
+  HARNESS_CONTAINMENT_MARKER,
   HARNESS_GUARD_MARKER,
+  HARNESS_RECORDER_SYMBOL,
   HARNESS_TRAP_SYMBOL,
   HARNESS_VIOLATION_EXIT_CODE,
+  RECORDED_SHELL_METHODS,
   SAFE_STORAGE_METHODS,
+  assertLaunchable,
   bundleCarriesGuard,
   createRegistry,
   electronExtraEnv,
   findInSnapshot,
   instanceLayout,
+  killExactly,
+  ownedProcesses,
+  processIdentity,
+  processTable,
   snapshotRefs,
 } from "./lib/core.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
 
-const execFileAsync = promisify(execFile);
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const L = instanceLayout(spec.scratch, spec.evidence);
 for (const dir of [
@@ -66,6 +73,8 @@ for (const dir of [
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 process.env.GIT_CONFIG_GLOBAL = join(L.home, ".gitconfig");
 process.env.HOME = L.home;
+delete process.env.SSH_AUTH_SOCK;
+delete process.env.SSH_AGENT_PID;
 
 const registry = createRegistry(spec.driveHome);
 const t0 = performance.now();
@@ -78,6 +87,8 @@ const transcript = (entry) =>
 
 let app = null;
 let electronPid = null;
+/** { pid, pgid, started }: the Electron child, as ps saw it at launch. */
+let electronIdentity = null;
 let electronExit = null;
 let provider = null;
 let server = null;
@@ -270,8 +281,9 @@ async function memory() {
 
 async function liveGuard() {
   return app.evaluate(
-    ({ safeStorage, app: electronApp }, { methods, symbol }) => {
+    ({ safeStorage, shell, app: electronApp }, { methods, symbol, shellMethods, recorderSymbol }) => {
       const trap = Symbol.for(symbol);
+      const recorder = Symbol.for(recorderSymbol);
       return {
         pid: process.pid,
         harnessEnv: process.env.VOLLI_HARNESS ?? null,
@@ -282,19 +294,27 @@ async function liveGuard() {
             typeof safeStorage[m] === "function" && safeStorage[m][trap] === true,
           ]),
         ),
+        // Reads each property; never calls one.
+        recorded: Object.fromEntries(
+          shellMethods.map((m) => [m, typeof shell[m] === "function" && shell[m][recorder] === true]),
+        ),
         mockKeychainSwitch: electronApp.commandLine.hasSwitch("use-mock-keychain"),
         passwordStore: electronApp.commandLine.getSwitchValue("password-store"),
         userData: electronApp.getPath("userData"),
         // Node's and the app's own idea of home ($HOME). Electron's
-        // getPath("home") ignores $HOME on macOS; its one reader in the app
-        // is redirected by VOLLI_AGENT_HOME, reported beside it.
+        // getPath("home") ignores $HOME on macOS; harness mode never reads
+        // it — the guard record's contained agentHome is what the app uses.
         home: process.env.HOME ?? null,
-        agentHome: process.env.VOLLI_AGENT_HOME ?? null,
         electronHome: electronApp.getPath("home"),
         isPackaged: electronApp.isPackaged,
       };
     },
-    { methods: SAFE_STORAGE_METHODS, symbol: HARNESS_TRAP_SYMBOL },
+    {
+      methods: SAFE_STORAGE_METHODS,
+      symbol: HARNESS_TRAP_SYMBOL,
+      shellMethods: RECORDED_SHELL_METHODS,
+      recorderSymbol: HARNESS_RECORDER_SYMBOL,
+    },
   );
 }
 
@@ -335,6 +355,10 @@ async function doctor() {
   if (record && record.pid !== electronPid)
     problems.push(`guard record pid ${record.pid} ≠ Electron pid ${electronPid}`);
   if (alive && !trappedAll) problems.push("live safeStorage is not fully trapped");
+  const recordedAll = live?.recorded ? Object.values(live.recorded).every(Boolean) : false;
+  if (alive && !recordedAll) problems.push("live shell.openExternal & co. are not all recorders");
+  if (record && record.containment?.marker !== HARNESS_CONTAINMENT_MARKER)
+    problems.push("guard record has no home containment");
   if (alive && live?.harnessEnv !== "1")
     problems.push("VOLLI_HARNESS is not 1 in the live process");
   if (alive && !live?.mockKeychainSwitch) problems.push("--use-mock-keychain is missing");
@@ -348,8 +372,15 @@ async function doctor() {
     userDataInside: live?.userData ? await inside(live.userData) : null,
     home: live?.home ?? null,
     homeInside: live?.home ? await inside(live.home) : null,
-    agentHome: live?.agentHome ?? null,
-    agentHomeInside: live?.agentHome ? await inside(live.agentHome) : false,
+    agentHome: record?.containment?.agentHome ?? null,
+    agentHomeInside: record?.containment?.agentHome
+      ? await inside(record.containment.agentHome)
+      : false,
+    externalRequests: (
+      await fs.readFile(join(L.harnessDir, "external-requests.jsonl"), "utf8").catch(() => "")
+    )
+      .split("\n")
+      .filter(Boolean).length,
     db: L.dbPath,
     dbInside: await inside(L.dbPath),
     appSocket: L.appSocket,
@@ -382,11 +413,11 @@ async function doctor() {
       commit: spec.commit,
       dirty: spec.dirty,
       bundle: spec.bundle,
-      bundleCarriesGuard: spec.build === "dev" ? bundleCarriesGuard(spec.bundle) : null,
+      bundleCarriesGuard: bundleCarriesGuard(spec.bundle),
       isPackaged: live?.isPackaged ?? null,
     },
     guard: {
-      active: Boolean(record) && trappedAll && violated.length === 0,
+      active: Boolean(record) && trappedAll && recordedAll && violated.length === 0,
       record,
       live,
       violations: violated,
@@ -402,17 +433,10 @@ async function doctor() {
 
 // ---- stop --------------------------------------------------------------------
 
-/** Processes whose command line names our unique scratch path, and only those. */
-async function stragglers() {
-  const { stdout } = await execFileAsync("/bin/ps", ["-axo", "pid=,command="], {
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return stdout
-    .split("\n")
-    .map((line) => /^\s*(\d+)\s+(.*)$/.exec(line))
-    .filter(Boolean)
-    .map((m) => ({ pid: Number(m[1]), command: m[2] }))
-    .filter((p) => p.pid !== process.pid && p.command.includes(L.scratch));
+/** Everything we can prove we started: the Electron child, its group, its tree. */
+async function owned() {
+  if (!electronIdentity) return [];
+  return ownedProcesses(await processTable(), [electronIdentity]);
 }
 
 async function finalize(reason, { keepScratch = false } = {}) {
@@ -420,23 +444,22 @@ async function finalize(reason, { keepScratch = false } = {}) {
   stopping = true;
   clearTimeout(idleTimer);
   slog(`stopping: ${reason}`);
+  // Seen BEFORE close: once Electron exits its children are reparented, and
+  // only this snapshot still ties them to us.
+  const before = await owned().catch(() => []);
   let close = null;
   if (app && electronExit === null) {
     close = await closeAppBounded(app).catch((error) => ({ kind: "error", error: error.message }));
   }
   await provider?.close?.().catch(() => {});
-  let leftovers = await stragglers().catch(() => []);
-  for (const p of leftovers) {
-    try {
-      process.kill(p.pid, "SIGKILL");
-    } catch {
-      // already gone
-    }
-  }
-  if (leftovers.length > 0) leftovers = leftovers.map((p) => ({ ...p, killed: true }));
+  const after = await owned().catch(() => []);
+  const targets = [...new Map([...before, ...after].map((p) => [p.pid, p])).values()];
+  const leftovers = await killExactly(targets, { signal: "SIGKILL", graceMs: 2_000 }).catch(
+    () => [],
+  );
   // Keep the guard's own record and any violation beside the evidence.
   await fs.mkdir(join(L.evidence, "harness"), { recursive: true });
-  for (const file of ["harness-guard.json", "keychain-violations.jsonl"]) {
+  for (const file of ["harness-guard.json", "keychain-violations.jsonl", "external-requests.jsonl"]) {
     await fs.copyFile(join(L.harnessDir, file), join(L.evidence, "harness", file)).catch(() => {});
   }
   const violated = await violations();
@@ -497,9 +520,8 @@ async function boot() {
   slog(
     `supervisor ${process.pid} booting ${spec.id} (${spec.build}, fixture ${spec.fixture}, model ${spec.model})`,
   );
-  if (spec.build === "dev" && !bundleCarriesGuard(spec.bundle)) {
-    throw new Error(`${spec.bundle} does not carry the keychain guard; rebuild before launching`);
-  }
+  // The one gate, checked again here: the supervisor can be started by hand.
+  assertLaunchable(spec);
   if (spec.model === "fake") {
     const { startFakeProvider } = await import("./lib/fake-provider.mjs");
     provider = await startFakeProvider({
@@ -510,8 +532,10 @@ async function boot() {
   mark("providerReady");
   const { path, loginShell } = await prepareEnvironment();
   const extraEnv = electronExtraEnv(L, { loginShell, path, providerEnv: provider?.env ?? {} });
-  if (spec.build === "packed") process.env.VOLLI_SMOKE_APP_BINARY = spec.appBinary;
   mark("launchStart");
+  // Re-checked at the call: nothing between the gate above and here may have
+  // pointed smoke-kit at a packed app.
+  assertLaunchable(spec);
   app = await launch({
     dbPath: L.dbPath,
     userDataDir: L.userDataDir,
@@ -521,7 +545,8 @@ async function boot() {
   });
   const child = app.process();
   electronPid = child.pid;
-  await registry.update(spec.id, { electronPid }).catch(() => {});
+  electronIdentity = await processIdentity(electronPid).catch(() => null);
+  await registry.update(spec.id, { electronPid, electron: electronIdentity }).catch(() => {});
   child.stdout?.on("data", (chunk) => appendFileSync(L.mainLog, chunk));
   child.stderr?.on("data", (chunk) => appendFileSync(L.mainLog, chunk));
   child.on("exit", (code, signal) => {
@@ -547,9 +572,16 @@ async function boot() {
   const live = await liveGuard();
   const record = await readGuardRecord();
   const trappedAll = Object.values(live.trapped).every(Boolean);
-  if (!trappedAll || record?.pid !== electronPid || live.harnessEnv !== "1") {
+  const recordedAll = Object.values(live.recorded).every(Boolean);
+  if (
+    !trappedAll ||
+    !recordedAll ||
+    record?.pid !== electronPid ||
+    live.harnessEnv !== "1" ||
+    record?.containment?.marker !== HARNESS_CONTAINMENT_MARKER
+  ) {
     throw new Error(
-      `keychain guard NOT proven active in the live process: ${JSON.stringify({ trapped: live.trapped, recordPid: record?.pid, electronPid })}`,
+      `harness guard NOT proven active in the live process: ${JSON.stringify({ trapped: live.trapped, recorded: live.recorded, containment: record?.containment ?? null, recordPid: record?.pid, electronPid })}`,
     );
   }
   mark("guardVerified");

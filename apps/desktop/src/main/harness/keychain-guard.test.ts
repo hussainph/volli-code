@@ -6,7 +6,7 @@
  * keychain: Electron is never imported, and the "safeStorage" objects are
  * plain records whose methods fail the test if they are ever reached.
  */
-import { mkdtempSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -25,7 +25,9 @@ import {
   isTrap,
   keychainTrapped,
 } from "./keychain-guard";
+import { HARNESS_CONTAINMENT_MARKER } from "./containment";
 import { harnessSecretPorts } from "./secret-ports";
+import { HARNESS_RECORDER_MARKER, RECORDED_SHELL_METHODS, isRecorder } from "./shell-recorder";
 
 const reached = (name: string) => () => {
   throw new Error(`the real keychain method ${name} was reached`);
@@ -63,8 +65,48 @@ function untouchable(label: string): object {
   );
 }
 
-function fakeApp() {
-  return { commandLine: { appendSwitch: vi.fn() }, exit: vi.fn() };
+function fakeApp(userDataDir = "") {
+  return {
+    commandLine: { appendSwitch: vi.fn(), getSwitchValue: vi.fn(() => userDataDir) },
+    isPackaged: false,
+    exit: vi.fn(),
+  };
+}
+
+/** A shell stand-in whose real methods fail the test if ever called. */
+function fakeShell(): Record<string, (...args: unknown[]) => unknown> {
+  return Object.fromEntries(
+    ["openExternal", "openPath", "showItemInFolder", "trashItem"].map((name) => [
+      name,
+      vi.fn(() => {
+        throw new Error(`the real shell.${name} was reached`);
+      }),
+    ]),
+  );
+}
+
+/** Not a real home: a string the containment check compares against. */
+const OWNER_HOME = "/Users/volli-owner-not-real";
+
+/** The environment volli-drive hands a contained instance rooted at `scratch`. */
+function harnessEnv(scratch: string): Record<string, string> {
+  return {
+    VOLLI_HARNESS: "1",
+    VOLLI_HARNESS_DIR: scratch,
+    VOLLI_HARNESS_SCRATCH: scratch,
+    HOME: join(scratch, "home"),
+    VOLLI_AGENT_HOME: join(scratch, "home"),
+    VOLLI_WORKTREE_HOME_DIR: join(scratch, "wt"),
+    PI_CODING_AGENT_DIR: join(scratch, "home", ".pi", "agent"),
+    VOLLI_DB_PATH: join(scratch, "ud", "volli.db"),
+    XDG_CONFIG_HOME: join(scratch, "home", ".config"),
+    XDG_DATA_HOME: join(scratch, "home", ".local", "share"),
+    XDG_CACHE_HOME: join(scratch, "home", ".cache"),
+    ZDOTDIR: join(scratch, "zdot"),
+    GIT_CONFIG_GLOBAL: join(scratch, "home", ".gitconfig"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
 }
 
 let dir: string;
@@ -114,6 +156,7 @@ describe("installHarnessGuard when off", () => {
       env: { VOLLI_HARNESS_DIR: dir },
       app: app as never,
       safeStorage,
+      shell: untouchable("shell"),
       log: () => {
         throw new Error("logged while off");
       },
@@ -127,7 +170,10 @@ describe("installHarnessGuard when off", () => {
     const safeStorage = fakeSafeStorage();
     const before = { ...safeStorage };
     const app = fakeApp();
-    installHarnessGuard({ env: {}, app, safeStorage });
+    const shell = fakeShell();
+    const shellBefore = { ...shell };
+    installHarnessGuard({ env: {}, app, safeStorage, shell });
+    expect(shell).toEqual(shellBefore);
     expect(safeStorage).toEqual(before);
     expect(keychainTrapped(safeStorage)).toBe(false);
     expect(app.commandLine.appendSwitch).not.toHaveBeenCalled();
@@ -144,6 +190,7 @@ describe("installHarnessGuard when refused", () => {
         env: { VOLLI_HARNESS: "1" },
         app,
         safeStorage: fakeSafeStorage(),
+        shell: fakeShell(),
         log,
       }),
     ).toThrow(/VOLLI_HARNESS_DIR/);
@@ -151,13 +198,15 @@ describe("installHarnessGuard when refused", () => {
   });
 
   it("fails closed when safeStorage cannot be trapped", () => {
-    const app = fakeApp();
+    const app = fakeApp(join(dir, "ud"));
     const frozen = Object.freeze(fakeSafeStorage());
     expect(() =>
       installHarnessGuard({
-        env: { VOLLI_HARNESS: "1", VOLLI_HARNESS_DIR: dir },
+        env: harnessEnv(dir),
         app,
         safeStorage: frozen,
+        shell: fakeShell(),
+        ownerHome: OWNER_HOME,
         log: () => {},
       }),
     ).toThrow(/could not guard safeStorage/);
@@ -168,20 +217,24 @@ describe("installHarnessGuard when refused", () => {
 
 describe("installHarnessGuard when on", () => {
   function install(overrides: { defer?: (fn: () => void) => void } = {}) {
-    const app = fakeApp();
+    const app = fakeApp(join(dir, "ud"));
     const safeStorage = fakeSafeStorage();
     const originals = { ...safeStorage };
+    const shell = fakeShell();
+    const shellOriginals = { ...shell };
     const log = vi.fn();
     const guard = installHarnessGuard({
-      env: { VOLLI_HARNESS: "1", VOLLI_HARNESS_DIR: dir },
+      env: harnessEnv(dir),
       app,
       safeStorage,
+      shell,
+      ownerHome: OWNER_HOME,
       log,
       pid: 4242,
       now: () => 1000,
       defer: overrides.defer ?? ((fn) => fn()),
     });
-    return { app, safeStorage, originals, log, guard };
+    return { app, safeStorage, originals, shell, shellOriginals, log, guard };
   }
 
   it("traps every safeStorage method, and no call reaches the real one", async () => {
@@ -253,6 +306,72 @@ describe("installHarnessGuard when on", () => {
     expect(record.trapped).toEqual(expect.arrayContaining([...SAFE_STORAGE_METHODS]));
     expect(statSync(join(dir, "harness-guard.json")).mode & 0o777).toBe(0o600);
     expect(statSync(join(dir, "keys")).mode & 0o777).toBe(0o700);
+    expect(record.containment).toMatchObject({
+      marker: HARNESS_CONTAINMENT_MARKER,
+      agentHome: join(realpathSync.native(dir), "home"),
+    });
+    expect(record.shellRecorder).toMatchObject({ marker: HARNESS_RECORDER_MARKER });
+  });
+
+  it("forces the agent-tools home into scratch and returns it for index.ts", () => {
+    const { guard } = install();
+    if (!guard.active) throw new Error("guard inactive");
+    expect(guard.containment.agentHome).toBe(join(realpathSync.native(dir), "home"));
+    expect(guard.containment.scratch).toBe(realpathSync.native(dir));
+  });
+
+  it("replaces shell.openExternal & co. with recorders that open nothing", async () => {
+    const { shell, shellOriginals } = install();
+    await expect(shell.openExternal!("https://example.invalid/x")).resolves.toBeUndefined();
+    await expect(shell.openPath!("/some/file")).resolves.toBe("");
+    expect(shell.showItemInFolder!("/some/file")).toBeUndefined();
+    await expect(shell.trashItem!("/some/file")).resolves.toBeUndefined();
+    for (const name of RECORDED_SHELL_METHODS) {
+      expect(isRecorder(shell[name])).toBe(true);
+      expect(shellOriginals[name]).not.toHaveBeenCalled();
+    }
+    const lines = readFileSync(join(dir, "external-requests.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(lines.map((l) => [l.method, l.args])).toEqual([
+      ["openExternal", ["https://example.invalid/x"]],
+      ["openPath", ["/some/file"]],
+      ["showItemInFolder", ["/some/file"]],
+      ["trashItem", ["/some/file"]],
+    ]);
+  });
+});
+
+describe("installHarnessGuard containment refusals", () => {
+  function attempt(env: Record<string, string | undefined>, opts: { packaged?: boolean } = {}) {
+    const app = { ...fakeApp(join(dir, "ud")), isPackaged: opts.packaged ?? false };
+    const safeStorage = fakeSafeStorage();
+    const before = { ...safeStorage };
+    const shell = fakeShell();
+    const shellBefore = { ...shell };
+    let error: unknown = null;
+    try {
+      installHarnessGuard({ env, app, safeStorage, shell, ownerHome: OWNER_HOME, log: () => {} });
+    } catch (caught) {
+      error = caught;
+    }
+    return { app, error, safeStorage, before, shell, shellBefore };
+  }
+
+  it("refuses to boot, before trapping anything, when a home path leaves scratch", () => {
+    const result = attempt({ ...harnessEnv(dir), VOLLI_AGENT_HOME: OWNER_HOME });
+    expect(String(result.error)).toMatch(/VOLLI_AGENT_HOME .* outside the scratch root/);
+    expect(result.app.exit).toHaveBeenCalledWith(HARNESS_VIOLATION_EXIT_CODE);
+    expect(result.app.commandLine.appendSwitch).not.toHaveBeenCalled();
+    expect(result.safeStorage).toEqual(result.before);
+    expect(existsSync(join(dir, "harness-guard.json"))).toBe(false);
+  });
+
+  it("refuses a packaged build in harness mode", () => {
+    const result = attempt(harnessEnv(dir), { packaged: true });
+    expect(String(result.error)).toMatch(/dev-build only/);
+    expect(result.app.exit).toHaveBeenCalledWith(HARNESS_VIOLATION_EXIT_CODE);
   });
 });
 
@@ -305,9 +424,11 @@ describe("harnessSecretPorts", () => {
   it("seals and opens with a per-instance random key in the scratch dir, no keychain", () => {
     const paths = harnessPaths(dir);
     installHarnessGuard({
-      env: { VOLLI_HARNESS: "1", VOLLI_HARNESS_DIR: dir },
-      app: fakeApp(),
+      env: harnessEnv(dir),
+      app: fakeApp(join(dir, "ud")),
       safeStorage: fakeSafeStorage(),
+      shell: fakeShell(),
+      ownerHome: OWNER_HOME,
       log: () => {},
     });
     const ports = harnessSecretPorts(paths);

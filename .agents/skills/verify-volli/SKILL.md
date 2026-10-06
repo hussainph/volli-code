@@ -20,7 +20,7 @@ Never run the app any other way (`pnpm dev`, `pnpm start`, a smoke) to "check so
 ```sh
 alias volli-drive='node apps/desktop/e2e/volli-drive/cli.mjs'
 volli-drive doctor                      # preflight, no id: is the bundle about to launch guarded?
-volli-drive launch                      # --fixture basic|empty  --model fake|env  --build dev|packed --app <bin>
+volli-drive launch                      # --fixture basic|empty  --model fake|env  (dev build only)
 ```
 
 `launch` builds first if the bundle is missing or predates the guard (`--no-build` refuses instead), then prints the instance id (`vd-xxxxxx`), the evidence dir, timings, memory and the guard status. 10–16 s to ready on an M-series Mac. Fixture `basic`: project **Drive Project** (prefix `DRV`), tickets DRV-1 (Todo), DRV-2 (Backlog), DRV-3 (Doing), DRV-4 (Needs Review), fake model pinned for `global` and `ticket` purposes.
@@ -33,7 +33,7 @@ After changing desktop code, `pnpm run build` (≈15 s) and launch a fresh insta
 volli-drive doctor vd-xxxxxx            # exit 2 on any problem; --json for everything
 ```
 
-`OK` means: Electron is up; the build is your commit; the guard record's pid is the live main pid; all 8 `safeStorage` methods are traps; both Chromium switches are on; zero violations; userData, `HOME`, `VOLLI_AGENT_HOME`, DB and the app socket are inside the scratch tree; the socket is ours. Run it first whenever anything looks off. **If doctor ever reports a keychain violation or an inactive guard: stop, keep the evidence, report it — do not relaunch to "see if it happens again".**
+`OK` means: Electron is up; the build is your commit; the guard record's pid is the live main pid; all 8 `safeStorage` methods are traps; `shell.openExternal`/`openPath`/`showItemInFolder`/`trashItem` are recorders (requests land in `harness/external-requests.jsonl`, nothing opens); the guard record carries home containment (the app refused to boot unless every home-derived path — `HOME`, the agent-tools home, worktrees, Pi, DB, XDG, userData — is in scratch); both Chromium switches are on; zero violations; the socket is ours. Run it first whenever anything looks off. **If doctor ever reports a keychain violation or an inactive guard: stop, keep the evidence, report it — do not relaunch to "see if it happens again".**
 
 ## 3. Drive — snapshot → one action → fresh snapshot → verify
 
@@ -79,7 +79,7 @@ volli-drive stop vd-xxxxxx          # graceful close → TERM → KILL of the ex
 volli-drive list                    # nothing of yours should remain live
 ```
 
-`stop` never kills by name; stragglers are killed only if their command line names this instance's unique scratch path. Evidence survives (`logs`, `console` still work on a stopped id). Stop every instance you launched, including after a failed attempt.
+`stop` never kills by name or path: it signals only the recorded supervisor and Electron, each while its pid still has the start time recorded at launch, plus their process groups and descendants. A recorded pid now held by another process is left alone (and reported). Evidence survives (`logs`, `console` still work on a stopped id). Stop every instance you launched, including after a failed attempt.
 
 ## Feature map
 
@@ -97,5 +97,6 @@ volli-drive list                    # nothing of yours should remain live
 
 - Terminal Sessions: the instance's `$SHELL` is a fake login shell (PATH probe), so terminal/harness CLIs are not meaningfully drivable yet; use `apps/desktop/e2e/lib/fake-harness.mjs` smokes for those.
 - Remote hosts ("Add a host over SSH"): design only — see `docs/research/volli-drive-sshd-fixture.md`.
-- `--build packed` is wired but unproven; the default is the built `dist-electron/` on the dev Electron binary. No HMR renderer yet.
+- Packed apps are refused (`--build packed`/`--app` → "not yet safe; dev builds only"; the app itself also refuses harness mode when packaged) until VC-705 gives them a validated gate. Launch is the built `dist-electron/` on the dev Electron binary, rebuilt when the harness sources are newer. No HMR renderer yet.
+- Fixture repos are scratch-created with a local bare `origin`; never point an instance at a real repo or remote.
 - `logs --trace` is a literal match until VC-699's structured logs land (it already reads `logs/structured/*.jsonl` when present).

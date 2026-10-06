@@ -10,6 +10,9 @@
  *
  * In harness mode:
  *
+ * 0. **The boot is refused unless it is contained** (`containment.ts`): a dev
+ *    build, with every home-derived path inside the instance's scratch root.
+ *    Nothing below runs otherwise.
  * 1. **Every `safeStorage` method is replaced by a trap** before anything can
  *    call it. A trap records the call (a line on stderr and a JSON line in
  *    `<VOLLI_HARNESS_DIR>/keychain-violations.jsonl`), throws
@@ -27,7 +30,9 @@
  * 3. **Chromium is told not to use the keychain either**: `use-mock-keychain`
  *    and `password-store=basic`, the switches the agent browser already
  *    launches with (`@volli/host-core` `chromium-launch.ts`).
- * 4. **The guard announces itself** in `<VOLLI_HARNESS_DIR>/harness-guard.json`
+ * 4. **`shell.openExternal` & co. only record** (`shell-recorder.ts`): no
+ *    owner browser, Finder reveal or Trash.
+ * 5. **The guard announces itself** in `<VOLLI_HARNESS_DIR>/harness-guard.json`
  *    so `volli-drive doctor` can prove it is active in the running process,
  *    and every trap carries {@link HARNESS_TRAP} so the supervisor can check
  *    the live `safeStorage` object without calling it.
@@ -36,7 +41,19 @@
  * without a keychain anywhere near the test.
  */
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
+
+import {
+  checkHarnessContainment,
+  HARNESS_CONTAINMENT_MARKER,
+  type HarnessContainment,
+} from "./containment";
+import {
+  HARNESS_EXTERNAL_REQUESTS_FILE,
+  HARNESS_RECORDER_MARKER,
+  installShellRecorder,
+} from "./shell-recorder";
 
 /** The one switch. Only `volli-drive` sets it. */
 export const HARNESS_ENV = "VOLLI_HARNESS";
@@ -197,6 +214,7 @@ export interface HarnessPaths {
   readonly credentialKeyFile: string;
   readonly guardFile: string;
   readonly violationsFile: string;
+  readonly externalRequestsFile: string;
 }
 
 export function harnessPaths(dir: string): HarnessPaths {
@@ -208,12 +226,17 @@ export function harnessPaths(dir: string): HarnessPaths {
     credentialKeyFile: join(keysDir, "host-credentials.key"),
     guardFile: join(dir, HARNESS_GUARD_FILE),
     violationsFile: join(dir, HARNESS_VIOLATIONS_FILE),
+    externalRequestsFile: join(dir, HARNESS_EXTERNAL_REQUESTS_FILE),
   };
 }
 
 /** The slice of Electron's `app` the guard needs. */
 export interface HarnessApp {
-  commandLine: { appendSwitch(name: string, value?: string): void };
+  commandLine: {
+    appendSwitch(name: string, value?: string): void;
+    getSwitchValue(name: string): string;
+  };
+  readonly isPackaged: boolean;
   exit(code?: number): void;
 }
 
@@ -222,6 +245,11 @@ export interface HarnessGuardDeps {
   readonly app: HarnessApp;
   /** Electron's `safeStorage`, trapped in place. */
   readonly safeStorage: object;
+  /** Electron's `shell`: its OS-reaching methods become recorders. */
+  readonly shell: object;
+  /** The owner's passwd home, which no harness path may sit in. */
+  readonly ownerHome?: string;
+  readonly realpath?: (path: string) => string;
   readonly pid?: number;
   readonly log?: (line: string) => void;
   /** Defers the violation exit so the throw reaches its caller first. */
@@ -231,7 +259,13 @@ export interface HarnessGuardDeps {
 
 export type HarnessGuard =
   | { readonly active: false }
-  | { readonly active: true; readonly paths: HarnessPaths; readonly trapped: readonly string[] };
+  | {
+      readonly active: true;
+      readonly paths: HarnessPaths;
+      readonly trapped: readonly string[];
+      readonly recorded: readonly string[];
+      readonly containment: HarnessContainment;
+    };
 
 /**
  * Installs harness mode, or does nothing. Call once, at the top of main,
@@ -253,6 +287,21 @@ export function installHarnessGuard(deps: HarnessGuardDeps): HarnessGuard {
     // run as if harness mode were off.
     throw new Error(mode.reason);
   }
+  // Every home-derived path inside the scratch root, or no boot at all.
+  const contained = checkHarnessContainment({
+    env: deps.env,
+    userDataDir: deps.app.commandLine.getSwitchValue("user-data-dir"),
+    isPackaged: deps.app.isPackaged,
+    ownerHome: deps.ownerHome ?? userInfo().homedir,
+    ...(deps.realpath ? { realpath: deps.realpath } : {}),
+  });
+  if (!contained.ok) {
+    const reason = `harness containment failed; refusing to start: ${contained.problems.join("; ")}`;
+    log(`[volli-harness] ${reason}`);
+    deps.app.exit(HARNESS_VIOLATION_EXIT_CODE);
+    throw new Error(reason);
+  }
+  const containment = contained.containment;
   const paths = harnessPaths(mode.dir);
   const defer = deps.defer ?? ((fn: () => void) => setImmediate(fn));
   const now = deps.now ?? Date.now;
@@ -281,6 +330,14 @@ export function installHarnessGuard(deps: HarnessGuardDeps): HarnessGuard {
     deps.app.exit(HARNESS_VIOLATION_EXIT_CODE);
     throw error;
   }
+  let recorded: string[];
+  try {
+    recorded = installShellRecorder(deps.shell, paths.externalRequestsFile, now);
+  } catch (error) {
+    log(`[volli-harness] ${(error as Error).message}`);
+    deps.app.exit(HARNESS_VIOLATION_EXIT_CODE);
+    throw error;
+  }
   for (const [name, value] of HARNESS_CHROMIUM_SWITCHES) {
     if (value === undefined) deps.app.commandLine.appendSwitch(name);
     else deps.app.commandLine.appendSwitch(name, value);
@@ -296,6 +353,12 @@ export function installHarnessGuard(deps: HarnessGuardDeps): HarnessGuard {
         chromiumSwitches: HARNESS_CHROMIUM_SWITCHES.map(([n, v]) => (v ? `--${n}=${v}` : `--${n}`)),
         secretKey: { backend: "file", path: paths.secretKeyFile },
         credentialKeyring: { backend: "file", path: paths.credentialKeyFile },
+        containment: { marker: HARNESS_CONTAINMENT_MARKER, ...containment },
+        shellRecorder: {
+          marker: HARNESS_RECORDER_MARKER,
+          recorded,
+          file: paths.externalRequestsFile,
+        },
       },
       null,
       2,
@@ -303,5 +366,5 @@ export function installHarnessGuard(deps: HarnessGuardDeps): HarnessGuard {
     { mode: 0o600 },
   );
   log(`[volli-harness] ${HARNESS_GUARD_MARKER} active: safeStorage trapped (${trapped.length})`);
-  return { active: true, paths, trapped };
+  return { active: true, paths, trapped, recorded, containment };
 }

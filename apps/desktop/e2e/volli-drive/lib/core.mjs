@@ -15,11 +15,15 @@
  *   • snapshot search      — `find`, the same literal, case-insensitive match
  *                            Volli's browser_find makes, with ancestor paths.
  */
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, promises as fs, readFileSync, statSync } from "node:fs";
+import { mkdirSync, promises as fs, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /** Repo root: this file lives at apps/desktop/e2e/volli-drive/lib/. */
 export const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
@@ -29,6 +33,26 @@ export const BUILT_CLI = join(APP_DIR, "dist-electron", "volli-cli.cjs");
 
 /** The guard's bundled marker (apps/desktop/src/main/harness/keychain-guard.ts). */
 export const HARNESS_GUARD_MARKER = "volli-harness-keychain-guard:v1";
+/** Home containment (harness/containment.ts): every home path in scratch. */
+export const HARNESS_CONTAINMENT_MARKER = "volli-harness-containment:v1";
+/** The shell recorder (harness/shell-recorder.ts): openExternal & co. record only. */
+export const HARNESS_RECORDER_MARKER = "volli-harness-shell-recorder:v1";
+export const HARNESS_RECORDER_SYMBOL = "volli.harness.shellRecorder";
+export const RECORDED_SHELL_METHODS = ["openExternal", "openPath", "showItemInFolder", "trashItem"];
+/** Sources the built bundle must be newer than (provenance, cheaply). */
+export const HARNESS_SOURCES = [
+  join(APP_DIR, "src", "main", "index.ts"),
+  ...(() => {
+    const dir = join(APP_DIR, "src", "main", "harness");
+    try {
+      return readdirSync(dir)
+        .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+        .map((name) => join(dir, name));
+    } catch {
+      return [];
+    }
+  })(),
+];
 export const HARNESS_TRAP_SYMBOL = "volli.harness.keychainTrap";
 export const HARNESS_VIOLATION_EXIT_CODE = 86;
 export const SAFE_STORAGE_METHODS = [
@@ -272,6 +296,10 @@ export function electronExtraEnv(layout, { loginShell, path, providerEnv = {} })
     // The keychain guard (keychain-guard.ts). Nothing else sets these.
     VOLLI_HARNESS: "1",
     VOLLI_HARNESS_DIR: layout.harnessDir,
+    // The root every home-derived path must resolve inside; the app refuses
+    // to boot otherwise (harness/containment.ts).
+    VOLLI_HARNESS_SCRATCH: layout.scratch,
+    VOLLI_DB_PATH: layout.dbPath,
     VOLLI_QUIET_WINDOWS: "1",
     VOLLI_SKIP_AGENT_TOOLS: "1",
     VOLLI_SKIP_CLOSE_CONFIRM: "1",
@@ -287,7 +315,9 @@ export function electronExtraEnv(layout, { loginShell, path, providerEnv = {} })
     ZDOTDIR: layout.zdotDir,
     SHELL: loginShell,
     PATH: path,
-    // Git reads no system config (Xcode's names the osxkeychain credential
+    // Fixtures are scratch repos whose only remote is a local bare repo
+    // (makeScratchRepo), so no credential is ever asked for. Belt and braces:
+    // git reads no system config (Xcode's names the osxkeychain credential
     // helper) and a global config of our own; it never prompts.
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: join(layout.home, ".gitconfig"),
@@ -361,16 +391,249 @@ export function snapshotRefs(snapshot) {
 
 // ---- static guard check ----------------------------------------------------
 
-/** Whether a built main bundle carries the keychain guard. */
+/**
+ * Whether a built main bundle carries the whole harness: the keychain guard,
+ * home containment and the shell recorder. A build with only the first
+ * (pre-containment) is refused like one with none.
+ */
 export function bundleCarriesGuard(path = BUILT_MAIN) {
   try {
     const source = readFileSync(path, "utf8");
     return (
       source.includes(HARNESS_GUARD_MARKER) &&
+      source.includes(HARNESS_CONTAINMENT_MARKER) &&
+      source.includes(HARNESS_RECORDER_MARKER) &&
       source.includes("installHarnessGuard") &&
       source.includes("use-mock-keychain")
     );
   } catch {
     return false;
   }
+}
+
+/** Harness sources edited after the bundle was built: a stale build. */
+export function staleHarnessSources(bundle = BUILT_MAIN, sources = HARNESS_SOURCES) {
+  let built;
+  try {
+    built = statSync(bundle).mtimeMs;
+  } catch {
+    return sources;
+  }
+  return sources.filter((file) => {
+    try {
+      return statSync(file).mtimeMs > built;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * THE launch gate. Every launch path (the CLI before it spawns a supervisor,
+ * the supervisor before it starts Electron) calls this and nothing launches
+ * without it passing. Dev builds only: a packed app's bundle cannot be
+ * validated statically yet, so it is refused outright (VC-705).
+ * Returns the problems; empty means launchable.
+ */
+export function launchProblems(
+  spec,
+  { env = process.env, bundle = BUILT_MAIN, appDir = APP_DIR, sources = HARNESS_SOURCES } = {},
+) {
+  const problems = [];
+  if (spec.build !== "dev") problems.push(`--build ${spec.build}: not yet safe; dev builds only`);
+  if (spec.appBinary) problems.push("--app: packed apps are not yet safe; dev builds only");
+  if (env.VOLLI_SMOKE_APP_BINARY)
+    problems.push("VOLLI_SMOKE_APP_BINARY is set: it would launch a packed app; dev builds only");
+  if (resolve(spec.bundle ?? bundle) !== resolve(bundle))
+    problems.push(`the spec names bundle ${spec.bundle}, not ${bundle}`);
+  try {
+    const main = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")).main;
+    if (resolve(appDir, main) !== resolve(bundle))
+      problems.push(`${appDir}/package.json main is ${main}, not the validated ${bundle}`);
+  } catch (error) {
+    problems.push(`cannot read ${appDir}/package.json: ${error.message}`);
+  }
+  if (!bundleCarriesGuard(bundle))
+    problems.push(`${bundle} is missing or lacks the harness guard/containment/recorder`);
+  const stale = staleHarnessSources(bundle, sources);
+  if (stale.length > 0)
+    problems.push(`${bundle} predates ${stale.map((f) => f.slice(appDir.length + 1)).join(", ")}: rebuild`);
+  return problems;
+}
+
+/** Throws unless {@link launchProblems} is empty. */
+export function assertLaunchable(spec, options) {
+  const problems = launchProblems(spec, options);
+  if (problems.length > 0) throw new Error(`refusing to launch: ${problems.join("; ")}`);
+}
+
+// ---- scratch fixture repos -------------------------------------------------
+
+const inside = (path, root) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+
+/**
+ * A fixture repo: created in scratch, never cloned from a real one. Its only
+ * remote is a local bare repo beside it, so a push or fetch an agent makes
+ * never needs a credential, a helper or ssh. Returns { dir, origin }.
+ */
+export async function makeScratchRepo(parentDir, name = "drive-project") {
+  const dir = await fs.realpath(await fs.mkdtemp(join(parentDir, `${name}-`)));
+  const origin = `${dir}.origin.git`;
+  const git = (args, cwd = dir) => execFileAsync("git", args, { cwd });
+  await git(["init", "-q", "--bare", origin], parentDir);
+  await git(["init", "-q", "-b", "main"]);
+  await git(["config", "user.email", "drive@volli.test"]);
+  await git(["config", "user.name", "Volli Drive"]);
+  await git(["config", "commit.gpgsign", "false"]);
+  await fs.writeFile(join(dir, "README.md"), "# drive project\n");
+  await git(["add", "-A"]);
+  await git(["commit", "-q", "-m", "initial commit"]);
+  await git(["remote", "add", "origin", origin]);
+  await git(["push", "-q", "-u", "origin", "main"]);
+  await assertScratchRemotes(dir, dirname(dir));
+  return { dir, origin };
+}
+
+/**
+ * Every remote URL of `repo` is a local path inside `scratch`: no network
+ * remote, so no credential helper or ssh is ever reached. Throws otherwise.
+ */
+export async function assertScratchRemotes(repo, scratch) {
+  const { stdout } = await execFileAsync("git", ["config", "--get-regexp", "^remote\\..*url$"], {
+    cwd: repo,
+  }).catch((error) => (error.code === 1 ? { stdout: "" } : Promise.reject(error)));
+  const root = await fs.realpath(scratch);
+  const bad = [];
+  for (const line of stdout.split("\n").filter(Boolean)) {
+    const url = line.slice(line.indexOf(" ") + 1);
+    const local = url.startsWith("file://") ? url.slice("file://".length) : url;
+    if (!isAbsolute(local) || !inside(resolve(local), root)) bad.push(line);
+  }
+  if (bad.length > 0)
+    throw new Error(`fixture repo ${repo} has non-scratch remotes: ${bad.join(", ")}`);
+}
+
+// ---- process ownership -----------------------------------------------------
+
+/**
+ * One `ps` snapshot: pid, parent, process group, start time and command.
+ * The start time is what makes a pid an identity: a reused pid starts later.
+ */
+export async function processTable(run = execFileAsync) {
+  const { stdout } = await run("/bin/ps", ["-Ao", "pid=,ppid=,pgid=,lstart=,command="], {
+    env: { ...process.env, LC_ALL: "C" },
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return parseProcessTable(stdout);
+}
+
+export function parseProcessTable(stdout) {
+  const rows = [];
+  for (const line of stdout.split("\n")) {
+    const tokens = line.trim().split(/\s+/);
+    if (tokens.length < 8) continue;
+    const [pid, ppid, pgid] = tokens.slice(0, 3).map(Number);
+    if (![pid, ppid, pgid].every(Number.isInteger)) continue;
+    rows.push({
+      pid,
+      ppid,
+      pgid,
+      started: tokens.slice(3, 8).join(" "),
+      command: tokens.slice(8).join(" "),
+    });
+  }
+  return rows;
+}
+
+/** The identity to record for a process we just started: pid, group, start time. */
+export async function processIdentity(pid, run = execFileAsync) {
+  const row = (await processTable(run)).find((p) => p.pid === pid);
+  return row ? { pid: row.pid, pgid: row.pgid, started: row.started } : null;
+}
+
+/**
+ * What we own, from recorded identities only, never from a name or a path:
+ *   • a recorded root that is still the same process (pid AND start time);
+ *   • every descendant of a verified root, by parent pid;
+ *   • every member of a group a verified root leads (pgid === its pid), or,
+ *     when that leader has exited, members of its group that started no
+ *     earlier than it did (a pgid is never reused while its group lives).
+ * A root whose pid now names a different process is someone else's, and so
+ * is its group.
+ */
+export function ownedProcesses(table, roots, { self = process.pid } = {}) {
+  const byPid = new Map(table.map((p) => [p.pid, p]));
+  const owned = new Map();
+  const verified = [];
+  for (const root of roots.filter(Boolean)) {
+    const row = byPid.get(root.pid);
+    if (row) {
+      if (row.started !== root.started) continue; // reused pid: not ours
+      verified.push(row);
+      owned.set(row.pid, row);
+    }
+    if (root.pgid === root.pid) {
+      const since = Date.parse(root.started);
+      for (const p of table) {
+        if (p.pgid !== root.pgid) continue;
+        if (!row && !(Date.parse(p.started) >= since)) continue;
+        owned.set(p.pid, p);
+      }
+    }
+  }
+  const children = new Map();
+  for (const p of table) {
+    if (!children.has(p.ppid)) children.set(p.ppid, []);
+    children.get(p.ppid).push(p);
+  }
+  const queue = [...owned.values()];
+  while (queue.length > 0) {
+    const p = queue.shift();
+    for (const child of children.get(p.pid) ?? []) {
+      if (owned.has(child.pid)) continue;
+      owned.set(child.pid, child);
+      queue.push(child);
+    }
+  }
+  owned.delete(self);
+  return [...owned.values()];
+}
+
+/**
+ * Signals exactly `targets` (rows from {@link ownedProcesses}), each only if
+ * its pid still has the start time we saw, waits up to `graceMs`, then
+ * SIGKILLs the same-identity survivors. Returns what was signalled.
+ */
+export async function killExactly(
+  targets,
+  { signal = "SIGTERM", graceMs = 5_000, table = processTable, kill = process.kill } = {},
+) {
+  const same = async () => {
+    const now = new Map((await table()).map((p) => [p.pid, p.started]));
+    return targets.filter((t) => now.get(t.pid) === t.started);
+  };
+  const signalled = [];
+  for (const t of await same()) {
+    try {
+      kill(t.pid, signal);
+      signalled.push({ pid: t.pid, command: t.command, signal });
+    } catch {
+      // already gone
+    }
+  }
+  const deadline = Date.now() + graceMs;
+  let alive = await same();
+  while (alive.length > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    alive = await same();
+  }
+  for (const t of alive) {
+    try {
+      kill(t.pid, "SIGKILL");
+      signalled.push({ pid: t.pid, command: t.command, signal: "SIGKILL" });
+    } catch {
+      // already gone
+    }
+  }
+  return signalled;
 }

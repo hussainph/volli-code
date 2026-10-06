@@ -19,7 +19,7 @@ function topLevelStatements(): string[] {
   let inImport = false;
   for (const line of lines) {
     if (inImport) {
-      if (/^\} from |from "[^"]+";$/.test(line)) inImport = false;
+      if (line.startsWith("} from ") || /from "[^"]+";$/.test(line)) inImport = false;
       continue;
     }
     if (line.startsWith("import ")) {
@@ -35,7 +35,7 @@ describe("index.ts harness wiring", () => {
   it("installs the guard as the first statement after the imports", () => {
     const [first] = topLevelStatements();
     expect(first).toBe(
-      "const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage });",
+      "const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage, shell });",
     );
     expect(SOURCE.match(/installHarnessGuard\(/g)).toHaveLength(1);
   });
@@ -48,7 +48,7 @@ describe("index.ts harness wiring", () => {
       // The named import.
       "safeStorage,",
       // The guard itself, which traps it.
-      "const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage });",
+      "const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage, shell });",
       // A forwarding wrapper: reads no keychain until a codec calls it, and
       // in harness mode no codec is built over it.
       "const keychainUse = observeKeychainUse(safeStorage);",
@@ -71,5 +71,31 @@ describe("index.ts harness wiring", () => {
       /if \(dbHandle\.ok && harnessPorts === null\) \{\n\s+const moved = migrateLegacySafeStorageSecrets\(/,
     );
     expect(SOURCE.match(/migrateLegacySafeStorageSecrets\(/g)).toHaveLength(1);
+  });
+});
+
+describe("shell recorder coverage", () => {
+  const MAIN = new URL("../", import.meta.url);
+  const files = ["index.ts", "client-capabilities.ts", "ipc.ts", "data-ipc.ts"].map((name) => ({
+    name,
+    text: readFileSync(new URL(name, MAIN), "utf8"),
+  }));
+
+  it("every caller reaches the OS-launching shell methods through the shell object at call time", () => {
+    for (const { name, text } of files) {
+      // A destructured or bound method would keep the real one past the
+      // recorder's install; a call through `shell.` reads the recorder.
+      expect(text, name).not.toMatch(/\{[^}]*\b(openExternal|openPath|showItemInFolder|trashItem)\b[^}]*\}\s*=\s*shell\b/);
+      expect(text, name).not.toMatch(/shell\.(openExternal|openPath|showItemInFolder|trashItem)\.bind\(/);
+    }
+  });
+
+  it("window.open and external navigation in the main window go through openExternal", () => {
+    const index = files[0]!.text;
+    expect(index).toMatch(
+      /setWindowOpenHandler\(\(\{ url \}\) => \{\n\s+openExternal\(url\);\n\s+return \{ action: "deny" \};/,
+    );
+    expect(index).toMatch(/event\.preventDefault\(\);\n\s+openExternal\(target\);/);
+    expect(index).toMatch(/void shell\.openExternal\(target\);/);
   });
 });

@@ -371,11 +371,37 @@ export async function startFakeProvider(options = {}) {
  * reaches `requests`. Falls back to everything when nothing is left.
  */
 export function spokenText(text) {
-  const stripped = String(text)
-    .replace(/--- BEGIN ([A-Z][A-Z :_-]*?) ---[\s\S]*?--- END \1 ---/g, "")
-    .replace(/<\/?[a-z][a-z-]*(\s[^>]*)?>/gi, "")
-    .trim();
+  const stripped = withoutElementTags(
+    String(text).replace(/--- BEGIN ([A-Z][A-Z :_-]*?) ---[\s\S]*?--- END \1 ---/g, ""),
+  ).trim();
   return stripped.length > 0 ? stripped : String(text);
+}
+
+const isTagNameStart = (ch) => (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
+
+/**
+ * Drops `<name …>` / `</name>` wrappers in one left-to-right pass. This is a
+ * text normalizer for an echo, not an HTML sanitizer: its output is matched
+ * by a test driver, never rendered. A `<` that does not open a tag, or a tag
+ * left unclosed, is kept verbatim.
+ */
+function withoutElementTags(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "<") {
+      const nameAt = text[i + 1] === "/" ? i + 2 : i + 1;
+      const close = text.indexOf(">", nameAt);
+      if (isTagNameStart(text[nameAt] ?? "") && close !== -1) {
+        i = close + 1;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /** The reply text for a user message under the default rules. */
