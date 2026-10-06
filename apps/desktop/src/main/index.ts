@@ -250,7 +250,12 @@ import {
 } from "@volli/host-core/worktree";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
-import { installSmokeBootCapture } from "./bare-path-boot-capture";
+import {
+  installSmokeBootCapture,
+  isSmokeBootCapture,
+  WRAPPER_FAILURE_MESSAGE,
+  WRAPPER_READY_MESSAGE,
+} from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
@@ -369,7 +374,13 @@ const ownsAppProfile = acquireVolliAppProfile(app);
 // renderer (VC-699): rotating JSON lines in this profile's own log directory.
 // Only the instance that owns the profile writes there.
 const desktopLog = ownsAppProfile
-  ? startDesktopLog({ userData: app.getPath("userData"), dev: isDev, env: process.env })
+  ? startDesktopLog({
+      userData: app.getPath("userData"),
+      dev: isDev,
+      env: process.env,
+      // A smoke's captured boot reads main's lines off the terminal in any build.
+      terminal: isDev || isSmokeBootCapture(process.env),
+    })
   : null;
 /** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
 const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLog);
@@ -2838,9 +2849,9 @@ const appStartup = app.whenReady().then(async () => {
       // claiming reporting that isn't happening.
       try {
         await regenerateHarnessRuntime();
-        log.info("harness runtime ready");
+        log.info(WRAPPER_READY_MESSAGE);
       } catch (error) {
-        log.error("failed to generate harness wrappers", { error });
+        log.error(WRAPPER_FAILURE_MESSAGE, { error });
       }
     } catch (error) {
       log.error("failed to generate CLI shim", { error });

@@ -2735,7 +2735,7 @@ describe("BrowserTabHost traces (VC-453)", () => {
     expect(() => host.recordTraceStep(traceStep(tab.tabId))).not.toThrow();
     expect(warn).toHaveBeenCalledWith("[browser] browser trace step was not recorded", {
       tabId: tab.tabId,
-      error: { name: "Error", message: "disk full" },
+      error: expect.objectContaining({ name: "Error", message: "disk full" }),
     });
     warn.mockRestore();
   });

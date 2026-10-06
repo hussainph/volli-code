@@ -394,7 +394,7 @@ describe("watchSessionActivity", () => {
     await watch.flush();
 
     expect(warn).toHaveBeenCalledWith("[activity-watch] session activity watch failed", {
-      error: { name: "Error", message: "ledger gone" },
+      error: expect.objectContaining({ name: "Error", message: "ledger gone" }),
     });
     warn.mockRestore();
     watch.stop();

@@ -45,6 +45,8 @@ export interface DesktopLogOptions {
   readonly sinks?: readonly LogSink[];
   /** The terminal, in a dev build. */
   readonly console?: Pick<Console, "debug" | "info" | "warn" | "error">;
+  /** Whether lines also go to the terminal. Defaults to `dev`. */
+  readonly terminal?: boolean;
 }
 
 /** The profile's log directory. */
@@ -70,7 +72,7 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   });
   const level = logLevelFrom(options.env["VOLLI_LOG_LEVEL"], options.dev ? "debug" : "info");
   const sinks: LogSink[] = [file, ...(options.sinks ?? [])];
-  if (options.dev) sinks.push(consoleSink(options.console));
+  if (options.terminal ?? options.dev) sinks.push(consoleSink(options.console));
   const undo = installHostLog({ level, sink: teeSinks(...sinks) });
   return {
     directory,

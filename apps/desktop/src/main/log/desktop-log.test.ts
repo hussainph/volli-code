@@ -81,6 +81,20 @@ describe("the desktop's log", () => {
     expect(quiet.level).toBe("warn");
   });
 
+  it("prints to the terminal in a packaged build when asked (a smoke's captured boot)", async () => {
+    const terminal = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const log = startDesktopLog({
+      userData: profile(),
+      dev: false,
+      env: {},
+      console: terminal,
+      terminal: true,
+    });
+    logs.push(log);
+    hostLogger("desktop").info("harness runtime ready");
+    expect(terminal.info).toHaveBeenCalledWith("[desktop] harness runtime ready");
+  });
+
   it("flushes the log before the app exits, within a deadline", async () => {
     const exits: (number | undefined)[] = [];
     const app = {

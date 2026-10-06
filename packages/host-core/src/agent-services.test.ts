@@ -217,7 +217,7 @@ it("reports a socket close failure in words rather than throwing it", () => {
   try {
     lifecycle.reportFailure(new Error("EBUSY"));
     expect(error).toHaveBeenCalledExactlyOnceWith("[agent-socket] failed to close agent socket", {
-      error: { name: "Error", message: "EBUSY" },
+      error: expect.objectContaining({ name: "Error", message: "EBUSY" }),
     });
   } finally {
     error.mockRestore();

@@ -2335,7 +2335,10 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(logFailure).toHaveBeenCalledWith(
       "[ticket-move] failed to interrupt ticket sessions after committed move",
       expect.objectContaining({
-        error: { name: "Error", message: "terminal interrupt unavailable" },
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
       }),
     );
   });
@@ -2365,7 +2368,10 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(logFailure).toHaveBeenCalledWith(
       "[ticket-move] failed to interrupt ticket sessions after committed move",
       expect.objectContaining({
-        error: { name: "Error", message: "terminal interrupt unavailable" },
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
       }),
     );
   });

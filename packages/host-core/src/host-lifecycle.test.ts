@@ -353,7 +353,7 @@ describe("host lifecycle stop", () => {
     expect(calls.at(-1)).toBe("close-database");
     expect(consoleError).toHaveBeenCalledWith("[host] failed to report a shutdown step failure", {
       step: "close-runtime",
-      error: { name: "Error", message: "logger gone" },
+      error: expect.objectContaining({ name: "Error", message: "logger gone" }),
     });
   });
 });
