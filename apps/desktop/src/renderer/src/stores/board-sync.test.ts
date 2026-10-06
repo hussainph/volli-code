@@ -2445,10 +2445,10 @@ describe("edges of the rules", () => {
     const { host, sync } = harness({ feedRetryDelaysMs: [100] });
     host.methodLatency.snapshot = { request: 50 };
     host.fail("snapshot", unreachable);
-    const opening = sync.open("p1");
+    const opening = expect(sync.open("p1")).rejects.toEqual(unreachable);
     sync.close("p1");
     await vi.advanceTimersByTimeAsync(50);
-    await expect(opening).rejects.toEqual(unreachable);
+    await opening;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(host.callsTo("snapshot")).toHaveLength(1);
   });
