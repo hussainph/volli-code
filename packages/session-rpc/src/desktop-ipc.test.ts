@@ -47,6 +47,19 @@ describe("the desktop's IPC exposure", () => {
       "session.reconcile",
       "project.reorder",
       "worktree.trimSettings",
+      "hosts.snapshot",
+      "hosts.subscribe",
+      "hosts.retry",
+      "hosts.updateHost",
+      "hosts.cancelScheduledUpdate",
+      "hosts.signIn",
+      "hosts.forget",
+      "hostAdd.start",
+      "hostAdd.subscribe",
+      "hostAdd.answer",
+      "hostAdd.sudoPassword",
+      "hostAdd.retry",
+      "hostAdd.cancel",
     ]);
   });
 

@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { homedir, hostname } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 
+import type { RemoteHostsPort } from "@volli/host-core/handlers";
 import { createHostLink } from "@volli/host-protocol/client-link";
 import {
   acceptHostKeys,
@@ -193,4 +194,31 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
     logger,
     enabled: options.enabled,
   });
+}
+
+/**
+ * The engine as the handler map's `remoteHosts` port: its `subscribe` hears
+ * changes only, and the port's opens with the current snapshot.
+ */
+export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
+  return {
+    snapshot: () => hosts.snapshot(),
+    subscribe(listener) {
+      const current = hosts.snapshot();
+      const unsubscribe = hosts.subscribe((snapshot) => void listener(snapshot));
+      void listener(current);
+      return unsubscribe;
+    },
+    retry: (hostId) => hosts.retry(hostId),
+    updateHost: (hostId, when) => hosts.updateHost(hostId, when),
+    cancelScheduledUpdate: (hostId) => hosts.cancelScheduledUpdate(hostId),
+    signIn: (hostId, providerId) => hosts.signIn(hostId, providerId),
+    forget: (hostId) => hosts.forget(hostId),
+    startAdd: (input) => hosts.startAdd(input),
+    subscribeAdd: (flowId, listener) => hosts.subscribeAdd(flowId, (event) => void listener(event)),
+    answerAdd: (flowId, answer) => hosts.answerAdd(flowId, answer),
+    sudoPassword: (flowId, password) => hosts.sudoPassword(flowId, password),
+    retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
+    cancelAdd: (flowId) => hosts.cancelAdd(flowId),
+  };
 }

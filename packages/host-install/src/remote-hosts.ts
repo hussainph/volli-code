@@ -24,6 +24,7 @@
 import { isUuidV4, type HostFeature } from "@volli/host-protocol";
 import type { HostLink, HostLinkOptions, HostLinkState } from "@volli/host-protocol/client-link";
 import {
+  OperationUnavailableError,
   REMOTE_HOST_SIGN_IN_UNAVAILABLE,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostAnswer,
@@ -79,8 +80,12 @@ import type { SshTunnel, TunnelState } from "./tunnel";
 
 export const REMOTE_HOSTS_DISABLED = "Remote hosts are not available in this build.";
 
-/** The feature is off, or v1 does not do this yet: the caller says "unavailable". */
-export class RemoteHostsUnavailableError extends Error {
+/**
+ * The feature is off, or v1 does not do this yet: the caller says
+ * "unavailable". It carries `@volli/shared`'s operation-unavailable brand, so
+ * every door answers it as such (`NOT_IMPLEMENTED` / `operation-unavailable`).
+ */
+export class RemoteHostsUnavailableError extends OperationUnavailableError {
   constructor(message: string = REMOTE_HOSTS_DISABLED) {
     super(message);
     this.name = "RemoteHostsUnavailableError";

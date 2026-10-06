@@ -65,6 +65,96 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The host's worktree trim settings: what a finished ticket's trim keeps.",
   },
+  // Remote hosts this desktop added over SSH (VC-700 PR 2; wire types in
+  // `./remote-hosts`). Host-placed: the registry, its tunnels and its add
+  // flows are desktop main's, across every Workspace, and only the person's
+  // own window drives them. Desktop main serves them through the map's
+  // `RemoteHostsPort` (`@volli/host-core/handlers`); hostd has none, so every
+  // one answers unavailable there.
+  {
+    key: "hosts.snapshot",
+    placement: "host",
+    idempotency: "read",
+    summary: "Every remote host this desktop added, and which serves each remote project.",
+  },
+  {
+    key: "hosts.subscribe",
+    placement: "host",
+    idempotency: "read",
+    summary: "The remote hosts snapshot now, then again on every change.",
+  },
+  {
+    key: "hosts.retry",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Try a remote host's link again now.",
+  },
+  {
+    key: "hosts.updateHost",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Update a remote host's Volli now, or when it is idle.",
+  },
+  {
+    key: "hosts.cancelScheduledUpdate",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Cancel a remote host's update scheduled for when it is idle.",
+  },
+  {
+    key: "hosts.signIn",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Sign a remote host in to a model provider again.",
+  },
+  {
+    key: "hosts.forget",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Forget a remote host: close its link and drop it from this desktop.",
+  },
+  {
+    // `natural`, not `command-id`: the start input carries no caller-minted
+    // key to answer a repeat with, and each start is its own flow (its id is
+    // the answer). A repeat the window did not mean is a second flow the
+    // person sees and cancels.
+    key: "hostAdd.start",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Start adding a host over SSH: answers the new flow's id.",
+  },
+  {
+    key: "hostAdd.subscribe",
+    placement: "host",
+    idempotency: "read",
+    summary: "An add flow's checklist now, then every change and log line.",
+  },
+  {
+    key: "hostAdd.answer",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Answer the question an add flow stopped on.",
+  },
+  {
+    // Write-only: the password is handed to the flow and never echoed,
+    // logged or recorded in a diagnostic.
+    key: "hostAdd.sudoPassword",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Give an add flow the sudo password it asked for; never echoed.",
+  },
+  {
+    key: "hostAdd.retry",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Retry a failed add flow, from the step its failure names or the one given.",
+  },
+  {
+    key: "hostAdd.cancel",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Cancel an add flow.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];
