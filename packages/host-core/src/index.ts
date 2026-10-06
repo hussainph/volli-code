@@ -36,6 +36,7 @@ import {
   type HostSessionServices,
 } from "./session-services";
 import { createHostLifecycle, type HostStopPolicy, type HostStopReport } from "./host-lifecycle";
+import { stampFollowUpCleanClose } from "./db/session-follow-up-repo";
 import { createDetachedWorkTracker, type DetachedWorkTracker } from "./detached-work";
 import { SecretStore } from "./secrets/store";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-key";
@@ -185,6 +186,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
         await detachedWork.drain();
       },
       stopActivity: sessionServices.sessionActivityWatch.stop,
+      stampCleanClose: () => stampFollowUpCleanClose(db, Date.now()),
       closeDatabase: () => checkpointAndCloseDatabase(db),
     },
     options.stopPolicy,
@@ -249,6 +251,7 @@ function lifecycleOwner(
     drainDetached?(): Promise<void>;
     stopActivity?(): void;
     closeDatabase?(): void;
+    stampCleanClose?(): void;
   },
   stopPolicy: HostStopPolicy | undefined,
 ): Pick<HostLifecycleOwner, "start" | "stop"> {
@@ -274,6 +277,7 @@ function lifecycleOwner(
         }
       },
       stopActivity: () => services.stopActivity?.(),
+      stampCleanClose: () => services.stampCleanClose?.(),
       closeDatabase: () => services.closeDatabase?.(),
       reportFailure: (step, error) =>
         ports.log.error(`[volli] host shutdown failed at ${step}:`, error),

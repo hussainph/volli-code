@@ -132,6 +132,37 @@ describe("host lifecycle start", () => {
 });
 
 describe("host lifecycle stop", () => {
+  it.each(["desktop-quit", "drain-and-close"] as const)(
+    "%s stamps only after a clean drain, before any database close",
+    async (policy) => {
+      const { ports, calls } = recordingPorts({ stampCleanClose: () => calls.push("stamp") });
+      await createHostLifecycle(ports, policy).stop("quit");
+      expect(calls.indexOf("stamp")).toBeGreaterThan(calls.indexOf("stop-activity"));
+      if (policy === "drain-and-close") {
+        expect(calls.indexOf("stamp")).toBeGreaterThan(calls.indexOf("drain-detached"));
+        expect(calls.indexOf("stamp")).toBeLessThan(calls.indexOf("close-database"));
+      }
+    },
+  );
+
+  it("does not stamp an unclean drain", async () => {
+    const stampCleanClose = vi.fn();
+    const { ports } = recordingPorts({ closeRuntime: async () => false, stampCleanClose });
+    await createHostLifecycle(ports).stop("quit");
+    expect(stampCleanClose).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed stamp but still closes the database", async () => {
+    const error = new Error("stamp unavailable");
+    const { ports, calls, failures } = recordingPorts({
+      stampCleanClose: () => {
+        throw error;
+      },
+    });
+    expect((await createHostLifecycle(ports).stop("quit")).clean).toBe(false);
+    expect(failures).toEqual([{ step: "stamp-clean-close", error }]);
+    expect(calls.at(-1)).toBe("close-database");
+  });
   it("desktop quit adds no start/detached joins or database close", async () => {
     const boot = deferred();
     const { ports, calls } = recordingPorts({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
-import type { RuntimeObservation } from "@volli/shared";
+import type { RuntimeObservation, SessionLedger } from "@volli/shared";
 import {
   createInMemorySessionFollowUpLedger,
   createInMemorySessionLedger,
@@ -9,6 +9,7 @@ import {
   createSessionRuntime,
   isSessionStreamQueue,
   sessionFollowUpDeliveryCommandId,
+  sessionFollowUpDeliveryEvidence,
   SessionRuntimeCommandConflictError,
   NativeAttachmentError,
   type BindingHandle,
@@ -124,6 +125,7 @@ class Adapter implements NativeHarnessAdapter {
 function fixture(
   options: {
     followUps?: SessionFollowUpLedger;
+    eventLedger?: SessionLedger;
     adapter?: Adapter;
     locate?: () => void | Promise<void>;
     diagnostics?: () => void;
@@ -132,13 +134,14 @@ function fixture(
 ) {
   let sequence = 0;
   const clock = { now: () => ++sequence };
+  const eventLedger = options.eventLedger ?? createInMemorySessionLedger();
   const engine = createSessionEngine({
-    ledger: createInMemorySessionLedger(),
+    ledger: eventLedger,
     clock,
     ids: { next: (kind) => `${kind}-${++sequence}` },
   });
   const artifacts = createInMemoryTranscriptArtifactStore();
-  const followUps = options.followUps ?? createInMemorySessionFollowUpLedger();
+  const followUps = options.followUps ?? createInMemorySessionFollowUpLedger(eventLedger);
   const adapter = options.adapter ?? new Adapter();
   const errors: unknown[] = [];
   const runtime = (withStorage = true) =>
@@ -539,6 +542,15 @@ describe("host follow-up commands", () => {
       sessionFollowUpDeliveryCommandId("a", "b:c"),
     );
   });
+  it("does not infer turn proof without the delivery's recorded intent", async () => {
+    const f = fixture();
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const projection = (await f.engine.getSession({ sessionId }))!;
+    expect(sessionFollowUpDeliveryEvidence(sessionId, projection.commands[0], [], [])).toBeNull();
+    await runtime.close();
+  });
+
   it("keeps in-memory storage atomic and refuses transactions that escape across an await", async () => {
     const ledger = createInMemorySessionFollowUpLedger();
     expect(await ledger.transaction("session", () => "primitive")).toBe("primitive");
@@ -1648,6 +1660,108 @@ describe("host follow-ups never strand a row", () => {
     },
   );
 
+  it.each(["accepted", "completed", "derived-turn", "explicit-turn"] as const)(
+    "rejects cancellation when %s proof lands after the pre-transaction reads",
+    async (proof) => {
+      const f = fixture();
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      const first = deliveryId(sessionId, "first");
+      f.adapter.unknown = true;
+      await queue(runtime, sessionId, "first");
+      await runtime.recoverFollowUps();
+      expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing"]);
+      const projection = (await f.engine.getSession({ sessionId }))!;
+      expect(
+        projection.receipts.some(
+          ({ commandId, status }) =>
+            commandId === first && (status === "accepted" || status === "completed"),
+        ),
+      ).toBe(false);
+
+      // The old orphan check ran before this final asynchronous head read.
+      // Commit proof here, immediately before entering the cancel transaction.
+      const latest = f.engine.latestEventSequence;
+      let armed = true;
+      f.engine.latestEventSequence = async (query) => {
+        const sequence = await latest(query);
+        if (armed) {
+          armed = false;
+          const base = {
+            id: "late-proof",
+            sessionId,
+            occurredAt: 400,
+            attachmentId: projection.liveExecutor!.id,
+            provenance: {
+              source: { kind: "adapter" as const, id: "fake", detail: null },
+              venue: null,
+            },
+          };
+          await f.engine.observe(
+            proof === "accepted" || proof === "completed"
+              ? {
+                  ...base,
+                  kind: "command.receipt",
+                  receipt: {
+                    id: "late-receipt",
+                    commandId: first,
+                    status: proof,
+                    acceptedAt: 400,
+                    ...(proof === "completed" ? { completedAt: 400 } : {}),
+                    result: { kind: "message.submitted", sessionId },
+                  },
+                }
+              : {
+                  ...base,
+                  kind: "turn.started",
+                  attachmentId: projection.liveExecutor!.id,
+                  turnId: proof === "derived-turn" ? `turn:${first}` : "explicit-turn",
+                  ...(proof === "explicit-turn" ? { commandId: first } : {}),
+                },
+          );
+        }
+        return sequence;
+      };
+      const request = {
+        commandId: "cancel",
+        sessionId,
+        command: { kind: "message.cancel" as const, messageId: "first" },
+      };
+      const cancelled = await runtime.command(request);
+      expect(armed).toBe(false);
+      expect(cancelled.receipt).toMatchObject({
+        status: "rejected",
+        code: "message_releasing",
+        detail: "This message was already delivered",
+      });
+      expect(await runtime.command(request)).toEqual(cancelled);
+      await runtime.recoverFollowUps();
+      expect(await queueStates(runtime, sessionId)).toEqual([]);
+      expect(submits(f.adapter)).toEqual([first]);
+      await runtime.close();
+    },
+  );
+
+  it("fails closed when the queue storage cannot read delivery proof transactionally", async () => {
+    const f = fixture({ followUps: createInMemorySessionFollowUpLedger() });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    f.adapter.unknown = true;
+    await queue(runtime, sessionId, "first");
+    await runtime.recoverFollowUps();
+    expect(
+      (
+        await runtime.command({
+          commandId: "cancel",
+          sessionId,
+          command: { kind: "message.cancel", messageId: "first" },
+        })
+      ).receipt,
+    ).toMatchObject({ status: "rejected", code: "message_releasing" });
+    expect(await queueStates(runtime, sessionId)).toEqual(["first:releasing"]);
+    await runtime.close();
+  });
+
   it("settles an unacknowledged dispatch whose turn opened, without Attention", async () => {
     const f = fixture();
     const runtime = f.runtime();
@@ -1661,19 +1775,20 @@ describe("host follow-ups never strand a row", () => {
   });
 
   it("refuses to cancel a release proven by its receipt, and settles it instead", async () => {
-    const storage = createInMemorySessionFollowUpLedger();
+    const eventLedger = createInMemorySessionLedger();
+    const storage = createInMemorySessionFollowUpLedger(eventLedger);
     let crash = true;
     const followUps: SessionFollowUpLedger = {
       ...storage,
       transaction: (id, work) =>
-        storage.transaction(id, (state) => {
-          const result = work(state);
+        storage.transaction(id, (state, proof) => {
+          const result = work(state, proof);
           if (crash && Object.hasOwn(state.releases, "first"))
             throw new Error("crash before settling queue");
           return result;
         }),
     };
-    const f = fixture({ followUps });
+    const f = fixture({ followUps, eventLedger });
     let runtime = f.runtime();
     const sessionId = await create(runtime);
     await queue(runtime, sessionId, "first");

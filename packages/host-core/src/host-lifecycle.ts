@@ -23,7 +23,8 @@
  *    outlives the database.
  * 5. **The activity watch** is stopped: its flush timer is the last thing that
  *    reads the database on its own, so it keeps flushing through the drains.
- * 6. **Full drain only:** the WAL checkpoint and database close.
+ * 6. **Clean drain:** stamp pending follow-up event watermarks before process exit.
+ * 7. **Full drain only:** the WAL checkpoint and database close.
  *
  * NO DEADLINE HERE. The deadline stays at the host edge, which wraps `stop()`
  * in `settleShutdownBeforeDeadline` (desktop's quit gate). A bound inside the
@@ -41,6 +42,7 @@ export type HostLifecycleStep =
   | "close-socket"
   | "drain-detached"
   | "stop-activity"
+  | "stamp-clean-close"
   | "close-database";
 
 /**
@@ -64,6 +66,8 @@ export interface HostLifecyclePorts {
   drainDetached(): Promise<StepResult>;
   /** The activity watch's flush timer. Synchronous. */
   stopActivity(): void;
+  /** Only after a clean drain, for both desktop process exit and full DB close. */
+  stampCleanClose?(): void;
   /** WAL checkpoint and close; see `checkpointAndCloseDatabase`. */
   closeDatabase(): StepResult;
   /** Called once per failed step, as it fails. */
@@ -166,6 +170,8 @@ export function createHostLifecycle(
       await pending("drain-detached", () => ports.drainDetached());
     }
     sync("stop-activity", () => ports.stopActivity());
+    const stampCleanClose = ports.stampCleanClose;
+    if (clean && stampCleanClose !== undefined) sync("stamp-clean-close", stampCleanClose);
     if (stopPolicy === "drain-and-close") sync("close-database", () => ports.closeDatabase());
     state = "stopped";
     return { reason, clean };
