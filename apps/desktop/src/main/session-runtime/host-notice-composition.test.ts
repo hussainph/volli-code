@@ -115,6 +115,9 @@ function composeDesktopEdge(
           close: vi.fn(async () => {
             calls.push("runtime.close");
           }),
+          recoverFollowUps: vi.fn(async () => {
+            calls.push("follow-ups.recover");
+          }),
           reconcile: vi.fn(async () => {}),
           projection: vi.fn(async () => ({ projection: {} })),
           command: vi.fn(async () => ({})),
@@ -209,7 +212,13 @@ describe("desktop runtime edge composition", () => {
     expect(edge.calls).not.toContain("services");
     edge.recovery.resolve();
     await started;
-    expect(edge.calls).toEqual(["quit.hold", "delegations.recover", "services", "rpc.bind"]);
+    expect(edge.calls).toEqual([
+      "quit.hold",
+      "delegations.recover",
+      "follow-ups.recover",
+      "services",
+      "rpc.bind",
+    ]);
     expect(edge.bindRpc).toHaveBeenCalledOnce();
     expect(live.database.db.open).toBe(true);
 
