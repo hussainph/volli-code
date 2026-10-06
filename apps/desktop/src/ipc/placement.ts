@@ -1121,19 +1121,16 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
       "The Session tRPC edge; moves to the WebSocket (VC-564) and the generic IPC bridge (VC-608). Its session.*/sessions.* catalog entries are workspace-scoped; settings.* and modelAccess.* are host-scoped entries VC-572 refines (D3).",
   },
 
-  // ---- VolliBoardRpcIpcContract ------------------------------------------
-  "volli:board-rpc": {
-    placement: "workspace",
-    owner: "VC-565",
-    reason:
-      "The board router (board.read, board.write) for this desktop's own window with the cloud flag on; the WebSocket serves the same router to every other Client.",
-  },
-
   // ---- VolliSendContract -------------------------------------------------
   "volli:unsaved-documents": {
     placement: "client-local",
     owner: "stays",
     reason: "Feeds this desktop's quit gate.",
+  },
+  "volli:client-state-flushed": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "This window's ack that its app_state writes reached main before it is destroyed.",
   },
   "volli:terminal-ack": {
     placement: "workspace",
@@ -1155,11 +1152,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "workspace",
     owner: "VC-564",
     reason: "Cancels a Session tRPC subscription.",
-  },
-  "volli:board-rpc-cancel": {
-    placement: "workspace",
-    owner: "VC-565",
-    reason: "Cancels a board change-feed subscription.",
   },
 
   // ---- VolliPiSessionOrphanIpcContract -----------------------------------
@@ -1256,6 +1248,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "client-local",
     owner: "stays",
     reason: "Window state.",
+  },
+  "volli:client-state-flush": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Asks this window to flush its debounced app_state writes before main destroys it.",
   },
   "volli:browser-tab-state": {
     placement: "workspace",
@@ -1387,11 +1384,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "workspace",
     owner: "VC-564",
     reason: "Session tRPC subscription frames.",
-  },
-  "volli:board-rpc-event": {
-    placement: "workspace",
-    owner: "VC-565",
-    reason: "The Workspace change feed's frames (board.changes) for this window.",
   },
   "volli:update-state": {
     placement: "client-local",

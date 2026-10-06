@@ -12,12 +12,13 @@
  *   project settings, the sidebar's signals) goes through {@link boardApi}'s
  *   protocol facade, each write under a fresh `commandId`.
  *
- * The client is the same `TRPCClient<BoardRouter>` over either link: the
- * desktop's board bridge for this Mac's in-process host
- * ({@link createBoardIpcClient}), or `hostLinkTrpcLink(link)` for a remote host
- * ({@link createBoardClient}). Nothing above the client knows which.
+ * The client is the board router's procedures over either link: the desktop's
+ * generic IPC bridge for this Mac's in-process host (`sessionRpcClient()`,
+ * which serves the board router beside the Session router, VC-608), or
+ * `hostLinkTrpcLink(link)` for a remote host ({@link createBoardClient}).
+ * Nothing above the client knows which.
  */
-import { createTRPCClient, type TRPCLink } from "@trpc/client";
+import { createTRPCClient, type TRPCClient, type TRPCLink } from "@trpc/client";
 import type { BoardRouter } from "@volli/session-rpc";
 import type { ModelSelection } from "@volli/shared";
 
@@ -32,13 +33,21 @@ import type {
   TicketLatestSignalsResult,
   TicketStatusEntriesResult,
 } from "../../../ipc/contract";
-import { createBoardIpcClient, type BoardClient } from "./board-rpc-link";
+import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   BoardSync,
   isAmbiguousBoardFailure,
   type BoardSyncTransport,
   type BoardSyncView,
 } from "../stores/board-sync";
+
+/** A board client: the board router's procedures, whichever link carries them. */
+export type BoardClient = Pick<TRPCClient<BoardRouter>, "board">;
+
+/** The desktop window's board client: the generic IPC bridge's client, which serves the board router. */
+export function desktopBoardClient(): BoardClient {
+  return sessionRpcClient() as unknown as BoardClient;
+}
 
 /** A board client over any terminating link: a host link's, in particular. */
 export function createBoardClient(link: TRPCLink<BoardRouter>): BoardClient {
@@ -102,7 +111,7 @@ export function startBoardProtocol(options: {
   sync?: Partial<ConstructorParameters<typeof BoardSync>[0]>;
 }): ActiveProtocol {
   active?.sync.closeAll();
-  const client = options.client ?? createBoardIpcClient(window.api.boardRpc);
+  const client = options.client ?? desktopBoardClient();
   const sync = new BoardSync({
     ...options.sync,
     transport: options.sync?.transport ?? boardSyncTransport(client),

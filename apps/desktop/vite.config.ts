@@ -558,11 +558,6 @@ export default defineConfig(({ mode }) => ({
         // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
         // is gated by `src/stores/**` above.)
         "src/lib/board-protocol.ts",
-        // The board's terminating link over main's bridge (VC-565, `cloud`
-        // on): which answer is a call's and which a subscription's ack, frames
-        // held until their ack lands, a bridge failure read as an unreachable
-        // host. Each is a branch whose failure no screenshot shows.
-        "src/lib/board-rpc-link.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
@@ -663,6 +658,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
         "**/src/main/host-runtime.ts",
+        // Menu-bar mode's whole decision and lifecycle (VC-577).
+        "**/src/main/menu-bar-host.ts",
+        "**/src/main/menu-bar-electron.ts",
+        // The flush-and-ack barrier before menu-bar mode destroys a window.
+        "**/src/main/client-state-flush.ts",
         // When the web keys' sealed mirror reconciles, and that an accepted quit
         // stops it before it can start keychain work (VC-643). Every branch is
         // a rule about teardown nobody watches.
@@ -680,7 +680,6 @@ export default defineConfig(({ mode }) => ({
         // The db modules, including export.ts, are protected by
         // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
-        "**/src/main/board-rpc-ipc.ts",
         "**/src/main/experiments.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included

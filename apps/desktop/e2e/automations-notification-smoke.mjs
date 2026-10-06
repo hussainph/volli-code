@@ -196,7 +196,8 @@ try {
       const [run] = listed.runs;
       if (run === undefined) return { runs: 0 };
       const answered = await window.api.sessionRpc.request({
-        procedure: "session.projection",
+        path: "session.projection",
+        type: "query",
         input: { sessionId: run.sessionId },
       });
       // The routed answer is `{ projection, throughSequence }`, scrubbed for
@@ -219,7 +220,8 @@ try {
     page.evaluate(
       ({ id, operationId }) =>
         window.api.sessionRpc.request({
-          procedure: "sessions.attach",
+          path: "sessions.attach",
+          type: "mutation",
           input: { operationId, sessionId: id },
         }),
       { id: sessionId, operationId: crypto.randomUUID() },

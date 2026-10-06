@@ -10,8 +10,9 @@
  *   Workspace's change feed, `board.changes`, whose changes inline the
  *   committed row and name the command behind them (F1, T5).
  *
- * Served on hostd's WebSocket and on the desktop's board bridge (flag on),
- * both through the composed host router (`host-router.ts`). Handlers own every
+ * Served on hostd's WebSocket through the composed host router
+ * (`host-router.ts`), and on the desktop's generic IPC bridge
+ * (`DESKTOP_IPC_EXPOSURE`). Handlers own every
  * effect (T13); a procedure only maps its envelope.
  */
 import { tracked } from "@trpc/server";

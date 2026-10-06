@@ -11,7 +11,7 @@ import { observable } from "@trpc/server/observable";
 import type { BoardRouter } from "@volli/session-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { BoardRpcIpcRequest, BoardRpcIpcResponse } from "../../../ipc/contract";
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import {
   boardApi,
   boardProtocol,
@@ -22,6 +22,15 @@ import {
   stopBoardProtocol,
 } from "./board-protocol";
 import type { BoardSyncView } from "@renderer/stores/board-sync";
+
+vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-rpc-ipc-link")>();
+  // A fresh client over whatever bridge the case stubbed, not the app's singleton.
+  return {
+    ...actual,
+    sessionRpcClient: vi.fn(() => actual.createSessionRpcClient(window.api.sessionRpc)),
+  };
+});
 
 /** The router's error, as either board link delivers it: the envelope on `data.hostError`. */
 function hostError(code: string, message: string, reason?: string): TRPCClientError<BoardRouter> {
@@ -335,12 +344,13 @@ describe("startBoardProtocol / stopBoardProtocol", () => {
     expect(closeAll).toHaveBeenCalledOnce();
   });
 
-  it("builds its client over the desktop's board bridge when given none", async () => {
-    const request = vi.fn<(request: BoardRpcIpcRequest) => Promise<BoardRpcIpcResponse>>(
-      async () => ({ ok: true, data: snapshot }),
-    );
+  it("builds its client over the desktop's generic IPC bridge when given none", async () => {
+    const request = vi.fn<(request: IpcRequest) => Promise<IpcResponse>>(async () => ({
+      ok: true,
+      data: snapshot,
+    }));
     vi.stubGlobal("window", {
-      api: { boardRpc: { request, onEvent: vi.fn(() => () => {}), cancel: vi.fn() } },
+      api: { sessionRpc: { request, onEvent: vi.fn(() => () => {}), cancel: vi.fn() } },
     });
 
     const { sync } = startBoardProtocol({ view: silentView() });
@@ -349,6 +359,7 @@ describe("startBoardProtocol / stopBoardProtocol", () => {
 
     expect(request.mock.calls[0]?.[0]).toEqual({
       path: "board.snapshot",
+      type: "query",
       input: { projectId: "p1" },
     });
   });

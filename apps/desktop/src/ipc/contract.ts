@@ -1,3 +1,4 @@
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
   FileReadResult,
@@ -181,8 +182,6 @@ import type {
   SessionListingRow,
   SessionPeekContent,
   SessionReadState,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   SessionUsageGrouping,
   SessionUsageReport,
   SessionUsageScope,
@@ -2503,6 +2502,11 @@ export type UpdateLiveWorkResult = Result<{
   busyCommands: string[];
   /** Open structured agent Sessions — turns open right now, a plane that outlives any one PTY. */
   openAgentSessions: number;
+  /**
+   * Running background shells (VC-577) — a dev server a turn started. Counted
+   * only with the `cloud` flag on, from the host's live work; 0 otherwise.
+   */
+  backgroundShells: number;
   /** Display names of editor tabs holding unsaved drafts — the one thing a restart destroys unrecoverably. */
   unsavedDrafts: string[];
 }>;
@@ -2539,53 +2543,17 @@ export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
  * contract — is where a Session procedure's input and output are declared.
- * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
- * tRPC link is the only thing that should ever speak them directly.
+ * The wire shapes are the router-generic bridge's (`@volli/host-protocol/ipc`,
+ * VC-608); the renderer's terminating tRPC link is the only thing that should
+ * ever speak them directly.
  */
 export interface VolliSessionRpcIpcContract {
-  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
-  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+  /** Runs one served procedure; a subscription acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: IpcRequest]; result: IpcResponse };
 }
 
 /**
- * The board's host-protocol bridge (VC-565): the board router (`board.*`,
- * `ticket.move`) for the desktop's own window, when the `cloud` flag is on.
- * One invoke carrying any board procedure by path, because the router — not
- * this contract — declares each one's input and output; the change feed's
- * frames arrive on `volli:board-rpc-event`. With the flag off nothing calls
- * it, and the board keeps its per-channel IPC above.
- */
-export interface VolliBoardRpcIpcContract {
-  "volli:board-rpc": { args: [request: BoardRpcIpcRequest]; result: BoardRpcIpcResponse };
-}
-
-/** One board procedure call: its router path and its input, judged by the router. */
-export interface BoardRpcIpcRequest {
-  readonly path: string;
-  readonly input: unknown;
-}
-
-/** The router's error envelope (`hostErrorOf`), the same one the WebSocket carries as `data.hostError`. */
-export interface BoardRpcIpcError {
-  readonly code: string;
-  readonly message: string;
-  readonly reason?: string;
-}
-
-/** A query's or mutation's answer, a subscription's acknowledgement, or the router's refusal. */
-export type BoardRpcIpcResponse =
-  | { ok: true; data: unknown }
-  | { ok: true; subscriptionId: string }
-  | { ok: false; error: BoardRpcIpcError };
-
-/** One frame of a live board subscription, told apart by the id main acknowledged with. */
-export type BoardRpcIpcEvent =
-  | { kind: "data"; subscriptionId: string; eventId: string; data: unknown }
-  | { kind: "error"; subscriptionId: string; error: BoardRpcIpcError }
-  | { kind: "done"; subscriptionId: string };
-
-/**
- * The 4 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -2615,8 +2583,11 @@ export interface VolliSendContract {
   // stopping the frames, which the renderer is already listening for — an ack
   // would only be a second way to learn the same thing, later.
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
-  // Send-based, as the Session one is: the frames stopping is the answer.
-  "volli:board-rpc-cancel": { args: [subscriptionId: string] };
+  // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
+  // `volli:client-state-flush` push (VC-577) — every pending client-local
+  // write it held has been acknowledged by main. Main asked, so main is the
+  // one waiting; an invoke from the renderer would have no question to answer.
+  "volli:client-state-flushed": { args: [requestId: string] };
 }
 
 /**
@@ -2709,7 +2680,6 @@ export interface VolliInvokeContract
     VolliShellIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
-    VolliBoardRpcIpcContract,
     VolliSupportIpcContract,
     VolliSystemIpcContract,
     VolliNotificationIpcContract,
@@ -2730,6 +2700,12 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  // Main is about to destroy this window without an unload (VC-577: menu-bar
+  // mode, after the quit's confirms already answered), so `beforeunload` will
+  // not flush the debounced client-local writes. The renderer sends them now
+  // and answers `volli:client-state-flushed` with the request id once main
+  // has acknowledged every one; main waits for that, bounded, then destroys.
+  | "volli:client-state-flush"
   | "volli:browser-tab-state"
   // A background shell started, exited, or was forgotten with its Session's
   // attachment (VC-270): one push, one store, the island's shell feed.
@@ -2823,12 +2799,9 @@ export type VolliIpcEvent =
   // them, instead of within ten seconds of it.
   | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
-  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // `IpcEvent` (`@volli/host-protocol/ipc`). Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
-  // Ordered frames for one live board subscription (VC-565, `board.changes`)
-  // — see {@link BoardRpcIpcEvent}. Sent only to the window that subscribed.
-  | "volli:board-rpc-event"
   // The updater's user-facing state changed (VC-59) — one full {@link
   // UpdateUiState} snapshot per transition, fanned out from broadcast.ts so
   // the sidebar icon in every window renders the same truth. The renderer

@@ -1,9 +1,5 @@
-import type {
-  BootstrapPayload,
-  BoardRpcIpcEvent,
-  BoardRpcIpcRequest,
-  BoardRpcIpcResponse,
-} from "../../../ipc/contract";
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
+import type { BootstrapPayload } from "../../../ipc/contract";
 import {
   CHAT_DRAFTS_APP_STATE_KEY,
   type Project,
@@ -37,7 +33,12 @@ import { takeBootNotice } from "./boot-notice";
 // The real client unless a test says otherwise: only the `cloud` flag read is stubbed.
 vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-rpc-ipc-link")>();
-  return { ...actual, sessionRpcClient: vi.fn(actual.sessionRpcClient) };
+  // A fresh client over whatever bridge the case stubbed: the app's one
+  // client is a singleton, which would carry one case's bridge into the next.
+  return {
+    ...actual,
+    sessionRpcClient: vi.fn(() => actual.createSessionRpcClient(window.api.sessionRpc)),
+  };
 });
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
@@ -1029,7 +1030,8 @@ function boardTicket(id: string, projectId: string): Ticket {
 }
 
 /**
- * The desktop's board bridge (`window.api.boardRpc`), answering each project's
+ * The desktop's generic IPC bridge (`window.api.sessionRpc`, which serves the
+ * board router), answering each project's
  * snapshot from `boards`, acknowledging each feed, and letting the test push
  * feed frames. A path in `refuse` answers the router's refusal.
  */
@@ -1037,9 +1039,9 @@ function stubBoardBridge(
   boards: Record<string, Ticket[]>,
   refuse: Record<string, { code: string; message: string }> = {},
 ) {
-  let listener: ((event: BoardRpcIpcEvent) => void) | undefined;
+  let listener: ((event: IpcEvent) => void) | undefined;
   let feeds = 0;
-  const request = vi.fn(async (call: BoardRpcIpcRequest): Promise<BoardRpcIpcResponse> => {
+  const request = vi.fn(async (call: IpcRequest): Promise<IpcResponse> => {
     const refusal = refuse[call.path];
     if (refusal !== undefined) return { ok: false, error: refusal };
     const { projectId } = call.input as { projectId: string };
@@ -1056,9 +1058,9 @@ function stubBoardBridge(
   });
   vi.stubGlobal("window", {
     api: {
-      boardRpc: {
+      sessionRpc: {
         request,
-        onEvent: (next: (event: BoardRpcIpcEvent) => void) => {
+        onEvent: (next: (event: IpcEvent) => void) => {
           listener = next;
           return () => {};
         },
@@ -1066,7 +1068,7 @@ function stubBoardBridge(
       },
     },
   });
-  const push = (event: BoardRpcIpcEvent) => listener!(event);
+  const push = (event: IpcEvent) => listener!(event);
   return { request, push };
 }
 
