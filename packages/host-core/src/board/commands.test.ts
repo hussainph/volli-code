@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   isCommandIntentConflict,
+  isFeedResnapshotRequired,
   isOperationUnavailable,
   HOST_HANDLER_KEYS,
   type BoardChange,
@@ -352,6 +353,18 @@ describe("reads", () => {
     );
   });
 
+  it("tells a board.changes subscriber to resnapshot when its feed ends under it", async () => {
+    const fail = vi.fn();
+    const stop = await handlers()["board.changes"]({ projectId: PROJECT, after: null }, USER, {
+      emit: vi.fn(),
+      fail,
+    });
+    feed.dispose(PROJECT);
+    expect(fail).toHaveBeenCalledOnce();
+    expect(isFeedResnapshotRequired(fail.mock.calls[0]![0])).toBe(true);
+    stop();
+  });
+
   it("follows the Workspace's feed through board.changes, live and resumed", async () => {
     const map = handlers();
     const emit = vi.fn();
@@ -640,6 +653,37 @@ describe("ticket writes", () => {
     await map["board.deleteTicket"]({ ticketId: "t-1" }, WINDOW);
     await expect(async () => map["board.setPriority"](input, WINDOW)).rejects.toThrow(
       "Unknown ticket",
+    );
+  });
+
+  it("refuses the retry of any write whose resource is gone since: a comment, a project, a label", async () => {
+    seed("t-1");
+    const map = handlers();
+    const comment = { ticketId: "t-1", body: "Hi", commandId: "c-comment" };
+    const created = await map["board.createComment"](comment, WINDOW);
+    await map["board.removeComment"]({ commentId: created.comment.id }, WINDOW);
+    await expect(async () => map["board.createComment"](comment, WINDOW)).rejects.toThrow(
+      "Unknown comment",
+    );
+
+    const label = listTicketLabels(
+      ctx.db,
+      (await map["board.setLabels"]({ ticketId: "t-1", labels: ["ui"] }, WINDOW)).ticket.id,
+    )[0]!;
+    const color = { labelId: label.id, color: "#f00", commandId: "c-color" };
+    await map["board.setLabelColor"](color, WINDOW);
+    ctx.db.prepare("DELETE FROM labels WHERE id = ?").run(label.id);
+    await expect(async () => map["board.setLabelColor"](color, WINDOW)).rejects.toThrow(
+      "Unknown label",
+    );
+
+    const update = { projectId: PROJECT, baseBranch: "trunk", commandId: "c-project" };
+    await map["board.updateProject"](update, WINDOW);
+    ctx.db.pragma("foreign_keys = OFF");
+    ctx.db.prepare("DELETE FROM projects WHERE id = ?").run(PROJECT);
+    ctx.db.pragma("foreign_keys = ON");
+    await expect(async () => map["board.updateProject"](update, WINDOW)).rejects.toThrow(
+      "Unknown project",
     );
   });
 

@@ -105,7 +105,8 @@ export class BoardChangeFeed {
 
   /** Drops a feed and tells each of its subscribers to resnapshot. */
   #end(workspaceId: string, feed: WorkspaceFeed): void {
-    if (this.#feeds.get(workspaceId) === feed) this.#feeds.delete(workspaceId);
+    // Every caller ends the feed the map holds for this Workspace.
+    this.#feeds.delete(workspaceId);
     const ended = [...feed.listeners.values()];
     feed.listeners.clear();
     for (const onEnded of ended) onEnded?.(new FeedResnapshotRequiredError());
