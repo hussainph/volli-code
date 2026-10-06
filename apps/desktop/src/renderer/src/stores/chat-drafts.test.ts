@@ -634,6 +634,26 @@ describe("beginQueuedSteer", () => {
     ]);
   });
 
+  it("preserves existing files for an empty displayed strip and adopts nonempty displayed files", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const original = [blobView()];
+    const replacement = [blobView({ linkId: "replacement" })];
+    store.getState().holdMessage("s1", { id: "q1", text: "first", attachments: original });
+    store.getState().holdMessage("s1", { id: "q2", text: "second", attachments: original });
+    store.getState().beginQueuedSteer(
+      "s1",
+      [
+        { id: "q1", text: "empty strip", attachments: [] },
+        { id: "q2", text: "new files", attachments: replacement },
+      ],
+      "q1",
+    );
+    expect(store.getState().drafts.s1?.held).toEqual([
+      { id: "q1", text: "empty strip", attachments: original, state: "sending" },
+      { id: "q2", text: "new files", attachments: replacement, state: "sending" },
+    ]);
+  });
+
   // The displayed row is what this action persists back, so its files must
   // survive the round trip exactly as its words do (VC-137) — otherwise the
   // steer that follows would deliver a message that lost its screenshot.
