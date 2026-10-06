@@ -63,6 +63,7 @@ Everything else is an implementation detail.
 | `@volli/host-core/sessions`        | `session-control/`, `sessions/`, `session-concurrency.ts`, `session-tokens.ts`                                                                                                                                                                                                                                                                                                                                              | Listing rows, peek content, the concurrency env reader, Session tokens. Never a Session writer ([Session composition](#session-composition))                     |
 | `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                                                                 | The staged runtime: assembly, facade, agents, Automations adapter, lifecycle; model access preferences; background shells                                        |
 | `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                                               | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                 |
+| `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                                                      | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
 | `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
 | `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
 | `@volli/host-core/board`           | `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                           | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes                                                                            |
@@ -252,6 +253,30 @@ IPC doors and their integration tests (`main/volli-fs-ipc.ts`,
 protocol registration, native external-app launch, pickers and dialogs, and
 Web Access's legacy `safeStorage` migration. A desktop test that still composes
 desktop modules stays in desktop and imports host-core's entries.
+
+## The log
+
+One structured, correlated log (VC-699; HP § Tracing and logs). A module
+takes a logger for its component at module scope and writes identifiers and
+counts:
+
+```ts
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("publish");
+log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or a secret
+```
+
+- **The host installs the destination, once** (`installHostLog({ level, sink })`):
+  hostd's JSON lines on stdout, the desktop's rotating files. Before any
+  install (tests, benches, scripts) lines go to the console at `warn`, or
+  `VOLLI_LOG_LEVEL`.
+- **Every line is redacted** (`redactLogFields`, `@volli/shared`): credential-named
+  fields lose any value but a count, and strings lose credential-shaped text.
+- **Correlation is ambient.** A door opens `withTrace(peerTrace, { door, … }, handle)`
+  per request; code deeper in adds what it knows with `withLogContext({ sessionId })`.
+  Lines carry both without a parameter threaded through.
+- **Cheap.** The level check runs before anything is built; sinks buffer.
 
 ## Ports
 

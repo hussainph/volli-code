@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
+import { hostLogger, withTrace } from "@volli/host-core/log";
 import { errorMessage } from "@volli/shared";
 import type { IpcArgs, IpcResult, VolliInvokeContract } from "../ipc/contract";
 
@@ -38,6 +39,18 @@ export type IpcHandlerTable<Cs extends keyof VolliInvokeContract> = {
  * returned synchronously: the envelope must never force async on the many
  * sync SQLite handlers (their tests dispatch synchronously too).
  */
+const ipcLog = hostLogger("ipc");
+
+/**
+ * The envelope's failure, logged (VC-699) inside the call's trace: the
+ * channel and the message. The renderer surfaces it; the log keeps it.
+ */
+function failed(channel: string, error: unknown): { ok: false; error: string } {
+  const message = errorMessage(error);
+  ipcLog.warn("ipc call failed", { operation: channel, error: message });
+  return { ok: false, error: message };
+}
+
 export function registerGuardedIpcHandlers<Cs extends keyof VolliInvokeContract>(
   descriptors: IpcDescriptorTable<Cs>,
   handlers: IpcHandlerTable<Cs>,
@@ -45,17 +58,21 @@ export function registerGuardedIpcHandlers<Cs extends keyof VolliInvokeContract>
   const register = <C extends Cs>(channel: C): void => {
     const { guard, invalidError } = descriptors[channel];
     const handler = handlers[channel];
-    ipcMain.handle(channel, (event, ...args: unknown[]) => {
-      if (!guard(args)) return { ok: false, error: invalidError };
-      try {
-        const outcome = handler(...args, event.sender);
-        return outcome instanceof Promise
-          ? outcome.catch((error: unknown) => ({ ok: false, error: errorMessage(error) }))
-          : outcome;
-      } catch (error) {
-        return { ok: false, error: errorMessage(error) };
-      }
-    });
+    // Each call is its own trace (VC-699): every line main and the in-process
+    // host write while serving it carry it. Synchronous stays synchronous.
+    ipcMain.handle(channel, (event, ...args: unknown[]) =>
+      withTrace(null, { door: "ipc", operation: channel }, () => {
+        if (!guard(args)) return { ok: false, error: invalidError };
+        try {
+          const outcome = handler(...args, event.sender);
+          return outcome instanceof Promise
+            ? outcome.catch((error: unknown) => failed(channel, error))
+            : outcome;
+        } catch (error) {
+          return failed(channel, error);
+        }
+      }),
+    );
   };
   for (const channel of Object.keys(descriptors) as Cs[]) register(channel);
 }

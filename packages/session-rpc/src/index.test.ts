@@ -20,6 +20,7 @@ import {
   AsyncQueue,
   createSessionRouter,
   LOCAL_DESKTOP_CALLER,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
   type AppRouter,
@@ -385,6 +386,61 @@ describe("the Session router's host protocol seams", () => {
 
   it("answers commands in the receipt vocabulary the host protocol names", () => {
     expectTypeOf<CommandReceipt["status"]>().toEqualTypeOf<HostReceiptStatus>();
+  });
+});
+
+describe("logRpcDiagnostics (VC-699)", () => {
+  it("forwards each call from now on: start and answer at debug, a failure at warn", () => {
+    const diagnostics = new RpcDiagnosticLog();
+    diagnostics.record({
+      procedure: "old",
+      phase: "start",
+      transport: "websocket",
+      code: null,
+      message: null,
+    });
+    const lines: [string, string, Readonly<Record<string, unknown>>][] = [];
+    const stop = logRpcDiagnostics(diagnostics, {
+      debug: (msg, fields) => lines.push(["debug", msg, fields]),
+      warn: (msg, fields) => lines.push(["warn", msg, fields]),
+    });
+    const at = { procedure: "session.command", transport: "websocket" as const };
+    diagnostics.record({ ...at, phase: "start", code: null, message: null });
+    diagnostics.record({ ...at, phase: "success", code: null, message: null });
+    diagnostics.record({ ...at, phase: "error", code: "FORBIDDEN", message: "token=abc refused" });
+    stop();
+    diagnostics.record({ ...at, phase: "start", code: null, message: null });
+    expect(lines).toStrictEqual([
+      ["debug", "rpc call", { operation: "session.command", transport: "websocket" }],
+      ["debug", "rpc call answered", { operation: "session.command", transport: "websocket" }],
+      [
+        "warn",
+        "rpc call failed",
+        {
+          operation: "session.command",
+          transport: "websocket",
+          code: "FORBIDDEN",
+          reason: "token: [REDACTED] refused",
+        },
+      ],
+    ]);
+  });
+
+  it("starts from the beginning of an empty log", () => {
+    const diagnostics = new RpcDiagnosticLog();
+    const seen: string[] = [];
+    logRpcDiagnostics(diagnostics, {
+      debug: (msg) => seen.push(msg),
+      warn: (msg) => seen.push(msg),
+    });
+    diagnostics.record({
+      procedure: "p",
+      phase: "start",
+      transport: "websocket",
+      code: null,
+      message: null,
+    });
+    expect(seen).toStrictEqual(["rpc call"]);
   });
 });
 

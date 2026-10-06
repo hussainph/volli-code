@@ -30,6 +30,12 @@
  *   4400/4401/4413 and their reason text become typed states, never "Active
  *   connection is not open". The state holds no Workspace data (D-C1).
  *
+ * - **It traces what it sends** (VC-699). Every frame carries a trace beside
+ *   its id (`HOST_TRACE_FIELD`): the call's own, the link's flow trace with a
+ *   fresh span, or a fresh trace; so a host's log lines for a request carry
+ *   the Client's trace. Every state change, wake, resume and resnapshot is
+ *   reported to the owner's `log` with its reason and trace.
+ *
  * Renderer-safe: no Node, no Electron, no `ws`. The WebSocket implementation
  * is the platform's unless a caller injects one; wake signals arrive through
  * {@link HostLink.wake}, so the desktop wires `powerMonitor` and the network
@@ -54,6 +60,7 @@ import {
   type WorkspaceAuthority,
 } from "../handshake";
 import type { WorkspaceId } from "../identity";
+import { mintHostTrace, nextHostSpan, withHostTrace, type HostTrace } from "../trace";
 import { validateWelcome, type ValidateWelcomeOptions } from "../welcome";
 import {
   HOST_LINK_TIMING,
@@ -114,10 +121,55 @@ export interface HostLinkSubscription {
   unsubscribe(): void;
 }
 
-export interface HostLinkSubscribeOptions {
+export interface HostLinkSubscribeOptions extends HostLinkCallOptions {
   /** A cursor this subscriber already applied: the first subscribe resumes after it. */
   readonly lastEventId?: string;
 }
+
+/** What one call may say about itself. */
+export interface HostLinkCallOptions {
+  /**
+   * The operation this call belongs to: the trace minted when a person started
+   * it. The link sends it with a fresh span. Absent, the link's own `traceId`
+   * is used, or the call is an operation of its own.
+   */
+  readonly trace?: Pick<HostTrace, "traceId">;
+}
+
+/**
+ * What the link reports to its owner's log (VC-699): every state change with
+ * its reason, every wake, and every resume and resnapshot. Identifiers and
+ * reasons only, never a credential, a hello or a payload.
+ */
+export type HostLinkLogEvent =
+  | {
+      readonly kind: "state";
+      readonly from: HostLinkStatus;
+      readonly to: HostLinkStatus;
+      /** The trace of the connect attempt this change belongs to. */
+      readonly traceId: string;
+      readonly attempt?: number;
+      readonly reason?: string;
+      readonly closeCode?: number | null;
+      readonly retryInMs?: number;
+      readonly hostId?: string;
+      readonly epoch?: number;
+    }
+  | {
+      readonly kind: "wake";
+      readonly cause: HostLinkWakeCause;
+      readonly status: HostLinkStatus;
+      readonly traceId: string;
+    }
+  | {
+      readonly kind: "resubscribe";
+      readonly path: string;
+      /** Whether it resumed after a cursor, or opened from its start. */
+      readonly resumed: boolean;
+      readonly why: "welcome" | "overflow";
+      readonly traceId: string;
+    }
+  | { readonly kind: "resnapshot"; readonly path: string; readonly traceId: string };
 
 export interface HostLink {
   readonly workspaceId: WorkspaceId;
@@ -125,9 +177,9 @@ export interface HostLink {
   /** Called on every change, not with the current state: `useSyncExternalStore`'s shape. */
   subscribeState(listener: (state: HostLinkState) => void): () => void;
   /** A query, sent only while `ready`; otherwise it fails at once. */
-  query(path: string, input?: unknown): Promise<unknown>;
+  query(path: string, input?: unknown, options?: HostLinkCallOptions): Promise<unknown>;
   /** A mutation, sent only while `ready`; otherwise it fails at once. Never queued, never resent. */
-  mutate(path: string, input?: unknown): Promise<unknown>;
+  mutate(path: string, input?: unknown, options?: HostLinkCallOptions): Promise<unknown>;
   /**
    * A subscription the link keeps across reconnects: opened when the link is
    * `ready`, resumed from its last tracked id after each validated welcome.
@@ -170,6 +222,15 @@ export interface HostLinkOptions {
   readonly timing?: Partial<HostLinkTiming>;
   /** Backoff jitter, in [0, 1). */
   readonly random?: () => number;
+  /**
+   * The operation this link serves, when one person-started flow owns it
+   * ("Add a host" connects it): every connect and every call without a trace
+   * of its own carries this trace, each with a fresh span. Absent, each
+   * connect attempt and each call is its own trace.
+   */
+  readonly traceId?: string;
+  /** Hears every state change, wake, resume and resnapshot (VC-699). */
+  readonly log?: (event: HostLinkLogEvent) => void;
 }
 
 /** A failure the link itself answers, shaped so `readHostError` reads it on either side of tRPC. */
@@ -220,6 +281,10 @@ type Outcome =
 /** One socket, one `wsClient`, one hello: everything a connection holds dies with it. */
 interface Connection {
   readonly hello: HostHello;
+  /** The connect attempt's trace: its hello frame and its state changes carry it. */
+  readonly trace: HostTrace;
+  /** Each request id's trace, until its frame is sent. */
+  readonly traces: Map<number, HostTrace>;
   client: TRPCWebSocketClient | null;
   socket: WebSocket | null;
   phase: "handshake" | "ready";
@@ -235,6 +300,10 @@ interface Connection {
 interface Entry {
   readonly path: string;
   readonly input: unknown;
+  /** The subscription's operation: every open and resume is a span of it. */
+  readonly traceId: string;
+  /** Whether it was ever opened: the next open is then a resume. */
+  opened: boolean;
   readonly handlers: HostLinkSubscriptionHandlers;
   lastEventId: string | undefined;
   ended: boolean;
@@ -252,6 +321,14 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   }
   const Socket = options.WebSocket ?? globalThis.WebSocket;
   const random = options.random ?? Math.random;
+  const log = options.log;
+  /** A span of the link's flow, or a fresh trace: what a frame with no trace of its own carries. */
+  const traceFor = (given?: Pick<HostTrace, "traceId">): HostTrace => {
+    const traceId = given?.traceId ?? options.traceId;
+    return traceId === undefined ? mintHostTrace() : nextHostSpan({ traceId });
+  };
+  /** The trace of the attempt in flight, or of the last one: what a state change is filed under. */
+  let attemptTrace: HostTrace = traceFor();
 
   let state: HostLinkState = { status: "connecting", attempt: 0 };
   const listeners = new Set<(state: HostLinkState) => void>();
@@ -272,12 +349,43 @@ export function createHostLink(options: HostLinkOptions): HostLink {
    * transition it started.
    */
   function setState(next: HostLinkState): boolean {
+    if (log !== undefined) report(state, next);
     state = next;
     for (const listener of listeners) {
       if (state !== next) return false;
       listener(next);
     }
     return state === next;
+  }
+
+  /** One state change, with the reason and timing the owner's log needs. */
+  function report(from: HostLinkState, to: HostLinkState): void {
+    const base = {
+      kind: "state" as const,
+      from: from.status,
+      to: to.status,
+      traceId: attemptTrace.traceId,
+    };
+    switch (to.status) {
+      case "connecting":
+        return log!({ ...base, attempt: to.attempt });
+      case "ready":
+        return log!({ ...base, hostId: to.welcome.host.id, epoch: to.welcome.workspace.epoch });
+      case "unreachable":
+        return log!({
+          ...base,
+          attempt: to.attempt,
+          reason: reasonOf(to.error),
+          closeCode: to.closeCode,
+          retryInMs: Math.max(0, to.retryAt - Date.now()),
+        });
+      case "refused":
+        return log!({ ...base, reason: reasonOf(to.error), closeCode: to.closeCode });
+      case "fenced":
+        return log!({ ...base, reason: reasonOf(to.error) });
+      case "closed":
+        return log!(base);
+    }
   }
 
   /* ------------------------------------------------------------- attempts */
@@ -288,6 +396,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     clearTimeout(retryTimer);
     clearTimeout(handshakeTimer);
     const token = ++attemptToken;
+    attemptTrace = traceFor();
     // Armed before anyone hears `connecting`, so a listener's close clears it.
     handshakeTimer = setTimeout(() => {
       /* v8 ignore next -- every transition clears this timer; the token holds if one ever does not. */
@@ -323,6 +432,8 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   function open(hello: HostHello): void {
     const current: Connection = {
       hello,
+      trace: attemptTrace,
+      traces: new Map(),
       client: null,
       socket: null,
       phase: "handshake",
@@ -346,6 +457,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         }
         const socket = new target(...args);
         current.socket = socket;
+        traceSends(current, socket);
         watch(current, socket);
         return socket;
       },
@@ -360,7 +472,13 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       keepAlive: { enabled: false },
       retryDelayMs: () => TRPC_RETRY_MS,
     });
-    const welcome = request(current, "query", "protocol.welcome", undefined).subscribe({
+    const welcome = request(
+      current,
+      "query",
+      "protocol.welcome",
+      undefined,
+      nextHostSpan(current.trace),
+    ).subscribe({
       // Retiring unsubscribes it, so neither arrives for a retired connection.
       next: (envelope) => {
         current.inflight.delete(stop);
@@ -397,7 +515,10 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     if (!setState({ status: "ready", welcome: verdict.welcome })) return;
     // Only now: no subscription reaches a host whose welcome this client has
     // not judged. One a listener already opened is left as it is.
-    for (const entry of entries) openSubscription(entry, current);
+    // A stream opened before (it has delivered, or been resumed) is a resume.
+    for (const entry of entries) {
+      openSubscription(entry, current, entry.opened ? "welcome" : "first");
+    }
   }
 
   /** Settles the link once for a connection that failed, and retires it. */
@@ -490,6 +611,20 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     );
   }
 
+  /**
+   * Every frame this connection sends carries its trace (HP § Tracing and
+   * logs): a request its call's, the hello its attempt's. The heartbeat and
+   * tRPC's own control frames go as they are.
+   */
+  function traceSends(current: Connection, socket: WebSocket): void {
+    const send = socket.send.bind(socket);
+    socket.send = (data) =>
+      send(
+        /* v8 ignore next -- tRPC's client and the heartbeat send text; anything else goes as it is. */
+        typeof data === "string" ? traced(current, data) : data,
+      );
+  }
+
   /** Any frame from the host proves the socket alive; silence from here arms the next ping. */
   function heard(current: Connection): void {
     /* v8 ignore next -- a frame that was already in flight when the link retired the socket; nothing arms a timer for it. */
@@ -519,16 +654,24 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     type: "query" | "mutation" | "subscription",
     path: string,
     input: unknown,
+    trace: HostTrace,
     lastEventId?: string,
   ) {
+    const id = current.nextId++;
+    current.traces.set(id, trace);
     return current.client!.request({
-      op: { id: current.nextId++, type, path, input, signal: null },
+      op: { id, type, path, input, signal: null },
       transformer: TRANSFORMER,
       ...(lastEventId === undefined ? {} : { lastEventId }),
     });
   }
 
-  function call(type: "query" | "mutation", path: string, input: unknown): Promise<unknown> {
+  function call(
+    type: "query" | "mutation",
+    path: string,
+    input: unknown,
+    callOptions: HostLinkCallOptions = {},
+  ): Promise<unknown> {
     const current = connection;
     if (
       state.status !== "ready" ||
@@ -544,7 +687,13 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         reject(abortError());
       };
       current.inflight.add(abort);
-      const subscription = request(current, type, path, input).subscribe({
+      const subscription = request(
+        current,
+        type,
+        path,
+        input,
+        traceFor(callOptions.trace),
+      ).subscribe({
         next: (envelope) => {
           current.inflight.delete(abort);
           resolve((envelope.result as { data?: unknown }).data);
@@ -564,14 +713,28 @@ export function createHostLink(options: HostLinkOptions): HostLink {
    * listener subscribed it during `ready`), ended, or meeting a Connection
    * that is no longer the live one stays as it is.
    */
-  function openSubscription(entry: Entry, current: Connection): void {
+  function openSubscription(
+    entry: Entry,
+    current: Connection,
+    why: "first" | "welcome" | "overflow",
+  ): void {
     if (entry.ended || entry.detach !== null || current.retired || connection !== current) {
       return;
     }
     // A socket already closing would make tRPC open another for this
     // connection; the stream waits for the next welcome instead.
     if (current.socket!.readyState !== Socket.OPEN) return;
+    if (why !== "first") {
+      log?.({
+        kind: "resubscribe",
+        path: entry.path,
+        resumed: entry.lastEventId !== undefined,
+        why,
+        traceId: entry.traceId,
+      });
+    }
     entry.delivered = false;
+    entry.opened = true;
     // Attached before the request exists, so nothing re-enters and opens it
     // twice. tRPC answers nothing synchronously: the binding is set by then.
     let subscription!: { unsubscribe(): void };
@@ -582,6 +745,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       "subscription",
       entry.path,
       entry.input,
+      nextHostSpan(entry),
       entry.lastEventId,
     ).subscribe({
       // Retiring or unsubscribing deletes the request, so only `complete`
@@ -618,6 +782,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     // connection's welcome decides whether this stream resumes.
     if (failure === null || failure.reason === "credential-invalid") return;
     if (isResnapshotRequired(failure)) {
+      log?.({ kind: "resnapshot", path: entry.path, traceId: entry.traceId });
       end(entry);
       entry.handlers.onResnapshot(failure);
       return;
@@ -625,7 +790,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     // HP: an overflow drained what it held; resume from the last applied id.
     // Only after progress, so a stream that cannot keep up at all surfaces.
     if (failure.reason === "subscription-overflow" && entry.delivered) {
-      openSubscription(entry, current);
+      openSubscription(entry, current, "overflow");
       return;
     }
     end(entry);
@@ -655,12 +820,14 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    query: (path, input) => call("query", path, input),
-    mutate: (path, input) => call("mutation", path, input),
+    query: (path, input, callOptions) => call("query", path, input, callOptions),
+    mutate: (path, input, callOptions) => call("mutation", path, input, callOptions),
     subscribe(path, input, handlers, subscribeOptions = {}) {
       const entry: Entry = {
         path,
         input,
+        traceId: traceFor(subscribeOptions.trace).traceId,
+        opened: false,
         handlers,
         lastEventId: subscribeOptions.lastEventId,
         ended: false,
@@ -673,7 +840,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         queueMicrotask(() => handlers.onError(error));
       } else {
         entries.add(entry);
-        if (state.status === "ready") openSubscription(entry, connection!);
+        if (state.status === "ready") openSubscription(entry, connection!, "first");
       }
       return {
         unsubscribe() {
@@ -681,7 +848,8 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         },
       };
     },
-    wake() {
+    wake(cause) {
+      log?.({ kind: "wake", cause, status: state.status, traceId: attemptTrace.traceId });
       if (state.status === "ready") probe(connection!);
       else if (state.status === "unreachable") {
         failures = 0;
@@ -712,6 +880,28 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   void connect();
   return link;
+}
+
+/** One text frame, with each request's trace beside its id (HP § Tracing and logs). */
+function traced(current: Connection, data: string): string {
+  // Only a JSON object or batch is a request; PING is not.
+  if (!data.startsWith("{") && !data.startsWith("[")) return data;
+  let frame: { id?: unknown; method?: unknown } | { id?: unknown; method?: unknown }[];
+  try {
+    frame = JSON.parse(data) as typeof frame;
+  } catch {
+    /* v8 ignore next 2 -- tRPC's client sends only JSON frames; this keeps anything else as it was. */
+    return data;
+  }
+  const one = (message: { id?: unknown; method?: unknown }): unknown => {
+    if (message.method === "connectionParams") return withHostTrace(message, current.trace);
+    const trace = current.traces.get(message.id as number);
+    // A subscription's stop, or anything else no call of ours made.
+    if (trace === undefined) return message;
+    current.traces.delete(message.id as number);
+    return withHostTrace(message, trace);
+  };
+  return JSON.stringify(Array.isArray(frame) ? frame.map(one) : one(frame));
 }
 
 /** tRPC's server-to-client `{ id: null, method: "reconnect" }`, as its `wsClient` would decode it. */
@@ -799,6 +989,11 @@ function abortError(): HostLinkError {
       "The connection to the host ended before it answered; whether the call took effect is unknown",
     ),
   );
+}
+
+/** What a log line names a failure by: its reason, or its code when it has none. */
+function reasonOf(error: HostError): string {
+  return error.reason ?? error.code;
 }
 
 function messageOf(error: unknown): string {

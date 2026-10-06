@@ -30,6 +30,7 @@ export * from "./automation-schedule-pass";
 export * from "./model-access-policy";
 export * from "./decision-model";
 export * from "./secret-redaction";
+export * from "./structured-log";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";

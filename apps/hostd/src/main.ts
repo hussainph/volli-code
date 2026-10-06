@@ -16,7 +16,9 @@ import { socketActivationFd } from "./activation";
 import { runCredentialsReset } from "./credentials";
 import { runDatabaseRestore } from "./database";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
-import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
+import { hostLogger, installHostLog, jsonLineSink } from "@volli/host-core/log";
+
+import { logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
 import { checkStatus, LIVE_PROBES, statusExitCode } from "./status";
 import { headlessRuntimePaths } from "./runtime-paths";
@@ -26,10 +28,13 @@ import { HOSTD_VERSION } from "./version";
 const SHUTDOWN_DEADLINE_MS = 30_000;
 
 async function main(): Promise<number> {
-  const logger = createJsonLogger({
+  // One destination for every line this process writes: hostd's own and
+  // every host-core module's, JSON on stdout for the journal (VC-699).
+  installHostLog({
     level: logLevelFrom(process.env["VOLLI_HOSTD_LOG_LEVEL"]),
-    write: (line) => process.stdout.write(line),
+    sink: jsonLineSink((line) => process.stdout.write(line)),
   });
+  const logger = hostLogger("hostd");
   let command;
   try {
     command = parseHostdArgs(process.argv.slice(2), process.cwd());

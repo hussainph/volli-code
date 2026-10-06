@@ -1,3 +1,5 @@
+import type { TraceContext } from "./structured-log";
+
 // The wire protocol for the native Session tRPC edge over Electron IPC.
 //
 // It lives here rather than beside its main-process handler because BOTH ends
@@ -64,6 +66,13 @@ export type SessionRpcIpcRequest = {
   [Procedure in SessionRpcIpcProcedure]: {
     procedure: Procedure;
     input: unknown;
+    /**
+     * The operation this request belongs to (VC-699): the renderer mints one
+     * per request unless the caller names the operation's own. Main handles
+     * the request inside it, so every line it logs carries it. Optional and
+     * beside the input, never in it: an older main ignores it.
+     */
+    trace?: TraceContext;
   };
 }[SessionRpcIpcProcedure];
 

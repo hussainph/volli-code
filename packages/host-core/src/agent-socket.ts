@@ -10,6 +10,11 @@ import {
   type AgentResponse,
 } from "@volli/shared";
 
+import { withTrace } from "./log/context";
+import { hostLogger } from "./log/root";
+
+const socketLog = hostLogger("agent-socket");
+
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CONNECTIONS = 64;
@@ -205,21 +210,32 @@ function handleConnection(
       writeResponse(socket, request, responseFlushed);
       return;
     }
+    // Each request is its own trace (VC-699): every line the host writes
+    // while serving it, the verb's handler included, carries it.
     const accepted = acceptExecution(() =>
-      Promise.resolve()
-        .then(() => execute(request))
-        .then((response) => writeResponse(socket, response, responseFlushed))
-        .catch((error: unknown) =>
-          writeResponse(
-            socket,
-            {
-              v: 1,
-              ok: false,
-              error: makeAgentError("MUTATION_FAILED", errorMessage(error)),
-            },
-            responseFlushed,
-          ),
-        ),
+      withTrace(null, { door: "agent-socket", operation: request.cmd }, () =>
+        Promise.resolve()
+          .then(() => execute(request))
+          .then((response) => {
+            socketLog.debug("agent socket request", {
+              ok: response.ok,
+              ...(response.ok ? {} : { code: response.error.code }),
+            });
+            writeResponse(socket, response, responseFlushed);
+          })
+          .catch((error: unknown) => {
+            socketLog.warn("agent socket request failed", { error });
+            writeResponse(
+              socket,
+              {
+                v: 1,
+                ok: false,
+                error: makeAgentError("MUTATION_FAILED", errorMessage(error)),
+              },
+              responseFlushed,
+            );
+          }),
+      ),
     );
     if (!accepted) socket.destroy();
   });

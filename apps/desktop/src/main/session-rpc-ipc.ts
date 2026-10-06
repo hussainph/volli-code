@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { hostLogger, withTrace } from "@volli/host-core/log";
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import {
   createSessionRouter,
   hostErrorOf,
   LOCAL_DESKTOP_CALLER,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   type RpcProcedurePerformanceObserver,
   type SessionRouterHandlers,
@@ -156,6 +158,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   close(): Promise<void>;
 } {
   const diagnostics = options.diagnostics ?? new RpcDiagnosticLog();
+  // Every call's start and outcome, in the renderer's trace for it (VC-699).
+  logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const router = createSessionRouter();
   const active = new Map<string, ActiveSubscription>();
 
@@ -172,23 +176,35 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     SESSION_RPC_IPC_CHANNEL,
     async (event, request: unknown): Promise<SessionRpcIpcResponse> => {
       if (!isRequest(request)) return invalidRequest();
-      try {
-        if (request.procedure === "session.subscribe") {
-          return await startSubscription(request.input, event.sender);
-        }
-        const procedures = router.createCaller({
-          caller: LOCAL_DESKTOP_CALLER,
-          handlers: options.handlers,
-          diagnostics,
-          transport: "electron-ipc",
-          performanceObserver: options.performanceObserver,
-        });
-        return { ok: true, data: await callProcedure(procedures, request) };
-      } catch (error) {
-        return failure(error);
-      }
+      // Handled inside the renderer's trace for it (VC-699): every line main
+      // and the in-process host write for this call, a subscription's frames
+      // included, carry it.
+      return withTrace(request.trace, { door: "ipc", operation: request.procedure }, () =>
+        answer(request, event.sender),
+      );
     },
   );
+
+  async function answer(
+    request: SessionRpcIpcRequest,
+    sender: WebContents,
+  ): Promise<SessionRpcIpcResponse> {
+    try {
+      if (request.procedure === "session.subscribe") {
+        return await startSubscription(request.input, sender);
+      }
+      const procedures = router.createCaller({
+        caller: LOCAL_DESKTOP_CALLER,
+        handlers: options.handlers,
+        diagnostics,
+        transport: "electron-ipc",
+        performanceObserver: options.performanceObserver,
+      });
+      return { ok: true, data: await callProcedure(procedures, request) };
+    } catch (error) {
+      return failure(error);
+    }
+  }
 
   ipcMain.on(SESSION_RPC_CANCEL_CHANNEL, (event, subscriptionId: unknown) => {
     if (typeof subscriptionId !== "string") return;

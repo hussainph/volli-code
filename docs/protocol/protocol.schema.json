@@ -2,6 +2,27 @@
   "baseOperations": [
     "protocol.welcome"
   ],
+  "envelope": {
+    "volliTrace": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Optional. The operation this request belongs to (traceId) and this request (spanId), W3C Trace Context shaped. The host echoes it in every log line it writes while serving the request; a malformed one is ignored.",
+      "properties": {
+        "spanId": {
+          "pattern": "^[0-9a-f]{16}$",
+          "type": "string"
+        },
+        "traceId": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "traceId",
+        "spanId"
+      ],
+      "type": "object"
+    }
+  },
   "features": {
     "model-access": [
       "modelAccess.inspect",

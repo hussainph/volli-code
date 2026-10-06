@@ -393,6 +393,34 @@ const MAX_IDENTIFIER_LENGTH = 512;
  */
 const MAX_DISPLAY_LABEL_LENGTH = 512;
 
+/** Where {@link logRpcDiagnostics} writes: a host's structured logger, by level. */
+export interface RpcDiagnosticLogger {
+  debug(msg: string, fields: Readonly<Record<string, unknown>>): void;
+  warn(msg: string, fields: Readonly<Record<string, unknown>>): void;
+}
+
+/**
+ * Forwards every route diagnostic from now on into a host's structured log
+ * (VC-699): a call's start and success at `debug`, its failure at `warn` with
+ * the code and the sanitized message. The diagnostic is recorded inside the
+ * call, so a host whose door opened a trace scope gets the call's trace on
+ * each line. Returns the unsubscribe.
+ */
+export function logRpcDiagnostics(
+  diagnostics: RpcDiagnosticLog,
+  logger: RpcDiagnosticLogger,
+): () => void {
+  const afterId = diagnostics.list({ limit: 1 }).at(-1)?.id ?? 0;
+  return diagnostics.subscribe({ afterId }, (entry) => {
+    const fields = { operation: entry.procedure, transport: entry.transport };
+    if (entry.phase === "error") {
+      logger.warn("rpc call failed", { ...fields, code: entry.code, reason: entry.message });
+    } else {
+      logger.debug(entry.phase === "start" ? "rpc call" : "rpc call answered", fields);
+    }
+  });
+}
+
 /**
  * Small in-process, lossless-within-capacity diagnostic log. It records route
  * metadata only: procedure inputs and provider payloads never enter the log.

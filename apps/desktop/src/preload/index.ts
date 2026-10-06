@@ -50,6 +50,7 @@ import type {
   SessionRpcIpcEvent,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
+  RendererLogEntry,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -856,6 +857,16 @@ const api = {
     /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
     cancel: (subscriptionId: string): void => {
       send("volli:session-rpc-cancel" satisfies typeof SESSION_RPC_CANCEL_CHANNEL, subscriptionId);
+    },
+  },
+  /**
+   * The renderer's lines for main's log (VC-699): fire-and-forget. Main checks
+   * each entry, names it `renderer:<area>`, redacts it and bounds how many a
+   * window may send.
+   */
+  log: {
+    write: (entry: RendererLogEntry): void => {
+      send("volli:renderer-log", entry);
     },
   },
   /**

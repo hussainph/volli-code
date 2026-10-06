@@ -60,6 +60,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import { withLogContext } from "../log/context";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
@@ -269,6 +270,19 @@ const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on thi
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
 
+/**
+ * Runs a handler with the ids its input names joined to the operation's log
+ * context (VC-699): every line the command writes, the Session runtime's and
+ * the turn's included, names the Session, ticket and command it serves.
+ */
+function joined<Result>(
+  ids: Readonly<Record<string, string | undefined>>,
+  run: () => Result,
+): Result {
+  // An absent id stays absent: the logger leaves undefined fields out.
+  return withLogContext(ids, run);
+}
+
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
   return service;
@@ -306,49 +320,56 @@ function hostHandlerEntries(
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
 
   return {
-    "ticket.move": (input, call) => {
-      const database = board();
-      return executeTicketMove(
-        {
-          worktree: options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir }),
-          now,
-          busySites: options.busyWorktreeSites,
-          interruptTicketSessions: options.interruptTicketSessions,
-          // An explicit move is the Deliberate-move door: it reaches the one
-          // host-owned pending arrival, whichever door the person used.
-          onDeliberateMove: (notice) => {
-            if (automations.kind !== "live") return;
-            const execution = automations.execution;
-            if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
-          },
-          notify: (request) => ports.attention.deliver(request),
-          // The desktop window holds the committed board in its reply, so
-          // only the detached trim's worktree change is pushed back to it.
-          onMutation: (change) => {
-            if (call.origin === "desktop-window" && change.kind !== "worktree") return;
-            ports.events.publish("data-changed", change);
-          },
-          detachedWork: options.detachedWork,
+    "ticket.move": (input, call) =>
+      joined(
+        { ticketId: (input as { ticketId?: string }).ticketId, projectId: input.projectId },
+        () => {
+          const database = board();
+          return executeTicketMove(
+            {
+              worktree:
+                options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir }),
+              now,
+              busySites: options.busyWorktreeSites,
+              interruptTicketSessions: options.interruptTicketSessions,
+              // An explicit move is the Deliberate-move door: it reaches the one
+              // host-owned pending arrival, whichever door the person used.
+              onDeliberateMove: (notice) => {
+                if (automations.kind !== "live") return;
+                const execution = automations.execution;
+                if (execution.kind !== "idle")
+                  execution.pendingArmedRuns.noteDeliberateMove(notice);
+              },
+              notify: (request) => ports.attention.deliver(request),
+              // The desktop window holds the committed board in its reply, so
+              // only the detached trim's worktree change is pushed back to it.
+              onMutation: (change) => {
+                if (call.origin === "desktop-window" && change.kind !== "worktree") return;
+                ports.events.publish("data-changed", change);
+              },
+              detachedWork: options.detachedWork,
+            },
+            input,
+            { now: now(), actor: call.actor },
+          );
         },
-        input,
-        { now: now(), actor: call.actor },
-      );
-    },
+      ),
     "sessions.create": (input) =>
       sessions().create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
     // Every Retry rides this. A ready attachment is the recovery point for an
     // Automation's durable first-message intent; the runner's fixed Session
     // command id reconciles rather than duplicates after a crash.
-    "sessions.attach": async (input) => {
-      const attached = await sessions().attach(input);
-      if (attached.state === "ready" && automations.kind === "live") {
-        const execution = automations.execution;
-        if (execution.kind === "ready") {
-          await execution.runner.resumeDeliveryForSession(input.sessionId);
+    "sessions.attach": (input) =>
+      joined({ sessionId: input.sessionId }, async () => {
+        const attached = await sessions().attach(input);
+        if (attached.state === "ready" && automations.kind === "live") {
+          const execution = automations.execution;
+          if (execution.kind === "ready") {
+            await execution.runner.resumeDeliveryForSession(input.sessionId);
+          }
         }
-      }
-      return attached;
-    },
+        return attached;
+      }),
     "settings.experiments": () => experiments().snapshot(),
     "settings.setExperiment": ({ id, enabled }) => experiments().set(id, enabled),
     "modelAccess.inspect": async (input) => {
@@ -396,30 +417,38 @@ function hostHandlerEntries(
         (emission) => sink.emit(emission),
         (error) => sink.fail(error),
       ),
-    "session.command": (request) => runtime().command(request),
+    "session.command": (request) =>
+      joined(
+        { sessionId: (request as { sessionId?: string }).sessionId, commandId: request.commandId },
+        () => runtime().command(request),
+      ),
     // An absent revision stays absent: the command's idempotency signature is
     // unchanged for a Client that does not send one.
     "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
-      runtime().command({
-        commandId,
-        sessionId,
-        command: {
-          kind: "message.cancel",
-          messageId,
-          ...(expectedRevision === undefined ? {} : { expectedRevision }),
-        },
-      }),
+      joined({ sessionId, commandId }, () =>
+        runtime().command({
+          commandId,
+          sessionId,
+          command: {
+            kind: "message.cancel",
+            messageId,
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          },
+        }),
+      ),
     "session.editQueued": ({ commandId, sessionId, messageId, message, expectedRevision }) =>
-      runtime().command({
-        commandId,
-        sessionId,
-        command: {
-          kind: "message.edit",
-          messageId,
-          message,
-          ...(expectedRevision === undefined ? {} : { expectedRevision }),
-        },
-      }),
+      joined({ sessionId, commandId }, () =>
+        runtime().command({
+          commandId,
+          sessionId,
+          command: {
+            kind: "message.edit",
+            messageId,
+            message,
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          },
+        }),
+      ),
     // A person walked away from a pending interaction: the only reason a
     // person's door can honestly report is that they left it undecided.
     "session.cancelInteraction": (input) =>

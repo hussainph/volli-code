@@ -23,9 +23,12 @@ import {
   buildHostHello,
   encodeHostHello,
   HOST_V1_FEATURES,
+  mintHostTrace,
   type HostCredentialVerifier,
 } from "@volli/host-protocol";
 import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
+import { createHostLink } from "@volli/host-protocol/client-link";
+import { installHostLog, jsonLineSink } from "@volli/host-core/log";
 import type { AppRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
@@ -1199,6 +1202,95 @@ describe("the host protocol listener (VC-663)", () => {
       expect(reached.every(({ admitted }) => admitted)).toBe(true);
     } finally {
       await close();
+    }
+  });
+
+  it("writes the Client's trace on every line it logs for a request, joined to the Session and command (VC-699)", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const undo = installHostLog({
+      level: "debug",
+      sink: jsonLineSink((line) => lines.push(JSON.parse(line) as Record<string, unknown>)),
+    });
+    const lever = device();
+    try {
+      const host = await boot({
+        env: CLOUD,
+        listen: LOOPBACK,
+        hostProtocolVerifier: lever.verifier,
+      });
+      if (!isLiveHost(host.host)) throw new Error("database did not open");
+      const { db } = host.host.database;
+      insertProject(db, { ...project(WORKSPACE), path: join(root, "workspace") });
+      const created = await host.host.sessionEngine.createSession({
+        commandId: "create-trace",
+        projectId: WORKSPACE,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        provenance: { source: { kind: "user", id: "test", detail: null }, venue: null },
+      });
+      const sessionId = created.session.id;
+      const flow = mintHostTrace();
+      const link = createHostLink({
+        url: host.status().hostProtocol!.url,
+        workspaceId: WORKSPACE,
+        client: { kind: "desktop", version: "test" },
+        features: ["sessions"],
+        credential: () => "device-token",
+        traceId: flow.traceId,
+      });
+      try {
+        await new Promise<void>((resolve) => {
+          const stop = link.subscribeState((state) => {
+            if (state.status === "ready") {
+              stop();
+              resolve();
+            }
+          });
+        });
+        lines.length = 0;
+        const commandId = "0b5c6d7e-8f90-4a1b-8c2d-3e4f5a6b7c8d";
+        await link.mutate("session.command", {
+          sessionId,
+          commandId,
+          command: {
+            kind: "model.select",
+            selection: {
+              providerId: "anthropic",
+              modelId: "claude-sonnet-4",
+              reasoningLevel: "medium",
+            },
+          },
+        });
+        const traced = lines.filter((line) => line["traceId"] === flow.traceId);
+        // The door's line, and the Session's committed facts, all under the Client's trace.
+        expect(traced.map(({ component, msg }) => `${String(component)}: ${String(msg)}`)).toEqual(
+          expect.arrayContaining([
+            "rpc: rpc call",
+            "session: session command.recorded",
+            "session: session model.selected",
+            "session: session command.receipt.recorded",
+            "rpc: rpc call answered",
+          ]),
+        );
+        const session = traced.filter(({ component }) => component === "session");
+        for (const line of session) {
+          expect(line).toMatchObject({
+            sessionId,
+            commandId,
+            door: "websocket",
+            operation: "session.command",
+          });
+          expect(line["connection"]).toEqual(expect.any(String));
+          expect(line["spanId"]).toMatch(/^[0-9a-f]{16}$/u);
+        }
+        expect(JSON.stringify(lines)).not.toContain("device-token");
+      } finally {
+        link.close();
+      }
+    } finally {
+      undo();
     }
   });
 

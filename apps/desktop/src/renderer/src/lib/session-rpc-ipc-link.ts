@@ -6,6 +6,10 @@
  * subscriptions acknowledge with an id and then arrive as ordered frames on a
  * single push channel.
  *
+ * Every request carries a trace (VC-699): the operation's, when a caller
+ * names it in tRPC's operation context (`{ context: { trace: { traceId } } }`),
+ * or a fresh one. Main handles the request inside it.
+ *
  * DELIBERATE ELECTRON DETAIL. This link carries values by structured clone;
  * a future network transport will carry JSON text. Structured clone accepts
  * things JSON silently drops or mangles (`Date`, `Map`, `undefined` in a
@@ -38,7 +42,10 @@ import type {
   SessionRpcIpcProcedure,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
+  TraceContext,
 } from "@volli/shared";
+
+import { contextTraceId, traceFor } from "./trace";
 
 /** The preload door this link speaks through — `window.api.sessionRpc`. */
 export interface SessionRpcBridge {
@@ -222,7 +229,7 @@ export function sessionRpcIpcLink(
   return () =>
     ({ op }) =>
       observable((observer) => {
-        const request = routedRequest(op.path, op.input);
+        const request = routedRequest(op.path, op.input, traceFor(contextTraceId(op.context)));
         if (request === null) {
           observer.error(
             failure("NOT_FOUND", `${op.path} is not routed over Session IPC`, op.path),
@@ -433,9 +440,13 @@ function windowPerformanceObserver(): SessionRpcPerformanceObserver | undefined 
  * discriminant, so the assertion lands here, once, immediately after membership
  * has been checked.
  */
-function routedRequest(path: string, input: unknown): SessionRpcIpcRequest | null {
+function routedRequest(
+  path: string,
+  input: unknown,
+  trace: TraceContext,
+): SessionRpcIpcRequest | null {
   return (SESSION_RPC_IPC_PROCEDURES as readonly string[]).includes(path)
-    ? ({ procedure: path as SessionRpcIpcProcedure, input } as SessionRpcIpcRequest)
+    ? ({ procedure: path as SessionRpcIpcProcedure, input, trace } as SessionRpcIpcRequest)
     : null;
 }
 

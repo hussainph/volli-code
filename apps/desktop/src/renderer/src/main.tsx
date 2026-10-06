@@ -22,6 +22,7 @@ import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData } from "./lib/boot";
+import { installRendererLogForwarding } from "./lib/renderer-log";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
@@ -37,6 +38,8 @@ import { initTerminalAppearance } from "./terminal/appearance";
 const INTERRUPT_TOAST_DURATION_MS = 8000;
 
 async function main() {
+  // This window's warnings and errors join main's log (VC-699).
+  installRendererLogForwarding();
   const root = createRoot(document.getElementById("root")!);
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —

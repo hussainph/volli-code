@@ -25,6 +25,9 @@ import type {
   SessionStreamFrame,
 } from "@volli/session-engine";
 import { createSessionProjectionCheckpoint } from "@volli/shared";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { HOST_TRACE_FIELD } from "@volli/host-protocol";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket } from "ws";
 
@@ -43,8 +46,11 @@ import {
   startHostProtocolListener,
   validateListenerLimits,
   type BoundedSocket,
+  readRequests,
   type HostProtocolListenerEvent,
   type HostProtocolListenerLimits,
+  type HostProtocolRequest,
+  type HostProtocolRequestScope,
 } from "./websocket-server";
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
@@ -182,6 +188,7 @@ async function serve(
     };
     /** A source that keeps replaying after it was cancelled. */
     ignoresCancel?: boolean;
+    requestScope?: HostProtocolRequestScope;
   } = {},
 ) {
   // The production refusal window (1 s) unless a test asks otherwise. The
@@ -216,6 +223,7 @@ async function serve(
     },
     limits,
     log: (event) => events.push(event),
+    ...(options.requestScope === undefined ? {} : { requestScope: options.requestScope }),
   });
   cleanups.push(() => listener.close());
   return { listener, events, ...source };
@@ -1323,5 +1331,107 @@ describe("features advertise; actor policy enforces (security N1)", () => {
       await expectHostError(client.session.list.query({ projectId: WORKSPACE })),
     ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
     expect(reads).toStrictEqual([]);
+  });
+});
+
+describe("every request in its own trace (VC-699)", () => {
+  const HELLO_TRACE = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
+  const CALL_TRACE = { traceId: "a3ce929d0e0e47364bf92f3577b34da6", spanId: "0ba902b700f067aa" };
+
+  it("handles each request inside the root's scope, with the trace its frame carried", async () => {
+    const scope = new AsyncLocalStorage<HostProtocolRequest>();
+    const scoped: HostProtocolRequest[] = [];
+    const seen: (HostProtocolRequest | undefined)[] = [];
+    const { listener, events } = await serve({
+      requestScope: (inbound, handle) => {
+        scoped.push(inbound);
+        scope.run(inbound, handle);
+      },
+      context: (source) => ({
+        runtime: {
+          ...source.runtime,
+          projection: async (input) => {
+            // After an await: the scope follows the promise chain.
+            await Promise.resolve();
+            seen.push(scope.getStore());
+            return source.runtime.projection(input);
+          },
+        },
+      }),
+    });
+    const peer = await raw(listener.url, null);
+    peer.socket.send(
+      JSON.stringify({
+        method: "connectionParams",
+        data: encodeHostHello(buildHostHello(HELLO)),
+        [HOST_TRACE_FIELD]: HELLO_TRACE,
+      }),
+    );
+    const call = (id: number, trace?: unknown) => ({
+      id,
+      method: "query",
+      params: { path: "session.projection", input: { sessionId: SESSION } },
+      ...(trace === undefined ? {} : { [HOST_TRACE_FIELD]: trace }),
+    });
+    // A batch: each request keeps its own trace; a malformed one is none.
+    peer.socket.send(JSON.stringify([call(1, CALL_TRACE), call(2, { traceId: "nope" }), call(3)]));
+    peer.socket.send(JSON.stringify(call(4, HELLO_TRACE)));
+    await until(() => peer.messages.length === 4, "four answers");
+    expect(
+      scoped.map(({ method, path, trace }) => [method, path, trace?.traceId ?? null]),
+    ).toStrictEqual([
+      ["connectionParams", null, HELLO_TRACE.traceId],
+      ["query", "session.projection", CALL_TRACE.traceId],
+      ["query", "session.projection", null],
+      ["query", "session.projection", null],
+      ["query", "session.projection", HELLO_TRACE.traceId],
+    ]);
+    expect(new Set(scoped.map(({ connection }) => connection)).size).toBe(1);
+    expect(seen.map((inbound) => inbound?.trace?.traceId ?? null)).toStrictEqual([
+      CALL_TRACE.traceId,
+      null,
+      null,
+      HELLO_TRACE.traceId,
+    ]);
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: "connected", traceId: HELLO_TRACE.traceId }),
+    );
+    peer.socket.close();
+    await until(() => events.some(({ kind }) => kind === "closed"), "the close");
+    expect(events.find(({ kind }) => kind === "closed")).toMatchObject({
+      traceId: HELLO_TRACE.traceId,
+    });
+  });
+
+  it("names a connection without a traced hello by its id alone, and handles requests unscoped when the root gives no scope", async () => {
+    const { listener, events } = await serve();
+    const { client } = connect(listener.url);
+    await client.protocol.welcome.query();
+    const connected = events.find(({ kind }) => kind === "connected");
+    expect(connected).not.toHaveProperty("traceId");
+  });
+
+  it("reads only identifiers from a frame, and nothing from what is not a request", () => {
+    expect(readRequests("text")).toBeNull();
+    expect(readRequests(Buffer.from("PING"))).toBeNull();
+    expect(readRequests(Buffer.from("{not json"))).toBeNull();
+    expect(readRequests(Buffer.from("[]"))).toStrictEqual([]);
+    expect(
+      readRequests(Buffer.from('[1, {"method": 2, "params": null}, {"params": {"path": 3}}]')),
+    ).toStrictEqual([
+      { request: { trace: null, method: null, path: null }, method: null, trace: null, frame: 1 },
+      {
+        request: { trace: null, method: null, path: null },
+        method: null,
+        trace: null,
+        frame: { method: 2, params: null },
+      },
+      {
+        request: { trace: null, method: null, path: null },
+        method: null,
+        trace: null,
+        frame: { params: { path: 3 } },
+      },
+    ]);
   });
 });

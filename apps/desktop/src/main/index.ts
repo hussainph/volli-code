@@ -278,6 +278,8 @@ import {
   type CursorOverlay,
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { registerRendererLogForwarding } from "./log/renderer-log";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
@@ -346,6 +348,14 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+// One structured, correlated log for main, the in-process host and the
+// renderer (VC-699): rotating JSON lines in this profile's own log directory.
+// Only the instance that owns the profile writes there.
+const desktopLog = ownsAppProfile
+  ? startDesktopLog({ userData: app.getPath("userData"), dev: isDev, env: process.env })
+  : null;
+/** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
+const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLog);
 if (ownsAppProfile) {
   app.on("second-instance", () => {
     const mainWindow = BrowserWindow.getAllWindows()[0];
@@ -619,6 +629,8 @@ const appStartup = app.whenReady().then(async () => {
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
+  logPowerTransitions(powerMonitor);
+  registerRendererLogForwarding(ipcMain);
   const serveRendererAsset = (request: Request): Promise<Response> | Response => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
@@ -1467,7 +1479,7 @@ const appStartup = app.whenReady().then(async () => {
     },
     installQuitHold: () =>
       registerAcceptedQuitCoordinator({
-        lifecycle: app,
+        lifecycle: quittingApp,
         shutdownNativeSessions: async () => {
           await hostCore.stop("quit");
         },
@@ -2678,7 +2690,7 @@ app.on("window-all-closed", () => {
 });
 
 registerAgentSocketWillQuit({
-  lifecycle: app,
+  lifecycle: quittingApp,
   shutdownAgentSocket,
   reportFailure: (error) => {
     console.error(

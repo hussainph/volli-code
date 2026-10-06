@@ -103,6 +103,33 @@ afterEach(() => {
 });
 
 describe("query and mutation", () => {
+  it("carries the operation's trace from the call's context, with a fresh span per request", async () => {
+    const bridge = fakeBridge();
+    const client = createSessionRpcClient(bridge);
+    const flow = "4bf92f3577b34da6a3ce929d0e0e4736";
+    void client.session.projection.query(
+      { sessionId: "s" },
+      { context: { trace: { traceId: flow } } },
+    );
+    void client.session.projection.query(
+      { sessionId: "s" },
+      { context: { trace: { traceId: flow } } },
+    );
+    void client.session.projection.query(
+      { sessionId: "s" },
+      { context: { trace: { traceId: "bad" } } },
+    );
+    void client.session.projection.query({ sessionId: "s" }, { context: { trace: "bad" } });
+    await flush();
+    const traces = bridge.requests.map(
+      (request) => (request as { trace: { traceId: string; spanId: string } }).trace,
+    );
+    expect(traces.slice(0, 2).map(({ traceId }) => traceId)).toEqual([flow, flow]);
+    expect(traces[0]!.spanId).not.toBe(traces[1]!.spanId);
+    expect(traces[2]!.traceId).not.toBe(flow);
+    expect(traces[3]!.traceId).toMatch(/^[0-9a-f]{32}$/u);
+  });
+
   it("routes a query through the bridge and resolves its data", async () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
@@ -110,7 +137,15 @@ describe("query and mutation", () => {
     const answer = client.session.projection.query({ sessionId: "session-1" });
     await flush();
     expect(bridge.requests).toEqual([
-      { procedure: "session.projection", input: { sessionId: "session-1" } },
+      {
+        procedure: "session.projection",
+        input: { sessionId: "session-1" },
+        // Every request carries a trace (VC-699): a fresh one when the caller names none.
+        trace: {
+          traceId: expect.stringMatching(/^[0-9a-f]{32}$/u),
+          spanId: expect.stringMatching(/^[0-9a-f]{16}$/u),
+        },
+      },
     ]);
 
     bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
@@ -139,7 +174,8 @@ describe("query and mutation", () => {
         kind: "round-trip",
         procedure: "session.projection",
         durationMs: 2,
-        requestBytes: 68,
+        // The request's JSON, its 83-byte trace included.
+        requestBytes: 151,
         responseBytes: 56,
         outcome: "ok",
       },
@@ -188,7 +224,8 @@ describe("query and mutation", () => {
         kind: "round-trip",
         procedure: "session.projection",
         durationMs: 3,
-        requestBytes: 68,
+        // The request's JSON, its 83-byte trace included.
+        requestBytes: 151,
         responseBytes: 0,
         outcome: "transport-error",
       },

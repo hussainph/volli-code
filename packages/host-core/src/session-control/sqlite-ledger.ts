@@ -41,6 +41,7 @@ import {
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
 import { settleTransaction } from "../db/transaction-gate";
+import { logSessionEvents } from "./session-event-log";
 
 type SqlRow = Record<string, unknown>;
 
@@ -52,16 +53,23 @@ export class SqliteSessionLedger implements SessionLedger {
   constructor(private readonly db: Database.Database) {}
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
-    return settleTransaction(this.db, () => {
+    let appended: readonly SessionEvent[] = [];
+    const settled = settleTransaction(this.db, () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
       try {
         const value = work(transaction);
         transaction.assertReceiptEventPairs();
+        appended = transaction.appended;
         return value;
       } finally {
         open = false;
       }
+    });
+    // Logged once committed, inside the operation that appended them (VC-699).
+    return settled.then((value) => {
+      if (appended.length > 0) logSessionEvents(appended);
+      return value;
     });
   }
 }
@@ -72,6 +80,8 @@ export function createSqliteSessionLedger(db: Database.Database): SessionLedger 
 
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   readonly #touchedSessionIds = new Set<string>();
+  /** Every fact this transaction appended, in order: logged once it commits. */
+  readonly appended: SessionEvent[] = [];
 
   constructor(
     private readonly db: Database.Database,
@@ -424,6 +434,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       payload: encodeSessionJson(event.payload),
     });
     this.projectAttachmentClosure(event);
+    this.appended.push(event);
     // Projected in the same transaction that appends the fact. A projection
     // written afterwards would have a window in which the ledger and its read
     // model disagree, and the disagreement would survive a crash.

@@ -28,8 +28,10 @@ import {
   type HostV1Feature,
 } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
+import { hostLogger, withTrace } from "@volli/host-core/log";
 import {
   createSessionRouter,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
   type WorkspaceResource,
@@ -131,6 +133,8 @@ export function startHostdProtocolListener(
 ): Promise<HostProtocolListener> {
   const { db, sessionEngine, logger } = ports;
   const diagnostics = new RpcDiagnosticLog();
+  // Every call's start and outcome, inside the trace its frame carried (VC-699).
+  logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
     router: createSessionRouter(),
@@ -145,6 +149,18 @@ export function startHostdProtocolListener(
       resourceWorkspace: sessionWorkspace(sessionEngine),
     }),
     log: (event) => logListenerEvent(logger, event),
+    // Each request is handled inside its trace: the Client's, or one minted
+    // here. Every line the host writes while serving it carries it (VC-699).
+    requestScope: (request, handle) =>
+      withTrace(
+        request.trace,
+        {
+          door: "websocket",
+          connection: request.connection,
+          ...(request.path === null ? {} : { operation: request.path }),
+        },
+        handle,
+      ),
   });
 }
 
