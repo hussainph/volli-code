@@ -474,4 +474,88 @@ describe("ChromiumBrowserBackend over a fake browser", () => {
       await backend.dispose();
     }
   });
+
+  it("closes a target whose setup failed, rather than leave it paused and unclosable", async () => {
+    const fake = fakeChromium();
+    const { backend, restore } = backendOver(fake);
+    try {
+      fake.fail("Fetch.enable");
+      const tab = open(backend);
+      const closed = await eventually(
+        async () => fake.commands,
+        (commands) =>
+          commands.some(
+            (command) =>
+              command.method === "Target.closeTarget" && command.params["targetId"] === "target-1",
+          ),
+      );
+      expect(closed).toBeTruthy();
+      // It never ran unguarded.
+      expect(
+        fake.commands.some(
+          (command) =>
+            command.method === "Runtime.runIfWaitingForDebugger" &&
+            command.sessionId === "session-1",
+        ),
+      ).toBe(false);
+      await eventually(
+        async () => backend.list({ projectId: "p" })[0]!,
+        (state) => !state.loading,
+      );
+      expect(backend.list({ projectId: "p" })[0]!.error).toMatch(/could not open this tab/);
+      backend.close(tab.tabId);
+    } finally {
+      restore();
+      await backend.dispose();
+    }
+  });
+
+  it("waits, on dispose, for a browser that was already shutting down", async () => {
+    const fake = fakeChromium();
+    const profileRoot = root();
+    const { backend, restore } = backendOver(fake, profileRoot);
+    try {
+      open(backend);
+      await opened(fake, 1);
+      const child = fake.child();
+      const signals: string[] = [];
+      // Deaf to SIGTERM: only the group SIGKILL, past the grace, ends it.
+      child.kill = ((signal: NodeJS.Signals) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+        return true;
+      }) as typeof child.kill;
+      (child.stdio[4] as NodeJS.ReadableStream & { emit: (e: string, x: Error) => void }).emit(
+        "error",
+        new Error("broken pipe"),
+      );
+      await settle();
+      await backend.dispose();
+      expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(readdirSync(profileRoot)).toEqual([]);
+    } finally {
+      restore();
+    }
+  }, 10_000);
+});
+
+describe("launchChromium's shutdown runs once", () => {
+  it("whichever way the browser ends first: exit, then its pipe, then the host's close", async () => {
+    const fake = fakeChromium();
+    const profileRoot = root();
+    const browser = await launchChromium(
+      { executablePath: "/fake", profileRoot, noSandbox: false, deviceScaleFactor: 1 },
+      fake.spawn,
+    );
+    const child = fake.child();
+    const kill = vi.spyOn(child, "kill");
+    const heard = vi.fn();
+    browser.onExit(heard);
+    child.emit("exit", 1, null);
+    (child.stdio[4] as NodeJS.ReadableStream & { emit: (e: string) => void }).emit("close");
+    await browser.close();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(kill.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+    expect(readdirSync(profileRoot)).toEqual([]);
+  });
 });

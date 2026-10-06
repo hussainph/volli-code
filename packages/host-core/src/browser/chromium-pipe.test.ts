@@ -200,4 +200,16 @@ describe("CdpPipeConnection", () => {
     connection.close("done");
     expect(heard).toEqual([]);
   });
+
+  it("holds a finely fragmented frame in one buffer, not a view per fragment", async () => {
+    const { connection, fromBrowser } = wire();
+    const answered = connection.send("A.big");
+    const body = JSON.stringify({ id: 1, result: { pad: "z".repeat(50_000) } });
+    for (const byte of body) fromBrowser.write(byte);
+    await flush();
+    // About twice the bytes held at most, however many fragments carried them.
+    expect(connection.inboundCapacity).toBeLessThanOrEqual(2 * body.length);
+    fromBrowser.write("\0");
+    await expect(answered).resolves.toEqual({ pad: "z".repeat(50_000) });
+  });
 });
