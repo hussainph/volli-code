@@ -195,40 +195,42 @@ export async function answerGitCredential(
 }
 
 /**
- * Appends command-scope git configuration to an environment record: entries
- * go after any `GIT_CONFIG_COUNT` entries `base` already holds, never over
- * them, so every layer that configures a Session's git (a platform's reset of
- * the helper list, then Volli's helper) composes in order. Answers the
- * variables to merge over `base`.
+ * `base` with command-scope git configuration (`GIT_CONFIG_COUNT`,
+ * `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n`, git 2.31+) appended after
+ * whatever it already holds, never over it: every layer that configures a
+ * Session's git (a platform's reset of the helper list, then Volli's helper)
+ * composes in order, and none overwrites another's count. The one
+ * implementation; hostd's agent git environment uses it too.
  */
 export function appendGitConfig(
-  base: Readonly<Record<string, string | undefined>>,
+  base: Readonly<Record<string, string>>,
   entries: readonly (readonly [key: string, value: string])[],
 ): Record<string, string> {
   const held = Number(base["GIT_CONFIG_COUNT"] ?? "0");
   const start = Number.isSafeInteger(held) && held > 0 ? held : 0;
-  const appended: Record<string, string> = {
+  const out: Record<string, string> = {
+    ...base,
     GIT_CONFIG_COUNT: String(start + entries.length),
   };
-  entries.forEach(([key, value], index) => {
-    appended[`GIT_CONFIG_KEY_${start + index}`] = key;
-    appended[`GIT_CONFIG_VALUE_${start + index}`] = value;
+  entries.forEach(([key, value], offset) => {
+    out[`GIT_CONFIG_KEY_${start + offset}`] = key;
+    out[`GIT_CONFIG_VALUE_${start + offset}`] = value;
   });
-  return appended;
+  return out;
 }
 
 /**
- * The environment that installs Volli's helper for one command:
- * command-scope git configuration, appended after every file git reads and
- * after any command-scope entries `base` already holds (a reset of the
- * helper list composes before it).
+ * `base` with Volli's helper installed for one command: command-scope git
+ * configuration, appended after every file git reads and after any
+ * command-scope entries `base` already holds (a reset of the helper list
+ * composes before it).
  *
  * `helperCommand` is a `!`-prefixed shell command git runs with the action
  * appended (`!'/opt/volli-hostd/bin/volli-hostd' git-credential --data-dir '…'`).
  */
 export function gitCredentialHelperEnv(
   helperCommand: string,
-  base: Readonly<Record<string, string | undefined>> = {},
+  base: Readonly<Record<string, string>> = {},
 ): Record<string, string> {
   return appendGitConfig(base, [["credential.helper", helperCommand]]);
 }

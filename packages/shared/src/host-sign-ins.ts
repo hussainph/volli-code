@@ -146,12 +146,25 @@ export function hostSignInUpdateIsFinal(update: { kind: string }): boolean {
 }
 
 /**
- * The rows a host-chip badge reads (VC-576): a sign-in this host held that no
- * longer authenticates. A Session on it that tried says so itself, as its
- * `auth_required` Attention (the SessionBlocker); this is the host's half.
+ * An expired sign-in, as the host-connection store's `HostRecord.expiredSignIns`
+ * carries it (VC-576's `HostSignIn`): the provider and the name a person
+ * reads ("Claude").
  */
-export function expiredHostSignIns(status: HostSignInStatus): readonly HostProviderSignIn[] {
-  return status.providers.filter((provider) => provider.state === "expired");
+export interface ExpiredHostSignIn {
+  readonly providerId: string;
+  readonly name: string;
+}
+
+/**
+ * The rows a host-chip badge reads (VC-576): a sign-in this host held that no
+ * longer authenticates, in `HostRecord.expiredSignIns`'s shape. A Session on
+ * it that tried says so itself, as its `auth_required` Attention; this is the
+ * host's half.
+ */
+export function expiredHostSignIns(status: HostSignInStatus): readonly ExpiredHostSignIn[] {
+  return status.providers
+    .filter((provider) => provider.state === "expired")
+    .map((provider) => ({ providerId: provider.providerId, name: provider.label }));
 }
 
 /**

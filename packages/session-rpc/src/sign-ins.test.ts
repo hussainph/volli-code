@@ -14,7 +14,12 @@ import {
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createSessionRouter, RpcDiagnosticLog, type SignInRouterHandlers } from "./index";
+import {
+  createSessionRouter,
+  RpcDiagnosticLog,
+  sessionProcedureSchemas,
+  type SignInRouterHandlers,
+} from "./index";
 import { sessionContext } from "./session-handlers.test-support";
 
 const DEVICE: HostActor = {
@@ -140,6 +145,32 @@ describe("the sign-in procedures", () => {
         caller.auth.callback.deliver({ flowId: "f", pathAndQuery: "https://evil.test/" }),
       ),
     ).toBeUndefined();
+  });
+
+  it("takes a blank answer, as a step may want one, but never a blank key or password", () => {
+    const schemas = sessionProcedureSchemas();
+    // GitHub Copilot: "GitHub Enterprise URL/domain (blank for github.com)".
+    expect(
+      schemas["signIns.answer"]!.input.safeParse({ flowId: "flow", promptId: "prompt", value: "" })
+        .success,
+    ).toBe(true);
+    expect(
+      schemas["signIns.answer"]!.input.safeParse({
+        flowId: "flow",
+        promptId: "prompt",
+        value: "x".repeat(16_385),
+      }).success,
+    ).toBe(false);
+    expect(
+      schemas["signIns.setApiKey"]!.input.safeParse({ providerId: "p", key: "" }).success,
+    ).toBe(false);
+    expect(
+      schemas["signIns.setGitCredential"]!.input.safeParse({
+        host: "github.com",
+        username: "x",
+        password: "",
+      }).success,
+    ).toBe(false);
   });
 
   it("names a branded refusal by its reason, and an absent service as unavailable", async () => {

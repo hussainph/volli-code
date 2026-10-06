@@ -111,6 +111,28 @@ function scriptedPi(fixture: () => Fixture): PiSignIn {
       });
       await fixture().approve.promise;
     },
+    // pi-ai's GitHub Copilot: an optional enterprise domain first, where
+    // blank is the ordinary answer (github.com), then a device code.
+    "github-copilot": async (steps) => {
+      const domain = await steps.ask(
+        {
+          promptId: steps.newId(),
+          kind: "text",
+          message: "GitHub Enterprise URL/domain (blank for github.com)",
+          placeholder: "company.ghe.com",
+          options: [],
+        },
+        undefined,
+      );
+      steps.say({
+        kind: "device-code",
+        userCode: "GHUB-0000",
+        verificationUri: `https://${domain === "" ? "github.com" : domain}/login/device`,
+        intervalSeconds: 5,
+        expiresInSeconds: 900,
+      });
+      await fixture().approve.promise;
+    },
     anthropic: async (steps, signal) => {
       const callback = Promise.withResolvers<string>();
       const server = createServer((request, response) => {
@@ -209,7 +231,9 @@ function hostFixture(): Fixture {
     }),
     features: CLIENT_FEATURES,
     actor: DEVICE,
-    offered: HOSTD_FEATURES,
+    // A complete subset of what hostd offers: these cases serve the Session
+    // router's family, where the sign-ins are.
+    offered: ["sessions", "sign-ins", "auth.callback"],
     port: 0,
     approve: Promise.withResolvers<void>(),
     callbacks: [],
@@ -409,6 +433,27 @@ describeContract<Fixture, AppRouter>(
       expect(JSON.stringify(stream.frames)).not.toContain(CODE);
     });
 
+    it("takes a blank answer: GitHub Copilot's enterprise domain, blank for github.com", async () => {
+      const host = hostFixture();
+      const client = await connect(host);
+      const { flowId } = await client.signIns.start.mutate({ providerId: "github-copilot" });
+      const stream = follow(client, flowId);
+      const [prompt] = await stream.received(1);
+      expect(prompt).toMatchObject({ kind: "prompt", prompt: { kind: "text" } });
+      await client.signIns.answer.mutate({
+        flowId,
+        promptId: (prompt as Extract<HostSignInUpdate, { kind: "prompt" }>).prompt.promptId,
+        value: "",
+      });
+      const [, code] = await stream.received(2);
+      expect(code).toMatchObject({
+        kind: "device-code",
+        verificationUri: "https://github.com/login/device",
+      });
+      host.approve.resolve();
+      expect(await stream.ended).toEqual({ kind: "complete" });
+    });
+
     it("refuses another connection's flow exactly as an absent one", async () => {
       const host = hostFixture();
       const owner = await connect(host);
@@ -453,10 +498,8 @@ describeContract<Fixture, AppRouter>(
 
     it("an older host offers no sign-ins, so the Client hides them (N−1)", async () => {
       const host = hostFixture();
-      // What a host before VC-702 offers: the frozen v1 set without these.
-      host.offered = HOSTD_FEATURES.filter(
-        (feature) => feature !== "sign-ins" && feature !== "auth.callback",
-      );
+      // What a host before VC-702 offers: nothing of these.
+      host.offered = ["sessions"];
       const client = await connect(host);
       const welcome = await client.protocol.welcome.query().catch(() => null);
       if (welcome !== null) {

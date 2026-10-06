@@ -193,9 +193,7 @@ export function createHeadlessSessionRuntime(input: {
       // credential a person sent this host (VC-702), behind `cloud`. Appended
       // after any command-scope git configuration composed above it (a
       // platform's reset of the helper list goes first), never over it.
-      return gitHelper === null
-        ? environment
-        : { ...environment, ...gitCredentialHelperEnv(gitHelper, environment) };
+      return gitHelper === null ? environment : gitCredentialHelperEnv(gitHelper, environment);
     },
     resolveRuntimeContext: createRuntimeContextResolver({
       db,

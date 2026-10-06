@@ -29159,7 +29159,6 @@
             },
             "value": {
               "maxLength": 16384,
-              "minLength": 1,
               "type": "string"
             }
           },

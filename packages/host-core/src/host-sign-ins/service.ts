@@ -100,8 +100,16 @@ interface Flow {
   readonly updates: HostSignInUpdate[];
   readonly sinks: Set<FlowSink>;
   settled: boolean;
+  /** The person (or the connection's end) cancelled it; Pi's own unwinding may still be under way. */
+  cancelled: boolean;
   /** The relay grant: at most one per flow, spent by its first delivery. */
   relay: { readonly target: RelayTarget; used: boolean } | null;
+  /**
+   * Aborts when the flow is cancelled: a replay still running is abandoned
+   * with it. Not when it settles: Pi settles while its listener is still
+   * answering the replay that signed it in.
+   */
+  readonly abandoned: AbortController;
 }
 
 const NO_CONNECTION = "Sign-ins on a host belong to a network connection, and this door has none.";
@@ -236,7 +244,9 @@ export class HostSignIns {
       updates: [],
       sinks: new Set(),
       settled: false,
+      cancelled: false,
       relay: null,
+      abandoned: new AbortController(),
     };
     const begun = this.#flowsService.begin(input.providerId, type, {
       // The flow may speak before `begin` returns; its updates carry the id.
@@ -268,18 +278,23 @@ export class HostSignIns {
   /** `signIns.answer`: the step the flow waits on, the pasted redirect included. */
   answer(input: HostSignInAnswerInput, call: HandlerCall): void {
     const flow = this.#owned(input.flowId, call);
-    if (flow.settled) {
+    if (flow.settled || flow.cancelled) {
       throw new SignInRefusedError("sign-in-conflict", "This sign-in has already ended.");
     }
     const answered = this.#flowsService.respond(flow.id, input.promptId, input.value);
     if (!answered.ok) throw new SignInRefusedError("sign-in-conflict", answered.error);
   }
 
-  /** `signIns.cancel`: ends the flow; a flow that already ended stays as it ended. */
+  /**
+   * `signIns.cancel`: ends the flow; a flow that already ended stays as it
+   * ended. The relay grant is revoked here, synchronously, and a replay still
+   * running is abandoned: nothing waits on Pi's own unwinding, so no
+   * redirect is delivered after cancel returns.
+   */
   cancel(input: HostSignInFlow, call: HandlerCall): void {
     const flow = this.#owned(input.flowId, call);
     if (flow.settled) return;
-    this.#flowsService.cancel(flow.id);
+    this.#abandon(flow);
   }
 
   /**
@@ -293,7 +308,7 @@ export class HostSignIns {
   ): Promise<HostAuthCallbackDeliverResult> {
     const flow = this.#owned(input.flowId, call);
     const relay = flow.relay;
-    if (flow.settled || relay === null || relay.used) {
+    if (flow.settled || flow.cancelled || relay === null || relay.used) {
       throw new SignInRefusedError(
         "sign-in-conflict",
         "This sign-in holds no callback grant to deliver to.",
@@ -309,8 +324,10 @@ export class HostSignIns {
     try {
       const status = await this.#replay(
         replayUrl(relay.target, input.pathAndQuery),
-        flow.connection.closed,
+        AbortSignal.any([flow.connection.closed, flow.abandoned.signal]),
       );
+      // Cancelled while the listener answered: say so, never a success.
+      if (flow.cancelled) throw new Error("cancelled");
       return { status };
     } catch {
       throw new SignInRefusedError(
@@ -350,6 +367,7 @@ export class HostSignIns {
         const target = relayTargetOf(event.url);
         if (
           target === null ||
+          flow.cancelled ||
           flow.relay !== null ||
           !flow.connection.features.includes(AUTH_CALLBACK_FEATURE)
         ) {
@@ -364,6 +382,7 @@ export class HostSignIns {
       }
       case "settled":
         flow.settled = true;
+        flow.relay = null;
         switch (update.outcome.kind) {
           case "signed-in":
             return [{ kind: "done" }];
@@ -380,12 +399,20 @@ export class HostSignIns {
     if (!final && flow.updates.length >= MAX_FLOW_UPDATES) {
       // Never a silent gap: a flow that says too much is ended, and its end
       // is what the stream reports.
-      this.#flowsService.cancel(flow.id);
+      this.#abandon(flow);
       return;
     }
     flow.updates.push(update);
     for (const sink of flow.sinks) void sink.emit(update);
     if (final) flow.sinks.clear();
+  }
+
+  /** Cancels a running flow: its grant goes at once, then Pi unwinds. */
+  #abandon(flow: Flow): void {
+    flow.cancelled = true;
+    flow.relay = null;
+    flow.abandoned.abort();
+    this.#flowsService.cancel(flow.id);
   }
 
   /** Cancels and forgets every flow of a connection when it ends. */
@@ -398,7 +425,7 @@ export class HostSignIns {
         this.#watched.delete(connection.id);
         for (const flow of this.#flows.values()) {
           if (flow.connection.id !== connection.id) continue;
-          if (!flow.settled) this.#flowsService.cancel(flow.id);
+          if (!flow.settled) this.#abandon(flow);
           this.#flows.delete(flow.id);
         }
       },

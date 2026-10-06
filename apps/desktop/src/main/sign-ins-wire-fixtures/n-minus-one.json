@@ -1,0 +1,35 @@
+{
+  "provenance": {
+    "revision": "e88dc8616e7c0293db8052202c9d05f32f027610",
+    "peer": "The release before VC-702: main at the merge base of #811. Its hostd offer (HOSTD_FEATURES) and its desktop's request (HOST_V1_FEATURES), as they shipped; neither names sign-ins or auth.callback.",
+    "producer": "unknownOperation recorded once from VC-669's frozen Session peer (session-rpc-n-minus-one.test-support.ts) over the stock tRPC WebSocket adapter; it has no signIns operation",
+    "format": "Canonical application-wire payloads; transport-local request ids omitted. Frozen: never refreshed to make a change pass."
+  },
+  "hostOffered": [
+    "sessions",
+    "sessions.queue",
+    "sessions.subscribe",
+    "sessions.history",
+    "session.read",
+    "board.read",
+    "board.write"
+  ],
+  "clientRequested": [
+    "sessions",
+    "sessions.queue",
+    "sessions.subscribe",
+    "sessions.history",
+    "session.read",
+    "board.read",
+    "board.write",
+    "model-access"
+  ],
+  "unknownOperation": {
+    "procedure": "signIns.status",
+    "input": null,
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "No \"query\"-procedure on path \"signIns.status\""
+    }
+  }
+}
