@@ -47,6 +47,7 @@ const hello: HostHello = {
   lastSeen: null,
   features: [],
   credential: "token",
+  nonce: "bm9uY2Utb2YtdGhlLWNvbnRyYWN0LWhhcm5lc3M",
 };
 
 const links: ContractLink<ToyHost, ToyRouter>[] = [
