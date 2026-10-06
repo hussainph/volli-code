@@ -24,11 +24,29 @@ and builds the desktop with it. It uploads `hostd-linux-x64`,
 artifacts. `prepare` (bump/tag/push), the macOS release job, and provenance
 signing are skipped. No local Docker, signing or keychain commands are needed.
 
-Only the owner may invoke the publishing path (`dry_run=false`) or push a
-release tag. Stable tags still create drafts; canaries still publish as
+**A real button release requires `dry_run=false`**: uncheck `dry_run` in the
+Actions form. Only the owner may invoke the publishing path or push a release
+tag. The exact CLI equivalent for a patch release is:
+
+```sh
+gh workflow run release.yml --ref main -f bump=patch -f dry_run=false
+```
+
+The button's `prepare` job writes the resolved version into both root and
+desktop `package.json` files in the same commit before tagging. Stable tags
+still create drafts; canaries still publish as
 prereleases. The single desktop publisher uploads the complete Mac + hostd
 asset set, so rerun cleanup does not delete hostd assets. **VC-698 must land
 before any release or canary containing migration 061.**
+
+A `hostd-assets` failure (including provenance signing) deliberately blocks the
+desktop release: the signed desktop pin requires matching assets on that same
+release. After a failure, use **“Re-run all jobs”**, not “re-run failed jobs”
+(actions/download-artifact#486 reports cross-attempt artifact-download 404s).
+Button-mode `prepare` is not idempotent and can bump again on a full rerun;
+the owner must account for that when choosing the retry/version. The artifact
+retention period is 14 days. Hostd inputs are downloaded and checked before
+pre-creating the release, so those failures cannot leave an empty live canary.
 
 Linux tarballs cannot use the desktop's Apple Developer ID signature. The
 publishing path instead signs build provenance via GitHub OIDC/Sigstore for
@@ -101,7 +119,11 @@ Without that environment variable, a local build writes the same schema/version/
 tag with `assets: []` and
 `unavailableReason: "Local build: VOLLI_HOSTD_MANIFEST is not set."`. It overwrites
 stale metadata and contains no invented hashes. An empty local manifest is not
-a valid release input.
+a valid release input. Manifest copying checks root/desktop version parity for
+`build` (including ordinary CI builds) and reports both files/versions on drift.
+`pnpm dev` runs the separate dev/pack-watch task, not the manifest copier; the
+package/desktop CI test lanes likewise do not invoke it. No version guard is
+added to those dev/test paths.
 
 Existing electron-builder packaging includes `dist-electron/**`. The runtime
 consumer reads the file at:

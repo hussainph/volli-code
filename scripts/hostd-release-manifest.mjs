@@ -17,7 +17,9 @@ export function releaseVersion(root = repositoryRoot) {
     throw new Error(`Invalid release version: ${version}`);
   }
   if (version !== desktopVersion) {
-    throw new Error(`Version drift: root ${version} != desktop ${desktopVersion}`);
+    throw new Error(
+      `Version drift: root package.json is ${version} but apps/desktop/package.json is ${desktopVersion} — bump both together.`,
+    );
   }
   return version;
 }

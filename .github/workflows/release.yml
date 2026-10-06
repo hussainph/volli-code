@@ -125,7 +125,7 @@ on:
         type: boolean
         default: true
       dry_run:
-        description: "Build hostd assets and desktop pin on the selected ref; never tag, sign desktop or publish"
+        description: "Defaults to dry-run (no tag/sign/publish). Set false for a real button release."
         type: boolean
         default: true
 
@@ -296,8 +296,15 @@ jobs:
         run: |
           set -euo pipefail
           version="$(jq -r .version package.json)"
-          test "$version" = "$(jq -r .version apps/desktop/package.json)"
-          if [ "$DRY_RUN" != true ]; then test "$RELEASE_REF" = "v$version"; fi
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::root package.json is $version but apps/desktop/package.json is $pkg — bump both together."
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$RELEASE_REF" != "v$pkg" ]; then
+            echo "::error::Tag $RELEASE_REF does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
       # Native runners + the same multi-arch bookworm image as CI: no QEMU,
       # cross-compilation, Electron rebuild or glibc baseline change.
       - name: Build host image
@@ -430,6 +437,10 @@ jobs:
     # Door 1 arrives via prepare; door 2 skips it. `always()` is what lets a
     # skipped dependency still run this job, so the two results are
     # distinguished explicitly rather than by truthiness.
+    # A hostd-assets failure blocks desktop release by design: the signed pin
+    # requires same-release assets. After a failure use "Re-run all jobs", not
+    # "re-run failed jobs" (actions/download-artifact#486, cross-attempt 404s).
+    # Button-mode prepare is not idempotent: it may bump again on a full rerun.
     needs: [prepare, hostd-assets]
     if: >-
       always() && !cancelled() && needs.hostd-assets.result == 'success' &&
@@ -557,6 +568,26 @@ jobs:
           fi
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
+      # Download and verify before creating a live canary pre-release: missing
+      # or corrupt hostd inputs must not leave an empty release behind.
+      - name: Download verified hostd release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets
+
+      - name: Verify hostd release asset set
+        working-directory: ${{ runner.temp }}/hostd-assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
+          [ "${#hostdFiles[@]}" -eq 7 ] || { echo "::error::hostd asset set incomplete"; exit 1; }
+          for f in "${hostdFiles[@]}"; do
+            [ -s "$f" ] || { echo "::error::hostd release asset missing or empty: $f"; exit 1; }
+          done
+          shasum -a 256 -c SHA256SUMS
+
       # Seed the release for this tag before electron-builder runs, so its
       # racing publisher instances all find and reuse one release instead of
       # each trying to create it (see header). Hyphenated tag = live
@@ -593,12 +624,6 @@ jobs:
       # electron-builder downloads its own Electron distribution, but our
       # extraResources reads Chromium's notice from the installed package.
       # Prefetch that package too (as CI does), or packaging silently omits it.
-      - name: Download verified hostd release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: hostd-release-assets
-          path: ${{ runner.temp }}/hostd-assets
-
       - name: Build desktop pipeline and fetch Electron
         env:
           VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
@@ -699,9 +724,6 @@ jobs:
           # remove hostd assets from a canary or a re-run of an existing draft.
           cp "$RUNNER_TEMP/hostd-assets/"* .
           hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
-          [ "${#hostdFiles[@]}" -eq 7 ] || { echo "::error::hostd asset set incomplete"; exit 1; }
-          shasum -a 256 -c SHA256SUMS
-          for f in "${hostdFiles[@]}"; do test -s "$f"; done
           files+=("${hostdFiles[@]}")
 
           # latest-mac.yml must describe the dmg about to be uploaded, but

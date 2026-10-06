@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { parse } from "yaml";
@@ -93,5 +96,93 @@ test("desktop gets the same generated pin; release cleanup keeps hostd assets an
   ).run;
   assert.match(publish, /files\+=\("\$\{hostdFiles\[@\]\}"\)/);
   assert.match(publish, /hostd-provenance.sigstore.json/);
-  assert.match(publish, /shasum -a 256 -c SHA256SUMS/);
+  const steps = workflow.jobs.release.steps;
+  const download = steps.findIndex(
+    (step) => step.name === "Download verified hostd release assets",
+  );
+  const verify = steps.findIndex((step) => step.name === "Verify hostd release asset set");
+  const precreate = steps.findIndex((step) => step.name === "Pre-create GitHub release");
+  assert.ok(download >= 0 && download < verify && verify < precreate);
+  assert.match(steps[verify].run, /shasum -a 256 -c SHA256SUMS/);
+  assert.match(steps[verify].run, /hostd-provenance.sigstore.json/);
+  assert.match(steps[verify].run, /hostd release asset missing or empty/);
+});
+
+function versionFixture(t, version = "1.2.3") {
+  const scratch = fileURLToPath(new URL("../.tmp/", import.meta.url));
+  mkdirSync(scratch, { recursive: true });
+  const root = mkdtempSync(join(scratch, "release-version-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "apps/desktop"), { recursive: true });
+  for (const file of ["package.json", "apps/desktop/package.json"]) {
+    writeFileSync(join(root, file), JSON.stringify({ version }));
+  }
+  return root;
+}
+
+const guard = workflow.jobs.hostd.steps.find((step) => step.name === "Guard release version").run;
+
+test("button bump updates root and desktop together, including a canary", (t) => {
+  const root = versionFixture(t);
+  const bump = workflow.jobs.prepare.steps
+    .find((step) => step.name === "Bump versions, commit, tag, push")
+    .run.split("git diff --stat")[0];
+  // Execute only the manifest rewrite, never the commit/tag/push portion.
+  assert.doesNotMatch(bump, /\bgit\b/);
+  const result = spawnSync("bash", ["-c", bump], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, VERSION: "1.2.4-canary.1" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of ["package.json", "apps/desktop/package.json"]) {
+    assert.equal(JSON.parse(readFileSync(join(root, file), "utf8")).version, "1.2.4-canary.1");
+  }
+  const matched = spawnSync("bash", ["-c", guard], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, RELEASE_REF: "v1.2.4-canary.1", DRY_RUN: "false" },
+  });
+  assert.equal(matched.status, 0, matched.stdout + matched.stderr);
+});
+
+test("hostd version guard explains tag mismatch and root/desktop drift", (t) => {
+  const root = versionFixture(t);
+  const runGuard = () =>
+    spawnSync("bash", ["-c", guard], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, RELEASE_REF: "v9.9.9", DRY_RUN: "false" },
+    });
+  const mismatch = runGuard();
+  assert.notEqual(mismatch.status, 0);
+  assert.match(
+    mismatch.stdout,
+    /::error::Tag v9.9.9 does not match apps\/desktop\/package.json version 1.2.3/,
+  );
+  writeFileSync(join(root, "apps/desktop/package.json"), JSON.stringify({ version: "1.2.4" }));
+  const drift = runGuard();
+  assert.notEqual(drift.status, 0);
+  assert.match(
+    drift.stdout,
+    /::error::root package.json is 1.2.3 but apps\/desktop\/package.json is 1.2.4 — bump both together/,
+  );
+});
+
+test("manifest version validation is build-only, not pnpm dev or CI test lanes", () => {
+  const config = readFileSync(new URL("../apps/desktop/vite.config.ts", import.meta.url), "utf8");
+  const devTask = config.slice(config.indexOf("      dev: {"), config.indexOf("      build: {"));
+  assert.doesNotMatch(devTask, /copy-hostd-manifest|releaseVersion/);
+  const devScript = readFileSync(
+    new URL("../apps/desktop/scripts/dev.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(devScript, /copy-hostd-manifest|releaseVersion/);
+  const ci = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const testJobs = Object.values(ci.jobs).filter((job) => (job.name ?? "").startsWith("Test ("));
+  assert.ok(testJobs.length > 0);
+  for (const job of testJobs) {
+    const commands = job.steps.map((step) => step.run ?? "").join("\n");
+    assert.doesNotMatch(commands, /copy-hostd-manifest|hostd-release-manifest|releaseVersion/);
+  }
 });
