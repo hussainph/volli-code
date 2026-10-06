@@ -266,22 +266,22 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           // ownership. Override packaged/source runtime path metadata alike.
           options: { ...runtimeOptions, venue: hostdVenue(host.database.db) },
         });
-        const sessionPorts = await sessionRuntime.ready();
+        const { handlers, automationsAvailable, ...sessionPorts } = await sessionRuntime.ready();
         capabilities = {
           ...UNAVAILABLE,
           board: "available",
           sessions: "available",
-          automations: sessionPorts.automationsAvailable ? "available" : "unavailable",
+          automations: automationsAvailable ? "available" : "unavailable",
         };
         settle(
           createHostAgentCommands(ports, {
             db: host.database.db,
             ...sessionPorts,
+            // The one object every door projects (VC-668). A Done move's trim,
+            // its armed arrival and its drain at stop are the handler's.
+            handlers,
             appVersion: options.version,
             verifyOperatorToken: operators.verify,
-            // A Done move's worktree trim outlives its reply; the host's stop
-            // drains it before the database closes.
-            detachedWork: host.detachedWork,
             // The audit line beside each operator write. `SO_PEERCRED` would
             // add the peer's uid and pid, but Node's `net` cannot read it
             // without a native addon; the login the token names is the

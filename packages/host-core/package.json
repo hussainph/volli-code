@@ -21,6 +21,10 @@
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"
     },
+    "./handlers": {
+      "types": "./src/entries/handlers.ts",
+      "import": "./src/entries/handlers.ts"
+    },
     "./browser": {
       "types": "./src/entries/browser.ts",
       "import": "./src/entries/browser.ts"
@@ -98,6 +102,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "ai": "^7.0.83",
+    "playwright-core": "^1.62.1",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

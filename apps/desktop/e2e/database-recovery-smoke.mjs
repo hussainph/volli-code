@@ -637,8 +637,7 @@ async function malformedHeaderScenario() {
       await unchanged(raw);
       await unchanged(copies);
       await preservedRaw(config, actionRaw);
-      const marker = await fs.lstat(`${config.dbPath}.recovery-pending`);
-      assert.equal(marker.isFile(), true);
+      await assertMissing(`${config.dbPath}.recovery-pending`);
       // A round trip and a >750ms observation window catch any accidental success
       // timer while leaving all production lifecycle/timer logic unmodified.
       await run.page.waitForTimeout(1100);

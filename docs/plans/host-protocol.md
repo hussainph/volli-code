@@ -27,7 +27,7 @@
 | Errors | `HostError { code, message, reason? }`; tRPC codes | Same branchable failure on either link, no thrown strings | IPC registry's result envelope + Session RPC's code/message |
 | JSON seams | `IsJsonSafe` on every raw input/output, subscription yield included | Structured-clone success must not conceal JSON data loss | BOUNDARIES rule 3; moved checker, Session RPC re-export |
 | Operation placement | Authority/resource ownership, not the caller's machine | One host API, no remote tools routed back to the desktop | Cloud rulings 1–3; classification below |
-| Command catalog (F3) | One Verb Registry entry per domain command, bound to exactly one handler; area routers, IPC, the agent socket and tools are projections | Three door vocabularies diverge unless one table drives them; VC-92 policy is checked once | Verb Registry `catalog` (VC-564), `@volli/session-rpc` `catalog.ts`, `AGENT_VERB_TABLE` |
+| Command catalog (F3) | One Verb Registry entry per domain command, bound to exactly one handler in host-core's one handler map; area routers, IPC, the agent socket and tools are projections of it | Three door vocabularies diverge unless one table drives them; VC-92 policy is checked once | Verb Registry `catalog` (VC-564), `@volli/session-rpc` `catalog.ts`, `@volli/host-core/handlers` (VC-668), `AGENT_VERB_TABLE` |
 | Board delivery (F1) | One change feed per Workspace: tracked cursor, resume or resnapshot | Fire-and-forget `data-changed` pings vanish with no listener and cannot resume after a lid-close | Session stream contract below |
 | Host events (F4) | Every host fact is a `HostEventMap` topic with a Workspace scope and a delivery class; cadence in host-core | Two topics bypass the bus; coalescing lives in an adapter; `publish` names no Workspace | `ports/events.ts` |
 | Client capabilities (F2) | Requests to the one connection that asked; per-connection focus and presence; auth-callback relay | A process-wide `client` means nothing with N Clients; remote OAuth fails | `HostClientEventSink`; VS Code `asExternalUri` |
@@ -78,7 +78,7 @@ Left alone, they diverge. The renderer's `volli:ticket-move` once trimmed a newl
 
 Source: `.scratch/arch-review-m1/architecture-review-post-M1.html`, D-A1; owner approval on VC-542 (2026-10-06). The catalog builders and their legacy exceptions below describe the public tier; this is a plan amendment, not a claim that desktop-only routing has already landed.
 
-**One entry per public domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler each door's projection resolves to: `AGENT_VERB_TABLE` for socket verbs, one tRPC procedure for router commands. Both grow to cover human commands; no second table appears beside them. An entry carries:
+**One entry per public domain command.** The Verb Registry (`@volli/shared`, pure data) is the catalog's declaration half; the binding half is the one handler in host-core's handler map, `handlers[key]` ([One handler map](#one-handler-map-vc-668)), which every door's projection resolves to: a tRPC procedure for router commands, an `AGENT_VERB_TABLE` projection for socket verbs. Socket verbs that are not yet catalog entries keep their own `AGENT_VERB_TABLE` handler until their area moves; no second table appears beside these. An entry carries:
 
 - its dot-name, `key`: one identity on every door, chosen once. A router entry's key is its procedure path (`session.snapshot`);
 - its actor policy, per door. `actor` is what the agent doors (socket, tools, CLI) judge, unchanged. A router judges `catalog.actor`, defaulting to `actor` (`catalogActorOf`), and it must be a `CatalogActor`:
@@ -94,7 +94,7 @@ Source: `.scratch/arch-review-m1/architecture-review-post-M1.html`, D-A1; owner 
   - `refusedIntents` (optional, workspace `command-id` entries only): intent kinds no actor may send through this entry because each has its own. Its input must be a `{ command: { kind } }` envelope: `workspaceProcedure` demands one at the type (`CatalogKeyRefusingIntents`) and refuses another at construction;
 - its access modes: `hostApi` is the WebSocket projection; an entry with a `catalog` and no access mode is policed but served by no network door (the lab's `labDiagnostics.*`);
 - JSON input/output validators, transport-independent (BOUNDARIES rule 3): zod, in the projection that binds the entry (D2): `.input(zod)` (or `workspaceProcedure`'s schema) and `.output(zod)`. **Every new query or mutation binds an output schema;** `catalogRouter` refuses one that does not. The named legacy exceptions, listed in the Session family's `legacyUnvalidatedOutputs` (`session-catalog.ts`) so the list can only shrink, are the Session procedures that return runtime projections: `sessions.create`, `sessions.attach`, `session.snapshot`, `session.projection`, `session.command`, `session.cancelInteraction`, `session.reconcile`, and the lab's `labDiagnostics.list`. A subscription's yields are not validated by tRPC's `.output()`, so `session.subscribe` and `labDiagnostics.subscribe` stand outside the rule; their payloads are pinned by the static `IsJsonSafe` check only, which is not runtime validation. JSON Schema for a non-TypeScript client is derived from zod (`z.toJSONSchema`), never hand-written;
-- exactly one handler: the procedure's resolver, or the socket binding.
+- exactly one handler: `handlers[key]` in the host's map. A procedure's resolver and a socket binding are projections of it, never handlers of their own. The lab's `labDiagnostics.*` are the one exception, answered by the router that records them (`DOOR_LOCAL_CATALOG_KEYS`).
 
 **A worked example**, the entry behind `settings.setExperiment`, with both validators:
 
@@ -153,7 +153,7 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
 **Exhaustive, at compile time and at construction.**
 
 - `hostProcedure(key)` and `workspaceProcedure(key, input, resources)` take only catalog keys of their scope, so a procedure with no entry, or a workspace procedure with no resources, does not compile.
-- `SessionRouterCatalogBinding` asserts `CatalogMismatch<ProcedurePaths<router>>` is `never`: no procedure without an entry and no entry without a procedure. The keys that disagree are named in the error. When a second area router lands, the assertion moves to the composition root and takes the union of every router's paths (below).
+- Each family asserts `CatalogMismatch<ProcedurePaths<router>, CatalogKeyOf<FamilyEntry>>` is `never` (`SessionRouterCatalogBinding`, `BoardRouterCatalogBinding`): no procedure without an entry and no entry without a procedure. `HostRouterCatalogBinding` (`host-router.ts`) asserts the same over the union of every router's paths and the whole catalog, and `HostRouterPathsDisjoint` that no path is two families'. The keys that disagree are named in the error.
 - `HostApiCatalogCoverage` fails a `hostApi` entry with no `catalog`; `catalogEntriesFrom` refuses one at load.
 - `catalogRouter` throws at construction on a procedure the builders did not make, one at another entry's path, one whose tRPC type contradicts its idempotency (`read` is a query or subscription; anything else is a mutation), or a query/mutation with no output schema that is not a named legacy exception.
 - **Provenance is private, never metadata.** Each builder call records, in a module-private `WeakMap`, the middleware that completes its entry's policy (admission for a host entry, Workspace authorization for a workspace entry), bound to that entry's key and to the exact middleware chain it built. `catalogRouter` accepts a procedure only if its chain begins with that chain at that entry's path. tRPC `meta` proves nothing (any module can `initTRPC` and set it): a bare procedure claiming an entry, a host procedure retagged as a workspace one, and a chain that runs anything before the policy are all refused at construction. A builder also refuses a key of the other scope at runtime, for a caller that cast past the types.
@@ -163,12 +163,62 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
 
 - **Builders.** `@volli/session-rpc` exports `createCatalogBuilders<Ctx extends CatalogCallerContext, Entry = Verb Registry>()`. Each area router calls it once with its own context type, and gets its own `hostProcedure`, `workspaceProcedure` and `catalogRouter`. The Session router's family is `session-catalog.ts`.
 - **Routers.** An area router lives at `packages/session-rpc/src/<area>-router.ts`, for example `board-router.ts` for VC-565. Its context is `CatalogCallerContext` (caller, `resourceWorkspace`, `sessionMayAct`, diagnostics) plus the area's ports.
-- **Composition.** The router that composes every area router, and the one binding assertion over the union of their paths, live in `packages/session-rpc/src/host-router.ts`, which VC-565 creates when the second router lands. Both doors mount that one router: desktop IPC through VC-608's bridge, and hostd's WebSocket.
-- **Layering (D2).** host-core takes no `@trpc/server`. A router handler never holds domain logic; it calls a context port. The app composition roots (`apps/desktop/src/main`, `apps/hostd`) wire each port to the host-core function the socket verb's `AGENT_VERB_TABLE` binding already calls. That's how "both doors reach the same host-core function" holds, with session-rpc depending on host-core's contract only through the ports it declares. Don't copy handler bodies into session-rpc, and don't add a fourth style.
+- **Composition.** `packages/session-rpc/src/host-router.ts` holds the binding assertion over the union of every router's paths (the board router, the second, landed with VC-668). The router that composes the families into one served router lands there with VC-565; each family has its own tRPC instance today. Both doors mount that one router: desktop IPC through VC-608's bridge, and hostd's WebSocket.
+- **Layering (D2).** host-core takes no `@trpc/server`. A router procedure never holds domain logic: it calls `ctx.handlers[key]`, the host's handler map. session-rpc cannot import host-core, so each family declares the slice it projects structurally (`SessionRouterHandlers`, `BoardRouterHandlers`), keyed by catalog key; a composition root hands it the router policy's view of host-core's map (`admittedHandlers(map, ROUTER_POLICY)`), and that assignment is where the two are checked against each other. Don't copy handler bodies into session-rpc, and don't add a fourth style.
 
-**Adding a command** (what VC-565 onward copies). The worked example is a test-only area router, `packages/session-rpc/src/example-area.test-support.ts`, proven by `example-area.test.ts` through the real builders. It declares a `ticket.create`-like and a `ticket.move`-like command. Follow it step by step:
+#### One handler map (VC-668)
 
-1. **Declare the entry** in `VERB_REGISTRY`. The example's entries are in `EXAMPLE_AREA_ENTRIES` so they need no registry row. A command both doors serve is **one** entry:
+host-core exports one map from catalog key to handler (`@volli/host-core/handlers`). Each composition root builds it once, `createHostHandlers(ports, services)`, and hands the same object to every door: desktop's Session RPC bridge, its `volli:ticket-move` channel and its agent socket (`apps/desktop/src/main/index.ts`); hostd's agent socket (`apps/hostd/src/session-runtime.ts` builds it, `hostd.ts` hands it over), and its WebSocket when VC-663 mounts one. A root passes services (the database, the recovered runtime and Sessions facade, Model Access, Automations, the busy-worktree guard), never a port per behaviour.
+
+What a root receives is sealed: a `HostHandlerMap` has no entry anyone can call. Its one invocation path is `invokeHandler(map, policy, key, input, call)`, or the `admittedHandlers(map, policy)` view built on it. Both run the door's `HandlerPolicy` first. A policy is transport-independent: it reads the key, the input and the `HandlerCall`, and imports neither tRPC nor Electron. A refusal throws `HandlerRefusedError` (`@volli/shared`), and the handler never runs. So D-A1's "one handler map plus the policy middleware" is the only path the type offers. A synchronous verdict over a synchronous handler answers synchronously.
+
+- **A handler is the whole command.** `(input, call) => output`, where `call` (`HandlerCall`, `@volli/shared`) says only who the door authenticated, as host history attributes them, and `origin: "desktop-window"` for the desktop's own window. What a root used to write around a call (reconciling preferences after a refresh, the availability check before a default, the Role a ticket implies, resuming an Automation's delivery after attach, a deliberate move's armed arrival, its interrupts and its feed change) is the handler's.
+- **Unavailable is an answer.** The map is total on every host. A service a host lacks this launch makes its handlers throw `OperationUnavailableError` (`@volli/shared`), which a router answers `NOT_IMPLEMENTED` / `operation-unavailable` and the socket `APP_UNREACHABLE`.
+- **Doors are projections, each under its own policy.** Every door judges a call at the map, before the handler:
+  - **Routers.** A router procedure calls `ctx.handlers[key](input, ctx.call)`. Its context holds the catalog's ports plus `handlers` and nothing else (`RouterContextPorts<Ctx>` is `never`). A root hands it `admittedHandlers(map, ROUTER_POLICY)`. `ROUTER_POLICY` judges the catalog entry again at the map: the router actor, `hostApi` for a network caller, and every declared entry for the desktop's own window. The router's middleware still judges first, together with what only it can read (a current credential, Workspace authorization, per-subject `sessionMayAct`). A refusal at the map answers `FORBIDDEN` / `verb-refused`, as the middleware does.
+  - **The socket.** A socket verb for a catalog key is `projectHandler(key, { decode, envSession })` (`agent-dispatch/projection.ts`). `decode` maps display ids, `--dry-run` and refusals in, and a `reply` maps the answer out. The projection invokes the map under that request's `socketHandlerPolicy`. That policy is the socket's own coordination policy, judged again at the map, and it admits only the key the request's verb projects. It is deliberately not the router actor, so a Session that project policy admits keeps moving tickets over the socket. A refusal at the map answers `FORBIDDEN_ACTOR`.
+  - **Legacy IPC.** A legacy per-channel IPC handler serving a catalog command (`volli:ticket-move`, until VC-565 deletes it) invokes the map under `DESKTOP_WINDOW_POLICY`. That policy admits only the desktop window's trusted call (`origin: "desktop-window"`), then applies the catalog's rule for it. It is synchronous, so the channel's synchronous reply stays synchronous.
+- **Checked in CI.**
+  - **Coverage.** `HostHandlerCoverage` fails `pnpm typecheck` when a catalog key (less `DOOR_LOCAL_CATALOG_KEYS`) has no handler signature, or a signature has no key. Each family's `…HandlersCoverage` does the same for its slice.
+  - **Socket bindings.** `AGENT_VERB_TABLE`'s type demands `projectHandler`'s brand for every `SocketHandlerKey`, so a both-door verb with a handler of its own does not compile.
+  - **The seal.** A sealed map has no callable entry. `package-interface.test.ts` (host-core) refuses the two ways around it, so a door can't run the move, or seal a map of its own, outside the policy path:
+    - a production entry that serves `executeTicketMove` or `sealHostHandlers`;
+    - a production importer of either, other than `handlers/host-handlers.ts`.
+  - **Projections.** At runtime, `handler-projection.test.ts` (session-rpc) drives every procedure against a recording map and fails one that reaches any key but its own. `agent-dispatch.test.ts` (host-core) does the same for the socket, and `ticket-move-doors.contract.test.ts` (desktop) for `volli:ticket-move`.
+  - **Policy order.** The contract test records each door's verdict at the map ahead of the handler on IPC, WebSocket and the socket, and proves a refusal never reaches it.
+- **Both tiers (D-A1 = (c)): a prerequisite, not yet a fact.** The map's keys are the public catalog's keys alone: `HostHandlerKey` derives from `CatalogKey` (`packages/shared/src/handler-keys.ts`), and a desktop-only key does not compile in it. VC-608 reuses the invocation shape (a sealed map, a door policy, `admittedHandlers`), but before its generic bridge can serve a desktop-only channel from this map, it must change the key contract:
+  1. Add a host-owned set of desktop-only keys, with descriptors that carry the channel's placement class. Electron channel vocabulary stays out of `@volli/shared`'s domain types.
+  2. Make the map's key set the union of the public catalog keys and those desktop-only keys. Keep the coverage exhaustive over both.
+  3. Derive the policy for each key from its placement: catalog policy for a public key, placement-class policy for a local one.
+
+  Only then is "both tiers reach the same handler" the same fact of the type, and the bridge's projection check joins `handler-projection.test.ts`. Promoting an entry adds its catalog row and schemas, never a second handler.
+
+**Adding a command** (what VC-565 onward copies). The worked example is a test-only area router, `packages/session-rpc/src/example-area.test-support.ts`, proven by `example-area.test.ts` through the real builders. It declares a `ticket.create`-like and a `ticket.move`-like command. The real first both-door command is `ticket.move` (`BOARD_ENTRIES`, `board-router.ts`, its handler in `createHostHandlers`).
+
+A command's behaviour has one implementation location, the handler. Adding one is still several edits, each checked:
+
+- the registry entry;
+- the map's signature and body;
+- the family's structural slice and its coverage;
+- the procedure, with its schemas and resources;
+- the socket projection, if the socket serves it;
+- its row in `SAMPLE_INPUTS`.
+
+Follow it step by step:
+
+1. **Write the handler in the host's map.** Add the key's signature to `HostHandlerSignatures` and its body to `createHostHandlers` (`packages/host-core/src/handlers/host-handlers.ts`): the whole command, with every effect it has, from the services the root already passes. The handler holds no policy; each door's policy runs before it, at the map. `HostHandlerCoverage` fails `pnpm typecheck` until the key below is declared, and the map's tests (`host-handlers.test.ts`) prove the command once, whichever door calls it:
+
+   ```ts
+   readonly "ticket.move": HostHandler<TicketMoveCommandInput, Ticket[]>;   // HostHandlerSignatures
+
+   "ticket.move": (input, call) =>                                            // createHostHandlers
+     executeTicketMove({ /* worktree, interrupts, armed arrival, notify, feed */ }, input, {
+       now: now(),
+       actor: call.actor,
+     }),
+   ```
+
+   Then **declare the entry** in `VERB_REGISTRY`. The example's entries are in `EXAMPLE_AREA_ENTRIES` so they need no registry row. A command both doors serve is **one** entry:
 
    ```ts
    {
@@ -197,7 +247,7 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
    ```
 
    A family that passes neither type nor entries is typed across the whole registry and could build another area's key. Add the entry's rows to `verb-registry.test.ts`'s tier and catalog tables.
-2. **Name its resources and ports.** Choose the area's resource kinds (`TICKET_RESOURCE = "ticket"`). Its context extends `CatalogCallerContext` with the area's ports (`ExampleAreaContext.tickets`) and answers `resourceWorkspace` and `sessionMayAct` for its kinds only, `null`/`false` for any other (`exampleAreaContext`). `sessionMayAct` comes from the area's existing policy: the example's ledger lets every Session coordinating on a ticket act on it. The composition root wires these to host-core.
+2. **Name its resources and its slice of the map.** Choose the area's resource kinds (`TICKET_RESOURCE = "ticket"`). Its context extends `CatalogCallerContext` with exactly one field, `handlers`: the slice of the host's map the area projects, declared structurally and keyed by catalog key (`ExampleAreaHandlers`, `BoardRouterHandlers`), with a `…HandlersCoverage` assertion against the family's keys and `RouterContextPorts<Ctx>` asserted `never`. It answers `resourceWorkspace` and `sessionMayAct` for its kinds only, `null`/`false` for any other (`exampleAreaContext`). `sessionMayAct` comes from the area's existing policy: the example's ledger lets every Session coordinating on a ticket act on it. The composition root hands it the host's one map, as `admittedHandlers(map, ROUTER_POLICY)`.
 3. **Build the procedure** from the area's own family, `createCatalogBuilders<ExampleAreaContext, ExampleAreaEntry>()`, inside its `catalogRouter`. Give it both zod validators, and a resolver that names **every** resource the input addresses:
 
    ```ts
@@ -210,12 +260,12 @@ After the handler, a thrown error carrying the `CommandIntentConflict` brand (`@
      ],
    )
      .output(receiptSchema)                                           // output validator, required
-     .mutation(({ ctx, input }) => ctx.tickets.move(input)),          // the one handler: a port
+     .mutation(({ ctx, input }) => ctx.handlers["ticket.move"](input, ctx.call)), // the one handler
    ```
 
    A new query or mutation with no `.output()` is refused at construction.
 4. **Brand the intent conflict.** A `command-id` entry's handler reaches an intent ledger. That ledger throws an error implementing `CommandIntentConflict` (`ExampleIntentConflictError`) when a command id is reused with a different intent, and answers the same receipt for the same intent.
-5. **Assert the binding.** `CatalogMismatch<ProcedurePaths<router>, keys>` must be `never` (`ExampleAreaCatalogBinding`; in production, the composition root's union assertion). `pnpm typecheck` names a key missing on either side. A socket verb keeps its `AGENT_VERB_TABLE` binding, and both doors reach the same host-core function (see Layering).
+5. **Assert the binding, and project the socket verb.** `CatalogMismatch<ProcedurePaths<router>, keys>` must be `never` (`ExampleAreaCatalogBinding`; in production, the family's and `host-router.ts`'s union assertion). `pnpm typecheck` names a key missing on either side. A socket verb for the key becomes `projectHandler(key, { decode, envSession })` in `AGENT_VERB_TABLE`, whose type demands it; its old handler body becomes `decode` and `reply` (`ticketMoveDecode`). Add the key's sample input to `handler-projection.test.ts`'s `SAMPLE_INPUTS`, which is total over the served paths.
 6. **Write its cases.** The example proves, through the real builders: the person is admitted; any Session the policy lets act on the subject is admitted (two Sessions on one ticket); a Session it doesn't is `FORBIDDEN`/`verb-refused` before the handler; a Session may land after a ticket only someone else works on (a reference); a cross-Workspace reference is still `NOT_FOUND`/`workspace-unknown`, exactly as an absent one; same id with the same intent replays; and another intent is `CONFLICT`/`command-conflict`. An area writes these once in its `describeContract`, so they run on every link.
 7. **Delete the area's old per-channel IPC** in the same PR (below).
 
@@ -234,7 +284,7 @@ A public procedure, socket verb or tool without an entry fails compilation, as `
 **Migration, area by area.** It deletes per-channel IPC as each area moves:
 
 1. VC-564 lands the entry shape, the policy middleware and the tRPC projection, with the Session router as the first area. The socket projection already dispatches through `AGENT_VERB_TABLE` and is unchanged. VC-608 lands the generic IPC bridge over the same routers. The socket read verbs are not projected onto `hostApi` in VC-564 (orchestrator ruling on D4): each selects across projects and returns opaque `data`, so serving one over a Workspace-bound connection needs forced Workspace scoping and recursive JSON validation. The Session reads (`session.list/show/peek/answer`) move to VC-663 and the board reads (`board`, `ticket.list/show/events`) to VC-565, each with its `verbs.read` coverage ([Handshake](#handshake-and-capabilities)).
-2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` into the shared handler map. Socket/CLI/agent and phone entries are public; desktop-only channels use the generic bridge and placement-class policy without a catalog rewrite. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` already has one handler for both doors (VC-629); VC-565 makes it a public entry.
+2. Each area ticket (VC-565–573) moves its handler bodies out of `data-ipc.ts` into the shared handler map. Socket/CLI/agent and phone entries are public; desktop-only channels use the generic bridge and placement-class policy without a catalog rewrite. Where doors disagree, the stronger behavior wins and is tested on every door. `ticket.move` is the first public both-door entry (VC-668): one entry (`catalog: { actor: "user", scope: "workspace", idempotency: "natural" }`, column-only on the router), one handler, and three projections. VC-565 widens its router actor to `session-own` once the board's `sessionMayAct` exists, gives it its board-feature membership (VC-669), and decides whether it becomes a `command-id` entry.
 3. Renderer calls go through the generic bridge: IPC locally, WebSocket remotely, the same handler either way. D-A2 retains the Mac's Electron host pending VC-691; flag-off is an in-process link swap, not a host handoff.
 4. The same PR deletes the area's channels from `contract.ts`, `ipc-descriptors.ts` and `preload/index.ts`, with their handlers. No area keeps per-channel IPC beside its generic bridge or public router.
 
@@ -409,6 +459,15 @@ describeContract('Tickets', [
 });
 ```
 
+`ticket-move-doors.contract.test.ts` (desktop) is the first case that runs one command through all three doors at once: the desktop's `volli:ticket-move` channel, the board router over the WebSocket link, and the agent socket, all over one host handler map. It asserts:
+
+- the same durable state, history and effects (the armed arrival, the backward-move interrupt, no notification for a person);
+- replies that are equal up to their envelope;
+- the one documented feed difference: the desktop window is not echoed the board change its reply already carries;
+- each door's policy verdict at the map (`desktop-ipc`, `router`, `agent-socket`), recorded ahead of the handler;
+- refusals that never reach the handler: a Session on the WebSocket, an anonymous socket caller, and a policy narrowed between the socket's dispatch and the map;
+- a Done move over a real git worktree, through the worktree bundle production builds: a busy worktree refuses the trim on every door, and an idle one completes it detached, with its durable `worktree_trimmed` event, snapshot invalidation and `worktree` change on every door.
+
 Add host-protocol as a **devDependency** for `/testing`; never import it in production. Use `recordSubscription` and `expectHostError` for shared subscription/error assertions. Each area adds command replay/conflict, scope denial, snapshot/resume and its own backpressure cases. Each catalog entry's cases run on every door that projects it, the agent socket included once VC-565 adds its link, where a command first exists on both doors: that is the check the `ticket.move` divergence lacked (F3). Each fed command asserts its change on the Workspace feed, and resume and resnapshot are tested per area (F1). VC-608 (on VC-542's list) owns a generic IPC bridge replacing `SESSION_RPC_IPC_PROCEDURES` and `callProcedure`, not a second routing framework in this PR.
 
 Workspace glob `packages/*` includes this package in `pnpm typecheck` (`vp run -r typecheck`) and CI's `Test (packages)` (`test:coverage`); desktop contract cases run in desktop test shards. Owner review of this spec, particularly binary limits/bootstrap naming, is required before migration tickets copy it. VC-564/575 own runtime enforcement and production security; VC-550 defines the identity/fence contract; copy detection and promotion arbitration remain implementation requirements for restore/promotion (VC-591) and control-plane work. This package does not solve those by typing them.
@@ -424,6 +483,7 @@ The four questions VC-630 raised are settled.
      - **Agent capabilities:** every agent browser tool verb behaves identically on both backends, with the same results and refusals, proved by the backend-parameterized suite (VC-619).
      - **Latency:** the 95th-percentile time from a person's input in the view to the screencast frame showing its effect is at most 100 ms. The view shows at least 30 frames per second while the page changes.
      - **The person's interaction:** pointer, scroll, keyboard and text input (IME included), clipboard, navigation, and taking and releasing the browser hold all work in the view as they do in the panel today.
+   - **Known residual: same-process `data:`, `blob:` and `srcdoc` iframes (VC-619, B6(c)).** On Chromium, every document request and redirect hop is held to HTTP(S) before it is sent (`Fetch` on the page's session and on every out-of-process iframe's session, the frame kept paused until its guard is installed). A main frame sent to anything else (its own `blob:`, an external scheme) is refused before it commits. What is **not** blocked: an iframe the page makes in its own process from a `data:` URL, a `blob:` URL or `srcdoc` loads and runs its script. Desktop's `will-frame-navigate` refuses all three. **Why:** these frames make no network request, so no `Fetch` guard sees them, and CDP has no per-frame refusal before commit (`Network.setBlockedURLs` does not cover them either). None gains a privilege the page lacks: `blob:` and `srcdoc` share its origin, and `data:` is opaque. **Rejected mechanisms:** injecting a `frame-src` CSP through `Fetch` response interception rewrites every document's headers, is visible to the page (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame element races the commit and changes the page's DOM. **Pinned:** `packages/host-core/src/browser/chromium-backend.test.ts`, "guards frames", asserts the three run today and flips when a mechanism lands. **Gate:** VC-571 must enforce this rule, or keep the lent-view fallback below, before persons use hostd's browser.
    - **Extensibility.** The `BrowserBackend` seam stays open to further backends and capabilities, as optional members a host advertises. The owner has larger plans for the browser.
    - **Fallback.** If Chromium cannot meet the parity bar, the fallback is option (c): the desktop's own view is lent to a same-machine host while the desktop is attached, and Chromium is used otherwise.
 3. **Key-bound identity lands in M2** (F5, VC-575). That covers host-key pinning at pairing, the welcome signed over the client nonce, and short-lived device and worker credentials that prove a key. Copy detection stays open.
