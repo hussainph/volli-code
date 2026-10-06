@@ -60,13 +60,13 @@ const TEST_SUPPORT = [
   "web/test-support/**",
 ];
 /** Built once, by `createHostCore`; a second one is a second Session writer. */
-const SESSION_WRITER_CONSTRUCTORS = [
+const SESSION_WRITER_CONSTRUCTORS = new Set([
   "createSqliteSessionLedger",
   "SqliteSessionLedger",
   "createHostSessionEngine",
   "createSessionEngine",
   "createTestSessionEngine",
-];
+]);
 
 function read(file: string): string {
   return readFileSync(new URL(file, new URL(".", import.meta.url)), "utf8");
@@ -278,10 +278,10 @@ function productionExportsMatching(
 }
 
 const isWriterConstructor = (name: string) =>
-  SESSION_WRITER_CONSTRUCTORS.includes(name) ||
+  SESSION_WRITER_CONSTRUCTORS.has(name) ||
   name === externalStar(SESSION_ENGINE_PACKAGE) ||
   name.startsWith(`${externalStar(SESSION_ENGINE_PACKAGE)}/`);
-const isTestReset = (name: string) => /ForTest$/.test(name);
+const isTestReset = (name: string) => name.endsWith("ForTest");
 
 describe("host-core's package interface", () => {
   it("flags a self-name import in every quoting form, in a scanned source file", () => {
