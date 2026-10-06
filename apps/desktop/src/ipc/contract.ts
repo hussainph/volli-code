@@ -4,7 +4,7 @@ import type {
   FileWriteResult,
   FileSearchResult,
   ArtifactCreateResult,
-} from "@volli/host-core/file-types";
+} from "@volli/shared";
 export type {
   FileMutationResult,
   FileContent,
@@ -15,7 +15,7 @@ export type {
   FileSearchLimit,
   FileSearchResult,
   ArtifactCreateResult,
-} from "@volli/host-core/file-types";
+} from "@volli/shared";
 export type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 // The Electron IPC catalog: every channel this app speaks, declared once.
 //
@@ -1994,12 +1994,12 @@ export type BrowserTabStateEvent =
  * started and read them are the durable record.
  */
 /**
- * One background shell as the host holds it. Defined beside the host that
- * produces it (`@volli/host-core/shell/background-shell-host`, VC-622) and
- * re-exported here so the renderer contract stays in one place.
+ * One background shell as the host holds it. Client wire vocabulary in
+ * `@volli/shared` (VC-632), re-exported here so the renderer contract stays in
+ * one place; this contract never depends on host-core.
  */
-export type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
-import type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
+export type { BackgroundShellState } from "@volli/shared";
+import type { BackgroundShellState } from "@volli/shared";
 
 /**
  * A complete shell snapshot pushed on start and on exit, or the id of a shell

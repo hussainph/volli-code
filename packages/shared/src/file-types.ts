@@ -1,6 +1,9 @@
-/** File service results, independent of any transport. */
-import type { FileKind, FileSource } from "@volli/shared";
-export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+/**
+ * File service results, independent of any transport: what host-core's file
+ * services answer and what a client's IPC contract carries (VC-632).
+ */
+import type { FileKind, FileSource } from "./file-ref";
+import type { Result } from "./host-settings";
 export type RevealResult = Result;
 /**
  * What the create/rename/duplicate track resolves with: the project-relative
