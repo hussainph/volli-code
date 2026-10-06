@@ -22,7 +22,7 @@
  * table answers it.
  */
 import type { AuthorityActorKind } from "./authority-config";
-import type { VerbActor } from "./verb-registry";
+import type { CatalogActor, VerbActor } from "./verb-registry";
 
 /** `HostActor["kind"]`, which `@volli/session-rpc` pins equal to this. */
 export type HostActorKindName = "device" | "session" | "worker";
@@ -66,4 +66,21 @@ export function actorRequirementAdmits(requirement: VerbActor, actor: AuthorityA
     case "role":
       return false;
   }
+}
+
+/**
+ * How a router admits a policy actor to an entry whose router actor is
+ * `requirement`: outright, only to resources the Session owns (`if-owner`,
+ * answered after the Workspace check by the context's `resourceOwner` port),
+ * or not at all.
+ */
+export type CatalogAdmission = "admitted" | "if-owner" | "refused";
+
+export function catalogActorAdmits(
+  requirement: CatalogActor,
+  actor: AuthorityActorKind,
+): CatalogAdmission {
+  if (requirement === "session-own" && actor === "session") return "if-owner";
+  const judged = requirement === "session-own" ? "user" : requirement;
+  return actorRequirementAdmits(judged, actor) ? "admitted" : "refused";
 }

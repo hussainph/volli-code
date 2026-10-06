@@ -138,7 +138,7 @@ function fixture() {
   };
   const host = {
     caller: device,
-    sessionWorkspace: (sessionId: string) => OWNERS[sessionId] ?? null,
+    resourceWorkspace: ({ id }: { id: string }) => OWNERS[id] ?? null,
     runtime,
     diagnostics: new RpcDiagnosticLog(),
   } satisfies SessionRouterHost;

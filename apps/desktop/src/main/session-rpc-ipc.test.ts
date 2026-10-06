@@ -204,7 +204,7 @@ describe("registerSessionRpcIpcHandlers", () => {
   // options cannot make it anyone else.
   it("takes no caller and no Session-to-Workspace port in its options", () => {
     expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("caller");
-    expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("sessionWorkspace");
+    expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("resourceWorkspace");
     const fixture = runtimeFixture();
     // @ts-expect-error -- a caller is not a production option.
     registerSessionRpcIpcHandlers({ runtime: fixture.runtime, caller: LOCAL_DESKTOP_CALLER });
@@ -222,7 +222,7 @@ describe("registerSessionRpcIpcHandlers", () => {
     };
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      ...({ caller: network, sessionWorkspace: () => null } as object),
+      ...({ caller: network, resourceWorkspace: () => null } as object),
     });
     const owner = sender();
     // A network device with that port would be refused this Session; the

@@ -17,7 +17,7 @@ import type { RouterCaller, SessionRouterContext } from "@volli/session-rpc";
 /** Who a harness link's router judges, in place of the desktop's own window. */
 export interface HarnessIdentity {
   readonly caller: RouterCaller;
-  readonly sessionWorkspace?: SessionRouterContext["sessionWorkspace"];
+  readonly resourceWorkspace?: SessionRouterContext["resourceWorkspace"];
 }
 
 let pending: HarnessIdentity | null = null;
@@ -53,7 +53,7 @@ export function withHarnessIdentity(actual: typeof SessionRpc): typeof SessionRp
               // Main's bridge always hands the router a context object.
               ...(context as SessionRouterContext),
               caller: identity.caller,
-              sessionWorkspace: identity.sessionWorkspace,
+              resourceWorkspace: identity.resourceWorkspace,
             },
             options,
           ),

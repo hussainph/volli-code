@@ -10,17 +10,19 @@ import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
 import {
-  assertCatalogBound,
-  catalogRouter,
   hostErrorOf,
-  hostProcedure,
   HostProcedureError,
   LOCAL_DESKTOP_CALLER,
-  workspaceProcedure,
   type CatalogMismatch,
   type ProcedurePaths,
   type RouterCaller,
 } from "./catalog";
+import {
+  assertCatalogBound,
+  catalogRouter,
+  hostProcedure,
+  workspaceProcedure,
+} from "./session-catalog";
 import {
   createSessionRouter,
   RpcDiagnosticLog,
@@ -67,7 +69,7 @@ function fixture(caller: RouterCaller) {
     caller,
     runtime,
     diagnostics: new RpcDiagnosticLog(),
-    sessionWorkspace: (sessionId) => OWNERS[sessionId] ?? null,
+    resourceWorkspace: ({ id }) => OWNERS[id] ?? null,
     readModelAccessDefaults: () => EMPTY_MODEL_ACCESS_DEFAULTS,
     createSession,
   };
