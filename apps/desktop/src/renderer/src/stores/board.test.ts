@@ -15,7 +15,10 @@ import {
   type BoardGateway,
   createBoardStore,
   planningChangeAffects,
+  preserveIdentities,
 } from "./board";
+import { startBoardProtocol, stopBoardProtocol } from "@renderer/lib/board-protocol";
+import type { BoardSyncTransport } from "./board-sync";
 import { useChatSessionsStore } from "./chat-sessions";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
@@ -2475,4 +2478,760 @@ describe("planningChangeAffects", () => {
     expect(planningChangeAffects(change, "t1")).toBe(true);
     expect(planningChangeAffects(change, "t2")).toBe(false);
   });
+});
+
+// ---- VC-447: identity preservation ----------------------------------------------------
+
+/** Two versioned rows are the same when their versions match. */
+const same = (left: { id: string; v: number }, right: { id: string; v: number }) =>
+  left.v === right.v;
+
+describe("preserveIdentities (VC-447)", () => {
+  it("answers the previous array itself when nothing changed", () => {
+    const previous = [
+      { id: "a", v: 1 },
+      { id: "b", v: 2 },
+    ];
+
+    expect(
+      preserveIdentities(
+        previous,
+        [
+          { id: "a", v: 1 },
+          { id: "b", v: 2 },
+        ],
+        same,
+      ),
+    ).toBe(previous);
+  });
+
+  it("keeps each unchanged element's object and takes each changed or new one", () => {
+    const a = { id: "a", v: 1 };
+    const b = { id: "b", v: 2 };
+    const nextB = { id: "b", v: 3 };
+    const c = { id: "c", v: 4 };
+
+    const kept = preserveIdentities([a, b], [{ id: "a", v: 1 }, nextB, c], same);
+
+    expect(kept[0]).toBe(a);
+    expect(kept[1]).toBe(nextB);
+    expect(kept[2]).toBe(c);
+  });
+
+  it("answers a new array for a reorder or a removal, with the same objects", () => {
+    const a = { id: "a", v: 1 };
+    const b = { id: "b", v: 2 };
+
+    const reordered = preserveIdentities(
+      [a, b],
+      [
+        { id: "b", v: 2 },
+        { id: "a", v: 1 },
+      ],
+      same,
+    );
+    const shorter = preserveIdentities([a, b], [{ id: "a", v: 1 }], same);
+
+    expect(reordered).toEqual([b, a]);
+    expect(reordered[0]).toBe(b);
+    expect(reordered[1]).toBe(a);
+    expect(shorter).not.toBe([a, b]);
+    expect(shorter[0]).toBe(a);
+    expect(shorter).toHaveLength(1);
+  });
+});
+
+describe("hydrateProjectRoster keeps identities (VC-447)", () => {
+  it("mints nothing when the roster reads back the rows already held", () => {
+    const store = createBoardStore(fakeGateway());
+    const labels = [labelNamed("bug")];
+    store.getState().hydrate(
+      {
+        p1: [
+          ticket({ id: "a", status: "doing", labels: ["bug"] }),
+          ticket({ id: "b", status: "todo" }),
+        ],
+      },
+      { p1: labels },
+    );
+    const before = store.getState().ticketsByProject.p1;
+
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [
+          rosterRow({ ...before![0]!, labels: ["bug"] }),
+          rosterRow({ ...before![1]!, status: "todo" }),
+        ],
+        [labelNamed("bug")],
+      );
+
+    // Equal label lists in a fresh array still count as the same row.
+    expect(store.getState().ticketsByProject.p1).toBe(before);
+    expect(store.getState().labelsByProject.p1).toBe(labels);
+  });
+
+  it("re-mints only the row and label that changed", () => {
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .hydrate(
+        { p1: [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })] },
+        { p1: [labelNamed("bug"), labelNamed("ui")] },
+      );
+    const [a, b] = store.getState().ticketsByProject.p1!;
+    const [bug, ui] = store.getState().labelsByProject.p1!;
+
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [rosterRow({ ...a!, labels: ["ui"] }), rosterRow({ ...b! })],
+        [bug!, { ...ui!, color: "#f00" }],
+      );
+
+    const [nextA, nextB] = store.getState().ticketsByProject.p1!;
+    const [nextBug, nextUi] = store.getState().labelsByProject.p1!;
+    expect(nextA).not.toBe(a);
+    expect(nextA?.labels).toEqual(["ui"]);
+    expect(nextB).toBe(b);
+    expect(nextBug).toBe(bug);
+    expect(nextUi).not.toBe(ui);
+    expect(nextUi?.color).toBe("#f00");
+  });
+
+  it("re-mints a row whose shape differs, and seeds labels for a slice that held none", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    const [a] = store.getState().ticketsByProject.p1!;
+
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [{ ...rosterRow({ ...a! }), extra: true } as unknown as TicketSummary],
+        [labelNamed("bug")],
+      );
+
+    expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(a);
+    expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
+  });
+});
+
+// ---- VC-565: the protocol path (`cloud` on) -------------------------------------------
+
+describe("paintProtocolBoard", () => {
+  it("seeds a Workspace it has never painted, marking the rows whose body it has not read", () => {
+    const store = createBoardStore(fakeGateway());
+    const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
+
+    store.getState().paintProtocolBoard("p1", tickets, [labelNamed("bug")], new Set(["b"]));
+
+    expect(store.getState().ticketsByProject.p1).toEqual(tickets);
+    expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
+    expect(isTicketBodyLoaded(store.getState(), "a")).toBe(true);
+    expect(isTicketBodyLoaded(store.getState(), "b")).toBe(false);
+  });
+
+  it("seeds empty slices for an empty Workspace", () => {
+    const store = createBoardStore(fakeGateway());
+
+    store.getState().paintProtocolBoard("p1", [], [], new Set());
+
+    expect(store.getState().ticketsByProject.p1).toEqual([]);
+    expect(store.getState().labelsByProject.p1).toEqual([]);
+  });
+
+  it("sets nothing at all when a repaint shows what is already held", () => {
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [ticket({ id: "a", status: "doing" })],
+        [labelNamed("bug")],
+        new Set(["a"]),
+      );
+    const before = store.getState();
+
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [{ ...before.ticketsByProject.p1![0]! }],
+        [labelNamed("bug")],
+        new Set(["a"]),
+      );
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("re-mints only the card that changed, and leaves the labels' slice alone", () => {
+    const store = createBoardStore(fakeGateway());
+    const labels = [labelNamed("bug")];
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })],
+        labels,
+        new Set(),
+      );
+    const [a, b] = store.getState().ticketsByProject.p1!;
+    const labelsBefore = store.getState().labelsByProject.p1;
+
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [{ ...a!, status: "done" }, { ...b! }],
+        [labelNamed("bug")],
+        new Set(),
+      );
+
+    const [nextA, nextB] = store.getState().ticketsByProject.p1!;
+    expect(nextA?.status).toBe("done");
+    expect(nextB).toBe(b);
+    expect(store.getState().labelsByProject.p1).toBe(labelsBefore);
+  });
+
+  it("re-mints only the labels' slice when only a label changed", () => {
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [ticket({ id: "a", status: "doing" })],
+        [labelNamed("bug")],
+        new Set(),
+      );
+    const ticketsBefore = store.getState().ticketsByProject;
+
+    store
+      .getState()
+      .paintProtocolBoard(
+        "p1",
+        [{ ...ticketsBefore.p1![0]! }],
+        [{ ...labelNamed("bug"), color: "#f00" }],
+        new Set(),
+      );
+
+    expect(store.getState().ticketsByProject).toBe(ticketsBefore);
+    expect(store.getState().labelsByProject.p1?.[0]?.color).toBe("#f00");
+  });
+
+  it("moves the unloaded marks alone when only they changed", () => {
+    const store = createBoardStore(fakeGateway());
+    const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
+    store.getState().paintProtocolBoard("p1", tickets, [], new Set(["a"]));
+    const ticketsBefore = store.getState().ticketsByProject;
+
+    store.getState().paintProtocolBoard(
+      "p1",
+      tickets.map((row) => structuredClone(row)),
+      [],
+      new Set(["b"]),
+    );
+
+    expect(store.getState().ticketsByProject).toBe(ticketsBefore);
+    expect(store.getState().unloadedTicketBodies).toEqual({ b: true });
+  });
+
+  it("re-homes the chat tabs of a card that left the board, and restores them when it returns", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    store.getState().paintProtocolBoard("p1", [a, b], [], new Set());
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
+
+    store.getState().paintProtocolBoard("p1", [b], [], new Set());
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c2"], p1: ["c1"] });
+
+    store.getState().paintProtocolBoard("p1", [a, b], [], new Set());
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ a: ["c1"], b: ["c2"] });
+  });
+
+  it("does not touch the chat tabs when only the labels changed", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    const a = ticket({ id: "a", status: "doing" });
+    store.getState().paintProtocolBoard("p1", [a], [], new Set());
+    useChatSessionsStore.setState({ openTabs: { x: ["c1"] } });
+    const reconcile = vi.spyOn(useChatSessionsStore.getState(), "reconcileTicketChatTabs");
+
+    store.getState().paintProtocolBoard("p1", [a], [labelNamed("bug")], new Set());
+
+    expect(reconcile).not.toHaveBeenCalled();
+    reconcile.mockRestore();
+  });
+});
+
+const unused = () => Promise.reject(new Error("not expected"));
+
+/** A transport nothing should reach: the store's branches talk to the engine, spied on. */
+function unusedTransport(): BoardSyncTransport {
+  return {
+    snapshot: vi.fn(unused),
+    roster: vi.fn(unused),
+    changes: vi.fn(() => () => {}),
+    createTicket: vi.fn(unused),
+    moveTickets: vi.fn(unused),
+    setPriority: vi.fn(unused),
+    updateTicket: vi.fn(unused),
+    setLabels: vi.fn(unused),
+    setLabelColor: vi.fn(unused),
+    archiveTicket: vi.fn(unused),
+    unarchiveTicket: vi.fn(unused),
+    deleteTicket: vi.fn(unused),
+    archivedTickets: vi.fn(unused),
+  };
+}
+
+/** Starts the protocol path with an engine over {@link unusedTransport}. */
+function startProtocol() {
+  const view = {
+    paint: vi.fn(),
+    adoptProject: vi.fn(),
+    notePlanningChange: vi.fn(),
+    checkoutMoved: vi.fn(),
+    failed: vi.fn(),
+  };
+  const transport = unusedTransport();
+  const { sync } = startBoardProtocol({ view, client: {} as never, sync: { transport } });
+  return { sync, transport };
+}
+
+/** Every gateway call: none may happen on the protocol path. */
+function gatewayCalls(gateway: BoardGateway): number {
+  return Object.values(gateway).reduce(
+    (total, fn) => total + vi.mocked(fn as () => unknown).mock.calls.length,
+    0,
+  );
+}
+
+describe("the board store on the protocol path (cloud on)", () => {
+  afterEach(() => {
+    stopBoardProtocol();
+  });
+
+  it("creates through the engine, passing only the options the caller supplied", async () => {
+    const { sync } = startProtocol();
+    const created = ticket({ id: "n", status: "todo", title: "New" });
+    const createTicket = vi.spyOn(sync, "createTicket").mockResolvedValue(created);
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    expect(await store.getState().addTicket("p1", "todo", "  New  ")).toBe(created);
+    await store
+      .getState()
+      .addTicket("p1", "doing", "Two", { priority: "high", body: undefined, labels: ["bug"] });
+    expect(await store.getState().addTicket("p1", "todo", "   ")).toBeNull();
+
+    expect(createTicket.mock.calls).toEqual([
+      ["p1", { status: "todo", title: "New" }],
+      ["p1", { status: "doing", title: "Two", priority: "high", labels: ["bug"] }],
+    ]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("moves one card or a group through the engine as one command", async () => {
+    const { sync } = startProtocol();
+    const moveTickets = vi.spyOn(sync, "moveTickets").mockResolvedValue();
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    const choice = { kind: "move-only" } as const;
+
+    await store.getState().moveTicket("p1", "a", "doing", 2, choice);
+    await store.getState().moveTickets("p1", ["a", "b", "a"], "done", 0);
+
+    expect(moveTickets.mock.calls).toEqual([
+      ["p1", ["a"], "doing", 2, choice],
+      ["p1", ["a", "b"], "done", 0, undefined],
+    ]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("sets a changed priority through the engine, and an unchanged one nowhere", async () => {
+    const { sync } = startProtocol();
+    const setPriority = vi.spyOn(sync, "setPriority").mockResolvedValue();
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", priority: "low" })] }, {});
+
+    await store.getState().setTicketPriority("p1", "a", "low");
+    await store.getState().setTicketPriority("p1", "a", "high");
+
+    expect(setPriority.mock.calls).toEqual([["p1", "a", "high"]]);
+    // The engine paints; the store does not patch its own slice.
+    expect(store.getState().ticketsByProject.p1?.[0]?.priority).toBe("low");
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("updates through the engine without a host path, and marks the body read on success", async () => {
+    const { sync } = startProtocol();
+    const updateTicket = vi.spyOn(sync, "updateTicket");
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, { p1: [] });
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [rosterRow({ id: "a", status: "doing" }), rosterRow({ id: "b", status: "doing" })],
+        [],
+      );
+
+    updateTicket.mockResolvedValueOnce(null);
+    await store.getState().updateTicket({ ticketId: "a", title: "Refused" });
+    expect(isTicketBodyLoaded(store.getState(), "a")).toBe(false);
+
+    updateTicket.mockResolvedValueOnce(ticket({ id: "a", status: "doing" }));
+    await store
+      .getState()
+      .updateTicket({ ticketId: "a", title: "T", worktreePath: "/wt", branch: "b" });
+    expect(isTicketBodyLoaded(store.getState(), "a")).toBe(true);
+    // Already read: nothing to clear.
+    updateTicket.mockResolvedValueOnce(ticket({ id: "a", status: "doing" }));
+    const before = store.getState().unloadedTicketBodies;
+    await store.getState().updateTicket({ ticketId: "a", title: "Again" });
+    expect(store.getState().unloadedTicketBodies).toBe(before);
+
+    await store.getState().updateTicket({ ticketId: "nowhere", title: "No" });
+
+    expect(updateTicket.mock.calls).toEqual([
+      ["p1", { ticketId: "a", title: "Refused" }],
+      ["p1", { ticketId: "a", title: "T", branch: "b" }],
+      ["p1", { ticketId: "a", title: "Again" }],
+    ]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("sets labels through the engine for a ticket it holds, and nowhere for one it does not", async () => {
+    const { sync } = startProtocol();
+    const setLabels = vi.spyOn(sync, "setLabels").mockResolvedValue();
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    await store.getState().setLabels("a", ["bug"]);
+    await store.getState().setLabels("nowhere", ["bug"]);
+
+    expect(setLabels.mock.calls).toEqual([["p1", "a", ["bug"]]]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("recolors a label through the engine only when the color changes", async () => {
+    const { sync } = startProtocol();
+    const setLabelColor = vi.spyOn(sync, "setLabelColor").mockResolvedValue();
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({}, { p1: [labelNamed("bug")] });
+
+    await store.getState().setLabelColor("p1", "l-bug", null);
+    await store.getState().setLabelColor("p1", "l-bug", "#f00");
+
+    expect(setLabelColor.mock.calls).toEqual([["p1", "l-bug", "#f00"]]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("loads the archive through the engine", async () => {
+    const { sync } = startProtocol();
+    const archived = [archivedTicket({ id: "x", status: "done" })];
+    const archivedTickets = vi.spyOn(sync, "archivedTickets");
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+
+    archivedTickets.mockResolvedValueOnce(archived);
+    expect(await store.getState().loadArchived("p1")).toBe(true);
+    expect(store.getState().archivedByProject.p1).toBe(archived);
+
+    // A failed read (the engine already said so) loads nothing.
+    archivedTickets.mockResolvedValueOnce(null);
+    expect(await store.getState().loadArchived("p1")).toBe(false);
+    // Nor for a Workspace forgotten meanwhile.
+    archivedTickets.mockResolvedValueOnce(archived);
+    expect(await store.getState().loadArchived("gone")).toBe(false);
+    expect(store.getState().archivedByProject.gone).toBeUndefined();
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("archives through the engine, then ends the ticket's sessions and prunes the selection", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const { sync } = startProtocol();
+    const archiveTicket = vi.spyOn(sync, "archiveTicket").mockResolvedValue(true);
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate(
+      {
+        p1: [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "doing", order: 1 })],
+      },
+      {},
+    );
+    store.setState({ archivedByProject: { p1: [] } });
+    store.getState().selectTickets("p1", ["a", "b"]);
+    useSessionsStore.getState().addSession(ticketScope("p1", "a"), "s1", shellLaunch("Session 1"));
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(archiveTicket).toHaveBeenCalledWith("p1", "a");
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(useSessionsStore.getState().byOwner.a).toBeUndefined();
+    expect(store.getState().archivedByProject.p1).toBeUndefined();
+    expect(store.getState().selectedByProject.p1).toEqual(["b"]);
+
+    await store.getState().archiveTicket("p1", "b");
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
+    // An unknown card asks nothing of the engine.
+    await store.getState().archiveTicket("p1", "nowhere");
+    expect(archiveTicket).toHaveBeenCalledTimes(2);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("keeps the ticket's sessions and selection when the engine refuses the archive", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const { sync } = startProtocol();
+    vi.spyOn(sync, "archiveTicket").mockResolvedValue(false);
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    store.setState({ archivedByProject: { p1: [] } });
+    store.getState().selectTicket("p1", "a");
+    useSessionsStore.getState().addSession(ticketScope("p1", "a"), "s1", shellLaunch("Session 1"));
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().byOwner.a?.tabs).toHaveLength(1);
+    expect(store.getState().selectedByProject.p1).toEqual(["a"]);
+    expect(store.getState().archivedByProject.p1).toEqual([]);
+  });
+
+  it("unarchives through the engine, dropping the card from the Archive slice", async () => {
+    const { sync } = startProtocol();
+    const target = archivedTicket({ id: "x", status: "done" });
+    const unarchiveTicket = vi
+      .spyOn(sync, "unarchiveTicket")
+      .mockResolvedValue(ticket({ id: "x", status: "done" }));
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({
+      archivedByProject: { p1: [archivedTicket({ id: "w", status: "done" }), target] },
+    });
+
+    await store.getState().unarchiveTicket("p1", "x");
+
+    expect(unarchiveTicket).toHaveBeenCalledWith("p1", target);
+    expect(store.getState().archivedByProject.p1?.map(({ id }) => id)).toEqual(["w"]);
+    // The engine paints the board; the store does not append it itself.
+    expect(store.getState().ticketsByProject.p1).toEqual([]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("restores the Archive slice when the engine refuses the unarchive", async () => {
+    const { sync } = startProtocol();
+    vi.spyOn(sync, "unarchiveTicket").mockResolvedValue(null);
+    const store = createBoardStore(fakeGateway());
+    const archived = [
+      archivedTicket({ id: "w", status: "done" }),
+      archivedTicket({ id: "x", status: "done" }),
+      archivedTicket({ id: "y", status: "done" }),
+    ];
+    store.setState({ archivedByProject: { p1: archived } });
+
+    await store.getState().unarchiveTicket("p1", "x");
+
+    expect(store.getState().archivedByProject.p1?.map(({ id }) => id)).toEqual(["w", "x", "y"]);
+  });
+
+  it("deletes through the engine, ending the ticket's sessions", async () => {
+    const kill = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { terminal: { kill } } });
+    resetSessions();
+    const { sync } = startProtocol();
+    const deleteTicket = vi.spyOn(sync, "deleteTicket").mockResolvedValue(true);
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "x", status: "done" })] } });
+    useSessionsStore.getState().addSession(ticketScope("p1", "x"), "s1", shellLaunch("Session 1"));
+
+    await store.getState().deleteArchivedTicket("p1", "x");
+
+    expect(deleteTicket).toHaveBeenCalledWith("p1", "x");
+    expect(kill).toHaveBeenCalledWith("s1");
+    expect(store.getState().archivedByProject.p1).toEqual([]);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
+
+  it("restores the Archive slice when the engine refuses the delete", async () => {
+    const { sync } = startProtocol();
+    vi.spyOn(sync, "deleteTicket").mockResolvedValue(false);
+    const store = createBoardStore(fakeGateway());
+    store.setState({
+      archivedByProject: {
+        p1: [
+          archivedTicket({ id: "w", status: "done" }),
+          archivedTicket({ id: "x", status: "done" }),
+        ],
+      },
+    });
+
+    await store.getState().deleteArchivedTicket("p1", "x");
+
+    expect(store.getState().archivedByProject.p1?.map(({ id }) => id)).toEqual(["w", "x"]);
+  });
+
+  it("opens a new Workspace's board once, and says so when it cannot", async () => {
+    const { sync } = startProtocol();
+    const open = vi.spyOn(sync, "open").mockResolvedValueOnce();
+    vi.spyOn(sync, "follows").mockImplementation((projectId) => projectId === "followed");
+    const store = createBoardStore(fakeGateway());
+
+    store.getState().seedProject("p1");
+    store.getState().seedProject("followed");
+    open.mockRejectedValueOnce(new Error("host gone"));
+    store.getState().seedProject("p2");
+    await vi.waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalled());
+
+    expect(open.mock.calls).toEqual([["p1"], ["p2"]]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't open the board: host gone", {
+      duration: 8000,
+      closeButton: true,
+    });
+  });
+
+  it("stops following a forgotten Workspace", () => {
+    const { sync } = startProtocol();
+    const close = vi.spyOn(sync, "close");
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    store.getState().forget("p1");
+
+    expect(close).toHaveBeenCalledWith("p1");
+  });
+
+  it("hands a body read on its own to the engine, and clears the placeholder mark it replaces", () => {
+    const { sync } = startProtocol();
+    const adoptBody = vi.spyOn(sync, "adoptBody");
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .paintProtocolBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
+
+    store.getState().adoptTicketBody("p1", "a", "# Read");
+
+    expect(adoptBody).toHaveBeenCalledWith("a", "# Read");
+    expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("# Read");
+    expect(isTicketBodyLoaded(store.getState(), "a")).toBe(true);
+  });
+
+  it("hands a body read on its own to the engine, so its repaints keep it", () => {
+    const { sync } = startProtocol();
+    const adoptBody = vi.spyOn(sync, "adoptBody");
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    store.getState().adoptTicketBody("p1", "a", "# Read");
+
+    expect(adoptBody).toHaveBeenCalledWith("a", "# Read");
+    expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("# Read");
+  });
+});
+
+// ---- the #810 review's identity probes, kept (VC-447) ----------------------------------------
+
+describe("VC-447: a refresh keeps every unchanged identity and drops no changed field (flag off and on)", () => {
+  const base = ticket({ id: "a", status: "todo", labels: ["a", "b"] });
+  const changed: Partial<Ticket>[] = [
+    { id: "b" },
+    { projectId: "p2" },
+    { ticketNumber: 888 },
+    { title: "changed" },
+    { status: "done" },
+    { priority: "high" },
+    { labels: ["a", "c"] },
+    { labels: ["b", "a"] },
+    { labels: ["a"] },
+    { labels: ["a", "b", "c"] },
+    { usesWorktree: false },
+    { preferredHarnessId: "codex" },
+    { order: 88 },
+    { worktreePath: "/new" },
+    { branch: "new" },
+    { baseBranch: "new" },
+    { prUrl: "https://example.test" },
+    { createdAt: 888 },
+    { updatedAt: 888 },
+  ];
+  it.each(changed)("does not drop changed ticket field %j", (patch) => {
+    stopBoardProtocol();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [base] }, { p1: [] });
+    const { body: _body, ...row } = { ...base, ...patch };
+    store.getState().hydrateProjectRoster("p1", [row], []);
+    expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(base);
+    expect(store.getState().ticketsByProject.p1?.[0]).toEqual({ ...row, body: base.body });
+  });
+  it.each([{ id: "other" }, { projectId: "p2" }, { name: "new" }, { color: "red" }])(
+    "does not drop label field %j",
+    (patch) => {
+      stopBoardProtocol();
+      const store = createBoardStore(fakeGateway());
+      const label = labelNamed("bug");
+      store.getState().hydrate({ p1: [base] }, { p1: [label] });
+      const { body: _body, ...row } = base;
+      store.getState().hydrateProjectRoster("p1", [row], [{ ...label, ...patch }]);
+      expect(store.getState().labelsByProject.p1?.[0]).not.toBe(label);
+    },
+  );
+  it("preserves cloned equal arrays and objects, but updates body through its dedicated read", () => {
+    stopBoardProtocol();
+    const store = createBoardStore(fakeGateway());
+    const label = labelNamed("bug");
+    store.getState().hydrate({ p1: [base] }, { p1: [label] });
+    const prior = store.getState().ticketsByProject.p1;
+    const { body: _body, ...row } = base;
+    store
+      .getState()
+      .hydrateProjectRoster("p1", [{ ...row, labels: [...row.labels] }], [{ ...label }]);
+    expect(store.getState().ticketsByProject.p1).toBe(prior);
+    expect(store.getState().labelsByProject.p1?.[0]).toBe(label);
+    store.getState().adoptTicketBody("p1", "a", "new body");
+    expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(base);
+    expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("new body");
+  });
+});
+
+it("preserves 599 of 600 ticket identities on both board paths", () => {
+  stopBoardProtocol();
+  const store = createBoardStore(fakeGateway());
+  const rows = Array.from({ length: 600 }, (_, i) =>
+    ticket({ id: `card-${i}`, status: "todo", order: i }),
+  );
+  store.getState().hydrate({ p1: rows }, { p1: [] });
+  const cloned = rows.map((t, i) => ({
+    ...t,
+    labels: [...t.labels],
+    title: i === 42 ? "changed" : t.title,
+  }));
+  const summaries = cloned.map(({ body: _body, ...t }) => t);
+  store.getState().hydrateProjectRoster("p1", summaries, []);
+  const off = store.getState().ticketsByProject.p1!;
+  expect(off.filter((t, i) => t === rows[i])).toHaveLength(599);
+  store.getState().paintProtocolBoard(
+    "p1",
+    // Fresh objects with equal values: the paint must keep the identities.
+    // oxlint-disable-next-line oxc/no-map-spread
+    cloned.map((t) => ({ ...t, labels: [...t.labels] })),
+    [],
+    new Set(),
+  );
+  expect(store.getState().ticketsByProject.p1).toBe(off);
 });

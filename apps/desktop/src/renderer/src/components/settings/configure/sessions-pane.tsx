@@ -44,6 +44,7 @@ import { ModelName } from "@renderer/components/models/model-identity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 const NO_MODELS: readonly ModelAccessModel[] = [];
 const NO_PROVIDERS: readonly ModelAccessProvider[] = [];
@@ -130,7 +131,7 @@ export function SessionsPane({ project }: { project: Project }) {
     if (saving) return;
     setSaving(true);
     const saved = await writeThrough("save this project's Chat default", () =>
-      window.api.projects.setSessionDefaults({ id: project.id, model: selection }),
+      boardApi().projects.setSessionDefaults({ id: project.id, model: selection }),
     );
     setSaving(false);
     if (saved !== null) adoptProject(saved.project);

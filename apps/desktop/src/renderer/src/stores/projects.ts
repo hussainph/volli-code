@@ -38,6 +38,7 @@ import { useBoardStore } from "./board";
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
 export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
@@ -130,10 +131,10 @@ const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
 
 const defaultGateway: ProjectsGateway = {
   create: (input) => window.api.projects.create(input),
-  update: (input) => window.api.projects.update(input),
+  update: (input) => boardApi().projects.update(input),
   remove: (id) => window.api.projects.remove(id),
   relink: (input) => window.api.projects.relink(input),
-  checkFolder: (projectId) => window.api.projects.checkFolder(projectId),
+  checkFolder: (projectId) => boardApi().projects.checkFolder(projectId),
   // `project.reorder`, the desktop-only tier's write that replaced
   // `volli:project-reorder` (VC-608).
   reorder: async (orderedIds) => {
