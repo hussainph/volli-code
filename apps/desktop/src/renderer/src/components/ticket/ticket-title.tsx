@@ -2,6 +2,7 @@ import * as React from "react";
 import type { Ticket } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/ui/inline-rename";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 
 /**
@@ -24,6 +25,8 @@ import { useBoardStore } from "@renderer/stores/board";
 export function TicketTitle({ ticket }: { ticket: Ticket }) {
   const updateTicket = useBoardStore((state) => state.updateTicket);
   const [editing, setEditing] = React.useState(false);
+  // Read-only (VC-576): the title reads, and does not offer itself as a field.
+  const canWrite = useCanWrite(ticket.projectId);
 
   // Seamless flip (ticket-detail live-preview pass): the field carries the exact
   // h1 typography with no border, background, or accent ring — the caret is the
@@ -36,11 +39,17 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
         ariaLabel="Ticket title"
         onCommit={(title) => {
           setEditing(false);
+          // A rename begun before the host went away says why it did not land.
+          if (!guardWrite(ticket.projectId)) return;
           void updateTicket({ ticketId: ticket.id, title });
         }}
         onCancel={() => setEditing(false)}
       />
     );
+  }
+
+  if (!canWrite) {
+    return <h1 className="text-title font-semibold text-foreground">{ticket.title}</h1>;
   }
 
   return (

@@ -88,6 +88,7 @@ import {
   type DiffStat,
   type Ticket,
 } from "@volli/shared";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import type { WorktreeCommitInput } from "../../../../ipc/contract";
 
 import { ExternalAppDropdownMenu } from "@renderer/components/files/external-app-menu";
@@ -302,9 +303,12 @@ function CommitGateDialog({
  */
 function InlineTextField({
   value,
+  disabled = false,
   onCommit,
 }: {
   value: string | null;
+  /** Read-only (VC-576): the value reads; it does not open as a field. */
+  disabled?: boolean;
   onCommit(next: string | null): void;
 }) {
   const [editing, setEditing] = React.useState(false);
@@ -331,8 +335,9 @@ function InlineTextField({
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => setEditing(true)}
-      className="w-full truncate rounded-md px-2 py-1 text-left font-mono text-ui text-foreground hover:bg-accent"
+      className="w-full truncate rounded-md px-2 py-1 text-left font-mono text-ui text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
     >
       {value ?? <span className="text-muted-foreground">—</span>}
     </button>
@@ -350,6 +355,8 @@ function InlineTextField({
  * it lives in portals out of a static render.
  */
 export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
+  // Read-only (VC-576): the destination is a write to the project's host.
+  const canWrite = useCanWrite(ticket.projectId);
   if (ticket.worktreePath !== null) return null;
   const label = ticket.usesWorktree ? "New worktree" : "Project checkout";
   return (
@@ -359,6 +366,7 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
           variant="ghost"
           size="sm"
           data-testid="ticket-worktree-destination"
+          disabled={!canWrite}
           aria-label={`Working destination: ${label}`}
           className="w-fit gap-1 border border-border px-2 text-ui text-foreground"
         >
@@ -370,11 +378,12 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={ticket.usesWorktree ? "worktree" : "checkout"}
-          onValueChange={(next) =>
+          onValueChange={(next) => {
+            if (!guardWrite(ticket.projectId)) return;
             void useBoardStore
               .getState()
-              .updateTicket({ ticketId: ticket.id, usesWorktree: next === "worktree" })
-          }
+              .updateTicket({ ticketId: ticket.id, usesWorktree: next === "worktree" });
+          }}
         >
           <DropdownMenuRadioItem value="worktree">New worktree</DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="checkout">Project checkout</DropdownMenuRadioItem>
@@ -396,6 +405,7 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
  * ref (branch/baseBranch are settable ONCE).
  */
 function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+  const canWrite = useCanWrite(projectId);
   const [branches, setBranches] = React.useState<string[] | null>(null);
   const [loading, setLoading] = React.useState(false);
 
@@ -426,6 +436,7 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
         <Button
           variant="ghost"
           size="sm"
+          disabled={!canWrite}
           className="w-fit gap-1 border border-border px-2 text-ui text-muted-foreground"
         >
           Select branch…
@@ -439,9 +450,10 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
         ) : (
           <DropdownMenuRadioGroup
             value={ticket.baseBranch ?? ""}
-            onValueChange={(next) =>
-              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, baseBranch: next })
-            }
+            onValueChange={(next) => {
+              if (!guardWrite(projectId)) return;
+              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, baseBranch: next });
+            }}
           >
             {options.map((branch) => (
               <DropdownMenuRadioItem key={branch} value={branch}>
@@ -557,6 +569,7 @@ function WorktreeMissingNotice({
  * drawer used to list now live; the row itself shows only the pair.
  */
 function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+  const canWrite = useCanWrite(projectId);
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticket.id));
 
   return (
@@ -586,9 +599,11 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
         ) : (
           <InlineTextField
             value={ticket.branch}
-            onCommit={(next) =>
-              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, branch: next })
-            }
+            disabled={!canWrite}
+            onCommit={(next) => {
+              if (!guardWrite(projectId)) return;
+              void useBoardStore.getState().updateTicket({ ticketId: ticket.id, branch: next });
+            }}
           />
         )}
       </div>

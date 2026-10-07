@@ -7,6 +7,7 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGl
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
 import { CommandPalette } from "@renderer/components/command-palette";
+import { HostChip } from "@renderer/components/hosts/host-chip";
 import { QuickOpen } from "@renderer/components/files/quick-open";
 import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { Button } from "@renderer/components/ui/button";
@@ -85,6 +86,9 @@ export function ChromeBar() {
               />
             </div>
             <NavHistoryButtons />
+            {/* Which machine the project in front runs on (VC-576). Nothing
+                with the `cloud` flag off. */}
+            <HostChip />
             <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
             {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
           </>

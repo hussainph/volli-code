@@ -30,6 +30,8 @@ import {
 import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
+import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -161,6 +163,7 @@ export function ComposerForm({
   );
 
   const canSubmit = title.trim() !== "" && !submitting;
+  const canWrite = useCanWrite(target.id);
   // What Create & start will run: the target project's own runtime preference
   // when it holds one, else the Ticket purpose's configured default — the same
   // rung order main resolves — read per open, overridable for this ticket
@@ -289,6 +292,8 @@ export function ComposerForm({
 
   const handleCreate = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
+    // Read-only (VC-576): the draft stays; the note above the footer says why.
+    if (!guardWrite(target.id)) return;
     setSubmitting(true);
     try {
       const result = await runPlainCreate(currentFields(), deps);
@@ -301,10 +306,12 @@ export function ComposerForm({
     } finally {
       setSubmitting(false);
     }
-  }, [title, submitting, currentFields, deps, createMore, resetForm, onClose]);
+  }, [title, submitting, target.id, currentFields, deps, createMore, resetForm, onClose]);
 
   const handleKickoff = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
+    // Read-only (VC-576): the draft stays; the note above the footer says why.
+    if (!guardWrite(target.id)) return;
     setSubmitting(true);
     try {
       const result = await runKickoff(
@@ -326,6 +333,7 @@ export function ComposerForm({
   }, [
     title,
     submitting,
+    target.id,
     currentFields,
     deps,
     createMore,
@@ -340,6 +348,7 @@ export function ComposerForm({
   const handleCreateWithAutomation = React.useCallback(
     async (automation: { id: string; name: string }) => {
       if (title.trim() === "" || submitting) return;
+      if (!guardWrite(target.id)) return;
       setSubmitting(true);
       try {
         const result = await runCreateWithAutomation(currentFields(), deps, { automation });
@@ -353,7 +362,7 @@ export function ComposerForm({
         setSubmitting(false);
       }
     },
-    [title, submitting, currentFields, deps, createMore, resetForm, onClose],
+    [title, submitting, target.id, currentFields, deps, createMore, resetForm, onClose],
   );
 
   const handleSubmit = React.useCallback(() => {
@@ -508,6 +517,7 @@ export function ComposerForm({
         className="border-t border-border px-6 py-2"
       />
 
+      <ReadOnlyNote projectId={target.id} className="px-6 pt-3" />
       <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}
@@ -522,7 +532,7 @@ export function ComposerForm({
             ready: automationOffer.ready,
             enabledIds,
           }}
-          disabled={!canSubmit}
+          disabled={!canSubmit || !canWrite}
         />
       </div>
     </div>

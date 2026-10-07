@@ -93,6 +93,7 @@ import {
   type TicketTabDescriptor,
 } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -1425,6 +1426,9 @@ export function TicketDetail({
         {tab.kind === "body" && (
           <ContentColumn>
             <TicketTitle ticket={ticket} />
+            {/* "Running on hetzner-1" (VC-576): only for a host other than
+                This Mac, and only with the `cloud` flag on. */}
+            <RunningOnLabel projectId={projectId} className="mt-2" />
           </ContentColumn>
         )}
         {/* Positioning context for the resident terminal plane: Doc/file tabs

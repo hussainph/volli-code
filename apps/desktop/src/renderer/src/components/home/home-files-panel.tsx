@@ -235,7 +235,12 @@ function HomeFilesScope({
             testId="home-files-read-status"
           />
         }
-        actions={<NewFileRailAction onNewFile={() => controls.startDraft("file")} />}
+        actions={
+          <NewFileRailAction
+            disabled={!controls.canWrite}
+            onNewFile={() => controls.startDraft("file")}
+          />
+        }
         root={project.name}
         cwd={cwd}
         upTestId="home-files-up"
