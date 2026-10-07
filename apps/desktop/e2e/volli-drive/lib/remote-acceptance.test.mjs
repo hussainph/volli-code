@@ -139,6 +139,12 @@ test("daemon cleanup never adopts the retained pid of a stopped/offline status",
     /fixture install/,
   );
 });
+test("native question selection observes the checked radio, not decorative text", () => {
+  const tree = '- radio "Proceed" [checked] [ref=e1]\n- generic: Proceed\n- radio "Stop" [ref=e2]';
+  assert.match(visibleControls(tree, "radio", "Proceed")[0], /\[checked\]/u);
+  assert.doesNotMatch(visibleControls(tree, "radio", "Stop")[0], /\[checked\]/u);
+});
+
 test("visible controls handle colon-quoted YAML keys and disabled rows without refs", () => {
   const tree = [
     `  - 'button "Host: This Mac" [ref=f2e12]':`,
@@ -380,6 +386,17 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "project creation must use the tested real-open classifier",
   );
   assert.ok(smoke.includes('record(number, "FAIL", assertion, error.message)'));
+  assert.match(
+    smoke,
+    /action\("press", "radio", "Proceed", \{ key: "Space" \}\)/u,
+    "a visually hidden native radio is selected by genuine keyboard activation",
+  );
+  assert.doesNotMatch(smoke, /click\("radio"|force:\s*true/u);
+  assert.equal(
+    (smoke.match(/await selectProceed\(\);/gu) ?? []).length,
+    2,
+    "both live and reopened questions use the native input and checked-state assertion",
+  );
   assert.ok(smoke.includes('record(n, "BLOCKED", "Not run"'));
   assert.match(
     smoke,

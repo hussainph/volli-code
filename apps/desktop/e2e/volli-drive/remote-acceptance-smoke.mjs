@@ -61,6 +61,12 @@ async function action(kind, role, name, extra = {}, options = {}) {
 }
 const click = (role, name, options) => action("click", role, name, {}, options);
 const type = (name, text) => action("type", "textbox", name, { text });
+async function selectProceed() {
+  // Native radios are visually hidden beneath their label's custom disc.
+  // Space selects the real focused input without bypassing pointer checks.
+  const selected = await action("press", "radio", "Proceed", { key: "Space" });
+  assert.match(controls(selected.text, "radio", "Proceed")[0] ?? "", /\[checked\]/u);
+}
 async function press(key) {
   const current = await snap();
   return (await call("act", { gen: current.generation, kind: "press", key })).snapshot;
@@ -288,7 +294,7 @@ async function journey() {
   await step(6, "Answer question: real options, sent receipt, host continuation", async () => {
     await send("remote-answer-question");
     await wait(ANSWER_QUESTION);
-    await click("radio", "Proceed", { contains: true });
+    await selectProceed();
     await click("button", "Send answer");
     await wait("Sent: Proceed");
     await wait(ANSWER_REPLY);
@@ -327,7 +333,7 @@ async function journey() {
         kind: "click",
       });
       await wait(REOPEN_QUESTION);
-      await click("radio", "Proceed", { contains: true });
+      await selectProceed();
       await click("button", "Send answer");
       await wait("Sent: Proceed");
       await wait(REOPEN_REPLY);
