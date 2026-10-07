@@ -249,6 +249,9 @@ export function sessionHandlersFrom(
     "hosts.rename": remote("hosts.rename"),
     "hosts.devices": remote("hosts.devices"),
     "hostAdd.facts": remote("hostAdd.facts"),
+    "hostLink.query": remote("hostLink.query"),
+    "hostLink.mutate": remote("hostLink.mutate"),
+    "hostLink.subscribe": remote("hostLink.subscribe"),
   };
   return { ...handlers, ...desktop };
 }

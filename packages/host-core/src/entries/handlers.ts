@@ -31,6 +31,7 @@ export type {
   RemoteHostUpdateWhen,
 } from "../handlers/remote-hosts-port";
 export type { RemoteSignInsPort } from "../handlers/remote-sign-ins-port";
+export type { HostLinkRelayPort } from "../handlers/host-link-relay-port";
 export {
   ADMITTED,
   admittedHandlers,

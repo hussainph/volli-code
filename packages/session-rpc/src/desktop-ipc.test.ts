@@ -102,6 +102,9 @@ describe("the desktop's IPC exposure", () => {
       "hosts.rename",
       "hosts.devices",
       "hostAdd.facts",
+      "hostLink.query",
+      "hostLink.mutate",
+      "hostLink.subscribe",
     ]);
   });
 

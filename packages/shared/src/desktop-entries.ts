@@ -232,6 +232,34 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "What an add flow has found about its host so far: its login, system, version.",
   },
+  // The Workspace link relay (VC-711; wire types in `./host-link-relay`): a
+  // remote project's public operations, sent by desktop main over that
+  // Workspace's link, which holds the device key. Host-placed: the Workspace
+  // named is a remote host's, never one this host authorizes, and only the
+  // person's own window reaches it. Bounded to what the link's welcome
+  // granted; the operation's own idempotency is the host's.
+  {
+    key: "hostLink.query",
+    placement: "host",
+    idempotency: "read",
+    summary: "Send one query to a remote project over its Workspace link.",
+  },
+  {
+    // Each relayed write carries its own `commandId` where its operation
+    // takes one; the relay never resends.
+    key: "hostLink.mutate",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Send one mutation to a remote project over its Workspace link; never resent.",
+  },
+  {
+    // Ends, with what ended it, when the link is lost, the window goes or the
+    // window cancels.
+    key: "hostLink.subscribe",
+    placement: "host",
+    idempotency: "read",
+    summary: "Follow one subscription of a remote project over its Workspace link.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

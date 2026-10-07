@@ -204,6 +204,32 @@ Desktop main holds the hosts this Mac added over SSH (`@volli/host-install`'s `c
 - **Managing a host** (VC-700 PR 3, same tier and policy): `hosts.rename` changes only this Mac's label for the host (trimmed, 1 to `REMOTE_HOST_NAME_MAX` characters, no control characters; saved to the registry and published), and the host's own name is untouched: nothing runs on the box. `hosts.devices` reads the host's enrolled devices on demand over SSH with BatchMode (`volli-hostd devices list --system|--user` as the login, no sudo), marking this Mac's own enrollment, and is never cached.
 - **The UI's source:** `hosts.subscribe` streams `RemoteHostsSnapshot` (`@volli/shared`): hosts with no link of their own, and each remote project with its own Workspace link state. The renderer's `createRemoteHostSource` feeds each project's link into its own VC-576 `createHostLinkTracker` and attaches beside This Mac while `cloud` is on; the host-connection store aggregates a host's link from its projects'.
 
+### The Workspace link relay (VC-711)
+
+A remote project's board, logs and Sessions reach its host through **the one Workspace link desktop main holds** (above). The window never holds a link, a credential or a device key, and its CSP stays `default-src 'self'`: it asks main, over the generic IPC bridge, through three desktop-only entries (host-placed, person-only, `DESKTOP_ENTRIES`; wire types in `packages/shared/src/host-link-relay.ts`):
+
+| Entry | Input | Answer |
+|---|---|---|
+| `hostLink.query` | `{ workspaceId, path, input? }` | the operation's own answer |
+| `hostLink.mutate` | `{ workspaceId, path, input? }` | the operation's own answer; sent once, never queued or resent |
+| `hostLink.subscribe` | `{ workspaceId, path, input?, lastEventId? }` | a stream of `HostLinkRelayEvent` |
+
+`path` is a public operation's catalog key; `input` is that operation's, judged by the host that receives it. Main (`apps/desktop/src/main/host-link-relay.ts`, over `RemoteHosts.workspaceLink(workspaceId)`, which lends the Workspace's link while it is `ready`, as `signInLink` does) sends it as is, only if:
+
+- a remote host here serves the Workspace: else `NOT_FOUND` / `workspace-unknown`;
+- its link is `ready` now: else `SERVICE_UNAVAILABLE` / `host-unreachable`. Nothing queues (Ruling 1);
+- the link's welcome granted the operation (`operationsGrantedBy`), and it is not one main keeps for itself (`sign-ins` and `auth.callback`, whose flows are main's sign-in service's): else `FORBIDDEN` / `verb-refused`, worded as the host's own door words it.
+
+A query's or mutation's failure carries its reason across the bridge: main's refusals above, the link's own (`host-unreachable` when the connection dies mid-call), or the host's answer. With `cloud` off (or on hostd, which supplies no relay) every entry answers `operation-unavailable`. Each relayed call carries the window's request trace (VC-699), so the box's log lines for it carry the window's trace.
+
+**A relayed subscription's events.** `started`; `data {data, id?}` (`id` is a tracked emission's, which a resubscribe resumes after: `HostLinkSubscriptionHandlers.onData(data, { id })`); then exactly one last event, after which nothing is said and the stream completes: `lost {error}` (the Workspace's link left `ready`, or had no connection to open on; resubscribe after the last id once the project's link reads ready), `resnapshot {error}` (`subscription-resnapshot-required`), `error {error}` (anything a resubscribe would repeat, or a full link: below) or `complete`. Open on `kind`.
+
+**Owned, bounded lifetimes.** Each relayed subscription is its window's stream: the bridge aborts it when the window is destroyed, navigates or its render process goes, and when the window cancels. Main watches the link's state (`subscribeState`) and ends the stream with `lost` the moment it leaves `ready`, since the link keeps a stream across an outage and ends it silently on close; the host-side subscription is let go at once. The window's stream holds at most `DESKTOP_STREAM_CAPACITY` (256) unsent frames before it ends `subscription-overflow`; main holds at most `HOST_LINK_RELAY_SUBSCRIPTION_CAP` (256) relayed streams at once (past it, `subscription-limit`).
+
+**The stream budget per Workspace link (AM1).** hostd admits 4 streams per connection (`HOSTD_LISTENER_LIMITS.maxSubscriptions`; its test pins `HOST_LINK_RELAY_STREAMS_PER_LINK` to it), and one link is one connection. Main keeps its relayed streams on each link inside that budget itself, by class: the board's feed (`board.changes`) and each open Session's own stream (`session.subscribe`) are **foreground**: admitted into a free slot or by ending the newest **background** stream (a Session's queue, `session.subscribeQueue`, and the host's log, `logs.follow`), which are admitted only into a free slot. So the board, one chat (its stream and queue) and the logs fill a link; a second chat's stream takes the logs' slot and its queue waits; a fourth foreground stream waits too. A refused or yielded stream ends `error` / `subscription-limit`. Clients subscribe only to the Session(s) a person is looking at. A stream main opens on the link itself (a sign-in's `signIns.subscribe`) is outside this count, and the host refuses it typed when the relay filled the link. Raising hostd's budget instead costs each connection up to 2 × 1.5 MiB of staged replay per stream against the 544 MiB envelope, so v1 keeps 4.
+
+**The window's side** (`renderer/src/lib/relay-host-link.ts`): `relayHostLink(workspaceId)` is a `HostLinkCalls` (`query`, `mutate`, `subscribe`; `hostLinkTrpcLink` takes one), with `getState`/`subscribeState` reading the project's own link from the host-connection store. A board client over it is `createBoardClient(hostLinkTrpcLink(relayHostLink(id)))`; a log source and the chat core's `"host-link"` recovery take it as they take a link. It keeps a link's subscription contract: after `lost` it resubscribes after the last tracked id once the project's link reads ready (after a 0.25 s, 1 s, 5 s backoff while the store catches up), and a `subscription-limit` waits for a slot the same way (`onStreamLimited` lets a view say live updates are paused), so the subscriber never hears an outage or a full link and nothing goes blank; `resnapshot`, a failure and `complete` reach its handlers and end it; an overflow after progress resumes from the last id. The renderer's slice of the client is `Pick<SessionRpcClient, "hostLink">`: nothing is cast.
+
 ## Command catalog (F3)
 
 Desktop has three verb vocabularies:

@@ -88,6 +88,18 @@ describe("the desktop-only tier", () => {
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });
 
+  // VC-711: a remote project's operations ride its Workspace link in main.
+  // The Workspace is the remote host's, never one this host authorizes, so
+  // the relay is host-placed like the rest of remote hosts.
+  it("declares the Workspace link relay host-placed, its query and stream as reads", () => {
+    const relay = DESKTOP_ENTRIES.filter(({ key }) => key.startsWith("hostLink."));
+    expect(relay.map(({ key, placement, idempotency }) => [key, placement, idempotency])).toEqual([
+      ["hostLink.query", "host", "read"],
+      ["hostLink.mutate", "host", "natural"],
+      ["hostLink.subscribe", "host", "read"],
+    ]);
+  });
+
   it("has no client-local or split placement to give a host command", () => {
     expectTypeOf<DesktopEntryPlacement>().toEqualTypeOf<"workspace" | "host">();
   });

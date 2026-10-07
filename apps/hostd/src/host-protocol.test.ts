@@ -7,6 +7,7 @@ import { insertProject, openVolliDb } from "@volli/host-core/db";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { validateListenerLimits } from "@volli/session-rpc/websocket";
+import { HOST_LINK_RELAY_STREAMS_PER_LINK } from "@volli/shared";
 
 import {
   cloudEnabled,
@@ -160,6 +161,9 @@ describe("hostd's listener limits", () => {
       limits.maxSubscriptions * 2 * limits.maxReplayBytes +
       limits.maxInboundBytes;
     expect(limits.maxConnections * perConnection).toBe(544 * MIB);
+    // The desktop's Workspace link relay keeps its streams inside this budget
+    // (VC-711, AM1): a change here is a change there.
+    expect(limits.maxSubscriptions).toBe(HOST_LINK_RELAY_STREAMS_PER_LINK);
   });
 
   it("serve a literal loopback address only, never a name", () => {
