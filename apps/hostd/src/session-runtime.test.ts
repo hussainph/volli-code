@@ -218,7 +218,7 @@ describe("headless runtime ownership", () => {
     expect(seam.observability.start).toHaveBeenCalledOnce();
     const input = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
     expect(input).toMatchObject({
-      askUser: false,
+      askUser: true,
       requestSecret: false,
       venue: f.input.options.venue,
     });
@@ -370,7 +370,7 @@ describe("headless runtime ownership", () => {
     const listSessions = vi.fn(async () => []);
     (f.host.sessionEngine as unknown as { listSessions: typeof listSessions }).listSessions =
       listSessions;
-    await f.launch().ready();
+    const ready = await f.launch().ready();
     const { sessionListing } = seam.handlers.mock.lastCall![1] as {
       sessionListing: {
         db: unknown;
@@ -385,6 +385,17 @@ describe("headless runtime ownership", () => {
       { attachmentId: "a-1", sessionId: "s-1" },
     ] as never);
     expect([...sessionListing.liveAttachmentIds()]).toEqual(["a-1"]);
+    const reads = vi.fn(async () => ({ v: 1 as const, ok: true as const, data: {} }));
+    ready.serveSessionReads(reads);
+    const handlers = seam.handlers.mock.lastCall![1];
+    await handlers.sessionReads("session.show", "p", { session: "s-1" });
+    expect(reads).toHaveBeenCalledWith("session.show", "p", { session: "s-1" });
+    const listSignals = vi.fn(async () => []);
+    (
+      f.host.sessionEngine as unknown as { listLatestTicketSignals: typeof listSignals }
+    ).listLatestTicketSignals = listSignals;
+    await handlers.ticketSignals("p");
+    expect(listSignals).toHaveBeenCalledWith({ projectId: "p" });
   });
 
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {

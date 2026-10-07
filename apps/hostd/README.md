@@ -223,8 +223,15 @@ They are separate from Volli's sealed Session environment secrets and must
 belong to the service user. A missing model or credential is a structured
 start refusal, not a silent terminal fallback.
 
-The frozen headless tool surface omits `ask_user`, `request_secret` and all
-browser tools: there is no client to answer their cards and no browser port.
+New root Sessions hold `ask_user`: remote chat reads the durable question and
+answers through `session.command` → `interaction.resolve`. Questions wait without
+a timeout while no Client is connected and remain pending on Client reopen.
+Subagents still hold no `ask_user` (VC-9); older Sessions keep their frozen surface.
+A clean hostd stop uses desktop's shared drain: pending questions are withdrawn,
+not answered, and their history remains readable after restart. Client disconnects
+do not run that drain.
+`request_secret` stays absent in v1: secret cards need a secure field on the box's
+side. Browser tools remain absent because this host has no browser port.
 Background shells, MCP, Code Mode, Web Access and delegation use the shared
 host services. Busy-worktree evidence includes active turns and every live
 background-shell cwd, including a shell still terminating after detach; an
