@@ -3374,36 +3374,7 @@ export interface MigrateOptions {
  * Applies every migration whose `version` is greater than the db's current
  * `user_version`, in order. Returns whether any migration ran.
  */
-// DIAGNOSTIC (VC-717) — TEMPORARY, never in the final diff.
-type Vc717Phases = Record<string, { n: number; ms: number }>;
-function vc717<T>(phase: string, run: () => T): T {
-  const sink = (globalThis as { __vc717?: Vc717Phases }).__vc717;
-  if (sink === undefined) return run();
-  const start = performance.now();
-  try {
-    return run();
-  } finally {
-    const entry = (sink[phase] ??= { n: 0, ms: 0 });
-    entry.n += 1;
-    entry.ms += performance.now() - start;
-  }
-}
-
 export function migrate(
-  db: Database.Database,
-  dbPath: string,
-  options: MigrateOptions = {},
-): boolean {
-  let kind = "unreadable";
-  try {
-    kind = (db.pragma("user_version", { simple: true }) as number) === 0 ? "fresh" : "existing";
-  } catch {
-    // the runner reports this itself
-  }
-  return vc717(`migrate:${kind}`, () => migrateInner(db, dbPath, options));
-}
-
-function migrateInner(
   db: Database.Database,
   dbPath: string,
   options: MigrateOptions = {},
@@ -3433,10 +3404,9 @@ function migrateInner(
     // need about twice the database free, and running out halfway names
     // neither the cause nor the remedy (VC-633). It fails open: only a
     // measurement that worked and shows too little room refuses.
-    if (options.diskChecked !== true)
-      vc717("m.diskSpace", () => assertMigrationDiskSpace(dbPath, options.disk));
+    if (options.diskChecked !== true) assertMigrationDiskSpace(dbPath, options.disk);
     try {
-      vc717("m.integrity", () => assertDatabaseIntegrity(db));
+      assertDatabaseIntegrity(db);
     } catch (error) {
       throw new Error(
         `Migration refused: source database failed integrity verification. ${recovery}`,
@@ -3445,7 +3415,7 @@ function migrateInner(
     }
     // The rollback point is a published database file: durable, verified,
     // and never torn behind the migration it protects (VC-628).
-    vc717("m.publishRollbackPoint", () => publishRollbackPoint(db, dbPath, currentVersion));
+    publishRollbackPoint(db, dbPath, currentVersion);
   }
 
   const applyPendingMigrations = db.transaction(() => {
@@ -3479,7 +3449,7 @@ function migrateInner(
       );
     }
   });
-  vc717("m.transaction", () => applyPendingMigrations());
+  applyPendingMigrations();
 
   // VACUUM cannot run inside the all-or-nothing migration transaction. Keep
   // the starting version check here as well: a batch that began at version 0
@@ -3488,14 +3458,14 @@ function migrateInner(
   const compactionReport =
     currentVersion === 0
       ? skippedMigrationCompaction(dbPath, "fresh database")
-      : vc717("m.compaction", () => compactMigrationDatabase(db, dbPath));
+      : compactMigrationDatabase(db, dbPath);
   logMigrationCompaction(compactionReport);
 
   // Retention is deliberately last, after the transaction committed, its
   // foreign-key check passed, and compaction returned (including a reported
   // failure). Fresh databases made no copy, so they do not participate.
   if (currentVersion > 0) {
-    const retentionReport = vc717("m.prune", () => pruneMigrationBackups(dbPath, currentVersion));
+    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
     logMigrationBackupRetention(retentionReport);
   }
   return true;

@@ -55,19 +55,12 @@ export function openRawDb(dbPath: string): Database.Database {
  * runs next (usually `migrate`, with its fsync'd rollback point) runs exactly
  * as it did before.
  *
- * WHY (VC-717). Every DDL statement of every hand-applied migration is its
- * own commit, and under the default `synchronous = FULL` each commit flushes
- * the journal and then the database. Building a v34 lineage this way issued
- * ~500 fsyncs, a v43 one ~800 (strace, on CI's ubuntu-24.04 runner) — and the
- * count grows with every migration added. On an idle runner a flush costs
- * ~0.3 ms and nobody notices; on one whose disk is throttled it costs
- * milliseconds, and `migrations.test.ts` timed out at 5 s in exactly the
- * tests that build the deepest fixtures, while its CPU-bound fresh-install
- * tests stayed at tens of milliseconds in the same run. A fixture's
- * durability against power loss is not what any of these tests is about.
- * `synchronous` decides when SQLite waits for the disk, not what it writes:
- * the v2 through v43 lineages built this way were checked byte-identical to
- * the flushing build's.
+ * WHY (VC-717). CI strace counted 527 fsyncs for the v34 reconciler test
+ * and 815 for the v43 kind-index test. Phase timings put 122–136 ms and
+ * 156–175 ms respectively in these fixture builds on an idle runner;
+ * slow flushes multiply that cost. A fixture's power-loss durability is
+ * not under test. Keep the statement order and transaction boundaries,
+ * but avoid hundreds of unnecessary flushes before the actual migration.
  */
 export function applyMigrationsByHand(
   db: Database.Database,
