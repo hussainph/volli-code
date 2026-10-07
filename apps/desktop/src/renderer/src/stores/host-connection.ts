@@ -134,6 +134,13 @@ export type HostSourceRecord = Omit<HostRecord, "link">;
 export interface ProjectLink {
   readonly hostId: HostId;
   readonly link: HostLinkView;
+  /**
+   * The features the project's own Workspace link granted while it is ready
+   * (VC-712: `host.logs` puts the host in the log viewer). Absent when the
+   * source does not say, and for This Mac's projects. A source keeps the same
+   * array while it does not change.
+   */
+  readonly granted?: readonly string[];
 }
 
 /** One source's answer: its hosts, and each project it serves with that project's link. */
@@ -326,7 +333,12 @@ function sameClaims(
   const keys = Object.keys(a);
   return (
     keys.length === Object.keys(b).length &&
-    keys.every((key) => a[key]!.hostId === b[key]?.hostId && a[key]!.link === b[key]?.link)
+    keys.every(
+      (key) =>
+        a[key]!.hostId === b[key]?.hostId &&
+        a[key]!.link === b[key]?.link &&
+        a[key]!.granted === b[key]?.granted,
+    )
   );
 }
 

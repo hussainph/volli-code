@@ -42,6 +42,9 @@ export const MAX_SUDO_PASSWORD_LENGTH = 1024;
 const flowId = z.string().min(1).max(MAX_FLOW_ID_LENGTH);
 /** The id of the question an answer is for (`AddHostQuestion.id`). */
 export const MAX_QUESTION_ID_LENGTH = 64;
+/** A project link's granted features (VC-712): a welcome's own bounds, 256 of at most 128 characters. */
+export const MAX_GRANTED_FEATURES = 256;
+export const MAX_GRANTED_FEATURE_LENGTH = 128;
 const questionId = z.string().min(1).max(MAX_QUESTION_ID_LENGTH);
 
 /** The add flow's steps, in order (`@volli/host-install`'s `STEP_ORDER`). */
@@ -153,7 +156,16 @@ const remoteHost = z.object({
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
 });
-const remoteProjectLink = z.object({ hostId: z.string(), link: linkState });
+const remoteProjectLink = z.object({
+  hostId: z.string(),
+  link: linkState,
+  // What the link's welcome granted, bounded as a welcome's features are.
+  granted: z
+    .array(z.string().max(MAX_GRANTED_FEATURE_LENGTH))
+    .max(MAX_GRANTED_FEATURES)
+    .readonly()
+    .optional(),
+});
 /** `RemoteHostsSnapshot`. Its arrays are read-only, as the registry hands them over. */
 export const remoteHostsSnapshotSchema = z.object({
   v: z.literal(1),

@@ -42,6 +42,7 @@ import {
   HOST_PROTOCOL_CLOSE_CODES,
   boundOutboundSends,
   DEFAULT_LISTENER_LIMITS,
+  FRAME_ENVELOPE_BYTES,
   isLoopbackHost,
   startHostProtocolListener,
   validateListenerLimits,
@@ -1507,6 +1508,8 @@ describe("every request in its own trace (VC-699)", () => {
 });
 
 describe("host.logs: the person's, never a Session's (VC-699)", () => {
+  /** What one answer may hold on the default listener: its frame, less the envelope. */
+  const FRAME_BUDGET = DEFAULT_LISTENER_LIMITS.maxFrameBytes - FRAME_ENVELOPE_BYTES;
   const page = {
     entries: [
       {
@@ -1551,7 +1554,8 @@ describe("host.logs: the person's, never a Session's (VC-699)", () => {
       code: "FORBIDDEN",
       reason: "verb-refused",
     });
-    expect(reads).toStrictEqual([{ limit: 5 }]);
+    // The door's frame budget rides beside the reader's query (VC-712).
+    expect(reads).toStrictEqual([{ limit: 5, maxBytes: FRAME_BUDGET }]);
   });
 
   it("follows the log over the wire, tracked by its newest line, and resumes after it", async () => {
@@ -1574,6 +1578,22 @@ describe("host.logs: the person's, never a Session's (VC-699)", () => {
     emit(page);
     expect(await stream.received(1)).toStrictEqual([{ id: "ring:1", data: page }]);
     stream.unsubscribe();
-    expect(follows).toStrictEqual([{ minLevel: "info", after: "ring:0" }]);
+    expect(follows).toStrictEqual([{ minLevel: "info", after: "ring:0", maxBytes: FRAME_BUDGET }]);
+  });
+
+  it("hands the host a smaller listener's own frame budget (VC-712)", async () => {
+    const reads: unknown[] = [];
+    const { listener } = await serve({
+      limits: { maxFrameBytes: 64 * 1024 },
+      logs: {
+        readLogs: (query) => {
+          reads.push(query);
+          return page;
+        },
+      },
+    });
+    const { client } = connect(listener.url, { features: ["host.logs"] });
+    await client.logs.tail.query({});
+    expect(reads).toStrictEqual([{ maxBytes: 64 * 1024 - FRAME_ENVELOPE_BYTES }]);
   });
 });

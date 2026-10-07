@@ -100,6 +100,13 @@ export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
   };
 }
 
+/** Two lists of the same strings, in the same order. */
+const sameStrings = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean =>
+  a !== undefined &&
+  b !== undefined &&
+  a.length === b.length &&
+  a.every((item, index) => item === b[index]);
+
 const sameRecord = (a: HostSourceRecord, b: HostSourceRecord): boolean =>
   a.id === b.id &&
   a.name === b.name &&
@@ -148,7 +155,7 @@ export function createRemoteHostSource(
     const factsOf = new Map(wire.hosts.map((host) => [host.id, host]));
     let soonest: number | null = null;
     const projects: Record<string, ProjectLink> = {};
-    for (const [projectId, { hostId, link }] of Object.entries(wire.projects)) {
+    for (const [projectId, { hostId, link, granted: wired }] of Object.entries(wire.projects)) {
       let tracker = trackers.get(projectId);
       if (tracker === undefined) {
         tracker = createHostLinkTracker();
@@ -167,10 +174,16 @@ export function createRemoteHostSource(
         soonest = worded.recheckAt;
       }
       const before = snapshot.projects[projectId];
+      // What the project's ready link granted (VC-712): the same array while it reads the same.
+      const granted =
+        wired !== undefined && sameStrings(before?.granted, wired) ? before!.granted : wired;
       projects[projectId] =
-        before !== undefined && before.hostId === hostId && sameView(before.link, worded.link)
+        before !== undefined &&
+        before.hostId === hostId &&
+        sameView(before.link, worded.link) &&
+        before.granted === granted
           ? before
-          : { hostId, link: worded.link };
+          : { hostId, link: worded.link, ...(granted === undefined ? {} : { granted }) };
     }
     for (const projectId of trackers.keys()) {
       if (!(projectId in wire.projects)) trackers.delete(projectId);

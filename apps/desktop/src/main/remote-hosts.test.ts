@@ -258,6 +258,8 @@ describe("the remote hosts port's sign-in (VC-702)", () => {
     expect(REMOTE_HOST_LINK_FEATURES).toEqual([
       "sign-ins",
       "auth.callback",
+      // The host's log (VC-712).
+      "host.logs",
       // A remote project's Sessions (VC-713).
       "sessions",
       "sessions.subscribe",

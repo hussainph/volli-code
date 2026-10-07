@@ -1,11 +1,16 @@
-import type { HostLogEntry, LogRecord } from "@volli/shared";
+import * as React from "react";
+import type { HostLinkRelayEvent, HostLogEntry, HostLogsBatch, LogRecord } from "@volli/shared";
 
-import { registerRemoteLogSource, type LogSource } from "@renderer/components/logs/log-sources";
+import type { LogSource } from "@renderer/components/logs/log-sources";
 import { LogStream, LogViewer } from "@renderer/components/logs/log-viewer";
+import { attachRemoteLogSources, relayLogLink } from "@renderer/components/logs/remote-log-sources";
+import { Button } from "@renderer/components/ui/button";
+import { fakeRelayRpc } from "@renderer/lib/relay-rpc.test-support";
+import type { HostLinkView } from "@renderer/stores/host-connection";
 
-export const title = "Log viewer (VC-699)";
+export const title = "Log viewer (VC-699, VC-712)";
 export const note =
-  "This Mac and a remote box in one stream; follow the Add-a-host trace across both";
+  "This Mac and a remote box in one stream, the box over the Workspace link relay; follow the Add-a-host trace across both";
 
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SESSION = "9c585826-3d34-408e-9ebf-d58ecaaad6a7";
@@ -211,14 +216,210 @@ function fixedSource(id: string, label: string, lines: HostLogEntry[]): LogSourc
 }
 
 const mac = fixedSource("this-mac", "This Mac", MAC);
-const box = fixedSource("box", "box.tail", BOX);
 
-// The box is a registered remote source, as the "Add a host" flow registers one.
-registerRemoteLogSource(box);
+/* ── The box, over the Workspace link relay (VC-712) ─────────────────────── */
+
+const BOX_HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+const BOX_PROJECT = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+const OPEN: HostLinkView = { status: "open" };
+const FULL = {
+  code: "TOO_MANY_REQUESTS",
+  reason: "subscription-limit",
+  message:
+    "This project’s link carries as many live views as it can; this one waits for a free one.",
+};
+
+/**
+ * The box as main's relay answers for it: its recent log (the fixture, then a
+ * line every two seconds) behind `hostLink.query` and `hostLink.subscribe`,
+ * with the relay's own event shapes. "Fill the link" makes the relay refuse
+ * the log's stream (`subscription-limit`, AM1), so the source polls; "Drop
+ * the link" takes the project's link down, so the dot says so.
+ */
+/** The query input a log read sends: after a cursor, at most so many. */
+function readOf(input: unknown): { after?: string; limit?: number } {
+  return typeof input === "object" && input !== null ? input : {};
+}
+
+/** The line a lab box cursor names: `box:<seq>`. */
+function seqOf(cursor: unknown): number {
+  return typeof cursor === "string" && cursor.startsWith("box:") ? Number(cursor.slice(4)) : 0;
+}
+
+function labBox() {
+  const lines: HostLogEntry[] = BOX.map(({ record }, index) => ({
+    cursor: `box:${index + 1}`,
+    record,
+  }));
+  const followers = new Set<(line: HostLogEntry) => void>();
+  const streams = new Set<() => void>();
+  const listeners = new Set<() => void>();
+  let link: HostLinkView = OPEN;
+  let full = false;
+  const after = (cursor: unknown) => lines.filter((line) => seqOf(line.cursor) > seqOf(cursor));
+  const batch = (held: HostLogEntry[]): HostLogsBatch => ({
+    entries: held,
+    gap: false,
+    cursor: lines.at(-1)!.cursor,
+  });
+  let tick = 0;
+  /** A heartbeat line every two seconds, while the scratch is mounted. */
+  const beat = () => {
+    tick += 1;
+    const line: HostLogEntry = {
+      cursor: `box:${lines.length + 1}`,
+      record: {
+        ts: new Date().toISOString(),
+        level: tick % 5 === 0 ? "warn" : "info",
+        component: "hostd",
+        msg: tick % 3 === 0 ? "ログ — ünïcödé heartbeat ✓" : "heartbeat",
+        tick,
+      } as LogRecord,
+    };
+    lines.push(line);
+    for (const follower of followers) follower(line);
+  };
+  const changed = () => {
+    for (const listener of Array.from(listeners)) listener();
+  };
+  const subscribeChanges = (listener: () => void) => {
+    listeners.add(listener);
+    return () => void listeners.delete(listener);
+  };
+  const rpc = fakeRelayRpc({
+    query: async ({ input }) => {
+      if (link.status !== "open") throw new Error("The project’s host can’t be reached right now.");
+      const read = readOf(input);
+      const unread = read.after === undefined ? lines : after(read.after);
+      return batch(unread.slice(-(read.limit ?? 500)));
+    },
+    subscribe: ({ input, lastEventId }, emit) => {
+      if (full) {
+        queueMicrotask(() => emit({ kind: "error", error: FULL }));
+        return () => undefined;
+      }
+      const follower = (line: HostLogEntry) =>
+        emit({ kind: "data", data: batch([line]), id: line.cursor });
+      const stop = () => {
+        followers.delete(follower);
+        streams.delete(stop);
+        emit(link.status === "open" ? { kind: "error", error: FULL } : LOST);
+      };
+      queueMicrotask(() => {
+        const backlog = after(lastEventId ?? readOf(input).after);
+        if (backlog.length > 0) {
+          emit({ kind: "data", data: batch(backlog), id: backlog.at(-1)!.cursor });
+        }
+        followers.add(follower);
+        streams.add(stop);
+      });
+      return () => {
+        followers.delete(follower);
+        streams.delete(stop);
+      };
+    },
+  });
+  return {
+    // The lab's stand-in for the window's client: only the relay's slice is served.
+    rpc,
+    hosts: {
+      getState: () => ({
+        hosts: [
+          {
+            id: BOX_HOST,
+            name: "box.tail",
+            local: false,
+            os: "linux" as const,
+            version: "0.3.0",
+            link: link.status === "open" ? OPEN : link,
+            liveSessions: 1,
+            update: null,
+            expiredSignIns: [],
+          },
+        ],
+        projects: {
+          [BOX_PROJECT]: {
+            hostId: BOX_HOST,
+            link,
+            ...(link.status === "open" ? { granted: ["sign-ins", "host.logs"] } : {}),
+          },
+        },
+      }),
+      subscribe: subscribeChanges,
+    },
+    state: { getState: () => link, subscribe: subscribeChanges },
+    setFull(next: boolean) {
+      full = next;
+      // A foreground view takes the log's slot: its stream yields.
+      if (full) for (const stop of Array.from(streams)) stop();
+      changed();
+    },
+    setDropped(dropped: boolean) {
+      link = dropped ? { status: "reconnecting" } : OPEN;
+      if (dropped) for (const stop of Array.from(streams)) stop();
+      changed();
+    },
+    start() {
+      const timer = setInterval(beat, 2_000);
+      return () => clearInterval(timer);
+    },
+  };
+}
+
+const LOST: HostLinkRelayEvent = {
+  kind: "lost",
+  error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "Dropped." },
+};
+
+/** The box registered as production registers it: the host-connection state, the relay. */
+function useLabBox() {
+  const [box] = React.useState(labBox);
+  React.useEffect(() => {
+    const detach = attachRemoteLogSources({
+      hosts: box.hosts,
+      link: (workspaceId) =>
+        relayLogLink(workspaceId, { rpc: box.rpc, state: box.state, resumeDelaysMs: [250, 1_000] }),
+      timing: { pollMs: 2_000, pollsPerFollowRetry: 5 },
+    });
+    const stop = box.start();
+    return () => {
+      detach();
+      stop();
+    };
+  }, [box]);
+  return box;
+}
 
 export default function LogViewerScratch() {
+  const box = useLabBox();
+  const [full, setFull] = React.useState(false);
+  const [dropped, setDropped] = React.useState(false);
   return (
-    <div className="flex h-[720px] flex-col gap-6 p-6">
+    <div className="flex h-[760px] flex-col gap-4 p-6">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          aria-pressed={full}
+          onClick={() => {
+            box.setFull(!full);
+            setFull(!full);
+          }}
+        >
+          {full ? "Free the box’s link" : "Fill the box’s link"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-pressed={dropped}
+          onClick={() => {
+            box.setDropped(!dropped);
+            setDropped(!dropped);
+          }}
+        >
+          {dropped ? "Reconnect the box" : "Drop the box’s link"}
+        </Button>
+      </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <LogViewer local={mac} />
       </div>

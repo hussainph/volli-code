@@ -32,6 +32,7 @@ import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
 import { attachThisMacWhileCloud } from "./stores/host-sources";
 import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
+import { attachRemoteLogSourcesForPage } from "./components/logs/remote-log-sources";
 import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
@@ -216,6 +217,10 @@ async function main() {
   // over each project's Workspace link while `cloud` is on; off, nothing is
   // registered and every Session is This Mac's.
   bindRemoteSessionsWhileCloud();
+  // Each connected remote host's log, in the one log viewer (VC-712): only
+  // hosts that store lists, so nothing registers while `cloud` is off. The
+  // page owns it: pagehide unregisters every source and stops its readings.
+  attachRemoteLogSourcesForPage({ shown: () => useProjectsStore.getState().selectedProjectId });
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement

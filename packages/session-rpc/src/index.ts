@@ -46,6 +46,7 @@ import {
   type HostHandler,
   type HostLogsBatch,
   type HostLogsQuery,
+  type HostLogsRead,
   type CatalogKeyOf,
   type HostHandlerKeyOf,
   type ModelAccessDefaults,
@@ -390,10 +391,10 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
   >;
   readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
   /** The host's recent log (VC-699): a page after a cursor. */
-  readonly "logs.tail": HostHandler<HostLogsQuery, HostLogsBatch>;
+  readonly "logs.tail": HostHandler<HostLogsRead, HostLogsBatch>;
   /** The host's log as it is written, after a cursor's backlog. */
   readonly "logs.follow": (
-    input: HostLogsQuery,
+    input: HostLogsRead,
     call: HandlerCall,
     sink: { emit(batch: HostLogsBatch): void | Promise<void>; fail(error: unknown): void },
   ) => Promise<() => void>;
@@ -952,8 +953,11 @@ const sessionSubscriptionSchema = z.object({
 
 /**
  * `host.logs` (VC-699; HP § Tracing and logs). A cursor is the host's opaque
- * `<instance>:<seq>`; a page holds at most 500 lines of at most 16 KiB each,
- * so an answer stays well inside the frame bound.
+ * `<instance>:<seq>`; a page holds at most 500 lines of at most 16 KiB each.
+ * On a bounded door (VC-712) the host also selects every answer and followed
+ * batch by its encoded bytes, inside the connection's frame budget
+ * (`maxResponseBytes`), and says it left lines out (`gap`): 500 lines of
+ * 5 KiB would pass a 2 MiB frame.
  */
 const logCursor = z.string().min(1).max(64);
 const logsQuerySchema = z.object({
@@ -978,8 +982,19 @@ const logsBatchSchema = z.object({
 });
 /** Batches one log stream may hold unsent before it ends `subscription-overflow`. */
 const LOGS_QUEUE_CAPACITY = 256;
+/**
+ * On a bounded door, the bytes one log stream may hold unsent, by the replay
+ * bound each stream is budgeted (twice it, as `session.subscribe` stages), so
+ * a log stream costs a connection no more than any other stream (VC-712).
+ */
+const LOGS_QUEUE_REPLAY_MULTIPLE = 2;
 const LOGS_OVERFLOW_MESSAGE = "The log stream fell behind the host's log";
 const LOGS_SOURCE_FAILURE_MESSAGE = "The host's log stopped";
+
+/** A reader's query as the host reads it: with the door's frame budget, when it has one. */
+function logsRead(query: HostLogsQuery, ctx: { readonly maxResponseBytes?: number }): HostLogsRead {
+  return ctx.maxResponseBytes === undefined ? query : { ...query, maxBytes: ctx.maxResponseBytes };
+}
 
 /** `before` is an event sequence: the page holds frames strictly below it (VC-315). */
 const sessionHistorySchema = z.object({
@@ -1560,7 +1575,7 @@ export function createSessionRouter() {
         .input(logsQuerySchema)
         .output(logsBatchSchema)
         .query(async ({ ctx, input }) => {
-          const page = await ctx.handlers["logs.tail"](input, ctx.call);
+          const page = await ctx.handlers["logs.tail"](logsRead(input, ctx), ctx.call);
           return { ...page, entries: [...page.entries] };
         }),
       follow: hostProcedure("logs.follow")
@@ -1569,16 +1584,27 @@ export function createSessionRouter() {
           if (signal?.aborted) return;
           const { lastEventId, ...query } = input;
           const after = lastEventId ?? query.after;
-          const queue = new AsyncQueue<HostLogsBatch>(LOGS_QUEUE_CAPACITY);
+          // Bounded in bytes too on a bounded door: each batch is inside the
+          // frame budget, and the stream holds at most its replay share unsent.
+          // (Never less than one whole batch.)
+          const maxQueuedBytes =
+            ctx.replayBounds === undefined
+              ? undefined
+              : Math.max(
+                  LOGS_QUEUE_REPLAY_MULTIPLE * ctx.replayBounds.bytes,
+                  ctx.maxResponseBytes ?? 0,
+                );
+          const queue = new AsyncQueue<HostLogsBatch>(LOGS_QUEUE_CAPACITY, maxQueuedBytes);
           const failure: { current: { error: unknown } | null } = { current: null };
           const abort = (): void => queue.close();
           signal?.addEventListener("abort", abort, { once: true });
           const unsubscribe = await hostAnswer(() =>
             ctx.handlers["logs.follow"](
-              { ...query, ...(after === undefined ? {} : { after }) },
+              logsRead({ ...query, ...(after === undefined ? {} : { after }) }, ctx),
               ctx.call,
               {
-                emit: (batch) => queue.push(batch),
+                emit: (batch) =>
+                  queue.push(batch, maxQueuedBytes === undefined ? 0 : jsonByteLength(batch)),
                 fail: (error) => {
                   failure.current = { error };
                   queue.close(false);

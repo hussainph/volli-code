@@ -200,10 +200,14 @@ export const REMOTE_SESSION_LINK_FEATURES = [
   "sessions.listing",
 ] as const;
 
-/** What every Workspace link to a remote host asks for. */
+/**
+ * What every Workspace link to a remote host asks for: sign-ins (VC-702), the
+ * host's log for the one log viewer (`host.logs`, VC-712), and its Sessions.
+ */
 export const REMOTE_HOST_LINK_FEATURES = [
   "sign-ins",
   "auth.callback",
+  "host.logs",
   ...REMOTE_SESSION_LINK_FEATURES,
 ] as const;
 

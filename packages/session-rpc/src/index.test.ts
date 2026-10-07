@@ -3342,6 +3342,83 @@ describe("host.logs on the router (VC-699)", () => {
     expect(unsubscribed).toBe(1);
   });
 
+  it("hands the host the door's frame budget, and bounds a stream's queue in bytes (VC-712)", async () => {
+    const reads: unknown[] = [];
+    const follows: unknown[] = [];
+    const one = Buffer.byteLength(JSON.stringify(logBatch("r:0")));
+    const bounded = (followLogs: Parameters<typeof sessionContext>[0]["followLogs"]) =>
+      createSessionRouter().createCaller({
+        ...sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          readLogs: (query) => {
+            reads.push(query);
+            return logBatch("r:1");
+          },
+          followLogs,
+        }),
+        maxResponseBytes: one + 16,
+        // Twice this is what one log stream may hold unsent: four batches.
+        replayBounds: { events: 100, bytes: 2 * one },
+      });
+    await bounded(undefined).logs.tail({ limit: 5 });
+    expect(reads).toStrictEqual([{ limit: 5, maxBytes: one + 16 }]);
+    const stream = await bounded((query, listener) => {
+      follows.push(query);
+      for (let index = 0; index < 10; index += 1) listener(logBatch(`r:${index}`));
+      return () => undefined;
+    }).logs.follow({ after: "r:0" });
+    const seen: string[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of stream) seen.push((tracked as unknown as [string])[0]);
+      })(),
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(follows).toStrictEqual([{ after: "r:0", maxBytes: one + 16 }]);
+    expect(seen).toEqual(["r:0", "r:1", "r:2", "r:3"]);
+    // Replay bounds without a frame bound: the queue is bounded by the replay share alone.
+    const replayOnly = await createSessionRouter()
+      .createCaller({
+        ...sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          followLogs: (query, listener) => {
+            follows.push(query);
+            for (let index = 0; index < 10; index += 1) listener(logBatch(`r:${index}`));
+            return () => undefined;
+          },
+        }),
+        replayBounds: { events: 100, bytes: one },
+      })
+      .logs.follow({});
+    const unbudgeted: string[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of replayOnly) {
+          unbudgeted.push((tracked as unknown as [string])[0]);
+        }
+      })(),
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(follows.at(-1)).toStrictEqual({});
+    expect(unbudgeted).toEqual(["r:0", "r:1"]);
+    // An unbounded door (the desktop's IPC) names no budget, as before.
+    const local = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        readLogs: (query) => {
+          reads.push(query);
+          return logBatch("r:1");
+        },
+      }),
+    );
+    await local.logs.tail({});
+    expect(reads.at(-1)).toStrictEqual({});
+  });
+
   it("ends subscription-source-failed when the host's log stops, after what it held", async () => {
     const caller = createSessionRouter().createCaller(
       sessionContext({
