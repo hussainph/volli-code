@@ -9,6 +9,8 @@ import {
   liveWorkPhrase,
   MENU_BAR_POLL_MS,
   MENU_BAR_SETTLE_MS,
+  MENU_BAR_SMOKE_SETTLE_MAX_MS,
+  menuBarSmokeSettleMs,
   planQuitBranch,
   SYSTEM_SHUTDOWN_LATCH_MS,
   quitWithLiveWorkCopy,
@@ -133,7 +135,7 @@ function fakeTimers() {
   };
 }
 
-function harness(initial: HostLiveWork = ONE_TURN) {
+function harness(initial: HostLiveWork = ONE_TURN, settleMs?: number) {
   const calls: string[] = [];
   let work = initial;
   const listeners = new Set<(work: HostLiveWork) => void>();
@@ -221,7 +223,7 @@ function harness(initial: HostLiveWork = ONE_TURN) {
     timers: clock.timers,
     log: () => {},
   } satisfies MenuBarHostPorts;
-  const host = createMenuBarHost(ports);
+  const host = createMenuBarHost(settleMs === undefined ? ports : { ...ports, settleMs });
   return {
     host,
     ports,
@@ -702,5 +704,47 @@ describe("createMenuBarHost (VC-577)", () => {
         "The browser was closed when Volli moved to the menu bar",
       );
     });
+  });
+});
+
+describe("menuBarSmokeSettleMs — the mechanics smoke's settle window (VC-709)", () => {
+  const SEAM = { VOLLI_SMOKE_MENU_BAR_HOST: "1" };
+
+  it("is the smoke's value only behind both locks: an unpackaged build and the seam flag", () => {
+    const env = { ...SEAM, VOLLI_SMOKE_MENU_BAR_SETTLE_MS: "20000" };
+    expect(menuBarSmokeSettleMs(true, env)).toBe(20_000);
+    expect(menuBarSmokeSettleMs(false, env)).toBeUndefined();
+    expect(menuBarSmokeSettleMs(true, { VOLLI_SMOKE_MENU_BAR_SETTLE_MS: "20000" })).toBeUndefined();
+    expect(
+      menuBarSmokeSettleMs(true, {
+        VOLLI_SMOKE_MENU_BAR_HOST: "0",
+        VOLLI_SMOKE_MENU_BAR_SETTLE_MS: "20000",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("can only lengthen the settle, never shorten it past a release's, and is bounded", () => {
+    const at = (value: string) =>
+      menuBarSmokeSettleMs(true, { ...SEAM, VOLLI_SMOKE_MENU_BAR_SETTLE_MS: value });
+    expect(menuBarSmokeSettleMs(true, SEAM)).toBeUndefined();
+    expect(at(String(MENU_BAR_SETTLE_MS))).toBe(MENU_BAR_SETTLE_MS);
+    expect(at(String(MENU_BAR_SETTLE_MS - 1))).toBeUndefined();
+    expect(at("0")).toBeUndefined();
+    expect(at(String(MENU_BAR_SMOKE_SETTLE_MAX_MS))).toBe(MENU_BAR_SMOKE_SETTLE_MAX_MS);
+    expect(at(String(MENU_BAR_SMOKE_SETTLE_MAX_MS + 1))).toBeUndefined();
+    for (const junk of ["", "-20000", "2e4", "20000.5", " 20000", "20s", "9999999999"]) {
+      expect(at(junk)).toBeUndefined();
+    }
+  });
+
+  it("a host given the longer settle stays resident through it, then drain-exits once", () => {
+    const settleMs = 20_000;
+    const h = harness(IDLE, settleMs);
+    h.host.enter();
+    h.clock.advance(settleMs - 1);
+    expect(h.host.isResident()).toBe(true);
+    expect(h.ports.quit).not.toHaveBeenCalled();
+    h.clock.advance(1);
+    expect(h.ports.quit).toHaveBeenCalledOnce();
   });
 });

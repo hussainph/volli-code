@@ -52,6 +52,36 @@ import { hasLiveWork, NO_LIVE_WORK, type HostLiveWork } from "@volli/host-core/s
 /** How long live work must stay drained before a resident host quits on its own. */
 export const MENU_BAR_SETTLE_MS = 5_000;
 
+/** The longest settle window the menu-bar smoke may ask for. */
+export const MENU_BAR_SMOKE_SETTLE_MAX_MS = 120_000;
+
+/**
+ * The menu-bar mechanics smoke's settle window (VC-709), or `undefined` for
+ * {@link MENU_BAR_SETTLE_MS}.
+ *
+ * The smoke enters the mode with nothing running, so the drain-exit's settle
+ * starts at entry. Its checks then wait out the windows' draft flush, read
+ * the socket, and reopen — all before that timer fires. On a contended CI
+ * runner main stalls for seconds at a time while the app boots, and that
+ * chain passed 5 s about one attempt in four: the host then quit as designed,
+ * and the smoke read a closed socket or reopened into an exiting app.
+ *
+ * Two locks, like the smoke seam itself: an unpackaged build AND
+ * `VOLLI_SMOKE_MENU_BAR_HOST=1`. The override can only LENGTHEN the settle,
+ * and only up to {@link MENU_BAR_SMOKE_SETTLE_MAX_MS}: it never makes a host
+ * quit sooner than a release does.
+ */
+export function menuBarSmokeSettleMs(
+  dev: boolean,
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  if (!dev || env["VOLLI_SMOKE_MENU_BAR_HOST"] !== "1") return undefined;
+  const raw = env["VOLLI_SMOKE_MENU_BAR_SETTLE_MS"];
+  if (raw === undefined || !/^\d{1,9}$/.test(raw)) return undefined;
+  const ms = Number(raw);
+  return ms >= MENU_BAR_SETTLE_MS && ms <= MENU_BAR_SMOKE_SETTLE_MAX_MS ? ms : undefined;
+}
+
 /**
  * How often a resident host re-reads live work on its own clock. The host's
  * feed announces every fold, but a binding that closes without one would
