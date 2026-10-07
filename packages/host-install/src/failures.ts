@@ -260,7 +260,7 @@ export function describeFailure(
           recovery: { action: "back", label: "Back" },
         };
       }
-      if (/\.sha256 is missing\.| is missing\.$/u.test(failure.detail)) {
+      if (failure.detail.endsWith(" is missing.")) {
         return {
           line: "The Volli host tarball VOLLI_HOSTD_DEV_TARBALLS names is missing or unverified. Restore it, then check again.",
           recovery: retry("Check again", step),
