@@ -530,6 +530,17 @@ describe("Add a host: detach and re-attach", () => {
     },
   );
 
+  it("lets Cancel before the first replay cancel directly and release observation", async () => {
+    await startFlow(); // No view or replay has arrived yet.
+    expect(api.following("flow-1")).toBe(true);
+    await click(sheet(), "Cancel");
+    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+    expect(api.following("flow-1")).toBe(false);
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    expect(useRemoteHostsStore.getState().addHostActivity).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("lets Cancel before upload cancel directly", async () => {
     await startFlow();
     await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
