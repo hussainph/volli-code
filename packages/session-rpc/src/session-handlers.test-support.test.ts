@@ -75,6 +75,8 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hostAdd.sudoPassword"]({ flowId: "f", questionId: "q1", password: "p" }, CALL),
     () => handlers["hostAdd.retry"]({ flowId: "f" }, CALL),
     () => handlers["hostAdd.cancel"]({ flowId: "f" }, CALL),
+    () => handlers["hosts.rename"]({ hostId: HOST, name: "Box" }, CALL),
+    () => handlers["hosts.devices"]({ hostId: HOST }, CALL),
   ];
 }
 
@@ -142,10 +144,12 @@ describe("sessionHandlersFrom", () => {
         "hostAdd.sudoPassword": port as never,
         "hostAdd.retry": port as never,
         "hostAdd.cancel": port as never,
+        "hosts.rename": port as never,
+        "hosts.devices": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(30);
+    expect(port).toHaveBeenCalledTimes(32);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -186,6 +190,6 @@ describe("sessionHandlersFrom", () => {
     // 21 existing router handlers, session.history (VC-315), three queue
     // operations, four Session reads, the desktop-only tier's two (VC-608),
     // two log reads (VC-699) and thirteen remote hosts commands (VC-700).
-    expect(Object.keys(context.handlers)).toHaveLength(46);
+    expect(Object.keys(context.handlers)).toHaveLength(48);
   });
 });

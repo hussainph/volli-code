@@ -155,6 +155,21 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Cancel an add flow.",
   },
+  // Managing a host (VC-700 PR 3): host-placed like the rest of `hosts.*`.
+  {
+    // A label on this Mac only: the host's own name is untouched.
+    key: "hosts.rename",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Rename a remote host on this desktop; the host's own name is untouched.",
+  },
+  {
+    // Read over SSH (BatchMode) when asked, never cached.
+    key: "hosts.devices",
+    placement: "host",
+    idempotency: "read",
+    summary: "The devices a remote host has enrolled, read from it over SSH.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

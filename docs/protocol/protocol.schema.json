@@ -1048,6 +1048,95 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "hosts.devices": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "devices": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "deviceId": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "enrolledAt": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "revokedAt": {
+                    "anyOf": [
+                      {
+                        "maxLength": 256,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "thisMac": {
+                    "type": "boolean"
+                  },
+                  "via": {
+                    "maxLength": 256,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deviceId",
+                  "name",
+                  "fingerprint",
+                  "enrolledAt",
+                  "via",
+                  "revokedAt",
+                  "thisMac"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "readOnly": true,
+              "type": "array"
+            },
+            "hostId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "devices"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hosts.forget": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1061,6 +1150,37 @@
           },
           "required": [
             "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.rename": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "name"
           ],
           "type": "object"
         },

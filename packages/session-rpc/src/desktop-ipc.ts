@@ -137,6 +137,8 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostAdd.sudoPassword": "ipc",
   "hostAdd.retry": "ipc",
   "hostAdd.cancel": "ipc",
+  "hosts.rename": "ipc",
+  "hosts.devices": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

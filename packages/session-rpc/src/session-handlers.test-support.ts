@@ -206,6 +206,8 @@ export function sessionHandlersFrom(
     "hostAdd.sudoPassword": remote("hostAdd.sudoPassword"),
     "hostAdd.retry": remote("hostAdd.retry"),
     "hostAdd.cancel": remote("hostAdd.cancel"),
+    "hosts.rename": remote("hosts.rename"),
+    "hosts.devices": remote("hosts.devices"),
   };
   return { ...handlers, ...desktop };
 }

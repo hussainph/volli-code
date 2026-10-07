@@ -39,7 +39,9 @@ import {
   type DesktopKey,
   type HandlerCall,
   type HostHandler,
+  type RemoteHostDevices,
   type RemoteHostsSnapshot,
+  type RenameRemoteHostInput,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 import type { JsonUnsafeProcedures } from "@volli/host-protocol";
@@ -63,7 +65,9 @@ import {
   hostAddAnswerInputSchema,
   hostAddRetryInputSchema,
   hostInputSchema,
+  remoteHostDevicesSchema,
   remoteHostsSnapshotSchema,
+  renameHostInputSchema,
   signInInputSchema,
   sudoPasswordInputSchema,
   updateHostInputSchema,
@@ -106,6 +110,9 @@ export interface DesktopRouterHandlers {
   >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
+  /** Managing a host (VC-700 PR 3): this Mac's label, and the host's devices read over SSH. */
+  readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
+  readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -255,6 +262,16 @@ export function createDesktopRouter() {
         .input(hostInputSchema)
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hosts.forget"](input, ctx.call)),
+      /** This Mac's label for the host: the host's own name is untouched. */
+      rename: hostProcedure("hosts.rename")
+        .input(renameHostInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["hosts.rename"](input, ctx.call)),
+      /** The devices the host has enrolled, read over SSH when asked, never cached. */
+      devices: hostProcedure("hosts.devices")
+        .input(hostInputSchema)
+        .output(remoteHostDevicesSchema)
+        .query(({ ctx, input }) => ctx.handlers["hosts.devices"](input, ctx.call)),
     },
     hostAdd: {
       start: hostProcedure("hostAdd.start")

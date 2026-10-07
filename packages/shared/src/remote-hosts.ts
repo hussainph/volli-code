@@ -229,8 +229,8 @@ export const REMOTE_HOST_TOO_MANY_PROJECTS = "too-many-projects";
 
 /* ── Managing a host (VC-700 PR 3) ───────────────────────────────────── */
 
-/** The longest label a host may be given. */
-export const REMOTE_HOST_NAME_MAX = 64;
+/** The longest label a host may be given (as `hostAdd.start`'s `name`). */
+export const REMOTE_HOST_NAME_MAX = 120;
 
 /** `hosts.rename`: this Mac's label for a host. The host's own name never changes. */
 export interface RenameRemoteHostInput {
@@ -255,6 +255,14 @@ export interface RemoteHostDevice {
   /** This Mac's own enrollment (its `deviceId` is the registry's). */
   readonly thisMac: boolean;
 }
+
+/**
+ * The most devices `hosts.devices` answers, and the longest text any of a
+ * device's fields may be: bounds, not policy. A host's answer past either is
+ * not believed (the engine says the host did not list its devices).
+ */
+export const REMOTE_HOST_DEVICES_MAX = 1000;
+export const REMOTE_HOST_DEVICE_TEXT_MAX = 256;
 
 /** `hosts.devices`: the devices a host has enrolled, read over SSH when asked. */
 export interface RemoteHostDevices {

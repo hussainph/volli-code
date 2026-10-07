@@ -71,11 +71,13 @@ describe("the desktop-only tier", () => {
       "hostAdd.sudoPassword",
       "hostAdd.retry",
       "hostAdd.cancel",
+      "hosts.rename",
+      "hosts.devices",
     ]);
     for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
     expect(
       remote.filter(({ idempotency }) => idempotency === "read").map(({ key }) => key),
-    ).toEqual(["hosts.snapshot", "hosts.subscribe", "hostAdd.subscribe"]);
+    ).toEqual(["hosts.snapshot", "hosts.subscribe", "hostAdd.subscribe", "hosts.devices"]);
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });
 

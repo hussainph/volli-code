@@ -53,6 +53,9 @@ import type {
 import {
   OperationUnavailableError,
   REMOTE_HOST_LINK_CAP,
+  REMOTE_HOST_DEVICE_TEXT_MAX,
+  REMOTE_HOST_DEVICES_MAX,
+  REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_SIGN_IN_UNAVAILABLE,
   REMOTE_HOST_TOO_MANY_PROJECTS,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
@@ -64,13 +67,15 @@ import {
   type AddHostStepId,
   type AddHostView,
   type RemoteHost,
+  type RemoteHostDevice,
+  type RemoteHostDevices,
   type RemoteHostLink,
   type RemoteHostLinkState,
   type RemoteProjectLink,
   type RemoteHostsSnapshot,
 } from "@volli/shared";
 
-import type { ListenAddress } from "./contract";
+import { isHostdFailure, readHostdJson, type InstallMode, type ListenAddress } from "./contract";
 import type { StepId } from "./failures";
 import { componentLogger, type InstallLogger, type LogFields } from "./logger";
 import {
@@ -106,7 +111,7 @@ import {
   type SshProvisionState,
   type SshStepResults,
 } from "./ssh-provider";
-import type { SshTransport } from "./ssh";
+import { classifySshFailure, shellQuote, type SshExecResult, type SshTransport } from "./ssh";
 import { describeStartup } from "./probe";
 import { parseSshTarget, type SshTarget } from "./target";
 import type { SshTunnel, TunnelState } from "./tunnel";
@@ -140,7 +145,13 @@ export type RemoteHostsErrorCode =
   /** The hosts file is from a newer Volli, or unreadable: nothing changes it. */
   | "registry-read-only"
   /** The hosts file would not save: the change did not happen. */
-  | "registry-unwritable";
+  | "registry-unwritable"
+  /** A host's label is empty, longer than `REMOTE_HOST_NAME_MAX`, or has a control character. */
+  | "bad-name"
+  /** SSH could not reach the host (or ran nothing there): nothing was asked of it. */
+  | "host-unreachable"
+  /** The host was reached, but its hostd answered no device list this Mac believes, or refused. */
+  | "devices-unavailable";
 
 export class RemoteHostsError extends Error {
   readonly code: RemoteHostsErrorCode;
@@ -247,6 +258,17 @@ export interface RemoteHosts {
    * untouched. When the registry would not save, refuses and keeps it all.
    */
   forget(hostId: string): Promise<void>;
+  /**
+   * This Mac's label for the host, trimmed: persisted and published. The
+   * host's own name is untouched (nothing runs on the box). The same name
+   * again changes nothing.
+   */
+  rename(hostId: string, name: string): void;
+  /**
+   * The devices the host has enrolled, read now over SSH (`volli-hostd
+   * devices list`, no sudo), never cached; this Mac's own marked.
+   */
+  devices(hostId: string): Promise<RemoteHostDevices>;
   /** Opens a Workspace on the host: remembered, and linked whenever the tunnel is up. */
   openWorkspace(hostId: string, workspaceId: string): void;
   /**
@@ -269,6 +291,76 @@ export interface RemoteHosts {
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/** C0, DEL and C1: never in a host's label. */
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * Where hostd's binary is for each install mode, as the probe looks for it
+ * (`probe.ts`'s `CANDIDATES`): a managed system install, else the M1
+ * runbook's hand-made one; a user install (a Mac's too) under
+ * `$XDG_DATA_HOME` or `~/.local/share`.
+ */
+const MANAGED_SYSTEM_BINARY = "/opt/volli-hostd/current/bin/volli-hostd";
+const FLAT_SYSTEM_BINARY = "/opt/volli-hostd/bin/volli-hostd";
+const USER_BINARY = '"${XDG_DATA_HOME:-$HOME/.local/share}/volli-hostd/current/bin/volli-hostd"';
+
+/**
+ * `volli-hostd devices list` for a host's install mode: plain POSIX sh, run
+ * as the login (anyone may list; no sudo), its stdin `/dev/null`.
+ */
+export function devicesListScript(mode: InstallMode): string {
+  const find =
+    mode === "system"
+      ? [
+          `b=${shellQuote(MANAGED_SYSTEM_BINARY)}`,
+          `[ -x "$b" ] || b=${shellQuote(FLAT_SYSTEM_BINARY)}`,
+        ]
+      : [`b=${USER_BINARY}`];
+  return [...find, `exec "$b" devices list --${mode} </dev/null`].join("\n");
+}
+
+const isDeviceText = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= REMOTE_HOST_DEVICE_TEXT_MAX;
+
+/** hostd's device list, each device exactly as the wire carries it, or `null` when not believed. */
+function readDeviceList(
+  said: Record<string, unknown>,
+  thisDevice: string,
+): RemoteHostDevice[] | null {
+  const { devices } = said;
+  if (said.ok !== true || !Array.isArray(devices) || devices.length > REMOTE_HOST_DEVICES_MAX) {
+    return null;
+  }
+  const read: RemoteHostDevice[] = [];
+  for (const value of devices as unknown[]) {
+    if (typeof value !== "object" || value === null) return null;
+    const { deviceId, name, fingerprint, enrolledAt, via, revokedAt } = value as Record<
+      string,
+      unknown
+    >;
+    if (
+      !isDeviceText(deviceId) ||
+      !isDeviceText(name) ||
+      !isDeviceText(fingerprint) ||
+      !isDeviceText(enrolledAt) ||
+      !isDeviceText(via) ||
+      !(revokedAt === null || isDeviceText(revokedAt))
+    ) {
+      return null;
+    }
+    read.push({
+      deviceId,
+      name,
+      fingerprint,
+      enrolledAt,
+      via,
+      revokedAt,
+      thisMac: deviceId === thisDevice,
+    });
+  }
+  return read;
+}
 
 /** Backoff for a tunnel's first open, which the tunnel leaves to its owner to retry. */
 const OPEN_BACKOFF_MIN_MS = 1_000;
@@ -778,6 +870,51 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     });
   }
 
+  /* ── Managing a host ─────────────────────────────────────────────────── */
+
+  /** Runs `devices list` on the host over its own short-lived SSH connection, always closed. */
+  async function listDevices(entry: RegistryHost): Promise<RemoteHostDevices> {
+    const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
+    const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
+    let result: SshExecResult;
+    try {
+      result = await ssh.exec(devicesListScript(entry.mode), {
+        label: "devices",
+        timeoutMs: 30_000,
+      });
+    } catch (error) {
+      log.warn("listing devices: ssh failed", { error: messageOf(error) });
+      throw new RemoteHostsError("host-unreachable", `Couldn't reach ${entry.name}.`);
+    } finally {
+      try {
+        await ssh.close();
+      } catch (error) {
+        log.warn("listing devices: ssh did not close cleanly", { error: messageOf(error) });
+      }
+    }
+    const failure = classifySshFailure(result);
+    if (failure !== null) {
+      log.warn("listing devices: host unreachable", {
+        failure: failure.kind,
+        detail: failure.detail,
+      });
+      throw new RemoteHostsError("host-unreachable", `Couldn't reach ${entry.name}.`);
+    }
+    const said = readHostdJson(result.stdout);
+    const devices = said === null ? null : readDeviceList(said, entry.deviceId);
+    if (devices === null) {
+      log.warn("listing devices: no device list believed", {
+        code: result.code,
+        ...(said !== null && isHostdFailure(said)
+          ? { hostd: said.code, message: said.message }
+          : { stderr: result.stderr.trim().split("\n").slice(-3).join(" ") }),
+      });
+      throw new RemoteHostsError("devices-unavailable", `${entry.name} didn't list its devices.`);
+    }
+    log.info("listed devices", { devices: devices.length });
+    return { hostId: entry.id, devices };
+  }
+
   /* ── Adding a host ───────────────────────────────────────────────────── */
 
   function flowOf(flowId: string): Flow {
@@ -1223,6 +1360,28 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       writable();
       hostOf(hostId);
       return track(dropHost(hostId));
+    },
+    rename(hostId, name) {
+      guard();
+      writable();
+      const entry = hostOf(hostId);
+      const label = name.trim();
+      if (label === "" || label.length > REMOTE_HOST_NAME_MAX || CONTROL_CHARACTER.test(label)) {
+        throw new RemoteHostsError(
+          "bad-name",
+          `A host's name is 1 to ${REMOTE_HOST_NAME_MAX} characters, with no control characters.`,
+        );
+      }
+      if (label === entry.name) return;
+      const next = { ...entry, name: label };
+      save([...entries.values()].map((other) => (other.id === hostId ? next : other)));
+      entries.set(hostId, next);
+      publish();
+      componentLogger(logger, { hostId }).info("remote host renamed");
+    },
+    async devices(hostId) {
+      guard();
+      return listDevices(hostOf(hostId));
     },
     openWorkspace(hostId, workspaceId) {
       guard();

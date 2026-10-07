@@ -31,6 +31,7 @@ import type {
   AddHostEvent,
   AddHostStartInput,
   AddHostStepId,
+  RemoteHostDevices,
   RemoteHostsSnapshot,
 } from "@volli/shared";
 
@@ -63,6 +64,10 @@ export interface RemoteHostsPort {
   signIn(hostId: string, providerId: string): Answer<void>;
   /** Closes the host's link and drops it from this desktop. */
   forget(hostId: string): Answer<void>;
+  /** This Mac's label for the host (the host's own name is untouched). */
+  rename(hostId: string, name: string): Answer<void>;
+  /** The devices the host has enrolled, read from it over SSH now, never cached. */
+  devices(hostId: string): Answer<RemoteHostDevices>;
   /** Starts an add flow; answers its id. */
   startAdd(input: AddHostStartInput): Answer<{ flowId: string }>;
   /**

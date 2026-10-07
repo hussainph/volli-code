@@ -328,6 +328,38 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
   ];
 }
 
+/* ----------------------------------------------------------------- hosts */
+
+/** "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more machines. */
+export interface CommandPaletteHostItem {
+  kind: "host-command";
+  id: "add-host" | "manage-hosts";
+  title: string;
+  hint: string;
+  keywords: string[];
+}
+
+/** The host rows, only with the `cloud` experiment on: off, the palette is unchanged. */
+export function buildHostCommandItems(cloud: boolean): CommandPaletteHostItem[] {
+  if (!cloud) return [];
+  return [
+    {
+      kind: "host-command",
+      id: "add-host",
+      title: "Add a host…",
+      hint: "Install Volli host on a machine over SSH",
+      keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
+    },
+    {
+      kind: "host-command",
+      id: "manage-hosts",
+      title: "Manage hosts…",
+      hint: "Settings → Hosts",
+      keywords: ["hosts", "remote", "rename host", "forget host", "devices", "settings"],
+    },
+  ];
+}
+
 /**
  * The open Ticket as a run target, or null. Resolved against the project's
  * live ticket list — `openTicketId` is remembered workspace state and may
