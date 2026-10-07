@@ -307,7 +307,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Setup Vite+
         if: steps.scope.outputs.tag != ''
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -483,7 +483,7 @@ jobs:
       # the packager copies this Node into the archive and refuses any other.
       # No dependency cache: a release build installs from the lockfile alone.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: .nvmrc
           run-install: false
@@ -554,7 +554,7 @@ jobs:
           ref: ${{ needs.hostd-ref.outputs.ref }}
           persist-credentials: false
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           run-install: false
@@ -629,7 +629,7 @@ jobs:
           name: hostd-release-assets
           path: ${{ runner.temp }}/hostd-assets
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -835,7 +835,7 @@ jobs:
       # (rebuild:native) — proven to survive on the macOS image by ci.yml's
       # desktop-smoke lane.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
