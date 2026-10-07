@@ -1,7 +1,8 @@
 /** The one host composition of the Session writer and its post-commit observers. */
 import type Database from "better-sqlite3";
 import type { HostNoticeOutbox, OpenNativeBinding, SessionEngine } from "@volli/session-engine";
-import { errorMessage, type SessionLedger, type SessionProjection } from "@volli/shared";
+import type { SessionLedger, SessionProjection } from "@volli/shared";
+import type { Logger } from "./log/logger";
 import { readAutomationRunAttendance } from "./db/automations-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
@@ -30,7 +31,7 @@ export interface HostSessionPorts {
   events: HostEventBus;
   /** Unattended Run alerts, and which Sessions a focused client is showing. */
   attention: AttentionDeliveryPort;
-  log: Pick<Console, "error" | "warn">;
+  log: Pick<Logger, "error" | "warn">;
 }
 
 /**
@@ -121,7 +122,7 @@ export function createHostSessionServices(
       },
       sessionId,
     ).catch((error: unknown) => {
-      ports.log.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
+      ports.log.warn("could not publish the session's read row", { sessionId, error });
     });
   };
   const sessionReadWatch = createSessionReadWatch({
@@ -140,7 +141,7 @@ export function createHostSessionServices(
     openSessionIds: () => new Set(runtime.openNativeBindings().map((binding) => binding.sessionId)),
     pendingStartSessionIds: () => runtime.pendingTurnStarts(),
     starts: { hold: () => runtime.holdTurnStarts(), release: () => runtime.releaseTurnStarts() },
-    onError: (error) => ports.log.warn("[volli] live work:", error),
+    onError: (error) => ports.log.warn("live work listener failed", { error }),
   });
   const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
     publish: publishSessionActivity,
@@ -150,8 +151,7 @@ export function createHostSessionServices(
     observe: (projection) => {
       observeSessionResumptions(db, projection, {
         publish: (change) => ports.events.publish("data-changed", change),
-        report: (error) =>
-          ports.log.error("[volli] failed to record Session resumption:", errorMessage(error)),
+        report: (error) => ports.log.error("failed to record session resumption", { error }),
       });
       runAttention.observe(projection);
       runtime.observeScheduledResume(projection);

@@ -19,6 +19,7 @@ import {
   skillResourcePart,
 } from "@volli/shared";
 import type { DbHandle } from "../index";
+import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectById } from "../db/projects-repo";
 import { loadPromptTemplates } from "../prompt-templates";
@@ -48,7 +49,7 @@ export interface RuntimeAutomationsInput {
   events: HostEventBus;
   piRuntimeHost: PiRuntimeHost | null;
   homeDir: string;
-  log: Pick<Console, "error">;
+  log: Pick<Logger, "error">;
 }
 
 interface RuntimeAutomationLifecycle {

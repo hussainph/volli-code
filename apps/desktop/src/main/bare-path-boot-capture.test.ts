@@ -6,6 +6,7 @@ import { afterEach, test } from "vite-plus/test";
 import { fileURLToPath } from "node:url";
 
 import {
+  isSmokeBootCapture,
   installBootCapture,
   installSmokeBootCapture,
   readBootCapture,
@@ -79,23 +80,23 @@ test("post-window PATH evidence uses the actual window event, not client attachm
 
 test("split markers survive interleaved descriptors and failure always wins", () => {
   const run = fixture();
-  run.stdout.write("[volli] harness runtime ");
-  run.stderr.write("[volli] failed to generate harness ");
+  run.stdout.write("[desktop] harness runtime ");
+  run.stderr.write("[desktop] failed to generate harness ");
   assert.equal(wrapperGenerationOutcome(run.read()), null);
   run.stdout.write("ready\n");
   run.stderr.write("wrappers: genuine write error\n");
   assert.deepEqual(wrapperGenerationOutcome(run.read()), {
     kind: "failed",
-    offending: "[volli] failed to generate harness wrappers: genuine write error",
+    offending: "[desktop] failed to generate harness wrappers: genuine write error",
   });
 });
 
 test("early wrapper failures cannot disappear before client attachment", () => {
   const run = fixture();
-  run.stderr.write("[volli] failed to generate harness wrappers: refused symlink\n");
+  run.stderr.write("[desktop] failed to generate harness wrappers: refused symlink\n");
   assert.deepEqual(wrapperGenerationOutcome(run.read()), {
     kind: "failed",
-    offending: "[volli] failed to generate harness wrappers: refused symlink",
+    offending: "[desktop] failed to generate harness wrappers: refused symlink",
   });
 });
 
@@ -149,4 +150,9 @@ test("restoring capture removes the window listener and original writes", () => 
   restore();
   assert.equal(run.stdout.write, originalWrite);
   assert.equal(run.app.listenerCount("browser-window-created"), 1);
+});
+
+test("a smoke's capture is named by its directory variable", () => {
+  assert.equal(isSmokeBootCapture({ VOLLI_BARE_PATH_CAPTURE_DIR: "/tmp/x" }), true);
+  assert.equal(isSmokeBootCapture({}), false);
 });

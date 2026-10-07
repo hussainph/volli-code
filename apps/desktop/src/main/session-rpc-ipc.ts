@@ -1,3 +1,4 @@
+import { hostLogger, withTrace } from "@volli/host-core/log";
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
@@ -9,6 +10,7 @@ import {
   DESKTOP_IPC_PATHS,
   type DesktopRouterHandlers,
   LOCAL_DESKTOP_CALLER,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   type BoardRouterHandlers,
   type RpcProcedurePerformanceObserver,
@@ -58,6 +60,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   close(): Promise<void>;
 } {
   const diagnostics = options.diagnostics ?? new RpcDiagnosticLog();
+  // Every call's start and outcome, in the renderer's trace for it (VC-699).
+  logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const server = createIpcServer({
     // The board router too (VC-565): the renderer's board with `cloud` on;
     // and the desktop-only tier's (VC-608). An area router joins here, and in
@@ -73,6 +77,11 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     }),
     onSubscriptionError: (procedure, error) =>
       diagnostics.record({ procedure, phase: "error", transport: "electron-ipc", ...error }),
+    // Handled inside the renderer's trace for it (VC-699): every line main and
+    // the in-process host write for this call, a subscription's frames
+    // included, carry it. A malformed trace is ignored and one is minted.
+    scope: (request, run) =>
+      withTrace(request.trace, { door: "ipc", operation: request.path }, run),
   });
 
   ipcMain.handle(SESSION_RPC_IPC_CHANNEL, (event, request: unknown) =>

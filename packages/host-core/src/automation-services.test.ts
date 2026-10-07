@@ -291,10 +291,12 @@ describe("start and stop", () => {
     f.scheduler.start.mockRejectedValueOnce(new Error("cursor unreadable"));
     f.automations.start(() => f.sessionPorts);
     await vi.waitFor(() => {
-      expect(f.log.error).toHaveBeenCalledWith("[volli] automation recovery failed: ledger locked");
-      expect(f.log.error).toHaveBeenCalledWith(
-        "[volli] automation scheduler could not start: cursor unreadable",
-      );
+      expect(f.log.error).toHaveBeenCalledWith("automation recovery failed", {
+        error: expect.objectContaining({ message: "ledger locked" }),
+      });
+      expect(f.log.error).toHaveBeenCalledWith("automation scheduler could not start", {
+        error: expect.objectContaining({ message: "cursor unreadable" }),
+      });
     });
   });
 });
@@ -460,7 +462,7 @@ describe("pending armed Run wiring", () => {
     });
   });
 
-  it("owns real timers, publishes changes and settlements, and logs to the console", () => {
+  it("owns real timers, publishes changes and settlements, and logs to the host log", () => {
     const f = fixture();
     f.automations.start(() => f.sessionPorts);
     const deps = f.pendingDeps();
@@ -478,8 +480,8 @@ describe("pending armed Run wiring", () => {
     deps.onSettled!(notice);
     expect(f.publish).toHaveBeenCalledWith("pending-armed-run-settled", notice);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    deps.log!("pending failed");
-    expect(error).toHaveBeenCalledWith("pending failed");
+    deps.log!("pending failed", { pendingId: "p1" });
+    expect(error).toHaveBeenCalledWith("[armed-runs] pending failed", { pendingId: "p1" });
   });
 });
 

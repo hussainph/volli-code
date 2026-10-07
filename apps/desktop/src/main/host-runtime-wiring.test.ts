@@ -191,6 +191,13 @@ function liftedQuitPath(options: {
     }),
     warnIfFollowUpCleanCloseSkipped: vi.fn(),
   };
+  const app = {
+    on: (event: string, listener: (event: QuitEvent) => void) => {
+      expect(event).toBe("before-quit");
+      listeners.push(listener);
+    },
+    exit: exited.resolve,
+  };
   const scope: Record<string, unknown> = {
     // Real modules index.ts imports.
     prepareDesktopQuit,
@@ -229,13 +236,10 @@ function liftedQuitPath(options: {
         calls.push("repack.abort");
       },
     },
-    app: {
-      on: (event: string, listener: (event: QuitEvent) => void) => {
-        expect(event).toBe("before-quit");
-        listeners.push(listener);
-      },
-      exit: exited.resolve,
-    },
+    app,
+    // index.ts hands the quit coordinator `app` with a log-flushing exit
+    // (VC-699); the lifted path sees the same object under that name.
+    quittingApp: app,
     hostCore,
     // Hosts added over SSH (VC-700): their tunnels and links close with the host.
     remoteHosts: {
@@ -692,7 +696,10 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
           timeoutMs,
         );
       },
-      console: { warn },
+      // index.ts logs through the structured logger (VC-699).
+      hostLogger: (component: string) => ({
+        warn: (msg: string, fields?: unknown) => warn(`[${component}] ${msg}`, fields),
+      }),
       BrowserWindow: { getAllWindows: () => all.filter((each) => !each.isDestroyed()) },
       createOwnedWindow,
       revealWindow,
@@ -740,7 +747,10 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     entry.ack("a");
     entry.overdue();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(entry.warn).toHaveBeenCalledWith(expect.stringContaining("kept hidden, not destroyed"));
+    expect(entry.warn).toHaveBeenCalledWith(
+      "[menu-bar] windows still saving drafts; kept hidden, not destroyed",
+      { unanswered: 1 },
+    );
     expect(entry.b.isDestroyed()).toBe(false);
     expect(entry.retiringWindows.has(entry.b)).toBe(true);
     // The slow renderer finally saved its latest draft: now it may go.

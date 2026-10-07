@@ -29,6 +29,7 @@ import {
 } from "@trpc/server/unstable-core-do-not-import";
 
 import { isHostErrorReason, type HostError } from "../errors";
+import { isTraceIdShaped, mintHostTrace, nextHostSpan, type HostTrace } from "../trace";
 import type { IpcBridge, IpcError, IpcEvent, IpcRequest, IpcResponse } from "./wire";
 
 /** One payload-free observation from the client side of the bridge. */
@@ -207,7 +208,12 @@ export function ipcLink<Router extends AnyRouter>(
   return () =>
     ({ op }) =>
       observable((observer) => {
-        const request: IpcRequest = { path: op.path, type: op.type, input: op.input };
+        const request: IpcRequest = {
+          path: op.path,
+          type: op.type,
+          input: op.input,
+          trace: traceFor(op.context),
+        };
 
         if (op.type !== "subscription") {
           void (async () => {
@@ -415,4 +421,18 @@ function isolate(record: () => void): void {
   } catch {
     // A throwing tap is ignored.
   }
+}
+
+/**
+ * One request's trace (VC-699): the operation's when the caller names one in
+ * tRPC's operation context (`{ context: { trace: { traceId } } }`), with a
+ * fresh span; otherwise a fresh trace of its own.
+ */
+function traceFor(context: Readonly<Record<string, unknown>> | undefined): HostTrace {
+  const named = context?.["trace"];
+  const traceId =
+    typeof named === "object" && named !== null
+      ? (named as { traceId?: unknown }).traceId
+      : undefined;
+  return isTraceIdShaped(traceId) ? nextHostSpan({ traceId }) : mintHostTrace();
 }

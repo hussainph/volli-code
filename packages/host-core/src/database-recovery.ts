@@ -25,6 +25,9 @@ import type { DatabaseFileFaults } from "./db/database-file";
 import { SCHEMA_HEAD } from "./db/migrations";
 import { DatabaseFromNewerVersionError, checkSchemaCompatibility } from "./db/schema-compatibility";
 import { migrationBackupCandidatePattern } from "./db/backup-retention";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("database-recovery");
 
 export class RecoveryFailure extends Error {}
 
@@ -173,7 +176,7 @@ export class DatabaseRecovery {
         replacing: "damaged",
         faults: this.options.faults,
       });
-      console.info("[database recovery] restored", {
+      log.info("database restored from backup", {
         backup: selected.name,
         preserved: savedDirectory,
       });
@@ -186,13 +189,13 @@ export class DatabaseRecovery {
       if (error instanceof DatabaseSwapFinalizeError) {
         // The replacement is already durable. A marker cleanup failure must not
         // undo it after the boot guard may have been removed.
-        console.error("[database recovery] finalization failed", error);
+        log.error("restore finalization failed", { error });
         throw new RecoveryFailure(
           "The backup was restored and checked, but recovery could not be finalized. Your original files and safety copies are preserved for manual recovery.",
         );
       }
       if (error instanceof DatabaseSwapRollbackError) {
-        console.error("[database recovery] rollback failed", {
+        log.error("restore rollback failed", {
           savedDirectory: error.asideDirectory,
           error: error.cause,
         });
@@ -200,7 +203,7 @@ export class DatabaseRecovery {
           "Restore failed. The original database files are preserved for manual recovery, but could not be put back. Volli remains unavailable.",
         );
       }
-      console.error("[database recovery] failed", error);
+      log.error("restore failed", { error });
       const reason =
         error instanceof DatabaseFileBusyError
           ? " The database is in use. Close other Volli instances before restoring."
@@ -216,7 +219,7 @@ export class DatabaseRecovery {
       } catch (error) {
         // A leftover private staging directory must not turn a verified restore
         // into a reported failure or prevent the restart that completes recovery.
-        console.error("[database recovery] staging cleanup failed", { stageDirectory, error });
+        log.error("staging cleanup failed", { stageDirectory, error });
       }
     }
   }

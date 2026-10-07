@@ -81,7 +81,8 @@ interface Harness {
     resources: readonly PromptResource[];
   }>;
   refinements: AutoTitleRequest[];
-  logs: string[];
+  /** What the runner logged: each line's message and its fields. */
+  logs: Array<Record<string, unknown>>;
   deliveryFailures: Array<{ sessionId: string; commandId: string; detail: string }>;
   projectId: string;
   ticketId: string;
@@ -110,7 +111,7 @@ function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
   const refinements: Harness["refinements"] = [];
-  const logs: string[] = [];
+  const logs: Harness["logs"] = [];
   const deliveryFailures: Harness["deliveryFailures"] = [];
   const sessionsByOperation = new Map<string, string>();
   let nextSession = 0;
@@ -180,7 +181,7 @@ function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
     },
     readSessionActivity: async () => "idle",
     refineAutoTitle: (input) => refinements.push(input),
-    log: (message) => logs.push(message),
+    log: (msg, fields) => logs.push({ msg, ...fields }),
     ...overrides,
   });
 
@@ -1156,7 +1157,9 @@ describe("createAutomationRunner", () => {
 
     expect(h.delivered[0]?.text).toBe(automation.instructions);
     expect(h.delivered[0]?.resources).toEqual([]);
-    expect(h.logs.join("\n")).toMatch(/prompt supply/);
+    expect(h.logs).toEqual([
+      expect.objectContaining({ msg: "automation run could not read the prompt supply" }),
+    ]);
   });
 
   /* ------------------------- the Project as the Target (VC-130) --------- */
@@ -1527,7 +1530,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     ]);
     expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} first-message receipt is rejected; retaining its delivery intent`,
+      {
+        msg: "automation run first-message receipt not accepted; retaining its delivery intent",
+        runId: outcome.run.id,
+        status: "rejected",
+      },
     ]);
   });
 
@@ -1562,7 +1569,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     ]);
     expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not deliver its Instructions: Pi delivery socket closed`,
+      {
+        msg: "automation run could not deliver its instructions",
+        runId: outcome.run.id,
+        error: expect.objectContaining({ message: "Pi delivery socket closed" }),
+      },
     ]);
   });
 
@@ -1584,7 +1595,10 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     expect(h.delivered).toHaveLength(1);
     expect(h.refinements).toEqual([]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not refine its Session title: the Run was not found`,
+      {
+        msg: "automation run could not refine its session title: the run was not found",
+        runId: outcome.run.id,
+      },
     ]);
   });
 
@@ -1609,7 +1623,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     if (!outcome.ok) throw new Error("refused");
     expect(h.delivered).toHaveLength(1);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not refine its Session title: titler unavailable`,
+      {
+        msg: "automation run could not refine its session title",
+        runId: outcome.run.id,
+        error: expect.objectContaining({ message: "titler unavailable" }),
+      },
     ]);
   });
 
@@ -1652,7 +1670,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     expect(h.delivered).toEqual([]);
     expect(h.refinements).toEqual([]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links",
+      },
     ]);
     expect(
       ctx.db
@@ -1680,7 +1702,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
 
     if (!outcome.ok) throw new Error("refused");
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach reported no receipt`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "the attach reported no receipt",
+      },
     ]);
   });
 
@@ -1708,7 +1734,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
 
     if (!outcome.ok) throw new Error("refused");
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach is unreconciled`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "the attach is unreconciled",
+      },
     ]);
   });
 });

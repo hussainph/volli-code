@@ -2,6 +2,27 @@
   "baseOperations": [
     "protocol.welcome"
   ],
+  "envelope": {
+    "volliTrace": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Optional. The operation this request belongs to (traceId) and this request (spanId), W3C Trace Context shaped. The host echoes it in every log line it writes while serving the request; a malformed one is ignored.",
+      "properties": {
+        "spanId": {
+          "pattern": "^[0-9a-f]{16}$",
+          "type": "string"
+        },
+        "traceId": {
+          "pattern": "^[0-9a-f]{32}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "traceId",
+        "spanId"
+      ],
+      "type": "object"
+    }
+  },
   "features": {
     "board.read": [
       "board.snapshot",
@@ -32,6 +53,10 @@
       "board.updateComment",
       "board.removeComment",
       "board.setLabelColor"
+    ],
+    "host.logs": [
+      "logs.tail",
+      "logs.follow"
     ],
     "model-access": [
       "modelAccess.inspect",
@@ -6520,6 +6545,271 @@
           "type": "object"
         },
         "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "logs.follow": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "after": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "lastEventId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "limit": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minLevel": {
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "entries": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "cursor": {
+                    "type": "string"
+                  },
+                  "record": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "properties": {
+                      "component": {
+                        "type": "string"
+                      },
+                      "level": {
+                        "enum": [
+                          "debug",
+                          "info",
+                          "warn",
+                          "error"
+                        ],
+                        "type": "string"
+                      },
+                      "msg": {
+                        "type": "string"
+                      },
+                      "ts": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ts",
+                      "level",
+                      "component",
+                      "msg"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "cursor",
+                  "record"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "gap": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "entries",
+            "gap",
+            "cursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "logs.tail": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "after": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "limit": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minLevel": {
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "entries": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "cursor": {
+                    "type": "string"
+                  },
+                  "record": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "properties": {
+                      "component": {
+                        "type": "string"
+                      },
+                      "level": {
+                        "enum": [
+                          "debug",
+                          "info",
+                          "warn",
+                          "error"
+                        ],
+                        "type": "string"
+                      },
+                      "msg": {
+                        "type": "string"
+                      },
+                      "ts": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ts",
+                      "level",
+                      "component",
+                      "msg"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "cursor",
+                  "record"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "gap": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "entries",
+            "gap",
+            "cursor"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "modelAccess.codeModePolicy": {

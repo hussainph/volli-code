@@ -52,6 +52,9 @@ import {
   type SessionProjection,
   type SessionTurnPhase,
 } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-read-watch");
 
 export interface SessionReadWatchPorts {
   /**
@@ -72,7 +75,7 @@ export interface SessionReadWatchPorts {
    * all, because a Session that is already read must not cost a broadcast.
    */
   markRead(sessionId: string): void;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -103,7 +106,7 @@ export interface SessionReadWatch {
 
 export function createSessionReadWatch(ports: SessionReadWatchPorts): SessionReadWatch {
   const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] session read watch:", error));
+    ports.onError ?? ((error: unknown) => log.warn("session read watch failed", { error }));
   /**
    * The last turn phase seen per Session — and NO ENTRY for one this process
    * has never folded. The two are deliberately different answers: `get()`

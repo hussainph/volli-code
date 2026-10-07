@@ -37,6 +37,7 @@ import {
   type IpcEvent,
   type IpcPeer,
   type IpcProcedureType,
+  type IpcRequest,
   type IpcResponse,
 } from "./wire";
 
@@ -66,6 +67,12 @@ export interface IpcServerOptions<Routers extends AnyRouter> {
   createContext(): IpcServerContext<Routers>;
   /** Sees every subscription that ended in failure, with the envelope its peer was sent. */
   onSubscriptionError?(path: string, error: IpcError): void;
+  /**
+   * Runs one well-formed request's handling (VC-699): a host opens its log
+   * context here, under `request.trace`, so everything the call does (a
+   * subscription's frames included) is logged under it. Absent: run as is.
+   */
+  scope?(request: IpcRequest, run: () => Promise<IpcResponse>): Promise<IpcResponse>;
 }
 
 /** The bridge as a transport binds it: one call per request and per cancel. */
@@ -108,6 +115,12 @@ export function createIpcServer<Routers extends AnyRouter>(
     if (!isIpcRequest(request)) {
       return { ok: false, error: { code: "BAD_REQUEST", message: "Invalid IPC request" } };
     }
+    return options.scope === undefined
+      ? dispatch(peer, request)
+      : options.scope(request, () => dispatch(peer, request));
+  }
+
+  async function dispatch(peer: IpcPeer, request: IpcRequest): Promise<IpcResponse> {
     const { path, type, input } = request;
     const route = routes.get(path);
     // tRPC's own answer to a path or type it has no procedure for.

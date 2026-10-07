@@ -40,6 +40,9 @@ import {
 import type { CdpTransport } from "./cdp-controller";
 import type { BrowserPictureStore } from "./picture-store";
 import type { BrowserTraceStepInput, BrowserTraceStore } from "./trace-store";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("browser");
 
 export const BROWSER_TITLE_MAX_CHARS = 512;
 export const BROWSER_ERROR_MAX_CHARS = 1_024;
@@ -673,7 +676,7 @@ export abstract class BrowserTabRegistry<
     try {
       traces.record(step);
     } catch (error) {
-      console.warn(`[volli] Browser Trace step for tab ${step.tabId} was not recorded:`, error);
+      log.warn("browser trace step was not recorded", { tabId: step.tabId, error });
     }
   }
 

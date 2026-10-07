@@ -119,7 +119,7 @@ describe("launchChromium", () => {
       },
     );
     await expect(launch).rejects.toThrow(/could not start: spawn ENOENT/);
-    expect(warn.mock.calls.some(([line]) => String(line).includes("WITHOUT its sandbox"))).toBe(
+    expect(warn.mock.calls.some(([line]) => String(line).includes("without its sandbox"))).toBe(
       true,
     );
     warn.mockRestore();

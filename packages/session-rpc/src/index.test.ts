@@ -20,6 +20,7 @@ import {
   AsyncQueue,
   createSessionRouter,
   LOCAL_DESKTOP_CALLER,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
   type AppRouter,
@@ -406,6 +407,61 @@ describe("the Session router's host protocol seams", () => {
 
   it("answers commands in the receipt vocabulary the host protocol names", () => {
     expectTypeOf<CommandReceipt["status"]>().toEqualTypeOf<HostReceiptStatus>();
+  });
+});
+
+describe("logRpcDiagnostics (VC-699)", () => {
+  it("forwards each call from now on: start and answer at debug, a failure at warn", () => {
+    const diagnostics = new RpcDiagnosticLog();
+    diagnostics.record({
+      procedure: "old",
+      phase: "start",
+      transport: "websocket",
+      code: null,
+      message: null,
+    });
+    const lines: [string, string, Readonly<Record<string, unknown>>][] = [];
+    const stop = logRpcDiagnostics(diagnostics, {
+      debug: (msg, fields) => lines.push(["debug", msg, fields]),
+      warn: (msg, fields) => lines.push(["warn", msg, fields]),
+    });
+    const at = { procedure: "session.command", transport: "websocket" as const };
+    diagnostics.record({ ...at, phase: "start", code: null, message: null });
+    diagnostics.record({ ...at, phase: "success", code: null, message: null });
+    diagnostics.record({ ...at, phase: "error", code: "FORBIDDEN", message: "token=abc refused" });
+    stop();
+    diagnostics.record({ ...at, phase: "start", code: null, message: null });
+    expect(lines).toStrictEqual([
+      ["debug", "rpc call", { operation: "session.command", transport: "websocket" }],
+      ["debug", "rpc call answered", { operation: "session.command", transport: "websocket" }],
+      [
+        "warn",
+        "rpc call failed",
+        {
+          operation: "session.command",
+          transport: "websocket",
+          code: "FORBIDDEN",
+          reason: "token: [REDACTED] refused",
+        },
+      ],
+    ]);
+  });
+
+  it("starts from the beginning of an empty log", () => {
+    const diagnostics = new RpcDiagnosticLog();
+    const seen: string[] = [];
+    logRpcDiagnostics(diagnostics, {
+      debug: (msg) => seen.push(msg),
+      warn: (msg) => seen.push(msg),
+    });
+    diagnostics.record({
+      procedure: "p",
+      phase: "start",
+      transport: "websocket",
+      code: null,
+      message: null,
+    });
+    expect(seen).toStrictEqual(["rpc call"]);
   });
 });
 
@@ -3234,5 +3290,109 @@ describe("Session tRPC router", () => {
     await Promise.resolve();
     diagnosticsController.abort();
     expect(await diagnosticsPending).toEqual({ done: true, value: undefined });
+  });
+});
+
+function logBatch(cursor: string) {
+  return {
+    entries: [
+      {
+        cursor,
+        record: {
+          ts: "2026-10-07T00:00:00.000Z",
+          level: "info" as const,
+          component: "c",
+          msg: cursor,
+        },
+      },
+    ],
+    gap: false,
+    cursor,
+  };
+}
+
+describe("host.logs on the router (VC-699)", () => {
+  it("follows from a cursor, and ends subscription-overflow when it falls behind", async () => {
+    const follows: unknown[] = [];
+    let unsubscribed = 0;
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: (query, listener) => {
+          follows.push(query);
+          // A burst past the stream's queue before the reader takes anything.
+          for (let index = 0; index < 300; index += 1) listener(logBatch(`r:${index}`));
+          return () => {
+            unsubscribed += 1;
+          };
+        },
+      }),
+    );
+    const stream = await caller.logs.follow({});
+    const seen: string[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of stream) seen.push((tracked as unknown as [string])[0]);
+      })(),
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(seen).toHaveLength(256);
+    expect(follows).toStrictEqual([{}]);
+    expect(unsubscribed).toBe(1);
+  });
+
+  it("ends subscription-source-failed when the host's log stops, after what it held", async () => {
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: (_query, listener, fail) => {
+          listener(logBatch("r:1"));
+          fail(new Error("ring gone"));
+          return () => undefined;
+        },
+      }),
+    );
+    const seen: unknown[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of await caller.logs.follow({})) seen.push(tracked);
+      })(),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("opens nothing for a caller that already left", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    let opened = false;
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+        followLogs: () => {
+          opened = true;
+          return () => undefined;
+        },
+      }),
+      { signal: abort.signal },
+    );
+    const stream = await caller.logs.follow({ after: "r:1" });
+    for await (const _ of stream) throw new Error("nothing should arrive");
+    expect(opened).toBe(false);
+  });
+
+  it("answers unavailable on a host that keeps no log", async () => {
+    const caller = createSessionRouter().createCaller(
+      sessionContext({
+        caller: LOCAL_DESKTOP_CALLER,
+        runtime: {},
+        diagnostics: new RpcDiagnosticLog(),
+      }),
+    );
+    await expect(caller.logs.tail({})).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
   });
 });

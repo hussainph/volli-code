@@ -106,7 +106,8 @@ describe("experimental host settings", () => {
     expect(readExperiments().cloud).toEqual({ enabled: true, source: "environment" });
     expect(isExperimentEnabled("cloud")).toBe(true);
     expect(warning).toHaveBeenCalledExactlyOnceWith(
-      "[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: retired-flag",
+      "[experiments] ignoring unknown VOLLI_EXPERIMENTAL ids",
+      { ids: ["retired-flag"] },
     );
     expect(getAppState(ctx!.db, EXPERIMENTS_APP_STATE_KEY)).toBeUndefined();
   });
@@ -125,7 +126,8 @@ describe("experimental host settings", () => {
     expect(isExperimentEnabled("cloud")).toBe(false);
     expect(readExperiments().cloud.source).toBe("default");
     expect(warning).toHaveBeenCalledExactlyOnceWith(
-      "[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: retired-flag, other",
+      "[experiments] ignoring unknown VOLLI_EXPERIMENTAL ids",
+      { ids: ["retired-flag", "other"] },
     );
   });
 

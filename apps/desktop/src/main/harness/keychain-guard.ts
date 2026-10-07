@@ -44,6 +44,8 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { hostLogger } from "@volli/host-core/log";
+
 import {
   checkHarnessContainment,
   HARNESS_CONTAINMENT_MARKER,
@@ -54,6 +56,8 @@ import {
   HARNESS_RECORDER_MARKER,
   installShellRecorder,
 } from "./shell-recorder";
+
+const harnessLog = hostLogger("harness");
 
 /** The one switch. Only `volli-drive` sets it. */
 export const HARNESS_ENV = "VOLLI_HARNESS";
@@ -279,7 +283,9 @@ export type HarnessGuard =
 export function installHarnessGuard(deps: HarnessGuardDeps): HarnessGuard {
   const mode = harnessMode(deps.env);
   if (mode.kind === "off") return { active: false };
-  const log = deps.log ?? ((line: string) => console.error(line));
+  // Before the desktop log is installed: the host log's default root prints
+  // this at error level on stderr, `[volli-harness] …` intact (VC-699).
+  const log = deps.log ?? ((line: string) => harnessLog.error(line));
   if (mode.kind === "refused") {
     log(`[volli-harness] ${mode.reason}`);
     deps.app.exit(HARNESS_VIOLATION_EXIT_CODE);

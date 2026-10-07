@@ -1149,6 +1149,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-564",
     reason: "Cancels a Session tRPC subscription.",
   },
+  "volli:renderer-log": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "This window's warnings into this machine's log; never sent to a host.",
+  },
 
   // ---- VolliPiSessionOrphanIpcContract -----------------------------------
   "volli:pi-session-orphans-scan": {

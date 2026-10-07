@@ -996,7 +996,9 @@ describe("RetentionWatcher — settled(): stop, then drain before the database c
       ctx.db.close();
       watcher.triggerNow();
       await expect(watcher.settled()).resolves.toBeUndefined();
-      expect(errors).toHaveBeenCalledWith("[retention] poll cycle failed:", expect.any(Error));
+      expect(errors).toHaveBeenCalledWith("[worktree-watch] retention poll cycle failed", {
+        error: expect.objectContaining({ message: expect.any(String) }),
+      });
       await expect(watcher.settled()).resolves.toBeUndefined();
     } finally {
       errors.mockRestore();
