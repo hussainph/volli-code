@@ -209,19 +209,10 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
         pending = [];
         pendingHead = 0;
         pendingBytes = 0;
-        let index = 0;
-        while (index < held.length) {
-          const entries: HostLogEntry[] = [];
-          let left = room;
-          while (index < held.length && entries.length < LOG_PAGE_LIMIT) {
-            const next = held[index]!;
-            const cost = entryBytes(next);
-            // Never an empty batch: a line past the whole budget was not held (below).
-            if (entries.length > 0 && cost > left) break;
-            left -= cost;
-            entries.push(entryOf(next));
-            index += 1;
-          }
+        // What is held fits one batch's bytes (the bound below), so a flush
+        // splits by count alone: each batch within the budget.
+        for (let index = 0; index < held.length; index += LOG_PAGE_LIMIT) {
+          const entries = held.slice(index, index + LOG_PAGE_LIMIT).map(entryOf);
           const gap = dropped;
           dropped = false;
           listener({ entries, gap, cursor: entries.at(-1)!.cursor });
