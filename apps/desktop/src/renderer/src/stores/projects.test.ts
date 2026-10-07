@@ -1858,13 +1858,51 @@ describe("remote selection intent", () => {
     "fallback resolves fresh local membership, including an empty Mac (%s)",
     (empty) => {
       const { store } = freshStore();
-      store.getState().hydrate([local], local.id);
+      const neighbor = project({ id: "neighbor", path: "/neighbor" });
+      store.getState().hydrate([local, neighbor], local.id);
       store.getState().beginRemoteRestore(remote);
-      store.setState({ projects: empty ? [] : [project({ id: "neighbor", path: "/neighbor" })] });
+      store.setState({ projects: empty ? [] : [neighbor] });
       store.getState().settleRemoteRestore(remote, false);
       expect(store.getState().selectedProjectId).toBe(empty ? null : "neighbor");
     },
   );
+
+  it("an unclaimed row cannot replace the last positively local fallback selection", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === remote.projectId,
+      () => null,
+    );
+    const neighbor = project({ id: "neighbor", path: "/neighbor" });
+    store.getState().hydrate([local, neighbor], local.id);
+    store.getState().select(neighbor.id);
+    store.getState().adoptProject(row);
+    store.getState().select(row.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBe(neighbor.id);
+  });
+
+  it("a successful local create establishes fallback provenance", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([], null);
+    await store.getState().addProject({ path: "/new", defaultName: "New" });
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBe("id-/new");
+  });
+
+  it("a successful local removal retires provenance, even if a stale row remains", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], null);
+    await store.getState().removeProject(local.id);
+    store.setState({ projects: [local] });
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBeNull();
+  });
 
   it("adding a local project wins over restore", async () => {
     const { store } = freshStore();

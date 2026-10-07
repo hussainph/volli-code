@@ -353,6 +353,9 @@ export function createProjectsStore(
   // Every stored link is `started.catch(...)` — already recovered — so chaining
   // `.then(run)` off it directly can never skip `run` on a predecessor failure.
   let localSelection: string | null = null;
+  // Only This Mac's bootstrap and successful local creates establish provenance.
+  // A vanished remote claim must never turn its still-resident row into a local one.
+  let localProjectIds = new Set<string>();
   const pendingProjectUpdates = new Map<string, Promise<unknown>>();
   function queueProjectUpdate<T>(id: string, run: () => Promise<T>): Promise<T> {
     const previous = pendingProjectUpdates.get(id) ?? Promise.resolve();
@@ -374,7 +377,9 @@ export function createProjectsStore(
    */
   function persistSelection(selectedProjectId: string | null): void {
     const remote = selectedProjectId === null ? null : selectionHost(selectedProjectId);
-    if (remote === null) localSelection = selectedProjectId;
+    if (selectedProjectId === null || localProjectIds.has(selectedProjectId)) {
+      localSelection = selectedProjectId;
+    }
     const write =
       remote === null
         ? gateway.setSelection(selectedProjectId)
@@ -430,6 +435,7 @@ export function createProjectsStore(
       // insert never will, so the guard is a no-op there).
       const { projects, selectedProjectId } = get();
       const exists = projects.some((project) => project.id === result.project.id);
+      localProjectIds.add(result.project.id);
       set({
         projects: exists ? projects : [...projects, result.project],
         selectedProjectId: result.project.id,
@@ -471,7 +477,7 @@ export function createProjectsStore(
       },
       settleRemoteRestore(selection, restored) {
         if (get().pendingRemoteSelection !== selection) return;
-        const local = get().projects.filter(({ id }) => !isRemote(id));
+        const local = get().projects.filter(({ id }) => localProjectIds.has(id));
         const id = restored
           ? selection.projectId
           : (local.find((project) => project.id === localSelection)?.id ?? local[0]?.id ?? null);
@@ -490,8 +496,8 @@ export function createProjectsStore(
         const previous = get().selectedProjectId;
         // The local bootstrap knows nothing of remote rows: keep each one still
         // claimed, after this Mac's own.
-        const local = new Set(projects.map(({ id }) => id));
-        const remote = get().projects.filter(({ id }) => !local.has(id) && isRemote(id));
+        localProjectIds = new Set(projects.map(({ id }) => id));
+        const remote = get().projects.filter(({ id }) => !localProjectIds.has(id) && isRemote(id));
         const merged = remote.length === 0 ? projects : [...projects, ...remote];
         // A remote project selected before stays selected: the bootstrap's
         // fallback only stands in for a selection this Mac's list lost.
@@ -660,6 +666,7 @@ export function createProjectsStore(
           gateway.remove(id),
         );
         if (!result) return;
+        localProjectIds.delete(id);
 
         // Removal, per-workspace-UI cleanup, and session teardown are one
         // invariant, enforced here so no removal path (dialog today, context
