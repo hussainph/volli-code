@@ -9,6 +9,7 @@ import {
   acceptanceTarballs,
   acceptanceDaemonPid,
   assertAcceptanceRunner,
+  assertAcceptanceCleanup,
   sshConfig,
   ANSWER_QUESTION,
   ANSWER_REPLY,
@@ -50,6 +51,16 @@ test("remote acceptance is refused by CLI before a build/reservation/spawn", asy
   assert.equal(result.code, 1);
   assert.match(result.stderr, /disposable macOS/);
   assert.doesNotMatch(result.stderr, /building the app|launch failed|Electron is not installed/);
+});
+test("CLI source guards remote acceptance before build/reservation/spawn (no CLI execution)", () => {
+  const cli = read("../cli.mjs");
+  const launch = cli.slice(cli.indexOf("async function launch(flags)"));
+  const guard = launch.indexOf("assertAcceptanceRunner();");
+  assert.ok(guard > 0);
+  for (const boundary of ["await ensureBuilt(flags)", "await registry.reserve(", "spawn("])
+    assert.ok(launch.indexOf(boundary) > guard, boundary);
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  assert.ok(smoke.indexOf("assertAcceptanceRunner();") < smoke.indexOf("await journey();"));
 });
 test("artifact setting is explicit, absolute and cannot silently fall back to downloads", () => {
   for (const value of ["", undefined, "relative.tar.gz", "/tmp/foo.zip", "/tmp/a.tar.gz:"])
@@ -238,30 +249,83 @@ test("script has real ask_user calls, answered continuation and a separate reope
   );
   assert.equal(acceptanceScript(turn("ordinary turn")), undefined);
 });
-test("VC-722 XFAIL is narrow and unexpected creation success is fatal", () => {
-  const options = { hostName: "box", projectName: "App", expectedTicket: "VC-722" };
+test("folder project must open; the old user-install refusal is a failure, never a waiver", () => {
+  const options = { hostName: "box", projectName: "App" };
   const refusal = "box runs Volli as your login, so this Mac can't add projects to it.";
-  assert.deepEqual(projectCreationOutcome(refusal, options), {
-    status: "XFAIL",
-    detail: `VC-722: ${refusal}`,
-  });
+  assert.throws(() => projectCreationOutcome(refusal, options), /Unexpected project refusal/u);
   assert.equal(projectCreationOutcome("Connection failed", options), null);
-  assert.throws(() => projectCreationOutcome("Opened App on box", options), /XPASS VC-722/u);
-  assert.throws(
-    () => projectCreationOutcome(`Opened App on box\n${refusal}`, options),
-    /XPASS VC-722/u,
-    "success outranks a stale refusal",
-  );
-  assert.deepEqual(
-    projectCreationOutcome("Opened App on box", { ...options, expectedTicket: null }),
-    { status: "PASS" },
-  );
-  assert.throws(
-    () => projectCreationOutcome(refusal, { ...options, expectedTicket: null }),
-    /Unexpected project refusal/u,
-  );
+  assert.equal(projectCreationOutcome("Opened Other on box", options), null);
+  assert.equal(projectCreationOutcome("Opened App on other", options), null);
+  assert.deepEqual(projectCreationOutcome("Opened App on box", options), { status: "PASS" });
 });
-test("journey arranges only benign Git state and narrowly XFAILs pending VC-722", () => {
+const cleanManifest = () => ({
+  electron: {
+    close: {
+      kind: "graceful",
+      exit: { code: 0, signal: null },
+      closeFailures: [],
+    },
+  },
+  scratchRemoved: true,
+  keychainViolations: [],
+  keychainViolationExit: false,
+  leftovers: [],
+  remoteCleanupError: null,
+});
+test("completion cleanup uses the supervisor's graceful close and scratch removal fields", () => {
+  assert.doesNotThrow(() => assertAcceptanceCleanup(cleanManifest()));
+  for (const manifest of [null, undefined, false, "stopped"])
+    assert.throws(() => assertAcceptanceCleanup(manifest), /cleanup manifest/u);
+  for (const scratchRemoved of [undefined, false, "true", 1])
+    assert.throws(
+      () => assertAcceptanceCleanup({ ...cleanManifest(), scratchRemoved }),
+      /scratchRemoved:true/u,
+    );
+  for (const electron of [undefined, {}, { close: null }])
+    assert.throws(
+      () => assertAcceptanceCleanup({ ...cleanManifest(), electron }),
+      /close gracefully/u,
+    );
+});
+test("forced, errored or unverified Electron shutdown cannot complete acceptance", () => {
+  for (const kind of [
+    undefined,
+    "sigterm",
+    "sigkill",
+    "error",
+    "already-exited",
+    "natural-after-close",
+    "natural-after-sigterm",
+  ]) {
+    const manifest = cleanManifest();
+    manifest.electron.close.kind = kind;
+    assert.throws(() => assertAcceptanceCleanup(manifest), /close gracefully/u);
+  }
+  for (const exit of [undefined, {}, { code: 1, signal: null }, { code: 0, signal: "SIGTERM" }]) {
+    const manifest = cleanManifest();
+    manifest.electron.close.exit = exit;
+    assert.throws(() => assertAcceptanceCleanup(manifest), /close gracefully/u);
+  }
+  for (const closeFailures of [undefined, ["app.close timed out"]]) {
+    const manifest = cleanManifest();
+    manifest.electron.close.closeFailures = closeFailures;
+    assert.throws(() => assertAcceptanceCleanup(manifest), /close gracefully/u);
+  }
+});
+test("missing guard fields, keychain violations, leftovers and remote cleanup errors fail closed", () => {
+  for (const [field, invalid] of [
+    ["keychainViolations", [[{ method: "security" }], undefined]],
+    ["keychainViolationExit", [true, undefined]],
+    ["leftovers", [[{ pid: 123, signal: "SIGKILL" }], undefined]],
+    ["remoteCleanupError", ["Fixture hostd did not stop cleanly", undefined]],
+  ])
+    for (const value of invalid)
+      assert.throws(
+        () => assertAcceptanceCleanup({ ...cleanManifest(), [field]: value }),
+        /manifest failed/u,
+      );
+});
+test("journey arranges only benign Git state and runs all eight real assertions without waivers", () => {
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
   for (const label of [
@@ -277,7 +341,7 @@ test("journey arranges only benign Git state and narrowly XFAILs pending VC-722"
     "Search",
   ])
     assert.ok(smoke.includes(label), label);
-  assert.match(smoke, /ticket: "VC-722", steps: \[2\]/u);
+  assert.doesNotMatch(smoke, /EXPECTED_PROJECT_FAILURE|XFAIL|XPASS|expectedFailure/u);
   assert.doesNotMatch(
     smoke,
     /VC-721|EXPECTED_QUESTION_FAILURE/u,
@@ -285,22 +349,27 @@ test("journey arranges only benign Git state and narrowly XFAILs pending VC-722"
   );
   assert.ok(
     smoke.includes("projectCreationOutcome(current.text"),
-    "unexpected project creation must use the tested fatal-XPASS classifier",
+    "project creation must use the tested real-open classifier",
   );
-  assert.ok(
-    smoke.includes(
-      'record(n, "BLOCKED", "Requires remote project", EXPECTED_PROJECT_FAILURE.ticket)',
-    ),
+  assert.ok(smoke.includes('record(number, "FAIL", assertion, error.message)'));
+  assert.ok(smoke.includes('record(n, "BLOCKED", "Not run"'));
+  assert.match(
+    smoke,
+    /await action\("scroll", "button", "Forget…", \{ direction: "down" \}\);\s*await shot\("step-1-paired-device"\)/u,
+    "pairing evidence is framed at the bottom of the host pane before the viewport screenshot",
   );
+  assert.doesNotMatch(smoke, /click\("button", "Forget…"/u);
   const fixture = read("./remote-acceptance.mjs");
   assert.doesNotMatch(fixture, /project add|operator-token|arrangeProject/u);
   assert.ok(fixture.includes("git init --bare --initial-branch=main"));
   assert.ok(fixture.includes("Arrange benign Git state over fixture SSH"));
   assert.ok(smoke.includes('call("acceptance-arrange-box")'));
   assert.ok(smoke.includes("can't add projects to it."));
-  assert.ok(
-    smoke.includes('row.status === "PASS"'),
-    "canary completion is all-PASS, not process exit zero",
+  assert.match(smoke, /assertAcceptanceCleanup\(manifest\);\s*cleanupVerified = true;/u);
+  assert.match(
+    smoke,
+    /complete:\s*!failed &&\s*cleanupVerified &&\s*results.length === 8 &&\s*results.every\(\(row\) => row.status === "PASS"\)/u,
+    "eight PASS rows alone cannot claim completion without verified disposal",
   );
   assert.doesNotMatch(read("../supervisor.mjs"), /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/);
 });

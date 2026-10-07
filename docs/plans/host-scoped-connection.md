@@ -113,12 +113,14 @@ new durable guarantees. No schema migration or persistent outcome map is added.
 
 ## Stack and verification
 
-PR A is [#838](https://github.com/hussainph/volli-code/pull/838). The additive
-contract, hostd implementation and security review fixes have passed focused
-protected coverage, CI gate and CodeQL at `15426148d`. VC-719 (#836), VC-720
-(#835) and VC-724 recovery UI have merged. The owner authorized PR B resumption;
-its client lifetime, desktop routing and renderer changes remain local until
-PR A merges.
+PR A [#838](https://github.com/hussainph/volli-code/pull/838) merged as
+`d0bd481e3` after protected coverage, security re-check, CI gate and CodeQL.
+VC-719 (#836), VC-720 (#835), VC-724 recovery UI and VC-718 (#834) have merged.
+PR B adds client lifetime, desktop routing and renderer changes, plus the
+VC-718 all-PASS smoke flip: UI folder registration on the macOS user fixture,
+real steps2–8, a framed pairing screenshot and strict scratch/graceful-close
+cleanup evidence. The required cloud CI lane reports real step results; local
+unit/loopback checks are not a claim that the full macOS journey passed.
 
 The actual pre-VC-722 main listener at `2323b19dac96eea3a9d77e512c1fadbccdc8f34c`
 returned `BAD_REQUEST / hello-invalid`, then closed 4400 / `hello-invalid`.

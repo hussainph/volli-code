@@ -25,6 +25,7 @@ import {
   REMOTE_PROJECT,
   STREAM_REPLY,
   assertAcceptanceRunner,
+  assertAcceptanceCleanup,
   projectCreationOutcome,
   acceptanceHostAddState,
 } from "./lib/remote-acceptance.mjs";
@@ -32,9 +33,6 @@ import {
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const TITLE = "Cloud acceptance ticket";
-// VC-722's host-scoped connection will enable UI creation on user installs.
-// Remove on landing; the named refusal is the only accepted expected failure.
-const EXPECTED_PROJECT_FAILURE = { ticket: "VC-722", steps: [2] };
 const results = [];
 let instance;
 let socket;
@@ -170,11 +168,16 @@ async function journey() {
       },
       { timeout: 30_000, interval: 200 },
     );
+    // drive screenshots capture the viewport, not the full Settings scroller.
+    // Hovering the footer scrolls it into view; wheel down there reaches the
+    // pane's bottom, framing Paired devices + This Mac immediately above it.
+    // Never click Forget: this is only a real UI scroll for the evidence frame.
+    await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
     await click("button", "Home");
   });
 
-  const projectResult = await step(
+  await step(
     2,
     "New project on host: folder path, Create and open, selected remote Host chip",
     async () => {
@@ -194,33 +197,27 @@ async function journey() {
       const opened = `Opened ${REMOTE_PROJECT} on ${REMOTE_HOST}`;
       let current;
       await waitUntil(
-        "project opens or shows its named user-install refusal",
+        "project opens (the old user-install refusal is a failure)",
         async () => {
           current = await snap();
           return current.text.includes(opened) || current.text.includes(refusal);
         },
         { timeout: 90_000, interval: 200 },
       );
-      const outcome = projectCreationOutcome(current.text, {
-        hostName: REMOTE_HOST,
-        projectName: REMOTE_PROJECT,
-        expectedTicket: EXPECTED_PROJECT_FAILURE?.ticket,
-      });
-      if (outcome.status === "XFAIL") return outcome;
+      assert.equal(
+        projectCreationOutcome(current.text, {
+          hostName: REMOTE_HOST,
+          projectName: REMOTE_PROJECT,
+        })?.status,
+        "PASS",
+        "The folder project must open through production UI registration",
+      );
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
       const selected = await wait(REMOTE_PROJECT);
       assert.match(selected.text, new RegExp(`Host: ${REMOTE_HOST}`));
     },
   );
-  if (projectResult?.status === "XFAIL") {
-    for (let n = 3; n <= 8; n++) {
-      record(n, "BLOCKED", "Requires remote project", EXPECTED_PROJECT_FAILURE.ticket);
-    }
-    const doctor = await call("doctor");
-    assert.ok(doctor.ok, JSON.stringify(doctor));
-    return;
-  }
   await call("acceptance-model");
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
@@ -347,6 +344,8 @@ assertAcceptanceRunner();
 const reportDir = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "cloud-acceptance");
 await fs.mkdir(reportDir, { recursive: true });
 let failed = false;
+let cleanupVerified = false;
+let cleanupError = null;
 try {
   await journey();
 } catch (error) {
@@ -363,7 +362,8 @@ try {
       timeout: 120_000,
     }).catch((error) => {
       failed = true;
-      console.error(error.message);
+      cleanupError = error.message;
+      console.error(cleanupError);
       return null;
     });
     if (stopped) {
@@ -371,16 +371,14 @@ try {
         .readFile(join(instance.evidence, "manifest.json"), "utf8")
         .then(JSON.parse)
         .catch(() => null);
-      if (!manifest) {
+      try {
+        assertAcceptanceCleanup(manifest);
+        cleanupVerified = true;
+      } catch (error) {
         failed = true;
-        console.error("Stop returned without a guard/cleanup manifest");
-      } else if (
-        manifest.keychainViolations.length ||
-        manifest.keychainViolationExit ||
-        manifest.leftovers.length ||
-        manifest.remoteCleanupError
-      )
-        failed = true;
+        cleanupError = error.message;
+        console.error(cleanupError);
+      }
     }
   }
   await fs.writeFile(
@@ -388,9 +386,14 @@ try {
     JSON.stringify(
       {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
-        complete: !failed && results.length === 8 && results.every((row) => row.status === "PASS"),
+        complete:
+          !failed &&
+          cleanupVerified &&
+          results.length === 8 &&
+          results.every((row) => row.status === "PASS"),
         failed,
-        expectedFailure: EXPECTED_PROJECT_FAILURE,
+        cleanupVerified,
+        cleanupError,
         instance: instance?.id,
         results,
       },
@@ -401,7 +404,7 @@ try {
   if (process.env.GITHUB_STEP_SUMMARY)
     await fs.appendFile(
       process.env.GITHUB_STEP_SUMMARY,
-      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nThe canary SHA requires all eight PASS rows and complete:true in acceptance.json.\n`,
+      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nCleanup: ${cleanupVerified ? "PASS" : "FAIL"}${cleanupError ? ` — ${cleanupError.split("\n")[0]}` : ""}. The canary SHA requires all eight PASS rows, verified graceful disposal and complete:true in acceptance.json.\n`,
     );
 }
 process.exitCode = failed ? 1 : 0;
