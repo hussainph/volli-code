@@ -53,6 +53,9 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { CHAT_DRAFTS_APP_STATE_KEY, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
 import { ChatPlane } from "./chat-plane";
 import {
   forgetTranscriptViews,
@@ -108,6 +111,8 @@ function transcript(count: number): UIMessage[] {
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 const nativeScrollTo = HTMLElement.prototype.scrollTo;
+const originalExperiments = useExperimentsStore.getState();
+const originalHosts = useHostConnectionStore.getState();
 
 beforeEach(() => {
   forgetTranscriptViews();
@@ -150,6 +155,8 @@ afterEach(async () => {
   container = null;
   MotionGlobalConfig.skipAnimations = false;
   HTMLElement.prototype.scrollTo = nativeScrollTo;
+  useExperimentsStore.setState(originalExperiments, true);
+  useHostConnectionStore.setState(originalHosts, true);
   vi.unstubAllGlobals();
 });
 
@@ -650,6 +657,33 @@ describe("a provisional chat plane", () => {
     await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
     expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toEqual(selection);
     await act(async () => finishPromotion());
+  });
+
+  it("promotes a remote Draft on first Send without consulting or freezing this Mac's default", async () => {
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    useHostConnectionStore.setState({
+      hosts: [remoteHost("box", "chat-box")],
+      projects: { [PROJECT]: { hostId: "box", link: { status: "open" }, granted: ["sessions"] } },
+    });
+    const client = modelClient(DEFAULT_SELECTION);
+    const defaults = vi.spyOn(client, "defaults").mockResolvedValue(EMPTY_MODEL_ACCESS_DEFAULTS);
+    const { promoteChatSession, enqueue, store } = provisionalChatStore();
+    await mountPlane(store, client);
+    const box = composer();
+    if (box === null) throw new Error("expected remote composer");
+    await act(async () => type(box, "remote first Send"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+    await act(async () => submit.click());
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(enqueue).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ text: "remote first Send" }),
+    );
+    expect(defaults).not.toHaveBeenCalled();
+    expect(useUiStore.getState().settingsOpen).toBe(false);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toBeUndefined();
   });
 
   it("opens Model Access instead of promoting when no default resolves", async () => {

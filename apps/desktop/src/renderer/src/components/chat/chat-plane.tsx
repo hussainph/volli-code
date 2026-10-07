@@ -607,10 +607,10 @@ export function ChatPlane({
   const deliver = React.useCallback(
     async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery> => {
       if (provisional !== undefined) {
-        // First Send cannot defer a still-unknown model choice into main: doing
-        // so would let a Settings change between retries alter one create
-        // operation. No default is the existing Model Access recovery.
-        if (provisionalModel === null) {
+        // This Mac freezes its known model choice before promotion. A remote
+        // Draft deliberately has no local model: VC-713 lets the box resolve
+        // its default and report missing-model recovery in that host's name.
+        if (remoteHost === null && provisionalModel === null) {
           setSettingsOpen(true, "model-access");
           return "refused";
         }
@@ -643,7 +643,16 @@ export function ChatPlane({
       if (messageRoute(intent, deliverable) === "hold") return submit(message, "queue");
       return submit(message, intent === "steer" ? "steer" : undefined);
     },
-    [deliverable, provisional, provisionalModel, sessionId, sessionsStore, setSettingsOpen, submit],
+    [
+      deliverable,
+      provisional,
+      provisionalModel,
+      remoteHost,
+      sessionId,
+      sessionsStore,
+      setSettingsOpen,
+      submit,
+    ],
   );
 
   /**
