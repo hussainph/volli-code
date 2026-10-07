@@ -186,8 +186,26 @@ export interface DesktopRemoteHostsOptions {
   readonly wake?: WakePlatform;
 }
 
+/**
+ * A remote project's Sessions (VC-713): create, attach and command them, follow
+ * the one on screen, page its history, and list the Workspace's rows. Hosts
+ * that predate a feature simply do not grant it, and the relay refuses its
+ * operations typed (N−1).
+ */
+export const REMOTE_SESSION_LINK_FEATURES = [
+  "sessions",
+  "sessions.subscribe",
+  "sessions.queue",
+  "sessions.history",
+  "sessions.listing",
+] as const;
+
 /** What every Workspace link to a remote host asks for. */
-export const REMOTE_HOST_LINK_FEATURES = ["sign-ins", "auth.callback"] as const;
+export const REMOTE_HOST_LINK_FEATURES = [
+  "sign-ins",
+  "auth.callback",
+  ...REMOTE_SESSION_LINK_FEATURES,
+] as const;
 
 /** The engine, composed with this app's ports. */
 export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): RemoteHosts {
