@@ -269,7 +269,7 @@ export function useIslandAgents(
         // The door is the mount's when it supplies one; otherwise the
         // window's RPC bridge, adapted — undefined where there is neither,
         // which presses nowhere. Read at press time, like every door here.
-        const bridge = api ?? browserIslandAgentsApi();
+        const bridge = api ?? browserIslandAgentsApi(projectId);
         if (bridge === undefined) return;
         void (async () => {
           try {
@@ -289,7 +289,7 @@ export function useIslandAgents(
         })();
       },
     }),
-    [api, flash, labelOf, openSession, peekSession],
+    [api, flash, labelOf, openSession, peekSession, projectId],
   );
 
   return React.useMemo(() => ({ model: { agents }, actions }), [agents, actions]);

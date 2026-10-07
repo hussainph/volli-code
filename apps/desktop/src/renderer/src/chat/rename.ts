@@ -21,6 +21,8 @@
  */
 import { errorMessage } from "@volli/shared";
 
+import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -47,6 +49,14 @@ export async function renameChatSession(
 ): Promise<boolean> {
   const trimmed = title.trim();
   if (trimmed.length === 0) return false;
+  // A Session on a remote host is retitled by its host (VC-713): this Mac's
+  // `volli:session-rename` writes only its own ledger. The automatic title is
+  // the host's to make, so it is skipped quietly; a person's rename is told.
+  const host = remoteHostOfSession(sessionId);
+  if (host !== null) {
+    if (refineFrom === undefined) toastError(`Rename: ${notAvailableOn(host)}`);
+    return false;
+  }
 
   const previous = titlesOf(sessionId);
   writeTitle(sessionId, trimmed, previous);

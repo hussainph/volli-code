@@ -29,6 +29,7 @@ import {
 } from "@volli/shared";
 
 import { TicketSessionsPanel } from "./ticket-sessions-panel";
+import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { useUiStore } from "@renderer/stores/ui";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -280,6 +281,32 @@ describe("the rail roster on the push path", () => {
     expect(fault?.textContent).toContain("Sessions failed to read");
     expect(fault?.getAttribute("title")).toBe("db locked");
     expect(fault?.querySelector("button")?.textContent).toContain("Retry");
+  });
+
+  it("names a host that grants no Sessions, with no Retry (VC-713, B3)", async () => {
+    const reason = "Sessions aren’t available on box — update it to use them here";
+    useRemoteSessionAvailabilityStore.setState({ unavailable: { p1: reason } });
+    try {
+      await act(async () => {
+        root?.render(
+          <TicketSessionsPanel
+            projectId="p1"
+            ticketId="t1"
+            creating={false}
+            onNewSession={() => {}}
+            onNewChat={() => {}}
+            onActivateSession={() => {}}
+            onActivateChat={() => {}}
+          />,
+        );
+      });
+      const named = container?.querySelector('[data-testid="ticket-sessions-unavailable"]');
+      expect(named?.textContent).toBe(reason);
+      expect(container?.querySelector('[data-testid="ticket-sessions-error"]')).toBeNull();
+      expect(currentSectionText()).not.toContain("No active sessions");
+    } finally {
+      useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
+    }
   });
 
   it("shows a Sessions row a create's push announces", async () => {

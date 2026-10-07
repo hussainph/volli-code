@@ -40,6 +40,8 @@ import {
   type MessageDelivery,
 } from "@volli/session-presentation";
 
+import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { answerInteraction } from "@renderer/components/chat/chat-plane-model";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
@@ -70,6 +72,10 @@ export interface SidebarPeekSurface {
 
 /** Independent of the surface: rebuilding its action ports must not invalidate peek reads. */
 const readContent: SessionPeekPorts["readContent"] = async (sessionId, refine = false) => {
+  // A remote Session's transcript is its host's (VC-713); this Mac's peek
+  // reads only its own ledger.
+  const host = remoteHostOfSession(sessionId);
+  if (host !== null) throw new Error(notAvailableOn(host));
   const result = await window.api.sessions.peekContent({ sessionId, refine });
   // A refusal is a failed read, not an empty Session or a read receipt.
   if (!result.ok) throw new Error(result.error);

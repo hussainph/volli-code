@@ -149,10 +149,18 @@ export default defineConfig(({ mode }) => ({
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
       { extends: true, test: { name: "renderer" } },
-      // NOT extends: main tests need no plugins/alias; fresh entry avoids
-      // inheriting root src/renderer. @volli/shared resolves via workspace link.
+      // NOT extends: main tests need no plugins; a fresh entry avoids
+      // inheriting root src/renderer. It takes the renderer's alias alone
+      // (below). @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
+        // The renderer's alias alone: the real-link Sessions test drives the
+        // renderer's remote-Session binding and stores from desktop main.
+        resolve: {
+          alias: {
+            "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
+          },
+        },
         test: {
           name: "main",
           environment: "node",
@@ -584,6 +592,16 @@ export default defineConfig(({ mode }) => ({
         // A remote Workspace's Session streams within the link's budget
         // (VC-713, AM1): a missed branch is a blank chat or a leaked stream.
         "src/lib/remote-session-streams.ts",
+        // Sessions on a remote host (VC-713): which transport, listing and
+        // streams a remote project's Sessions take, and when they let go.
+        "src/lib/remote-sessions.ts",
+        "src/lib/remote-session-wire.ts",
+        // A Session's project, for the surfaces that hold only its id: a wrong
+        // answer calls `window.api` with a remote Session's id.
+        "src/lib/session-project.ts",
+        // Which projects this window has known on a remote host (VC-713, B1):
+        // a wrong answer sends a remote Session's id to This Mac's IPC.
+        "src/lib/remote-owners.ts",
         // A remote project's Workspace link as the window reaches it (VC-711):
         // when a relayed stream resumes, waits for a slot, or ends is a rule
         // no screenshot shows until a board silently stops following.

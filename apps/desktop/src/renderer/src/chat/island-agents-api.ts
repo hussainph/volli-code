@@ -1,4 +1,5 @@
-import { sessionRpcClient, type SessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { sessionCommandFor, type SessionCommandDoor } from "@renderer/chat/transport";
+import { projectOfSession } from "@renderer/lib/session-project";
 
 /** The stop door the island mount can replace for a non-Electron client. */
 export interface IslandAgentsApi {
@@ -12,9 +13,7 @@ export interface IslandAgentsApi {
 }
 
 /** `session.command` as the router types it: its input and its answer. */
-type CommandDoor = (
-  input: Parameters<SessionRpcClient["session"]["command"]["mutate"]>[0],
-) => ReturnType<SessionRpcClient["session"]["command"]["mutate"]>;
+type CommandDoor = SessionCommandDoor;
 
 /** UI compatibility shape over the shared host protocol, not a preload verb. */
 export function islandAgentsApi(command: CommandDoor, newCommandId: () => string): IslandAgentsApi {
@@ -39,10 +38,19 @@ export function islandAgentsApi(command: CommandDoor, newCommandId: () => string
   };
 }
 
-export function browserIslandAgentsApi(): IslandAgentsApi | undefined {
+/**
+ * The window's Stop door. A subagent's Stop goes where the subagent lives
+ * (VC-713, B2): its host's Workspace for a Session on a remote host — its own
+ * project, else the parent's (`parentProjectId`), since a child absent from
+ * every listing lives where its parent does — and This Mac's IPC only for a Session of This Mac.
+ */
+export function browserIslandAgentsApi(parentProjectId?: string): IslandAgentsApi | undefined {
   if (typeof window === "undefined" || window.api?.sessionRpc === undefined) return undefined;
   return islandAgentsApi(
-    (input) => sessionRpcClient().session.command.mutate(input),
+    (input) => {
+      const own = input.sessionId === undefined ? null : projectOfSession(input.sessionId);
+      return sessionCommandFor(own ?? parentProjectId ?? null)(input);
+    },
     () => crypto.randomUUID(),
   );
 }
