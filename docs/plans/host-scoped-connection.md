@@ -40,7 +40,7 @@ The new frozen `host.workspaces` feature grants exactly:
   `capacity`. A different intent under the same command id is
   `CONFLICT` / `command-conflict`.
 
-## Decisions to confirm
+## Decisions confirmed (owner, 2026-10-07)
 
 - **Bootstrap:** host scope reads `protocol.hostWelcome`, a new door-local
   query. The existing `protocol.welcome` has a frozen Workspace-only output
@@ -52,11 +52,49 @@ The new frozen `host.workspaces` feature grants exactly:
 - **Listing:** report `omitted` rather than hide a truncated catalog. An
   unrepresentable locator is omitted, not clipped into a different path.
 
+- **Command outcomes:** a bounded process-owned map; no migration. A running
+  clone reports `still-running`, and a completed retry answers the exact same
+  result. Reusing a command id with another intent is `command-conflict`.
+  Outcomes do not survive a hostd restart: retrying a clone then finds its
+  existing target and answers `target-exists`; the client re-lists, never
+  silently clones again. Registration of an already tracked path returns its
+  existing Workspace through the shared host-core path.
+
+## Execution policies (for owner review)
+
+The hostd process owns one service, independent of client connections. It uses
+shared host-core project registration, canonical readable folder paths and the
+same repository URL admission as the SSH path. User roots are created on first
+clone with mode 0700, system roots with 0755; an existing root is not chmodded.
+An exclusive 0700 target reservation prevents competing clones. Failed clones
+remove only their still-owned target, never a replacement directory.
+
+- Retain at most **1,000 command outcomes**, without eviction; refuse new
+  commands with `capacity` at the limit. Existing commands remain replayable.
+- Run at most **four creates** and **one coalesced catalog read** at once,
+  hence at most five Git children. Over-capacity creates are not accepted or
+  retained and may be retried. A connection drop does not cancel accepted work.
+- Clone deadline: **10 minutes**, with **64 KiB combined child output**.
+  Git receives argument arrays, disables prompts and ambient Git configuration,
+  resets credential helpers, and installs only Volli's supplied stored-token
+  helper. Production permits HTTPS/SSH only; file transport is an internal
+  test seam. Catalog/branch Git reads each have a 10-second deadline.
+- Shutdown fences new work and database writes, sends process groups SIGTERM,
+  escalates to SIGKILL after **250 ms**, and waits at most **3 seconds** before
+  returning to runtime shutdown. A filesystem operation finishing later cannot
+  register a project. The service closes before the database-owning host drains.
+
+Capacity and shutdown values are implementation defaults for owner review, not
+new durable guarantees. No schema migration or persistent outcome map is added.
+
 ## Stack and verification
 
-PR A is draft contract work first; hostd project execution and real-link
-acceptance follow. It requires a security review before merge. PR B is not
-pushed until the owner confirms VC-719 (#836) and VC-720 (#835) have merged.
+PR A is draft [#838](https://github.com/hussainph/volli-code/pull/838). The owner
+approved the additive contract at `bb272ad5b` while GitHub refused pushes
+repository-wide. Hostd execution and signed-device real-link acceptance are now
+implemented; final coverage, CI/CodeQL and security review remain merge gates.
+PR B is not pushed until the owner confirms VC-719 (#836) and VC-720 (#835) have
+merged.
 
 N−1 refuses the new hello (`hello-invalid`); the client classifies this only
 while attempting host scope and keeps the SSH catalog/create path and

@@ -1,4 +1,8 @@
-import { HOST_BASE_OPERATIONS, HOST_FEATURE_OPERATIONS } from "@volli/host-protocol";
+import {
+  HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
+  HOST_FEATURE_OPERATIONS,
+} from "@volli/host-protocol";
 import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
@@ -22,8 +26,10 @@ describe("committed protocol schema projection", () => {
     const document = generateProtocolSchema();
     expect(document.features).toEqual(HOST_FEATURE_OPERATIONS);
     expect(document.baseOperations).toEqual(HOST_BASE_OPERATIONS);
+    expect(document.hostScopeBaseOperations).toEqual(HOST_SCOPE_BASE_OPERATIONS);
     for (const operation of [
       ...document.baseOperations,
+      ...document.hostScopeBaseOperations,
       ...Object.values(document.features).flat(),
     ]) {
       expect(Object.hasOwn(document.tiers.public!, operation)).toBe(true);

@@ -76,6 +76,7 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "board.write",
   "sign-ins",
   "auth.callback",
+  "host.workspaces",
   // The Session listing rows a remote rail paints (VC-713).
   "sessions.listing",
 ];
@@ -85,7 +86,7 @@ const MIB = 1024 * 1024;
 /**
  * hostd's listener bounds while the enrolled-device verifier is its only
  * one (VC-700): a few devices of one person, over SSH tunnels to loopback.
- * A client holds one connection per Workspace, and the desktop opens every
+ * A client holds one host connection plus one per Workspace, and the desktop opens every
  * project a host serves, so the cap is **32 connections per host** (across
  * every Mac), with a burst of 32 handshakes. Until VC-575's host-wide byte
  * budget, the per-connection bounds are the budget. Worst case, every

@@ -1,3 +1,4 @@
+import { createWorkspacesRouter } from "./workspaces-router";
 /**
  * The board router (VC-565) through the real catalog builders, driven with a
  * handler map that records what reaches it: who is admitted, which Workspace
@@ -972,11 +973,19 @@ describe("the composed host router", () => {
   it("serves both families' procedures, each once, under the one error envelope", () => {
     const session = Object.keys(createSessionRouter()._def.procedures);
     const board = Object.keys(createBoardRouter()._def.procedures);
+    const workspaces = Object.keys(createWorkspacesRouter()._def.procedures);
     const host = createHostRouter();
     expect(session.filter((path) => board.includes(path))).toEqual([]);
-    expect(Object.keys(host._def.procedures).toSorted()).toEqual([...session, ...board].toSorted());
+    expect(Object.keys(host._def.procedures).toSorted()).toEqual(
+      [...session, ...board, ...workspaces].toSorted(),
+    );
     expect(board.toSorted()).toEqual([...PATHS].toSorted());
-    for (const router of [host, createBoardRouter(), createSessionRouter()]) {
+    for (const router of [
+      host,
+      createBoardRouter(),
+      createSessionRouter(),
+      createWorkspacesRouter(),
+    ]) {
       expect(router._def._config.errorFormatter).toBe(catalogErrorFormatter);
     }
   });
@@ -1022,6 +1031,21 @@ describe("the composed host router", () => {
     } finally {
       vi.doUnmock("./board-router");
       vi.resetModules();
+    }
+  });
+  it("refuses a project family that shadows either existing family", async () => {
+    for (const namespace of ["session", "board"]) {
+      vi.resetModules();
+      vi.doMock("./workspaces-router", () => ({
+        createWorkspacesRouter: () => ({ _def: { record: { [namespace]: {} } } }),
+      }));
+      try {
+        const { createHostRouter: compose } = await import("./host-router");
+        expect(() => compose()).toThrow(`Router namespace ${namespace} belongs to two families`);
+      } finally {
+        vi.doUnmock("./workspaces-router");
+        vi.resetModules();
+      }
     }
   });
 });

@@ -601,16 +601,14 @@ async function authorizeWorkspace(
   entry: CatalogEntry,
   named: WorkspaceResources,
 ): Promise<void> {
-  const { actor } = ctx.caller;
+  // This private middleware runs only after policed() refused host-scoped
+  // actors, before parsing. Keep that admission in one place; only Workspace
+  // or local actors can reach this resource-ownership check.
+  const actor = ctx.caller.actor as Exclude<CallerActor, { scope: "host" }>;
   // Every Workspace on this host is the desktop window's, so there is nothing
   // to authorize and nothing new to read: with the flag off, a call answers
   // exactly as it did before the catalog existed.
   if (isLocalDeviceActor(actor)) return;
-  if (isHostScopeActor(actor))
-    throw new HostProcedureError(
-      "workspace-scope-required",
-      "This operation requires a Workspace connection.",
-    );
   const resources = namedResources(named);
   // A call that names nothing names nothing this caller could own.
   if (resources.length === 0) {

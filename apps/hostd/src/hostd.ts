@@ -41,7 +41,8 @@
  * the browser are not composed, and there is no periodic backup.
  */
 import { mkdirSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 import { makeAgentError, type AgentRequest, type AgentResponse } from "@volli/shared";
 import {
@@ -350,6 +351,15 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           options: {
             ...runtimeOptions,
             venue,
+            // Managed system installs pass a root-owned device store; user
+            // installs use their private data-dir store on Linux and macOS.
+            projectsRoot: cloud
+              ? (runtimeOptions.projectsRoot ??
+                (options.devicesFile
+                  ? "/srv/volli"
+                  : join(options.env["HOME"] || homedir(), "volli")))
+              : null,
+            userInstall: !options.devicesFile,
             gitCredentialHelper: cloud
               ? (options.gitCredentialHelper ?? defaultGitCredentialHelper(dataDir))
               : null,

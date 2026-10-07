@@ -80,7 +80,7 @@ function registerSessionRpcIpcHandlers(
   return registerBridge({
     ...(options as object),
     handlers: sessionHandlersFrom(options),
-  } as RegisterSessionRpcIpcOptions);
+  } as unknown as RegisterSessionRpcIpcOptions);
 }
 
 interface FakeSender {

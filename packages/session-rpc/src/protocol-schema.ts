@@ -8,6 +8,7 @@ import { desktopProcedureSchemas } from "./desktop-router";
 import {
   HOST_PROTOCOL_VERSION,
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_TRACE_FIELD,
 } from "@volli/host-protocol";
@@ -86,6 +87,7 @@ export function generateProtocolSchema(
   return {
     protocolVersion: HOST_PROTOCOL_VERSION,
     baseOperations: HOST_BASE_OPERATIONS,
+    hostScopeBaseOperations: HOST_SCOPE_BASE_OPERATIONS,
     features: HOST_FEATURE_OPERATIONS,
     envelope: Object.fromEntries(
       Object.entries(ENVELOPE_FIELD_SCHEMAS).map(([field, schema]) => [

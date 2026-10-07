@@ -1065,3 +1065,40 @@ describe("the Session listing (VC-713)", () => {
     });
   });
 });
+
+describe("host-scope projects at the one handler map", () => {
+  const command = {
+    commandId: "a0000000-0000-4000-8000-000000000001",
+    source: { path: "/work/project" },
+  };
+  it("answers unavailable where the host does not compose project management", async () => {
+    const map = handlers();
+    expect(await unavailable(() => map["workspaces.list"](undefined, USER))).toBe(
+      "Project management is not available on this host",
+    );
+    expect(await unavailable(() => map["workspaces.create"](command, USER))).toBe(
+      "Project management is not available on this host",
+    );
+  });
+  it("projects exactly to the host-owned service", async () => {
+    const row = {
+      id: command.commandId,
+      name: "Project",
+      path: "/work/project",
+      gitRemoteUrl: null,
+    };
+    const result = { ok: true as const, workspace: row };
+    const workspaces = {
+      list: vi.fn(() => ({ workspaces: [row], omitted: 0 })),
+      create: vi.fn(async () => result),
+    };
+    const map = handlers({ workspaces });
+    expect(await map["workspaces.list"](undefined, USER)).toEqual({
+      workspaces: [row],
+      omitted: 0,
+    });
+    expect(await map["workspaces.create"](command, USER)).toBe(result);
+    expect(workspaces.list).toHaveBeenCalledWith();
+    expect(workspaces.create).toHaveBeenCalledWith(command);
+  });
+});

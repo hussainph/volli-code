@@ -120,6 +120,9 @@
       "signIns.clearGitCredential"
     ]
   },
+  "hostScopeBaseOperations": [
+    "protocol.hostWelcome"
+  ],
   "protocolVersion": 1,
   "tiers": {
     "desktop": {

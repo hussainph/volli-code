@@ -55,6 +55,7 @@ import { dataDirDeviceStore, enrollDevice, rootDeviceStore } from "./enrolled-de
 const faults = vi.hoisted(() => ({
   failStatusOn: null as string | null,
   runtimeReadyError: false,
+  fallbackHome: null as string | null,
   runtimeConstructError: false,
   runtimeCloseError: false,
   automationsUnavailable: false,
@@ -66,6 +67,7 @@ const faults = vi.hoisted(() => ({
   detachedWork: null as DetachedWorkPort | null,
   host: null as HostCore | null,
   hostOptions: null as HostCoreOptions | null,
+  projectOptions: null as { projectsRoot?: string | null; userInstall?: boolean } | null,
   /** When set, every command waits on it before it runs. */
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
@@ -77,6 +79,11 @@ const faults = vi.hoisted(() => ({
   /** The execute hostd handed the socket, to call without a connection. */
   execute: null as ((request: AgentRequest) => Promise<AgentResponse>) | null,
 }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => faults.fallbackHome ?? actual.homedir() };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -209,6 +216,7 @@ vi.mock("./session-runtime", async (original) => {
       ...args: Parameters<typeof actual.createHeadlessSessionRuntime>
     ) => {
       if (faults.runtimeConstructError) throw new Error("runtime construction failed");
+      faults.projectOptions = args[0].options;
       const runtime = actual.createHeadlessSessionRuntime(...args);
       faults.runtimeOwned = true;
       return {
@@ -243,6 +251,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   faults.runtimeReadyError = false;
+  faults.fallbackHome = null;
   faults.runtimeConstructError = false;
   faults.runtimeCloseError = false;
   faults.automationsUnavailable = false;
@@ -260,6 +269,7 @@ afterEach(async () => {
   faults.detachedWork = null;
   faults.host = null;
   faults.hostOptions = null;
+  faults.projectOptions = null;
   await Promise.all(running.splice(0).map((host) => host.stop("test over")));
   // Those stops record too; the next test starts from an empty order.
   faults.order = [];
@@ -301,6 +311,7 @@ async function boot(
     devicesFile?: string;
     hostProtocolVerifier?: HostdOptions["hostProtocolVerifier"];
     logRing?: HostdOptions["logRing"];
+    runtime?: HostdOptions["runtime"];
   } = {},
   log = logger(),
 ): Promise<RunningHostd> {
@@ -322,6 +333,7 @@ async function boot(
       ? {}
       : { hostProtocolVerifier: options.hostProtocolVerifier }),
     ...(options.logRing === undefined ? {} : { logRing: options.logRing }),
+    ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
   });
   running.push(host);
   return host;
@@ -1218,6 +1230,7 @@ describe("the host protocol listener (VC-663)", () => {
     const log = logger();
     const host = await boot({ listen: LOOPBACK }, log);
     expect(host.status().hostProtocol).toBeNull();
+    expect(faults.projectOptions).toMatchObject({ projectsRoot: null });
     expect(readStatus(join(root, "data"))).toMatchObject({ hostProtocol: null });
     expect(log.warn).toHaveBeenCalledWith(
       "--listen is ignored: the host protocol needs VOLLI_EXPERIMENTAL=cloud",
@@ -1228,6 +1241,31 @@ describe("the host protocol listener (VC-663)", () => {
   it("serves nothing with the flag on and no address", async () => {
     const host = await boot({ env: CLOUD });
     expect(host.status().hostProtocol).toBeNull();
+    expect(faults.projectOptions).toMatchObject({
+      projectsRoot: join(root, "home", "volli"),
+      userInstall: true,
+    });
+    expect(existsSync(join(root, "home", "volli"))).toBe(false);
+  });
+
+  it("uses the user home fallback without creating the projects root at boot", async () => {
+    faults.fallbackHome = join(root, "fallback-home");
+    await boot({ env: { ...CLOUD, HOME: "" } });
+    expect(faults.projectOptions).toMatchObject({
+      projectsRoot: join(faults.fallbackHome, "volli"),
+      userInstall: true,
+    });
+    expect(existsSync(join(faults.fallbackHome, "volli"))).toBe(false);
+  });
+
+  it("preserves an explicitly composed projects root", async () => {
+    const projectsRoot = join(root, "custom-projects");
+    await boot({
+      env: CLOUD,
+      runtime: { binDir: root, projectsRoot, venue: { kind: "remote", id: "fixture" } },
+    });
+    expect(faults.projectOptions).toMatchObject({ projectsRoot, userInstall: true });
+    expect(existsSync(projectsRoot)).toBe(false);
   });
 
   it("listens on loopback with the flag on, names it in the status file, and refuses every credential", async () => {
@@ -1372,6 +1410,7 @@ describe("the host protocol listener (VC-663)", () => {
           "board.write",
           "sign-ins",
           "auth.callback",
+          "host.workspaces",
           "sessions.listing",
         ],
       });
@@ -1716,6 +1755,7 @@ describe("the host protocol listener (VC-663)", () => {
     const devicesFile = join(etc, "volli-hostd-devices");
     const log = logger();
     const host = await boot({ env: CLOUD, listen: LOOPBACK, devicesFile }, log);
+    expect(faults.projectOptions).toMatchObject({ projectsRoot: "/srv/volli", userInstall: false });
     if (!isLiveHost(host.host)) throw new Error("database did not open");
     insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
     const hostId = host.status().hostId!;

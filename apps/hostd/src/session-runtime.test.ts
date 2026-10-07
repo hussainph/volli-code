@@ -31,7 +31,9 @@ const seam = vi.hoisted(() => ({
   piHostCredentials: vi.fn(),
   observability: { start: vi.fn(), shutdown: vi.fn() },
   handlers: vi.fn(),
+  workspaces: vi.fn(),
 }));
+vi.mock("./host-workspaces", () => ({ createHostWorkspaces: seam.workspaces }));
 vi.mock("../../../packages/host-core/src/handlers/host-handlers", () => ({
   createHostHandlers: seam.handlers,
 }));
@@ -209,6 +211,68 @@ function fixture() {
 }
 
 describe("headless runtime ownership", () => {
+  it("composes one process-owned project service and closes it before the runtime", async () => {
+    const f = fixture();
+    const close = vi.fn(async () => {});
+    const service = { list: vi.fn(), create: vi.fn(), close };
+    seam.workspaces.mockReturnValue(service);
+    const owner = createHeadlessSessionRuntime({
+      ...f.input,
+      options: { ...f.input.options, projectsRoot: "/home/service/volli" },
+      boardFeed: {} as never,
+    });
+    await owner.ready();
+    await owner.ready();
+    expect(seam.workspaces).toHaveBeenCalledExactlyOnceWith({
+      db: f.host.database.db,
+      projectsRoot: "/home/service/volli",
+      userInstall: true,
+      env: f.input.env,
+      gitCredentialHelper: "",
+      detachedWork: f.host.detachedWork,
+    });
+    expect(seam.handlers.mock.lastCall![1]).toMatchObject({ workspaces: service });
+    await owner.close();
+    expect(close).toHaveBeenCalledOnce();
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(
+      f.lifecycle.close.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("passes system install and helper configuration and drains other owners if project close fails", async () => {
+    const f = fixture();
+    seam.workspaces.mockReturnValue({
+      close: vi.fn(async () => {
+        throw new Error("project drain failed");
+      }),
+    });
+    const owner = createHeadlessSessionRuntime({
+      ...f.input,
+      options: {
+        ...f.input.options,
+        projectsRoot: "/srv/volli",
+        userInstall: false,
+        gitCredentialHelper: "!fixture",
+      },
+    });
+    await owner.ready();
+    expect(seam.workspaces.mock.lastCall![0]).toMatchObject({
+      projectsRoot: "/srv/volli",
+      userInstall: false,
+      gitCredentialHelper: "!fixture",
+    });
+    await expect(owner.close()).rejects.toThrow("project drain failed");
+    expect(f.lifecycle.close).toHaveBeenCalledOnce();
+    expect(f.automations.settled).toHaveBeenCalledOnce();
+  });
+
+  it("composes no project service without the cloud-owned root", async () => {
+    const f = fixture();
+    await f.launch().ready();
+    expect(seam.workspaces).not.toHaveBeenCalled();
+    expect(seam.handlers.mock.lastCall![1]).toMatchObject({ workspaces: undefined });
+  });
+
   it("captures all ports before recovery, gates commands, and joins shell drain", async () => {
     const f = fixture();
     const owner = f.launch();

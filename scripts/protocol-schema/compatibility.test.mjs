@@ -721,6 +721,22 @@ test("dangling/external references and assertion siblings fail closed", () => {
   assert.deepEqual(schemaChanges(text, alias), []);
 });
 
+test("host-scope bootstrap is additive once, then independently frozen", () => {
+  const old = { protocolVersion: 1, tiers: {}, baseOperations: ["protocol.welcome"] };
+  const added = { ...old, hostScopeBaseOperations: ["protocol.hostWelcome"] };
+  assert.deepEqual(unapprovedChanges(old, added), []);
+  for (const hostScopeBaseOperations of [
+    undefined,
+    [],
+    ["protocol.welcome"],
+    ["protocol.hostWelcome", "protocol.extra"],
+  ]) {
+    assert.deepEqual(unapprovedChanges(added, { ...added, hostScopeBaseOperations }), [
+      { path: "/hostScopeBaseOperations", reason: "frozen bootstrap membership changed" },
+    ]);
+  }
+});
+
 test("the committed public feature/bootstrap sets are frozen independently of declaration order", () => {
   const old = JSON.parse(
     readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),

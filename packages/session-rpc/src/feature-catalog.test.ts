@@ -1,5 +1,9 @@
 // The v1 feature table against the catalog it grants from (VC-663).
-import { HOST_BASE_OPERATIONS, HOST_FEATURE_OPERATIONS } from "@volli/host-protocol";
+import {
+  HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
+  HOST_FEATURE_OPERATIONS,
+} from "@volli/host-protocol";
 import { CATALOG_ENTRIES } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
@@ -7,7 +11,7 @@ import type { HostRouterFeatureBinding } from "./host-router";
 
 const granted: readonly string[] = [
   ...HOST_BASE_OPERATIONS,
-  "protocol.hostWelcome",
+  ...HOST_SCOPE_BASE_OPERATIONS,
   ...Object.values(HOST_FEATURE_OPERATIONS).flat(),
 ];
 const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("hostApi"));

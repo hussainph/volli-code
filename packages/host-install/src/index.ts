@@ -17,3 +17,6 @@ export * from "./ssh-provider";
 export * from "./ssh";
 export * from "./target";
 export * from "./tunnel";
+
+// The hostd clone path uses the same pure URL admission rules as SSH creation.
+export { gitUrlProblem, repositoryName } from "./remote-hosts-projects";

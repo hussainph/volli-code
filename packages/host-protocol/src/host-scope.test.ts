@@ -181,6 +181,11 @@ describe("host-scoped v1 handshake", () => {
       "workspaces.list",
       "workspaces.create",
     ]);
+    expect([...operationsGrantedBy(["host.workspaces"], "host")]).toEqual([
+      "protocol.hostWelcome",
+      "workspaces.list",
+      "workspaces.create",
+    ]);
     expect(hostError("workspace-scope-required", "Choose a Workspace").code).toBe("FORBIDDEN");
     for (const answer of [
       negotiateWelcome(hello, offer, workspaceActor),

@@ -71,6 +71,7 @@ import {
   HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_MAX_FRAME_BYTES,
   HOST_PROTOCOL_VERSIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   isHostConnectionActor,
   negotiateWelcome,
   operationsGrantedBy,
@@ -588,6 +589,19 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const grant = await verify(hello);
     if (grant === null)
       return refuse(connection, "credential-invalid", "The credential is not valid.");
+    // A router composed before host scope has no host bootstrap. Refuse the
+    // hello rather than admit a connection whose welcome cannot be read.
+    if (
+      "scope" in hello &&
+      // oxlint-disable-next-line no-underscore-dangle -- tRPC's served procedure metadata.
+      !HOST_SCOPE_BASE_OPERATIONS.every((key) => Object.hasOwn(options.router._def.procedures, key))
+    ) {
+      return refuse(
+        connection,
+        "hello-invalid",
+        "This host does not serve host-scoped connections.",
+      );
+    }
     const workspace = "scope" in hello ? undefined : await options.workspace(hello.workspaceId);
     if (workspace === null) {
       return refuse(connection, "workspace-unknown", "No such workspace on this host");
@@ -618,14 +632,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const listenerContext: Pick<CatalogCallerContext, ListenerContextKey> = {
       caller,
       transport: "websocket",
-      operations:
-        "scope" in welcome
-          ? new Set(
-              ["protocol.hostWelcome", ...operationsGrantedBy(welcome.features)].filter(
-                (key) => key !== "protocol.welcome",
-              ),
-            )
-          : operationsGrantedBy(welcome.features),
+      operations: operationsGrantedBy(welcome.features, "scope" in welcome ? "host" : "workspace"),
       welcome,
       replayBounds: { events: limits.maxReplayEvents, bytes: limits.maxReplayBytes },
       admission: admissionOf(connection),

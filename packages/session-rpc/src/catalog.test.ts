@@ -1,5 +1,5 @@
 import { getTRPCErrorShape, initTRPC, TRPCError } from "@trpc/server";
-import type { HostActor } from "@volli/host-protocol";
+import type { HostConnectionActor } from "@volli/host-protocol";
 import {
   SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
@@ -104,7 +104,7 @@ function fixture(caller: RouterCaller) {
 }
 
 /** A network caller, whose door supplies the grant check every network caller must carry. */
-function as(actor: HostActor, current: () => boolean = () => true): RouterCaller {
+function as(actor: HostConnectionActor, current: () => boolean = () => true): RouterCaller {
   return { actor, current };
 }
 
@@ -345,6 +345,50 @@ describe("follow-up feature compatibility", () => {
 });
 
 describe("workspace scope, before any read", () => {
+  it("refuses a host device before Workspace input parsing, lookup, or the handler", async () => {
+    const parse = vi.fn((input: unknown) => input);
+    const lookup = vi.fn(() => WORKSPACE);
+    const handler = vi.fn(() => "answer");
+    const router = catalogRouter({
+      session: {
+        projection: workspaceProcedure(
+          "session.projection",
+          z.preprocess(parse, z.object({ sessionId: z.string().min(1) })),
+          ({ sessionId }) => ({ kind: "session", id: sessionId }),
+        )
+          .output(z.string())
+          .query(handler),
+      },
+    });
+    const call = (caller: RouterCaller) =>
+      router.createCaller(
+        sessionContext({
+          caller,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          resourceWorkspace: lookup,
+        }),
+      );
+    const host = call(as({ kind: "device", deviceId: DEVICE, scope: "host" }));
+    for (const input of [{ sessionId: "session-1" }, { sessionId: "" }]) {
+      await expect(host.session.projection(input)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        reason: "workspace-scope-required",
+      });
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+
+    // The same procedure does parse, resolve, and dispatch for a Workspace device.
+    await expect(call(device).session.projection({ sessionId: "session-1" })).resolves.toBe(
+      "answer",
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("answers a Session in another Workspace exactly as an absent one, and reads neither", async () => {
     const { caller, runtime } = fixture(device);
     const foreign = await refusal(caller.session.snapshot({ sessionId: "foreign-session" }));

@@ -161,7 +161,7 @@ On host startup, recovery starts before Clients and producers but readiness wait
 
 A box also admits one host connection per Client, before it has any projects.
 [The host-scope contract](host-scoped-connection.md) defines the additive hello,
-welcome, credential, bounded project catalog and decisions to confirm. Existing
+welcome, credential, bounded project catalog and owner-confirmed decisions. Existing
 Workspace hellos and welcomes are unchanged. The host hello has `scope: "host"`
 and no `workspaceId` or `lastSeen`; its device actor and signed `vdc1` claims have
 the same marker and no Workspace. Only a device enrolled for every Workspace on

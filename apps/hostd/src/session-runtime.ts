@@ -49,6 +49,7 @@ import {
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
 import { sessionGitEnv } from "./agent-git-env";
+import { createHostWorkspaces } from "./host-workspaces";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -66,6 +67,9 @@ export interface HeadlessRuntimeOptions {
   gitCredentialHelper?: string | null;
   /** The box's platform (`process.platform`): on a Mac, Session git never reaches the keychain. */
   platform?: string;
+  /** Host-scope project creation, composed only behind cloud. */
+  projectsRoot?: string | null;
+  userInstall?: boolean;
 }
 
 function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {
@@ -283,12 +287,17 @@ export function createHeadlessSessionRuntime(input: {
       });
     },
   };
+  let workspaces: ReturnType<typeof createHostWorkspaces> | undefined;
   return {
     close: async () => {
       try {
-        await lifecycle.close();
+        await workspaces?.close();
       } finally {
-        await automations.settled();
+        try {
+          await lifecycle.close();
+        } finally {
+          await automations.settled();
+        }
       }
     },
     /** The scheduler and armed Runs: the host lifecycle's synchronous first step. */
@@ -338,6 +347,17 @@ export function createHeadlessSessionRuntime(input: {
                 git: fileGitCredentialStore(join(host.dataDir, GIT_CREDENTIALS_FILE)),
               },
             });
+      workspaces ??=
+        options.projectsRoot == null
+          ? undefined
+          : createHostWorkspaces({
+              db,
+              projectsRoot: options.projectsRoot,
+              userInstall: options.userInstall ?? true,
+              env: input.env,
+              gitCredentialHelper: options.gitCredentialHelper ?? "",
+              detachedWork: host.detachedWork,
+            });
       let sessionReads: SessionReadPort | undefined;
       return {
         ...recoveredSessionCommandPorts(ready),
@@ -370,6 +390,7 @@ export function createHeadlessSessionRuntime(input: {
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
           signIns,
+          workspaces,
           logs: input.logs ?? null,
           // The listing rows (VC-713): the same rows the desktop's own
           // listing builds, live-ness from this process's executor bindings.
