@@ -161,7 +161,6 @@ export {
 } from "./desktop-ipc";
 export { AsyncQueue } from "./async-queue";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
-export { AsyncQueue } from "./async-queue";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];

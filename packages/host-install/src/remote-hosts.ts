@@ -48,7 +48,6 @@ import {
   initialProvisionState,
   retry as retryFrom,
   type HostProvider,
-  type ProvisionResults,
   type ProvisionSecrets,
 } from "./provision";
 import {
@@ -76,6 +75,7 @@ import {
   type SshStepResults,
 } from "./ssh-provider";
 import type { SshTransport } from "./ssh";
+import { describeStartup } from "./probe";
 import { parseSshTarget, type SshTarget } from "./target";
 import type { SshTunnel, TunnelState } from "./tunnel";
 
@@ -233,7 +233,7 @@ interface Flow {
   readonly listeners: Set<(event: AddHostEvent) => void>;
   state: SshProvisionState;
   /** The results the view shows: the state's, plus each step finished in this run. */
-  results: ProvisionResults;
+  results: SshStepResults;
   status: AddHostView["status"];
   active: StepId | null;
   hostId: string | null;
@@ -537,6 +537,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function emitView(flow: Flow): void {
     const { state, status } = flow;
     const waiting = status === "question" || status === "failed";
+    const { probe } = flow.results;
     flow.view = {
       flowId: flow.id,
       target: flow.targetText,
@@ -550,6 +551,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       question: status === "question" ? questionJson(state) : null,
       failure: status === "failed" ? failureJson(state, flow.name) : null,
       hostId: flow.hostId,
+      startup: probe === undefined ? null : describeStartup(probe, flow.name),
     };
     emit(flow, { kind: "view", view: flow.view });
   }

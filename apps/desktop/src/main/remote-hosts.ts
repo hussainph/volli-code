@@ -20,13 +20,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import type { RemoteHostsPort } from "@volli/host-core/handlers";
 import { createHostLink } from "@volli/host-protocol/client-link";
 import {
   acceptHostKeys,
-  artifactFileName,
   createRemoteHosts,
   createSshTunnel,
   discoverHostKeys,
@@ -173,18 +172,9 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
       },
     }),
     artifact: (target) =>
-      resolveArtifact({
-        version: appVersion,
-        target,
-        cacheDir,
-        pin,
-        // The one named for the box's target (`volli-hostd-<version>-<target>.tar.gz`).
-        devTarball:
-          devTarballs.find((path) => basename(path) === artifactFileName(appVersion, target)) ??
-          null,
-        logger,
-      }),
-    supportedTargets: supportedTargets(pin),
+      resolveArtifact({ version: appVersion, target, cacheDir, pin, devTarballs, logger }),
+    // The pin's targets (linux and darwin, x64 and arm64), else the dev tarballs' own.
+    supportedTargets: supportedTargets(pin, devTarballs),
     appVersion,
     deviceName: hostname().replace(/\.local$/u, ""),
     tunnel: (tunnel) => createSshTunnel({ ...tunnel }),

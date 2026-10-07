@@ -498,6 +498,16 @@
                         }
                       ]
                     },
+                    "startup": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "status": {
                       "enum": [
                         "running",
@@ -555,7 +565,8 @@
                     "steps",
                     "question",
                     "failure",
-                    "hostId"
+                    "hostId",
+                    "startup"
                   ],
                   "type": "object"
                 }

@@ -157,6 +157,7 @@ const addHostView = z.object({
   question: addHostQuestion.nullable(),
   failure: addHostFailure.nullable(),
   hostId: z.string().nullable(),
+  startup: z.string().nullable(),
 });
 const addHostLogLine = z.object({
   at: z.string(),

@@ -170,7 +170,7 @@ function fakeBoxes(...overrides: Handler[]) {
     if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
     if (options.label === "upload: check") return { stdout: "\n" };
     if (script.includes("cat > ")) return {};
-    if (script.includes(".part' | cut")) return { stdout: `${SHA}\n` };
+    if (script.includes(".part' 2>/dev/null; } | cut")) return { stdout: `${SHA}\n` };
     if (script.includes("tar -xzf")) return { stdout: `dir=${STAGED}\nversion=1.1.0\n` };
     if (script.includes(" install --"))
       return json(INSTALLED(script.includes("--user") ? "user" : "system"));
@@ -495,6 +495,8 @@ describe("adding a host end to end", () => {
       question: null,
       failure: null,
       hostId: HOST_ID,
+      // A Linux host starts at boot: nothing to say.
+      startup: null,
     });
     // Each step shows running, in order, each after the ones before it are done.
     const running = w
@@ -631,6 +633,8 @@ describe("adding a host end to end", () => {
     });
     const { view } = await startAdd(h);
     expect(view.status).toBe("done");
+    // The checklist says when it comes up: at login, not at boot.
+    expect(view.startup).toBe("Starts when you log in to deploy@box");
     expect(h.engine.snapshot().hosts[0]).toMatchObject({
       os: "macos",
       mode: "user",

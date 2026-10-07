@@ -96,6 +96,7 @@ const VIEW: AddHostEvent = {
     },
     failure: null,
     hostId: null,
+    startup: null,
   },
 };
 const FAILED: AddHostEvent = {

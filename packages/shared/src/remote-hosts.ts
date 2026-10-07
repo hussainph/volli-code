@@ -164,6 +164,12 @@ export interface AddHostView {
   readonly failure: AddHostFailure | null;
   /** The host it added, once `done`. */
   readonly hostId: string | null;
+  /**
+   * When the host comes up on its own, once the check knows: a Mac's is
+   * "Starts when you log in to <name>" (a launchd agent, not at boot); null
+   * says nothing (a Linux host starts at boot).
+   */
+  readonly startup: string | null;
 }
 
 /** One line of the flow's log (the log under Details): never a secret. */
