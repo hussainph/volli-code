@@ -19,6 +19,7 @@ import {
   type HostConnectionState,
   type HostRecord,
 } from "@renderer/stores/host-connection";
+import { remoteHosts } from "@renderer/stores/remote-hosts";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -55,7 +56,7 @@ function useHostRead<T>(cloud: boolean, select: (state: HostConnectionState) => 
 
 /**
  * The host a project runs on (This Mac for `null`, or for a project nobody
- * claims), with the host's aggregate link — what the chip draws. For a
+ * claims), with the host's own health — what the chip draws. For a
  * surface already behind the flag.
  */
 export function useProjectHost(projectId: string | null): HostRecord {
@@ -64,7 +65,7 @@ export function useProjectHost(projectId: string | null): HostRecord {
 
 /**
  * The project's host as THAT project sees it: the record with the project's
- * own link in place of the aggregate. The Island, the "Running on" dot and the
+ * own link in place of host health. The Island, the "Running on" dot and the
  * switcher's detail read this, so a fence on another project of the same box
  * never speaks for this one. For a surface already behind the flag.
  */
@@ -267,6 +268,17 @@ export function runHostAction(action: HostSurfaceAction, host: HostRecord): void
       return;
     case "manage-hosts":
       openManageHosts();
+      return;
+    case "forget-project":
+      void remoteHosts()
+        .closeWorkspace(host.id, action.workspaceId)
+        .catch((error: unknown) => {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : `Couldn’t forget this project on ${host.name}.`,
+          );
+        });
       return;
   }
 }

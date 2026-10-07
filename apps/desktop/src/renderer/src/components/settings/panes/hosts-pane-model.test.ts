@@ -36,27 +36,27 @@ function device(patch: Partial<RemoteHostDevice>): RemoteHostDevice {
 }
 
 describe("a host's health in Settings", () => {
-  it("says nothing for a host serving no project here", () => {
-    expect(hostHealth(remote({}), 0)).toBeNull();
-  });
-
-  it("reads its projects' aggregate link", () => {
-    expect(hostHealth(remote({}), 1)).toEqual({ state: "ready", label: "Online" });
-    expect(hostHealth(remote({ link: { status: "connecting" } }), 1)?.label).toBe("Connecting");
-    expect(hostHealth(remote({ link: { status: "reconnecting" } }), 1)?.label).toBe("Connecting");
-    expect(hostHealth(remote({ link: { status: "offline", since: 0, retryAt: null } }), 1)).toEqual(
-      { state: "exited", label: "Offline" },
-    );
+  it("reads the engine-projected host link without needing projects", () => {
+    expect(hostHealth(remote({}))).toEqual({ state: "ready", label: "Online" });
+    expect(hostHealth(remote({ link: { status: "connecting" } }))).toEqual({
+      state: "working",
+      label: "Connecting",
+    });
+    expect(hostHealth(remote({ link: { status: "reconnecting" } })).label).toBe("Connecting");
+    expect(hostHealth(remote({ link: { status: "offline", since: 0, retryAt: null } }))).toEqual({
+      state: "exited",
+      label: "Offline",
+    });
     expect(
-      hostHealth(remote({ link: { status: "version-skewed", availableVersion: "2" } }), 1)?.label,
+      hostHealth(remote({ link: { status: "version-skewed", availableVersion: "2" } })).label,
     ).toBe("Update available");
-    expect(hostHealth(remote({ link: { status: "incompatible", reason: "refused" } }), 2)).toEqual({
+    expect(hostHealth(remote({ link: { status: "incompatible", reason: "refused" } }))).toEqual({
       state: "error",
       label: "Can’t serve",
     });
     expect(
-      hostHealth(remote({ update: { status: "running", progress: 0.5, targetVersion: "2" } }), 1)
-        ?.label,
+      hostHealth(remote({ update: { status: "running", progress: 0.5, targetVersion: "2" } }))
+        .label,
     ).toBe("Updating");
   });
 });

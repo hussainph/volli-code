@@ -5,8 +5,8 @@
  * it, and Forget.
  *
  * Built from the settings kit over `ui/list-row.tsx`, as the lab was. The
- * connection state comes from VC-576's store (never re-drawn here: the chip,
- * the switcher and the Island own it); the registry's facts from the
+ * host health comes from the engine-projected HostRecord link, even with no
+ * projects open here; the registry's facts from the
  * remote-hosts store; the paired devices are read from the host over SSH
  * when its page opens, never cached. Forget is the one irreversible action,
  * so it is the one confirm. Revoking another device is VC-575's (pairing),
@@ -325,19 +325,15 @@ function HostRow({
   onForget: () => void;
 }) {
   const { remote, record, projects } = host;
-  const health = record === undefined ? null : hostHealth(record, projects);
+  const health = record === undefined ? null : hostHealth(record);
+  const retry = useHostConnectionStore((state) => state.retry);
   // A read-only hosts file: nothing to rename or forget, so no menu at all.
   const writable = useHostsWritable();
   return (
     <ListRow
       data-host-row=""
       density="two-line"
-      leading={
-        <HostGlyph
-          os={remote.os}
-          badge={record === undefined || projects === 0 ? null : hostBadge(record)}
-        />
-      }
+      leading={<HostGlyph os={remote.os} badge={record === undefined ? null : hostBadge(record)} />}
       primary={remote.name}
       secondary={
         <span className="block truncate text-ui text-muted-foreground/70">
@@ -347,6 +343,16 @@ function HostRow({
       trailing={health === null ? undefined : <Health state={health.state}>{health.label}</Health>}
       actions={
         <>
+          {record?.link.status === "offline" ? (
+            <Button
+              size="xs"
+              variant="secondary"
+              aria-label={`Retry ${remote.name}`}
+              onClick={() => retry(remote.id)}
+            >
+              Retry
+            </Button>
+          ) : null}
           {writable ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -398,7 +404,8 @@ function HostPage({
   onForget: () => void;
 }) {
   const { remote, record, projects } = host;
-  const health = record === undefined ? null : hostHealth(record, projects);
+  const health = record === undefined ? null : hostHealth(record);
+  const retry = useHostConnectionStore((state) => state.retry);
   const readOnly = useRemoteHostsStore((state) => state.readOnly);
   return (
     <>
@@ -414,7 +421,7 @@ function HostPage({
         <HostGlyph
           os={remote.os}
           size="md"
-          badge={record === undefined || projects === 0 ? null : hostBadge(record)}
+          badge={record === undefined ? null : hostBadge(record)}
         />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">
@@ -425,6 +432,16 @@ function HostPage({
           </p>
         </div>
         {health === null ? null : <Health state={health.state}>{health.label}</Health>}
+        {record?.link.status === "offline" ? (
+          <Button
+            size="xs"
+            variant="secondary"
+            aria-label={`Retry ${remote.name}`}
+            onClick={() => retry(remote.id)}
+          >
+            Retry
+          </Button>
+        ) : null}
       </div>
 
       <PrefSection title="Host" icon={HardDrivesIcon}>
