@@ -46,8 +46,42 @@ function makeSession(pid = nextPid()): ParkableSession {
 
 /** A `now` comfortably past the idle threshold from a fresh session. */
 const idleNow = () => Date.now() + 10_000;
-/** Real-time pause; mid-window actions land inside the 5ms breathe window. */
-const tick = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+/**
+ * Starts a sweep and returns once its breathe window is OPEN: every parked
+ * tree has been CONT'd and the verdict is waiting on the window's clock. The
+ * window then stays open until {@link closeBreatheWindow}, however long the
+ * test takes to act in it.
+ *
+ * The window is a real `setTimeout`, so a test that raced it with a shorter
+ * real one (a 1 ms pause inside a 5 ms window) was ordered by the wall clock:
+ * a worker descheduled for more than ~4 ms between arming the two timers on a
+ * loaded CI runner saw the window close first, and the verdict ran before the
+ * mid-window action it was meant to observe (VC-717). Only `setTimeout` is
+ * faked; `Date.now` stays real, as the activity timestamps compare it.
+ */
+async function openBreatheWindow(
+  controller: ParkController,
+  session: ParkableSession,
+  contCalls: () => number[],
+): Promise<{ sweepDone: Promise<void> }> {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  const sweepDone = controller.sweep(idleNow());
+  // Let the sweep reach the window: any microtask-only work before it runs,
+  // and no fake time passes.
+  await vi.advanceTimersByTimeAsync(0);
+  expect(contCalls()).toEqual([session.pty.pid]);
+  // Wrapped: an async function returning the bare promise would adopt it, and
+  // wait for the very verdict the window is holding back.
+  return { sweepDone };
+}
+
+/** Lets the breathe window's full duration elapse, so the verdict runs. */
+async function closeBreatheWindow({ sweepDone }: { sweepDone: Promise<void> }): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ENABLED_CONFIG.breatheWindowMs);
+  vi.useRealTimers();
+  await sweepDone;
+}
 
 /** A controller wired to a fresh fake inspector + empty session map. */
 function harness(config: ParkConfig = ENABLED_CONFIG) {
@@ -76,6 +110,7 @@ function harness(config: ParkConfig = ENABLED_CONFIG) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -383,11 +418,10 @@ describe("ParkController.breathe (via sweep)", () => {
   });
 
   it("wakes on activity during the window instead of re-freezing", async () => {
-    const { controller, session, stopCalls, pushParkState } = await autoParked();
-    const sweepDone = controller.sweep(idleNow());
-    await tick(1);
+    const { controller, session, contCalls, stopCalls, pushParkState } = await autoParked();
+    const window = await openBreatheWindow(controller, session, contCalls);
     session.lastActivityAt = Date.now() + 100; // output/input during the window
-    await sweepDone;
+    await closeBreatheWindow(window);
     expect(stopCalls()).toEqual([]);
     expect(pushParkState).toHaveBeenCalledWith("s");
   });
@@ -429,10 +463,9 @@ describe("ParkController.breathe (via sweep)", () => {
   it("lets a Park Now landing mid-window beat a busy verdict and stay manual", async () => {
     const { controller, session, cpuPercents, signal, stopCalls, contCalls } = await autoParked();
     cpuPercents.mockResolvedValue(new Map([[session.pty.pid, 5]])); // would wake
-    const sweepDone = controller.sweep(idleNow());
-    await tick(1);
+    const window = await openBreatheWindow(controller, session, contCalls);
     expect(await controller.park("s", { manual: true })).toEqual({ ok: true });
-    await sweepDone;
+    await closeBreatheWindow(window);
     expect(stopCalls()).toEqual([session.pty.pid]); // re-frozen despite the busy tree
     expect(session.parkedManually).toBe(true);
     // Now exempt from the duty cycle: a further sweep leaves it frozen.
