@@ -47,7 +47,8 @@ import {
 import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { browserChatTransport } from "@renderer/chat/transport";
+import { remoteHostNameNow } from "@renderer/components/hosts/use-remote-project";
+import { chatTransportFor } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import {
@@ -55,6 +56,7 @@ import {
   useChatDraftsStore,
   type ChatDraft,
 } from "@renderer/stores/chat-drafts";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -95,7 +97,12 @@ export interface ChatSessionsState extends ChatSessionWrites {
   /** Promotes one provisional Draft in place, serialized across concurrent sends. */
   promoteChatSession(sessionId: string): Promise<boolean>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
-  adoptChatSession(sessionId: string): void;
+  /**
+   * `projectId`, when the caller knows it, routes the Session to its host's
+   * transport (VC-713); absent, the project is read from this window's
+   * Drafts and listings, and a Session none of them names is This Mac's.
+   */
+  adoptChatSession(sessionId: string, projectId?: string): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
   enqueue(sessionId: string, message: QueuedMessage): Promise<MessageDelivery>;
@@ -231,11 +238,42 @@ function blobLinkDrafts(
   }));
 }
 
-/** Factory so tests get isolated instances (sessions.ts's convention). */
+/**
+ * The project of a Session this store did not start, from the listings it was
+ * opened from (VC-713). `null` when none names it, which reads as This Mac's.
+ * (A Draft never reaches here: it attaches only once promoted, and promotion
+ * records its project.)
+ */
+function knownProjectOf(sessionId: string): string | null {
+  for (const [projectId, rows] of Object.entries(useProjectSessionsStore.getState().byProject)) {
+    if (rows.chat.some((row) => row.sessionId === sessionId)) return projectId;
+  }
+  for (const rows of Object.values(useTicketSessionRecordsStore.getState().byTicket)) {
+    for (const row of rows) {
+      if (row.kind === "chat" && row.record.sessionId === sessionId) return row.record.projectId;
+    }
+  }
+  return null;
+}
+
+/**
+ * Factory so tests get isolated instances (sessions.ts's convention).
+ *
+ * `transport` answers per project (VC-713): a Session on a remote host goes
+ * over its Workspace's link, everything else over IPC exactly as before.
+ */
 export function createChatSessionsStore(
-  transport: () => ChatSessionTransport = browserChatTransport,
+  transport: (projectId: string | null) => ChatSessionTransport = chatTransportFor,
 ) {
   return create<ChatSessionsState>()((set, get, api) => {
+    /**
+     * Which project each Session this store started or adopted belongs to, so
+     * its client — created once, kept in the registry — gets that project's
+     * transport (VC-713). Forgotten when the Session is closed.
+     */
+    const projectOfSession = new Map<string, string>();
+    const projectOf = (sessionId: string): string | null =>
+      projectOfSession.get(sessionId) ?? knownProjectOf(sessionId);
     // A close after create but before Blob transfer finishes cannot delete the
     // durable row, but it must stop that in-flight promotion from attaching a
     // resident runtime behind the closed tab.
@@ -258,7 +296,7 @@ export function createChatSessionsStore(
 
     const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
-        ...transport(),
+        ...transport(projectOf(sessionId)),
         store: api,
         // The two desktop-owned effects the core names but never imports
         // (VC-169): an event failure surfaces as an error toast, and the
@@ -327,6 +365,13 @@ export function createChatSessionsStore(
         // configuration state, not an error: the recovery is Model Access,
         // so this opens it instead of raising a toast about it (VC-53).
         if (isDefaultModelRequired(errorMessage(failure))) {
+          // A remote host runs its own default (VC-713), which this Mac's
+          // Model Access cannot set: say whose it is instead of opening ours.
+          const host = remoteHostNameNow(input.projectId);
+          if (host !== null) {
+            toastError(`Could not start Session: ${host} has no default model yet`);
+            return null;
+          }
           useUiStore.getState().setSettingsOpen(true, "model-access");
           return null;
         }
@@ -354,6 +399,7 @@ export function createChatSessionsStore(
         toastError("Could not start Session. Try sending again.");
         return null;
       }
+      projectOfSession.set(created.sessionId, input.projectId);
       if (makeClient) makeResident(created.sessionId, input.ticketId);
       return created.sessionId;
     };
@@ -366,7 +412,7 @@ export function createChatSessionsStore(
       provisionalActive: {},
 
       async createChatSession(input) {
-        const edge = transport();
+        const edge = transport(input.projectId);
         // The Session is durable and addressable NOW — the id resolves and the
         // caller lands the tab while `makeResident`'s attach runs behind it.
         return mint(edge, input, true);
@@ -374,7 +420,7 @@ export function createChatSessionsStore(
 
       promoteChatSession(sessionId) {
         return useChatDraftsStore.getState().promote(sessionId, async (provisional) => {
-          const edge = transport();
+          const edge = transport(provisional.projectId);
           // The chat image budget is a per-Session rule, so a Draft's imports
           // were never held to it — there was no Session to measure (VC-358).
           // Ask it HERE, before anything durable exists: a strip that cannot
@@ -513,7 +559,8 @@ export function createChatSessionsStore(
       // no attachment attempt, so there is nothing in flight for `starting` to
       // name, and the composer is gated by whether an executor is live — which
       // the arriving snapshot answers — and never by this.
-      adoptChatSession(sessionId) {
+      adoptChatSession(sessionId, projectId) {
+        if (projectId !== undefined) projectOfSession.set(sessionId, projectId);
         // A Draft tab can travel through the same sidebar/split doors as a
         // durable chat. Opening that view must not manufacture a resident
         // client (and therefore an attach) before its first message promotes it.
@@ -526,6 +573,7 @@ export function createChatSessionsStore(
 
       closeChatSession(sessionId) {
         disposeChatClient(sessionId);
+        projectOfSession.delete(sessionId);
         set((state) => {
           if (state.sessions[sessionId] === undefined) return state;
           const sessions = { ...state.sessions };
