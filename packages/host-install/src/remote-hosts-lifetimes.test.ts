@@ -759,3 +759,23 @@ describe("the B5 probe, ported: a registry write that fails is never success", (
     expect(h.store.saves).toEqual([]);
   });
 });
+
+describe("renaming is a registry change like any other (PR 3)", () => {
+  it("refuses when the hosts file would not save, keeping the old name", () => {
+    const h = harness({ registry: registry(hostEntry()) });
+    h.store.state.saveFails = true;
+    expect(() => h.engine.rename(HOST_ID, "Build box")).toThrow(
+      expect.objectContaining({ code: "registry-unwritable" }),
+    );
+    expect(h.engine.snapshot().hosts[0]?.name).toBe("box");
+  });
+
+  it("refuses on a hosts file from a newer Volli, writing nothing", () => {
+    const file = { v: 2, hosts: [] };
+    const h = harness({ registry: file });
+    expect(() => h.engine.rename(HOST_ID, "Build box")).toThrow(
+      expect.objectContaining({ code: "registry-read-only" }),
+    );
+    expect(h.store.saves).toEqual([]);
+  });
+});
