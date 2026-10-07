@@ -1,3 +1,4 @@
+import { workspacesProcedureSchemas } from "./workspaces-router";
 import { boardProcedureSchemas } from "./board-router";
 import { desktopProcedureSchemas } from "./desktop-router";
 /** Build-time projection of both catalog tiers. Add area/desktop providers here,
@@ -42,6 +43,7 @@ export function generateProtocolSchema(
   providers: readonly ProtocolSchemaProvider[] = [
     { tier: "public", procedures: sessionProcedureSchemas },
     { tier: "public", procedures: boardProcedureSchemas },
+    { tier: "public", procedures: workspacesProcedureSchemas },
     { tier: "desktop", procedures: desktopProcedureSchemas },
   ],
   publicEntries: readonly { key: string }[] = CATALOG_ENTRIES,

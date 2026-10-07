@@ -10,6 +10,7 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   QUEUE_REVISION_CONFLICT,
   type BoardEntry,
+  type HostWorkspaceEntry,
   type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
@@ -566,7 +567,7 @@ describe("binding procedures to the catalog (D2)", () => {
     // Alone, the Session router leaves the board's commands unserved; the union
     // over every router (host-router.ts) is the catalog exactly.
     expectTypeOf<CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>>().toEqualTypeOf<
-      CatalogKeyOf<BoardEntry>
+      CatalogKeyOf<BoardEntry | HostWorkspaceEntry>
     >();
     expectTypeOf<HostRouterCatalogBinding>().toEqualTypeOf<never>();
     expectTypeOf<HostRouterPathsDisjoint>().toEqualTypeOf<never>();

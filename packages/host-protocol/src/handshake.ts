@@ -1,4 +1,10 @@
-import type { HostActor } from "./actor";
+import {
+  isHostScopeActor,
+  type HostActor,
+  type HostConnectionActor,
+  type HostScopeActor,
+} from "./actor";
+import { HOST_SCOPE_FEATURES } from "./features";
 import { hostError, type HostError } from "./errors";
 import { isEpoch, isUuidV4 } from "./identity";
 import type { HostId, WorkspaceEpoch, WorkspaceId } from "./identity";
@@ -63,6 +69,18 @@ export interface HostHello {
   readonly nonce: HostNonce;
 }
 
+/** First message addressing a host, never a Workspace or an authority fence. */
+export interface HostScopeHello {
+  readonly scope: "host";
+  readonly protocol: ProtocolVersionRange;
+  readonly client: HostHello["client"];
+  readonly features: readonly HostFeature[];
+  readonly credential: string;
+  readonly nonce: HostNonce;
+}
+
+export type HostConnectionHello = HostHello | HostScopeHello;
+
 /** Base64url, at least 128 random bits. {@link createHostNonce} mints 256. */
 export type HostNonce = string;
 const NONCE = /^[A-Za-z0-9_-]{22,128}$/u;
@@ -89,6 +107,18 @@ export interface HostWelcome {
   readonly proof: HostWelcomeProof | null;
 }
 
+/** A host-wide welcome: only a paired device, no Workspace authority. */
+export interface HostScopeWelcome {
+  readonly scope: "host";
+  readonly protocolVersion: number;
+  readonly host: HostWelcome["host"];
+  readonly actor: HostScopeActor;
+  readonly features: readonly HostFeature[];
+  readonly proof: HostWelcomeProof | null;
+}
+
+export type HostConnectionWelcome = HostWelcome | HostScopeWelcome;
+
 /**
  * The welcome proof's shape, reserved for VC-575: a named signature scheme
  * and its encoded value. Opaque to this package; nothing reads either field
@@ -106,6 +136,17 @@ export interface HostOffer {
   readonly workspace: { readonly id: WorkspaceId; readonly epoch: WorkspaceEpoch };
   readonly features: readonly HostFeature[];
 }
+
+export interface HostScopeOffer {
+  readonly scope: "host";
+  readonly host: HostOffer["host"];
+  readonly protocol: ProtocolVersionRange;
+  readonly features: readonly HostFeature[];
+}
+
+export type HostConnectionOffer = HostOffer | HostScopeOffer;
+
+type NegotiatedWelcome<Welcome> = { ok: true; welcome: Welcome } | { ok: false; error: HostError };
 
 /** The highest version both ranges share, or null when they do not meet. */
 export function negotiateProtocolVersion(
@@ -133,7 +174,22 @@ export function negotiateWelcome(
   hello: HostHello,
   offer: HostOffer,
   actor: HostActor,
-): { ok: true; welcome: HostWelcome } | { ok: false; error: HostError } {
+): NegotiatedWelcome<HostWelcome>;
+export function negotiateWelcome(
+  hello: HostScopeHello,
+  offer: HostScopeOffer,
+  actor: HostScopeActor,
+): NegotiatedWelcome<HostScopeWelcome>;
+export function negotiateWelcome(
+  hello: HostConnectionHello,
+  offer: HostConnectionOffer,
+  actor: HostConnectionActor,
+): NegotiatedWelcome<HostConnectionWelcome>;
+export function negotiateWelcome(
+  hello: HostConnectionHello,
+  offer: HostConnectionOffer,
+  actor: HostConnectionActor,
+): NegotiatedWelcome<HostConnectionWelcome> {
   const protocolVersion = negotiateProtocolVersion(hello.protocol, offer.protocol);
   if (protocolVersion === null) {
     return {
@@ -141,6 +197,45 @@ export function negotiateWelcome(
       error: hostError(
         "protocol-version-unsupported",
         `This host speaks protocol ${formatRange(offer.protocol)}; the client speaks ${formatRange(hello.protocol)}`,
+      ),
+    };
+  }
+  if ("scope" in hello) {
+    if (
+      !isHostScopeHello(hello) ||
+      !("scope" in offer) ||
+      offer.scope !== "host" ||
+      "workspace" in offer ||
+      !isHostScopeActor(actor)
+    ) {
+      return {
+        ok: false,
+        error: hostError(
+          "credential-invalid",
+          "Host scope requires a host-scoped device grant and offer",
+        ),
+      };
+    }
+    return {
+      ok: true,
+      welcome: {
+        scope: "host",
+        protocolVersion,
+        host: { ...offer.host },
+        actor,
+        features: negotiateFeatures(hello.features, offer.features).filter((feature) =>
+          (HOST_SCOPE_FEATURES as readonly string[]).includes(feature),
+        ),
+        proof: null,
+      },
+    };
+  }
+  if ("scope" in offer || "scope" in actor) {
+    return {
+      ok: false,
+      error: hostError(
+        "workspace-scope-required",
+        "This connection requires a Workspace-scoped grant and offer",
       ),
     };
   }
@@ -203,7 +298,24 @@ export interface HostHelloInput {
  * A hello for ONE handshake, with a fresh nonce: a client builds a new one on
  * every connect and reconnect, and keeps it to validate the welcome against.
  */
-export function buildHostHello(input: HostHelloInput): HostHello {
+export type HostScopeHelloInput = Omit<HostScopeHello, "nonce" | "protocol"> & {
+  readonly protocol?: ProtocolVersionRange;
+};
+
+export function buildHostHello(input: HostHelloInput): HostHello;
+export function buildHostHello(input: HostScopeHelloInput): HostScopeHello;
+export function buildHostHello(input: HostHelloInput | HostScopeHelloInput): HostConnectionHello;
+export function buildHostHello(input: HostHelloInput | HostScopeHelloInput): HostConnectionHello {
+  if ("scope" in input) {
+    return {
+      scope: "host",
+      protocol: input.protocol ?? HOST_PROTOCOL_VERSIONS,
+      client: { kind: input.client.kind, version: input.client.version },
+      features: [...input.features],
+      credential: input.credential,
+      nonce: createHostNonce(),
+    };
+  }
   return {
     protocol: input.protocol ?? HOST_PROTOCOL_VERSIONS,
     client: { kind: input.client.kind, version: input.client.version },
@@ -228,14 +340,14 @@ export function isHostNonce(value: unknown): value is HostNonce {
   return typeof value === "string" && NONCE.test(value);
 }
 
-export function encodeHostHello(hello: HostHello): Record<string, string> {
+export function encodeHostHello(hello: HostConnectionHello): Record<string, string> {
   return { [HOST_HELLO_PARAM]: JSON.stringify(hello) };
 }
 
 /** The hello a connection sent, or null when it sent none or sent one this build cannot read. */
 export function readHostHello(
   params: Readonly<Record<string, string | undefined>> | null,
-): HostHello | null {
+): HostConnectionHello | null {
   const raw = params?.[HOST_HELLO_PARAM];
   if (raw === undefined) return null;
   let parsed: unknown;
@@ -244,7 +356,7 @@ export function readHostHello(
   } catch {
     return null;
   }
-  return isHostHello(parsed) ? parsed : null;
+  return isHostConnectionHello(parsed) ? parsed : null;
 }
 
 export function isProtocolVersionRange(value: unknown): value is ProtocolVersionRange {
@@ -257,18 +369,40 @@ export function isHostFeature(value: unknown): value is HostFeature {
   return typeof value === "string" && value.length <= MAX_FEATURE_LENGTH && FEATURE.test(value);
 }
 
-export function isHostHello(value: unknown): value is HostHello {
-  if (!isRecord(value) || !isRecord(value.client)) return false;
+export function isHostConnectionHello(value: unknown): value is HostConnectionHello {
+  return isHostScopeHello(value) || isHostHello(value);
+}
+
+export function isHostScopeHello(value: unknown): value is HostScopeHello {
   return (
-    isProtocolVersionRange(value.protocol) &&
-    (HOST_CLIENT_KINDS as readonly unknown[]).includes(value.client.kind) &&
-    typeof value.client.version === "string" &&
-    value.client.version.length <= MAX_CLIENT_VERSION_LENGTH &&
+    isRecord(value) &&
+    value.scope === "host" &&
+    !("workspaceId" in value) &&
+    !("lastSeen" in value) &&
+    isHelloFields(value)
+  );
+}
+
+export function isHostHello(value: unknown): value is HostHello {
+  return (
+    isRecord(value) &&
+    !("scope" in value) &&
     isUuidV4(value.workspaceId) &&
     (value.lastSeen === null ||
       (isRecord(value.lastSeen) &&
         isEpoch(value.lastSeen.epoch) &&
         isUuidV4(value.lastSeen.hostId))) &&
+    isHelloFields(value)
+  );
+}
+
+function isHelloFields(value: Record<string, unknown>): boolean {
+  if (!isRecord(value.client)) return false;
+  return (
+    isProtocolVersionRange(value.protocol) &&
+    (HOST_CLIENT_KINDS as readonly unknown[]).includes(value.client.kind) &&
+    typeof value.client.version === "string" &&
+    value.client.version.length <= MAX_CLIENT_VERSION_LENGTH &&
     Array.isArray(value.features) &&
     value.features.length <= MAX_FEATURES &&
     value.features.every(isHostFeature) &&

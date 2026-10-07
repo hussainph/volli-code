@@ -1,3 +1,4 @@
+import { createWorkspacesRouter } from "./workspaces-router";
 /**
  * Every router procedure is a projection of the host's handler map (VC-668):
  * it reaches exactly `handlers[its own key]`, and nothing else in the map.
@@ -138,6 +139,12 @@ const SAMPLE_INPUTS: {
   "logs.tail": { limit: 10 },
   "logs.follow": {},
   "protocol.welcome": undefined,
+  "protocol.hostWelcome": undefined,
+  "workspaces.list": undefined,
+  "workspaces.create": {
+    commandId: "a0000000-0000-4000-8000-000000000001",
+    source: { path: "/tmp/project" },
+  },
   "session.list": { projectId: PROJECT },
   "session.listing": { projectId: PROJECT },
   "session.listingForTicket": { ticketId: "ticket-1" },
@@ -228,6 +235,7 @@ function routerCallers(handlers: never) {
   return {
     session: createSessionRouter().createCaller(context),
     board: createBoardRouter().createCaller(context),
+    workspaces: createWorkspacesRouter().createCaller(context),
     desktop: createDesktopRouter().createCaller(context),
   };
 }
@@ -251,9 +259,11 @@ describe("every router procedure projects its own handler (VC-668)", () => {
     const caller =
       key === "ticket.move" || key.startsWith("board.")
         ? callers.board
-        : (DESKTOP_HANDLER_KEYS as readonly string[]).includes(key)
-          ? callers.desktop
-          : callers.session;
+        : key.startsWith("workspaces.")
+          ? callers.workspaces
+          : (DESKTOP_HANDLER_KEYS as readonly string[]).includes(key)
+            ? callers.desktop
+            : callers.session;
     await drive(procedureAt(caller, key), SAMPLE_INPUTS[key]);
     expect(reached).toEqual([key]);
   });

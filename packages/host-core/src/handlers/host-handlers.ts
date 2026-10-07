@@ -1,3 +1,8 @@
+import type {
+  HostWorkspaceCreateInput,
+  HostWorkspaceCreateResult,
+  HostWorkspaceList,
+} from "@volli/shared";
 /**
  * The host's one handler map: catalog key → the whole command (VC-668; HP §
  * Command catalog, "One handler map").
@@ -160,6 +165,8 @@ export type SessionCreateHandlerInput = Omit<SessionStartInput, "role" | "parent
  * root's assignment of this map to that slice is the check that they agree.
  */
 export interface HostHandlerSignatures extends BoardHandlerSignatures {
+  readonly "workspaces.list": HostHandler<void, HostWorkspaceList>;
+  readonly "workspaces.create": HostHandler<HostWorkspaceCreateInput, HostWorkspaceCreateResult>;
   readonly "sessions.create": HostHandler<SessionCreateHandlerInput, { sessionId: string }>;
   readonly "sessions.attach": HostHandler<SessionAttachInput, SessionStartResult>;
   readonly "settings.experiments": HostHandler<void, ExperimentSnapshot>;
@@ -437,6 +444,11 @@ export interface HostHandlerOptions {
    * unavailable.
    */
   readonly signIns?: HostSignIns | null;
+  /** Hostd-owned project creation; absent on the in-process desktop. */
+  readonly workspaces?: {
+    list(): HostWorkspaceList | Promise<HostWorkspaceList>;
+    create(input: HostWorkspaceCreateInput): Promise<HostWorkspaceCreateResult>;
+  };
   /**
    * The host's board change feeds (VC-565): every board command stamps its
    * rows here, and the root's event bus feeds it every other writer's
@@ -726,6 +738,16 @@ function hostHandlerEntries(
       boundedSessionListing(await projectSessionListing(listing(), projectId)),
     "session.listingForTicket": async ({ ticketId }) =>
       boundedSessionListing(await ticketSessionListing(listing(), ticketId)),
+    "workspaces.list": () =>
+      present(
+        options.workspaces ?? null,
+        "Project management is not available on this host",
+      ).list(),
+    "workspaces.create": (input) =>
+      present(
+        options.workspaces ?? null,
+        "Project management is not available on this host",
+      ).create(input),
     "signIns.status": () => signIns().status(),
     "signIns.setApiKey": (input) => signIns().setApiKey(input),
     "signIns.signOut": (input) => signIns().signOut(input),

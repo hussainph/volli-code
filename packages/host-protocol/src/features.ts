@@ -133,10 +133,20 @@ export const HOST_FEATURE_OPERATIONS = {
    * `session.read` (the socket's short-id JSON) is frozen.
    */
   "sessions.listing": ["session.listing", "session.listingForTicket"],
+  /** Host-wide project discovery and creation, without a Workspace connection (VC-722). */
+  "host.workspaces": ["workspaces.list", "workspaces.create"],
 } as const satisfies Readonly<Record<HostFeature, readonly string[]>>;
 
 /** A feature this build can grant. */
 export type HostV1Feature = keyof typeof HOST_FEATURE_OPERATIONS;
+
+/** The only features a host-scoped device connection may receive. */
+export const HOST_SCOPE_FEATURES = [
+  "sign-ins",
+  "auth.callback",
+  "host.logs",
+  "host.workspaces",
+] as const satisfies readonly HostV1Feature[];
 
 /** Every operation some v1 feature grants, or the base set. */
 export type HostOperation =

@@ -164,3 +164,5 @@ export type {
   TicketRetentionState,
 } from "./worktree-host";
 export * from "./remote-hosts";
+
+export * from "./host-workspaces";

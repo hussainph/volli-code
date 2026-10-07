@@ -923,6 +923,33 @@ export type SignInEntry = (typeof SIGN_IN_ENTRIES)[number];
  * filter-and-map with nothing reordered. The order the CLI reference prints
  * them in is a different order, and it is {@link REFERENCE_VERBS}.
  */
+/** Host project management, person-only and protocol-only (VC-722). */
+export const HOST_WORKSPACE_ENTRIES = [
+  {
+    key: "workspaces.list",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "workspaces.list" },
+    listed: false,
+    group: "App",
+    summary: "List this host's projects without credentials.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "workspaces.create",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "workspaces.create" },
+    listed: false,
+    group: "App",
+    summary: "Register a folder or clone a project on this host.",
+    options: [],
+    catalog: { scope: "host", idempotency: "command-id" },
+  },
+] as const satisfies readonly VerbEntry[];
+export type HostWorkspaceEntry = (typeof HOST_WORKSPACE_ENTRIES)[number];
+
 export const VERB_REGISTRY = [
   {
     key: "identify",
@@ -3442,6 +3469,18 @@ export const VERB_REGISTRY = [
     options: [],
     catalog: { scope: "host", idempotency: "read" },
   },
+
+  {
+    key: "protocol.hostWelcome",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "protocol.hostWelcome" },
+    listed: false,
+    group: "App",
+    summary: "Read this host connection's validated handshake contract.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
   {
     key: "sessions.create",
     accessModes: ["hostApi"],
@@ -3797,6 +3836,7 @@ export const VERB_REGISTRY = [
     catalog: { scope: "host", idempotency: "read" },
   },
   ...SIGN_IN_ENTRIES,
+  ...HOST_WORKSPACE_ENTRIES,
 ] as const satisfies readonly VerbEntry[];
 
 type RegistryEntry = (typeof VERB_REGISTRY)[number];

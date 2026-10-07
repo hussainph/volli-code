@@ -71,19 +71,19 @@ import {
   HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_MAX_FRAME_BYTES,
   HOST_PROTOCOL_VERSIONS,
-  isHostActor,
+  isHostConnectionActor,
   negotiateWelcome,
   operationsGrantedBy,
   readHostHello,
   SUBSCRIPTION_REPLAY_BOUNDS,
   type HostActorKind,
-  type HostCredentialGrant,
+  type HostConnectionCredentialGrant,
   type HostCredentialVerifier,
   type HostErrorReason,
   type HostFeature,
-  type HostHello,
+  type HostConnectionHello,
   type HostId,
-  type HostWelcome,
+  type HostConnectionWelcome,
   type WorkspaceEpoch,
   type WorkspaceId,
 } from "@volli/host-protocol";
@@ -104,7 +104,7 @@ export { HOST_PROTOCOL_CLOSE_CODES };
 export interface HostProtocolConnection {
   /** Random, per connection; what the log names it by. */
   readonly id: string;
-  readonly welcome: HostWelcome;
+  readonly welcome: HostConnectionWelcome;
   readonly caller: NetworkRouterCaller;
 }
 
@@ -197,7 +197,7 @@ export type HostProtocolListenerEvent =
   | ConnectionEvent<{
       readonly kind: "connected";
       readonly actor: HostActorKind;
-      readonly workspaceId: WorkspaceId;
+      readonly workspaceId?: WorkspaceId;
     }>
   | ConnectionEvent<{ readonly kind: "revoked"; readonly streams: number }>
   | ConnectionEvent<{ readonly kind: "slow-peer"; readonly unsentBytes: number }>
@@ -588,13 +588,15 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const grant = await verify(hello);
     if (grant === null)
       return refuse(connection, "credential-invalid", "The credential is not valid.");
-    const workspace = await options.workspace(hello.workspaceId);
+    const workspace = "scope" in hello ? undefined : await options.workspace(hello.workspaceId);
     if (workspace === null) {
       return refuse(connection, "workspace-unknown", "No such workspace on this host");
     }
     const negotiated = negotiateWelcome(
       hello,
-      { host: options.host, protocol: HOST_PROTOCOL_VERSIONS, workspace, features },
+      workspace === undefined
+        ? { scope: "host", host: options.host, protocol: HOST_PROTOCOL_VERSIONS, features }
+        : { host: options.host, protocol: HOST_PROTOCOL_VERSIONS, workspace, features },
       grant.actor,
     );
     if (!negotiated.ok) {
@@ -606,7 +608,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       kind: "connected",
       ...named(connection),
       actor: grant.actor.kind,
-      workspaceId: welcome.workspace.id,
+      ...("scope" in welcome ? {} : { workspaceId: welcome.workspace.id }),
     });
     const caller: NetworkRouterCaller = {
       actor: grant.actor,
@@ -616,7 +618,14 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const listenerContext: Pick<CatalogCallerContext, ListenerContextKey> = {
       caller,
       transport: "websocket",
-      operations: operationsGrantedBy(welcome.features),
+      operations:
+        "scope" in welcome
+          ? new Set(
+              ["protocol.hostWelcome", ...operationsGrantedBy(welcome.features)].filter(
+                (key) => key !== "protocol.welcome",
+              ),
+            )
+          : operationsGrantedBy(welcome.features),
       welcome,
       replayBounds: { events: limits.maxReplayEvents, bytes: limits.maxReplayBytes },
       admission: admissionOf(connection),
@@ -663,12 +672,12 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
   }
 
   /** The verifier's grant, or null. A throw, a malformed actor or a lapsed grant are all null. */
-  async function verify(hello: HostHello): Promise<HostCredentialGrant | null> {
-    let grant: HostCredentialGrant | null;
+  async function verify(hello: HostConnectionHello): Promise<HostConnectionCredentialGrant | null> {
+    let grant: HostConnectionCredentialGrant | null;
     try {
       grant = await options.verifier.verify({
         credential: hello.credential,
-        workspaceId: hello.workspaceId,
+        ...("scope" in hello ? { scope: "host" as const } : { workspaceId: hello.workspaceId }),
         nonce: hello.nonce,
         client: hello.client,
       });
@@ -676,11 +685,13 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       return null;
     }
     // `isHostActor` refuses the reserved local device (D7): no verifier can mint it.
-    return grant !== null && isHostActor(grant.actor) && grant.current() === true ? grant : null;
+    return grant !== null && isHostConnectionActor(grant.actor) && grant.current() === true
+      ? grant
+      : null;
   }
 
   /** The connection holds a grant now: watch it for revocation, by push and by re-check. */
-  function admit(connection: Connection, grant: HostCredentialGrant): void {
+  function admit(connection: Connection, grant: HostConnectionCredentialGrant): void {
     // A peer that left mid-handshake has nothing left to watch.
     if (connection.state === "closed") return;
     connection.state = "admitted";

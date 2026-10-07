@@ -61,7 +61,7 @@ import {
   base64UrlToBytes,
   isUuidV4,
   parseDeviceCredential,
-  type HostCredentialGrant,
+  type HostConnectionCredentialGrant,
   type HostCredentialVerifier,
 } from "@volli/host-protocol";
 
@@ -515,12 +515,16 @@ export function createEnrolledDeviceVerifier(
   const seen = new Map<string, number>();
 
   return {
-    verify(presentation): HostCredentialGrant | null {
+    verify(presentation): HostConnectionCredentialGrant | null {
       const parsed = parseDeviceCredential(presentation.credential);
       if (parsed === null) return null;
       const { claims } = parsed;
       const nowS = Math.floor(now() / 1000);
-      if (claims.hostId !== options.hostId || claims.workspaceId !== presentation.workspaceId) {
+      if (claims.hostId !== options.hostId) return null;
+      if ("scope" in presentation) {
+        if (presentation.scope !== "host" || !("scope" in claims) || claims.scope !== "host")
+          return null;
+      } else if ("scope" in claims || claims.workspaceId !== presentation.workspaceId) {
         return null;
       }
       if (claims.iat > nowS + SKEW_S || claims.exp < nowS - SKEW_S) return null;
@@ -541,7 +545,10 @@ export function createEnrolledDeviceVerifier(
       seen.set(claims.jti, claims.exp);
       const { deviceId } = claims;
       return {
-        actor: { kind: "device", deviceId, workspaceId: presentation.workspaceId },
+        actor:
+          "scope" in presentation
+            ? { kind: "device", deviceId, scope: "host" }
+            : { kind: "device", deviceId, workspaceId: presentation.workspaceId },
         current: () => liveKeys().has(deviceId),
       };
     },

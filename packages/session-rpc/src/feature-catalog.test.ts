@@ -7,6 +7,7 @@ import type { HostRouterFeatureBinding } from "./host-router";
 
 const granted: readonly string[] = [
   ...HOST_BASE_OPERATIONS,
+  "protocol.hostWelcome",
   ...Object.values(HOST_FEATURE_OPERATIONS).flat(),
 ];
 const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("hostApi"));

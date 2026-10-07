@@ -945,6 +945,16 @@ const hostWelcomeSchema = z.object({
   proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
 });
 
+// A separate bootstrap preserves the frozen Workspace protocol.welcome output.
+const hostScopeWelcomeSchema = z.object({
+  scope: z.literal("host"),
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  actor: z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), scope: z.literal("host") }),
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
+});
+
 const sessionSubscriptionSchema = z.object({
   sessionId: nonEmptyString,
   afterSequence: nonNegativeSafeInteger.optional(),
@@ -1238,10 +1248,21 @@ export function createSessionRouter() {
       welcome: hostProcedure("protocol.welcome")
         .output(hostWelcomeSchema)
         .query(({ ctx }) => {
-          if (ctx.welcome === undefined) {
+          if (ctx.welcome === undefined || "scope" in ctx.welcome) {
             throw new HostProcedureError(
               "operation-unavailable",
               "This connection negotiated no welcome",
+            );
+          }
+          return ctx.welcome;
+        }),
+      hostWelcome: hostProcedure("protocol.hostWelcome")
+        .output(hostScopeWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined || !("scope" in ctx.welcome)) {
+            throw new HostProcedureError(
+              "operation-unavailable",
+              "This connection negotiated no host welcome",
             );
           }
           return ctx.welcome;

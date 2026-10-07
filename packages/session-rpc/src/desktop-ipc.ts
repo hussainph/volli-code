@@ -96,6 +96,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "session.listing": "websocket-only",
   "session.listingForTicket": "websocket-only",
   "protocol.welcome": "websocket-only",
+  "protocol.hostWelcome": "websocket-only",
   // Sign-ins on a remote host (VC-702): a connection owns its flows, and the
   // desktop's own window signs in over its own Model Access IPC.
   "signIns.status": "websocket-only",

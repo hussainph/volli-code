@@ -1,3 +1,4 @@
+import type { WorkspaceHandlers } from "./workspaces-router";
 /**
  * TEST-ONLY: a Session router context from the per-behaviour ports the router
  * took before VC-668, so the router's own tests keep stating only the
@@ -127,7 +128,7 @@ const REMOTE_HOSTS = "Remote hosts are unavailable on this host";
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(
   ports: Omit<LegacySessionPorts, keyof SessionRouterContext>,
-): SessionRouterHandlers & DesktopRouterHandlers {
+): SessionRouterHandlers & DesktopRouterHandlers & WorkspaceHandlers {
   const runtime = <Method extends keyof SessionRuntime>(method: Method) => {
     const bound = ports.runtime[method];
     if (bound === undefined) throw new OperationUnavailableError(RUNTIME);
@@ -257,7 +258,16 @@ export function sessionHandlersFrom(
     "hostLink.mutate": remote("hostLink.mutate"),
     "hostLink.subscribe": remote("hostLink.subscribe"),
   };
-  return { ...handlers, ...desktop };
+  return {
+    ...handlers,
+    ...desktop,
+    "workspaces.list": () => {
+      throw new OperationUnavailableError("Projects are unavailable in this fixture");
+    },
+    "workspaces.create": () => {
+      throw new OperationUnavailableError("Projects are unavailable in this fixture");
+    },
+  };
 }
 
 /** A Session router context from legacy ports. */
