@@ -25,7 +25,6 @@ import { HOST_TRACE_FIELD, type HostTrace } from "../trace";
 import {
   createHostLink,
   createClientSocketPool,
-  createHostLinkRegistry,
   HOST_LINK_TIMING,
   hostLinkBackoffDelay,
   HostLinkError,
@@ -1296,45 +1295,6 @@ describe("the backoff and timing policy", () => {
       backoffCapMs: 10_000,
     });
     expect(() => validateHostLinkTiming(HOST_LINK_TIMING)).not.toThrow();
-  });
-});
-
-describe("one link per Workspace", () => {
-  it("shares a Workspace's link, fans a wake out, and forgets a closed one", () => {
-    const made: string[] = [];
-    const fake = (workspaceId: string): HostLink => {
-      made.push(workspaceId);
-      let status: HostLinkState = { status: "ready", welcome: {} as HostWelcome };
-      return {
-        workspaceId,
-        getState: () => status,
-        subscribeState: () => () => undefined,
-        query: async () => undefined,
-        mutate: async () => undefined,
-        subscribe: () => ({ unsubscribe: () => undefined }),
-        wake: vi.fn(),
-        reconnect: () => undefined,
-        close: vi.fn(() => {
-          status = { status: "closed" };
-        }),
-      };
-    };
-    const registry = createHostLinkRegistry(fake);
-    const a = registry.link("a");
-    expect(registry.link("a")).toBe(a);
-    const b = registry.link("b");
-    registry.wake("power-resume");
-    expect(a.wake).toHaveBeenCalledWith("power-resume");
-    expect(b.wake).toHaveBeenCalledWith("power-resume");
-    a.close();
-    const again = registry.link("a");
-    expect(again).not.toBe(a);
-    registry.close("a");
-    registry.close("missing");
-    expect(again.close).toHaveBeenCalledOnce();
-    registry.closeAll();
-    expect(b.close).toHaveBeenCalledOnce();
-    expect(made).toStrictEqual(["a", "b", "a"]);
   });
 });
 

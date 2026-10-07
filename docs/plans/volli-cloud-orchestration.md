@@ -177,6 +177,16 @@ Rules: one PR based on main; with the `cloud` flag off the app must behave exact
 Done means: PR open; CI gate green on its head; the ticket body's "Done when" satisfied; a closing comment on the ticket with what changed, what was verified (exact commands), and anything left open.
 ```
 
+### Wiring review rule
+
+**No exported seam without a production caller.** Every new export names its production caller (file and call path), or the exact checklist line in the ticket that will call it. Tests and the lab do not count. “The next ticket wires it” requires a checklist line in that receiving ticket, not just a comment in the producing code.
+
+Record cross-ticket decisions, such as where a Workspace link lives, in the relevant plan before a second ticket builds on them. Review the producer and consumer against that decision.
+
+Before an acceptance run, **code-complete** requires a per-exit-criterion wiring table with every row **wired**. Use the [review brief's table](architecture-review-brief.md#wiring-evidence-every-review): criterion, each link in the production chain, status (`wired`, `pieces only`, `missing`), and production caller/evidence. Future-ticket wiring is an unfinished handoff, not code-complete.
+
+Attach the first output of `node scripts/report-exported-seams.mjs` to the PR body. The CI report is advisory and bounded below a minute; an empty inventory is not wiring proof. Its conservative ripgrep/name pass avoids depending on TypeScript 7's unstable parser API. Forwarding exports alone are not callers; comments, strings, name collisions and unused imports can mask gaps, while default/namespace/dynamic access and same-file calls need manual review. Lab simulations display **Simulated wiring**, even when the equivalent production path is now wired.
+
 ### When a Session reports done
 
 1. **Receipt.** Read the closing comment and `gh pr view <pr>` against the ticket's "Done when".

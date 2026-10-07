@@ -10,7 +10,7 @@ import type { HostLinkView } from "@renderer/stores/host-connection";
 
 export const title = "Log viewer (VC-699, VC-712)";
 export const note =
-  "This Mac and a remote box in one stream, the box over the Workspace link relay; follow the Add-a-host trace across both";
+  "Fixture logs from This Mac and a remote box through the real relay adapter; follow the simulated Add-a-host trace across both";
 
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SESSION = "9c585826-3d34-408e-9ebf-d58ecaaad6a7";
@@ -396,6 +396,16 @@ export default function LogViewerScratch() {
   const [dropped, setDropped] = React.useState(false);
   return (
     <div className="flex h-[760px] flex-col gap-4 p-6">
+      <section
+        aria-label="Simulated wiring"
+        className="shrink-0 rounded-card border border-border bg-muted p-4 text-ui"
+      >
+        <h2 className="font-medium text-foreground">Simulated wiring</h2>
+        <p className="text-muted-foreground">
+          Real log viewer and relay adapter over fixture logs and an in-memory host link; no live
+          host connection.
+        </p>
+      </section>
       <div className="flex items-center gap-2">
         <Button
           size="sm"

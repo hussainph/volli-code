@@ -443,6 +443,15 @@ export default function HostAddLiveScratch() {
     // The app mounts this once at its root; Settings → Hosts' back button needs it.
     <TooltipProvider>
       <div className="flex flex-col gap-6">
+        <section
+          aria-label="Simulated wiring"
+          className="shrink-0 rounded-card border border-border bg-muted p-4 text-ui"
+        >
+          <h2 className="font-medium text-foreground">Simulated wiring</h2>
+          <p className="text-muted-foreground">
+            Shipped Checklist and Hosts pane over scripted flow events; no SSH or main process.
+          </p>
+        </section>
         <div className="flex flex-wrap items-center gap-3 text-ui">
           <label className="flex items-center gap-2">
             Scenario
@@ -479,9 +488,6 @@ export default function HostAddLiveScratch() {
             {activity === null ? "" : `${activity.name}: ${activity.status}`}
           </span>
         </div>
-        <p className="text-ui text-muted-foreground">
-          Simulated backend: the shipped UI over scripted flow events; no SSH or main process.
-        </p>
         {scenario === "existing" ? <RestartWarningPreviews /> : null}
         <HostsChrome />
         <div className="max-w-2xl">
