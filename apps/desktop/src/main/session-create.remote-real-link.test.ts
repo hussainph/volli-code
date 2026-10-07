@@ -221,6 +221,9 @@ async function path(features: readonly string[] = FEATURES) {
       return { sessionId: created.sessionId, model: MODEL };
     },
     async attach(input) {
+      // A real attachment may outlive the 200ms UI draft debounce. Its prior
+      // acknowledged held message must still pass the durability barrier.
+      await new Promise((resolve) => setTimeout(resolve, 300));
       const attached = await runtime.command({
         commandId: `${input.operationId}:attach`,
         sessionId: input.sessionId,

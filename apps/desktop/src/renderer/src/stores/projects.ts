@@ -44,18 +44,27 @@ import {
 } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
-import { isRemoteProject, useHostConnectionStore } from "./host-connection";
+import { hostOfProject, isRemoteProject, useHostConnectionStore } from "./host-connection";
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 import { boardApi } from "@renderer/lib/board-protocol";
+import { isExperimentOn, useExperimentsStore } from "./experiments";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
 export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
 
+/** Durable UI intent, not a claim: only the host connection source can serve it. */
+export interface RemoteSelection {
+  readonly hostId: string;
+  readonly projectId: string;
+  readonly hostName: string;
+}
+
 /** The shape persisted under {@link PROJECTS_UI_APP_STATE_KEY}. */
 interface ProjectsUiState {
   selectedProjectId: string | null;
+  remoteSelection?: RemoteSelection;
 }
 
 /**
@@ -67,8 +76,14 @@ interface ProjectsUiState {
  * string }` — missing, unparseable, wrong shape, non-string field — decodes to
  * `null`, matching what an absent selection means.
  */
-export function encodeProjectsUiState(selectedProjectId: string | null): string {
-  const state: ProjectsUiState = { selectedProjectId };
+export function encodeProjectsUiState(
+  selectedProjectId: string | null,
+  remoteSelection?: RemoteSelection,
+): string {
+  const state: ProjectsUiState = {
+    selectedProjectId,
+    ...(remoteSelection === undefined ? {} : { remoteSelection }),
+  };
   return JSON.stringify(state);
 }
 
@@ -79,6 +94,25 @@ export function decodeProjectsUiState(raw: string | undefined): string | null {
     if (typeof parsed !== "object" || parsed === null) return null;
     const selectedProjectId = (parsed as Record<string, unknown>).selectedProjectId;
     return typeof selectedProjectId === "string" ? selectedProjectId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Older selections still decode; remote intent is read only behind `cloud`. */
+export function decodeRemoteSelection(raw: string | undefined): RemoteSelection | null {
+  try {
+    const value = (JSON.parse(raw ?? "null") as ProjectsUiState | null)?.remoteSelection;
+    return value &&
+      typeof value.hostId === "string" &&
+      value.hostId !== "this-mac" &&
+      value.hostId.length > 0 &&
+      typeof value.projectId === "string" &&
+      value.projectId.length > 0 &&
+      typeof value.hostName === "string" &&
+      value.hostName.length > 0
+      ? { hostId: value.hostId, projectId: value.projectId, hostName: value.hostName }
+      : null;
   } catch {
     return null;
   }
@@ -108,7 +142,10 @@ export interface ProjectsGateway {
   checkFolder(projectId: string): Promise<ProjectFolderResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
-  setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
+  setSelection(
+    selectedProjectId: string | null,
+    remoteSelection?: RemoteSelection,
+  ): Promise<AppStateSetResult>;
 }
 
 /**
@@ -151,11 +188,18 @@ const defaultGateway: ProjectsGateway = {
     await sessionRpcClient().project.reorder.mutate({ orderedIds });
     return { ok: true };
   },
-  setSelection: (selectedProjectId) =>
-    window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, encodeProjectsUiState(selectedProjectId)),
+  setSelection: (selectedProjectId, remoteSelection) =>
+    window.api.appState.set(
+      PROJECTS_UI_APP_STATE_KEY,
+      encodeProjectsUiState(selectedProjectId, remoteSelection),
+    ),
 };
 
 interface ProjectsState {
+  pendingRemoteSelection: RemoteSelection | null;
+  beginRemoteRestore(selection: RemoteSelection): void;
+  settleRemoteRestore(selection: RemoteSelection, restored: boolean): void;
+  cancelRemoteRestore(): void;
   projects: Project[];
   selectedProjectId: string | null;
   /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
@@ -285,6 +329,13 @@ export function createProjectsStore(
   gateway: ProjectsGateway = defaultGateway,
   onSelectedProjectChange: SelectedProjectListener = defaultSelectedProjectListener,
   isRemote: RemoteProjectTest = defaultIsRemote,
+  selectionHost: (id: string) => RemoteSelection | null = (id) => {
+    if (!isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")) return null;
+    const state = useHostConnectionStore.getState();
+    if (!isRemoteProject(state, id)) return null;
+    const host = hostOfProject(state, id);
+    return { hostId: host.id, projectId: id, hostName: host.name };
+  },
 ) {
   /**
    * Chains `gateway.update` calls for the SAME project id so only one is ever
@@ -301,6 +352,10 @@ export function createProjectsStore(
    */
   // Every stored link is `started.catch(...)` — already recovered — so chaining
   // `.then(run)` off it directly can never skip `run` on a predecessor failure.
+  let localSelection: string | null = null;
+  // Only This Mac's bootstrap and successful local creates establish provenance.
+  // A vanished remote claim must never turn its still-resident row into a local one.
+  let localProjectIds = new Set<string>();
   const pendingProjectUpdates = new Map<string, Promise<unknown>>();
   function queueProjectUpdate<T>(id: string, run: () => Promise<T>): Promise<T> {
     const previous = pendingProjectUpdates.get(id) ?? Promise.resolve();
@@ -321,8 +376,15 @@ export function createProjectsStore(
    * block or revert the in-memory change.
    */
   function persistSelection(selectedProjectId: string | null): void {
-    gateway
-      .setSelection(selectedProjectId)
+    const remote = selectedProjectId === null ? null : selectionHost(selectedProjectId);
+    if (selectedProjectId === null || localProjectIds.has(selectedProjectId)) {
+      localSelection = selectedProjectId;
+    }
+    const write =
+      remote === null
+        ? gateway.setSelection(selectedProjectId)
+        : gateway.setSelection(localSelection, remote);
+    write
       .then((result) => {
         if (!result.ok) toastError(`Couldn't save selected project: ${result.error}`);
       })
@@ -373,9 +435,11 @@ export function createProjectsStore(
       // insert never will, so the guard is a no-op there).
       const { projects, selectedProjectId } = get();
       const exists = projects.some((project) => project.id === result.project.id);
+      localProjectIds.add(result.project.id);
       set({
         projects: exists ? projects : [...projects, result.project],
         selectedProjectId: result.project.id,
+        pendingRemoteSelection: null,
       });
       persistSelection(result.project.id);
       announceSelection(selectedProjectId, result.project.id);
@@ -405,14 +469,35 @@ export function createProjectsStore(
     return {
       projects: [],
       selectedProjectId: null,
+      pendingRemoteSelection: null,
+      beginRemoteRestore(selection) {
+        const previous = get().selectedProjectId;
+        set({ pendingRemoteSelection: selection, selectedProjectId: null });
+        announceSelection(previous, null);
+      },
+      settleRemoteRestore(selection, restored) {
+        if (get().pendingRemoteSelection !== selection) return;
+        const local = get().projects.filter(({ id }) => localProjectIds.has(id));
+        const id = restored
+          ? selection.projectId
+          : (local.find((project) => project.id === localSelection)?.id ?? local[0]?.id ?? null);
+        set({ pendingRemoteSelection: null, selectedProjectId: id });
+        // Boot restored intent already persisted. A fallback retires it.
+        if (!restored) persistSelection(id);
+        announceSelection(null, id);
+      },
+      cancelRemoteRestore() {
+        const pending = get().pendingRemoteSelection;
+        if (pending !== null) get().settleRemoteRestore(pending, false);
+      },
       folderClaim: null,
 
       hydrate(projects, selectedProjectId) {
         const previous = get().selectedProjectId;
         // The local bootstrap knows nothing of remote rows: keep each one still
         // claimed, after this Mac's own.
-        const local = new Set(projects.map(({ id }) => id));
-        const remote = get().projects.filter(({ id }) => !local.has(id) && isRemote(id));
+        localProjectIds = new Set(projects.map(({ id }) => id));
+        const remote = get().projects.filter(({ id }) => !localProjectIds.has(id) && isRemote(id));
         const merged = remote.length === 0 ? projects : [...projects, ...remote];
         // A remote project selected before stays selected: the bootstrap's
         // fallback only stands in for a selection this Mac's list lost.
@@ -420,8 +505,12 @@ export function createProjectsStore(
           previous !== null && remote.some(({ id }) => id === previous)
             ? previous
             : selectedProjectId;
-        set({ projects: merged, selectedProjectId: selected });
-        announceSelection(previous, selected);
+        localSelection = selectedProjectId;
+        set({
+          projects: merged,
+          selectedProjectId: get().pendingRemoteSelection === null ? selected : null,
+        });
+        announceSelection(previous, get().selectedProjectId);
       },
 
       adoptProject(project) {
@@ -577,6 +666,7 @@ export function createProjectsStore(
           gateway.remove(id),
         );
         if (!result) return;
+        localProjectIds.delete(id);
 
         // Removal, per-workspace-UI cleanup, and session teardown are one
         // invariant, enforced here so no removal path (dialog today, context
@@ -660,7 +750,7 @@ export function createProjectsStore(
       select(id) {
         const { projects, selectedProjectId } = get();
         if (!projects.some((project) => project.id === id)) return;
-        set({ selectedProjectId: id });
+        set({ selectedProjectId: id, pendingRemoteSelection: null });
         persistSelection(id);
         announceSelection(selectedProjectId, id);
       },

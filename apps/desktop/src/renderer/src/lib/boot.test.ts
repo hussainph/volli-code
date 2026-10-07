@@ -13,6 +13,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
@@ -1487,5 +1488,153 @@ describe("remote projects", () => {
     expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "r1"]);
     expect(useProjectsStore.getState().selectedProjectId).toBe("r1");
     expect(useBoardStore.getState().ticketsByProject.r1).toEqual(remoteBoard);
+  });
+});
+
+describe("boot remote selection", () => {
+  const remote = { hostId: "box-id", projectId: "remote", hostName: "box" };
+  const saved = {
+    "volli:projects-ui": JSON.stringify({ selectedProjectId: "local", remoteSelection: remote }),
+  };
+  const local = workspace("local");
+  let save: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    save = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("window", {
+      api: {
+        appState: { set: save },
+        worktree: { orphans: vi.fn(async () => ({ ok: true, dirty: [] })) },
+      },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    useHostConnectionStore.setState({ hosts: [], projects: {} });
+    useProjectsStore.setState({
+      projects: [],
+      selectedProjectId: null,
+      pendingRemoteSelection: null,
+    });
+  });
+  afterEach(async () => {
+    // A second, flag-off boot retires the first boot owner and every listener.
+    await boot(fakeGateway(), fakeStorage(), async () => false);
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  const gateway = () =>
+    fakeGateway({
+      bootstrap: vi.fn(async () => ({
+        ok: true as const,
+        data: payload({ projects: [local], appState: saved }),
+      })),
+    });
+
+  it("boot restores remote intent, waits without selecting a remote id, then selects its authoritative row", async () => {
+    await boot(gateway(), fakeStorage(), async () => true);
+    const pending = useProjectsStore.getState().pendingRemoteSelection;
+    expect(pending).toEqual(remote);
+    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+    useHostConnectionStore.setState({
+      projects: { remote: { hostId: "box-id", link: { status: "open" } } },
+    });
+    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+    useProjectsStore.getState().adoptProject(workspace("remote"));
+    expect(useProjectsStore.getState().selectedProjectId).toBe("remote");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    expect(save).not.toHaveBeenCalledWith("volli:projects-ui", expect.anything());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("flag off reads the old selectedProjectId and never restores the additive remote value", async () => {
+    await boot(gateway(), fakeStorage(), async () => false);
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    useProjectsStore.getState().select("local");
+    expect(save).toHaveBeenCalledWith(
+      "volli:projects-ui",
+      JSON.stringify({ selectedProjectId: "local" }),
+    );
+  });
+
+  it("unreadable flag stays on today's local path", async () => {
+    await boot(gateway(), fakeStorage(), async () => {
+      throw new Error("unreadable");
+    });
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+  });
+
+  it("a stalled flag read cannot hold boot or restore later over the person's pick", async () => {
+    let finish!: (enabled: boolean) => void;
+    const flag = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    let signal!: AbortSignal;
+    const started = boot(gateway(), fakeStorage(), (requestSignal) => {
+      signal = requestSignal;
+      return flag;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await started).toEqual({ ok: true });
+    expect(signal.aborted).toBe(true);
+    useProjectsStore.getState().select("local");
+    finish(true);
+    await Promise.resolve();
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("absent or unreachable host falls back within one deadline and retires persisted intent", async () => {
+    await boot(gateway(), fakeStorage(), async () => true);
+    vi.advanceTimersByTime(15_000);
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    expect(save).toHaveBeenCalledWith(
+      "volli:projects-ui",
+      JSON.stringify({ selectedProjectId: "local" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("turning cloud off cancels the boot owner and writes only today's shape", async () => {
+    await boot(gateway(), fakeStorage(), async () => true);
+    useExperimentsStore.setState({ snapshot: null });
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: false, source: "storage" } } });
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(save).toHaveBeenCalledWith(
+      "volli:projects-ui",
+      JSON.stringify({ selectedProjectId: "local" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("page disposal clears the deadline and guards late rows", async () => {
+    await boot(gateway(), fakeStorage(), async () => true);
+    const dispose = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([event]) => event === "pagehide")![1] as () => void;
+    dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    useHostConnectionStore.setState({
+      projects: { remote: { hostId: "box-id", link: { status: "open" } } },
+    });
+    useProjectsStore.getState().adoptProject(workspace("remote"));
+    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+  });
+
+  it("the person's pick wins over boot restore and late remote row", async () => {
+    await boot(gateway(), fakeStorage(), async () => true);
+    useProjectsStore.getState().select("local");
+    useHostConnectionStore.setState({
+      projects: { remote: { hostId: "box-id", link: { status: "open" } } },
+    });
+    useProjectsStore.getState().adoptProject(workspace("remote"));
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
