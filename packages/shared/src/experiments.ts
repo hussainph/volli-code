@@ -17,7 +17,8 @@ export const EXPERIMENTS = Object.freeze([
   Object.freeze({
     id: "cloud",
     label: "Volli Cloud (unstable)",
-    description: "Unfinished cloud features may change or break.",
+    description:
+      "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
     default: false,
     scope: "host",
   }),
