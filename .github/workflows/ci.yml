@@ -81,6 +81,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Scheduled workflows run on the default branch (main).
+  schedule:
+    - cron: "30 7 * * *"
 
 permissions:
   contents: read
@@ -103,6 +106,7 @@ jobs:
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
       host-container: ${{ steps.filter.outputs.host-container }}
+      cloud-smoke: ${{ steps.filter.outputs.cloud-smoke }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -120,10 +124,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Anything not a PR (push to main, manual dispatch) runs the lanes.
+          # Anything not a PR (main push, nightly, manual dispatch) runs the lanes.
           if [[ "$EVENT" != "pull_request" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
             echo "event is $EVENT — running all conditional lanes"
             exit 0
           fi
@@ -132,6 +137,7 @@ jobs:
           if [[ -z "$changed" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
             echo "no diff resolved — running all conditional lanes (fail safe)"
             exit 0
           fi
@@ -161,6 +167,16 @@ jobs:
             echo "host-container=true" >> "$GITHUB_OUTPUT"
           else
             echo "host-container=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Flag-on remote acceptance is a separate lane: never turn cloud on
+          # for core e2e. Include the harness and its CI definition, as well as
+          # shared install/build inputs, so it tests its own changes too.
+          cloud='^(packages/host-[^/]+/|packages/session-rpc/|apps/hostd/|apps/desktop/src/main/remote-hosts[^/]*|apps/desktop/src/main/host-sign-ins/|apps/desktop/src/renderer/src/components/hosts/|apps/desktop/src/renderer/src/stores/[^/]*host[^/]*|apps/desktop/src/renderer/src/lib/board-protocol\.ts$|apps/desktop/e2e/volli-drive/|apps/desktop/e2e/lib/|apps/desktop/src/main/harness/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$|\.nvmrc$|package\.json$|apps/desktop/package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$)'
+          if echo "$changed" | grep -qE "$cloud"; then
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cloud-smoke=false" >> "$GITHUB_OUTPUT"
           fi
 
   # Every gate that is not a test suite: format/lint, the licence and
@@ -233,6 +249,7 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/launch-gate.test.mjs
           apps/desktop/e2e/volli-drive/lib/stop.test.mjs
           apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
+          apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
 
       # Every workspace manifest must declare the license the root declares
@@ -919,6 +936,90 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # Production add-host wiring over volli-drive's loopback sshd fixture.
+  # CI-only: install/start use the disposable macOS runner's launchd and home.
+  # Package hostd BEFORE the desktop install can rebuild native dependencies
+  # for Electron; the delivered archive must contain the exact .nvmrc Node.
+  smoke-cloud:
+    name: Smoke (cloud acceptance)
+    needs: changes
+    if: needs.changes.outputs.cloud-smoke == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # acceptance.json must name the PR head, not GitHub's synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          run-install: false
+
+      # setup-vp manages pnpm internally; package.mjs calls it by name.
+      - name: Enable pinned pnpm
+        run: |
+          set -euo pipefail
+          node_bin="$(dirname "$(node -p process.execPath)")"
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+          test "$(pnpm --version)" = "$expected"
+
+      - name: Check hostd target and desktop version
+        run: |
+          set -euo pipefail
+          test "$(node -p process.platform)" = darwin
+          test "$(node -p process.arch)" = arm64
+          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+          test "$(node -p 'require("./package.json").version')" = "$(node -p 'require("./apps/desktop/package.json").version')"
+
+      - name: Host-only install
+        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
+
+      - name: Package hostd and export production install artifact
+        run: |
+          set -euo pipefail
+          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
+          version="$(node -p 'require("./apps/desktop/package.json").version')"
+          tarball="$RUNNER_TEMP/hostd/volli-hostd-$version-darwin-arm64.tar.gz"
+          test -f "$tarball"
+          test -f "$tarball.sha256"
+          echo "VOLLI_HOSTD_DEV_TARBALLS=$tarball" >> "$GITHUB_ENV"
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Run flag-on remote acceptance
+        env:
+          VOLLI_EXPERIMENTAL: cloud
+          VOLLI_DRIVE_HOME: ${{ runner.temp }}/cloud-drive
+          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/cloud-acceptance
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/cloud-acceptance
+        run: node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs
+
+      - name: Upload cloud acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-cloud-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloud-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
   # The one check a ruleset should require. It waits on every lane, including
   # ones that failed or were cancelled (`always()`), and passes only when each
   # lane either succeeded or was skipped by its OWN condition — the smoke
@@ -946,6 +1047,7 @@ jobs:
         host-container,
         smoke-boot,
         smoke-rest,
+        smoke-cloud,
       ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -957,6 +1059,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           HOST_CONTAINER_REQUIRED: ${{ needs.changes.outputs.host-container }}
+          CLOUD_SMOKE_REQUIRED: ${{ needs.changes.outputs.cloud-smoke }}
           SCOPE: ${{ needs.changes.result }}
           CHECK: ${{ needs.check.result }}
           TEST_DESKTOP: ${{ needs.test-desktop.result }}
@@ -966,6 +1069,7 @@ jobs:
           HOST_CONTAINER: ${{ needs.host-container.result }}
           SMOKE_BOOT: ${{ needs.smoke-boot.result }}
           SMOKE_REST: ${{ needs.smoke-rest.result }}
+          SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
         run: |
           set -euo pipefail
           status=0
@@ -980,7 +1084,7 @@ jobs:
 
           # Only literal false permits a path-filtered skip. Missing/invalid
           # outputs fail closed, even if every conditional lane was skipped.
-          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED"; do
+          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED" "$CLOUD_SMOKE_REQUIRED"; do
             if [[ "$flag" != "true" && "$flag" != "false" ]]; then
               echo "::error::invalid Scope output '$flag'"
               status=1
@@ -992,7 +1096,9 @@ jobs:
           boot=skipped
           rest=skipped
           container=skipped
+          cloud=skipped
           if [[ "$HOST_CONTAINER_REQUIRED" == "true" ]]; then container=success; fi
+          if [[ "$CLOUD_SMOKE_REQUIRED" == "true" ]]; then cloud=success; fi
           if [[ "$DESKTOP" == "true" ]]; then
             boot=success
             if [[ "$EVENT" == "pull_request" ]]; then rest=success; fi
@@ -1007,4 +1113,5 @@ jobs:
           expect "Build (host container)" "$HOST_CONTAINER" "$container"
           expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
           expect "Smoke (shards)" "$SMOKE_REST" "$rest"
+          expect "Smoke (cloud acceptance)" "$SMOKE_CLOUD" "$cloud"
           exit "$status"
