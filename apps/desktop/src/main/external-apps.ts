@@ -42,7 +42,11 @@ export function isExternalAppId(value: unknown): value is ExternalAppId {
 
 export interface ExternalAppRuntime {
   platform: string;
-  findBundle(bundleId: string): Promise<boolean>;
+  /**
+   * Which of `bundleIds` Launch Services resolves to an installed app, asked
+   * in ONE lookup. Rejects when the lookup itself could not run.
+   */
+  findBundles(bundleIds: readonly string[]): Promise<ReadonlySet<string>>;
   openBundle(bundleId: string, path: string): Promise<void>;
 }
 
@@ -53,11 +57,16 @@ export type NativeAppCommand = (
 
 /**
  * macOS Launch Services is the bundle-id authority: it finds apps wherever the
- * user installed them, unlike a hand-maintained scan of /Applications. The id
- * is JSON-encoded before it enters JXA; production calls only pass catalogue
+ * user installed them, unlike a hand-maintained scan of /Applications. The ids
+ * are JSON-encoded before they enter JXA; production calls only pass catalogue
  * values, but this keeps the native-script boundary closed as well.
  *
- * The path leaves as the program's COMPLETION VALUE, never through
+ * Every id is asked in ONE `osascript` (VC-716). One process per id meant a
+ * burst of nine spawns from main on every window load, and each spawn's
+ * synchronous half runs on main's thread: CI measured that burst holding
+ * main for up to 1.3 s on a contended runner (0.5 s isolated).
+ *
+ * The answer leaves as the program's COMPLETION VALUE, never through
  * `console.log`: under `osascript -l JavaScript`, `console.log` writes to
  * stderr, so the version that used it put every app path on the stream this
  * runtime does not read and reported every Mac as having no supported apps
@@ -68,27 +77,53 @@ export type NativeAppCommand = (
  * unwraps to `undefined`, so an `if (url)` test alone answers "installed" for
  * every bundle id on earth.
  */
-function launchServicesLookupScript(bundleId: string): string {
+function launchServicesLookupScript(bundleIds: readonly string[]): string {
   return [
     "ObjC['import']('AppKit');",
-    `const url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier(${JSON.stringify(bundleId)});`,
-    "const path = url ? ObjC.unwrap(url.path) : null;",
-    "typeof path === 'string' ? path : '';",
+    `const ids = ${JSON.stringify(bundleIds)};`,
+    "const found = ids.filter((id) => {",
+    "  const url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier(id);",
+    "  const path = url ? ObjC.unwrap(url.path) : null;",
+    "  return typeof path === 'string';",
+    "});",
+    "JSON.stringify(found);",
   ].join("\n");
+}
+
+/**
+ * The lookup's stdout, held to what the script can print: a JSON array of
+ * asked-for ids. Anything else is a lookup that did not run as written, and
+ * reading it as "nothing installed" would be the VC-287 lie again.
+ */
+function parseFoundBundles(stdout: string, asked: readonly string[]): ReadonlySet<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("Launch Services lookup returned unreadable output");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((id) => typeof id === "string" && asked.includes(id))
+  ) {
+    throw new Error("Launch Services lookup returned unexpected output");
+  }
+  return new Set(parsed as string[]);
 }
 
 /** The macOS command adapter, injected in tests and bound to real executables at app startup. */
 export function createMacOSExternalAppRuntime(run: NativeAppCommand): ExternalAppRuntime {
   return {
     platform: "darwin",
-    async findBundle(bundleId: string): Promise<boolean> {
+    async findBundles(bundleIds: readonly string[]): Promise<ReadonlySet<string>> {
+      if (bundleIds.length === 0) return new Set();
       const { stdout } = await run("/usr/bin/osascript", [
         "-l",
         "JavaScript",
         "-e",
-        launchServicesLookupScript(bundleId),
+        launchServicesLookupScript(bundleIds),
       ]);
-      return stdout.trim().length > 0;
+      return parseFoundBundles(stdout, bundleIds);
     },
     async openBundle(bundleId: string, path: string): Promise<void> {
       await run("/usr/bin/open", ["-b", bundleId, path]);
@@ -119,35 +154,28 @@ export interface ExternalAppGateway {
 export function createExternalAppGateway(finder: ExternalAppRuntime): ExternalAppGateway {
   return {
     /**
-     * Every allowlisted bundle, or nothing. A per-app lookup that could not run
-     * used to become `null` — indistinguishable from "not installed" — so one
-     * broken Launch Services call quietly shortened the menu and a wholly
-     * broken one produced a confident empty list. The whole scan now fails
-     * instead, and `volli:external-app-list` turns that into `{ ok: false }`
-     * through the shared IPC envelope.
+     * Every allowlisted bundle, or nothing. A lookup that could not run used
+     * to become "not installed", so a broken Launch Services call quietly
+     * shortened the menu or produced a confident empty list. The whole scan
+     * fails instead, and `volli:external-app-list` turns that into
+     * `{ ok: false }` through the shared IPC envelope. One lookup asks for
+     * every bundle, so it either answers for all of them or for none.
      */
     async list(): Promise<ExternalApp[]> {
       if (finder.platform !== "darwin") return [];
-      const inspected = await Promise.all(
-        EXTERNAL_APPS.map(async ({ bundleId, ...app }) => {
-          try {
-            return { app, installed: await finder.findBundle(bundleId), failure: null };
-          } catch (error: unknown) {
-            return { app, installed: false, failure: error };
-          }
-        }),
-      );
-      // Every bundle is inspected before the verdict, so the log names every
-      // failed lookup rather than only whichever one lost the race.
-      const failures = inspected.filter((entry) => entry.failure !== null);
-      if (failures.length > 0) {
+      let installed: ReadonlySet<string>;
+      try {
+        installed = await finder.findBundles(EXTERNAL_APPS.map((app) => app.bundleId));
+      } catch (error: unknown) {
         log.error("external-app lookup failed", {
-          appIds: failures.map((entry) => entry.app.id),
-          error: failures[0]?.failure,
+          appIds: EXTERNAL_APPS.map((app) => app.id),
+          error,
         });
-        throw new Error(EXTERNAL_APP_DISCOVERY_FAILED, { cause: failures[0]?.failure });
+        throw new Error(EXTERNAL_APP_DISCOVERY_FAILED, { cause: error });
       }
-      return inspected.filter((entry) => entry.installed).map((entry) => entry.app);
+      return EXTERNAL_APPS.filter((app) => installed.has(app.bundleId)).map(
+        ({ bundleId: _bundleId, ...app }) => app,
+      );
     },
 
     async open(appId: ExternalAppId, path: string): Promise<ExternalAppOpenResult> {
@@ -175,8 +203,8 @@ function systemExternalAppRuntime(): ExternalAppRuntime {
   if (process.platform === "darwin") return createMacOSExternalAppRuntime(nativeAppCommand);
   return {
     platform: process.platform,
-    async findBundle() {
-      return false;
+    async findBundles() {
+      return new Set<string>();
     },
     async openBundle() {
       throw new Error("External apps are available on macOS only");
