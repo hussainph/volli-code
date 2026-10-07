@@ -95,7 +95,9 @@ describe("Settings → Experimental", () => {
     expect(rpc.query).toHaveBeenCalledTimes(1);
     expect(experimentSwitch().getAttribute("aria-checked")).toBe("false");
     expect(experimentSwitch().disabled).toBe(false);
-    expect(document.body.textContent).toContain("Unfinished cloud features may change or break.");
+    expect(document.body.textContent).toContain(
+      "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
+    );
   });
 
   it("writes through the semantic API and adopts its returned snapshot", async () => {
