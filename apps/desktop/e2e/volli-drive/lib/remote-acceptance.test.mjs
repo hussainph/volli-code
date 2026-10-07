@@ -13,6 +13,10 @@ import {
   ANSWER_REPLY,
   REOPEN_QUESTION,
   STREAM_REPLY,
+  REOPEN_REPLY,
+  controlLabel,
+  visibleControls,
+  stableWaitingLabel,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -67,6 +71,26 @@ test("SSH fixture config only names loopback and fresh credentials, no ambient k
     assert.ok(config.includes(text));
   assert.ok(!config.includes("~/"));
 });
+test("visible controls handle colon-quoted YAML keys and disabled rows without refs", () => {
+  const tree = [
+    `  - 'button "Host: This Mac" [ref=f2e12]':`,
+    `  - button "Connect" [ref=f2e13]`,
+    `  - button "volli-acceptance 0 projects" [disabled]`,
+  ].join("\n");
+  assert.equal(visibleControls(tree, "button", "Host:", { contains: true }).length, 1);
+  assert.equal(
+    controlLabel(visibleControls(tree, "button", "Host:", { contains: true })[0]),
+    "Host: This Mac",
+  );
+  assert.equal(visibleControls(tree, "button", "volli-acceptance", { contains: true }).length, 1);
+  assert.equal(visibleControls(tree, "button", "Connect").length, 1);
+});
+const row = (age) => `- button "Chat · Waiting for you Fix 1h timeout ACC-1 · ${age}" [ref=e5]`;
+test("waiting row identity survives a displayed age boundary without erasing title", () => {
+  assert.equal(stableWaitingLabel(row("just now")), stableWaitingLabel(row("1m ago")));
+  assert.ok(stableWaitingLabel(row("just now")).includes("Fix 1h timeout"));
+  assert.equal(stableWaitingLabel(row("now")), stableWaitingLabel(row("2m")));
+});
 test("script has real ask_user calls, answered continuation and a separate reopen request", () => {
   assert.equal(
     acceptanceScript({ text: "remote-answer-question", body: {} }),
@@ -90,6 +114,17 @@ test("script has real ask_user calls, answered continuation and a separate reope
     acceptanceScript(turn("remote-reopen-question")).toolCalls[0].arguments.question,
     REOPEN_QUESTION,
   );
+  assert.equal(
+    acceptanceScript(
+      turn("remote-reopen-question", [{ type: "function_call_output", output: "Chose: proceed" }]),
+    ),
+    REOPEN_REPLY,
+  );
+  assert.notEqual(
+    REOPEN_REPLY,
+    ANSWER_REPLY,
+    "Reopened answer cannot match a previous visible reply",
+  );
   assert.equal(acceptanceScript(turn("ordinary turn")), undefined);
 });
 test("journey never seeds its acceptance actions or injects product links", () => {
@@ -106,9 +141,11 @@ test("journey never seeds its acceptance actions or injects product links", () =
     "Search",
   ])
     assert.ok(smoke.includes(label), label);
-  assert.match(smoke, /record\(\s*2,\s*"XFAIL"/u);
-  assert.match(smoke, /record\(\s*2,\s*"XPASS"/u);
-  assert.match(smoke, /record\(\s*n,\s*"BLOCKED"/u);
+  assert.doesNotMatch(
+    smoke,
+    /XFAIL|XPASS|BLOCKED|EXPECTED_FAILURE/u,
+    "All four glue tickets are merged: no acceptance waivers remain",
+  );
   assert.ok(
     smoke.includes('row.status === "PASS"'),
     "canary completion is all-PASS, not process exit zero",

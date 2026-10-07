@@ -13,6 +13,7 @@ export const REMOTE_PROJECT = "Remote acceptance";
 export const ANSWER_QUESTION = "Continue the remote acceptance run?";
 export const REOPEN_QUESTION = "Did this question survive reopening Volli?";
 export const ANSWER_REPLY = "REMOTE: answer received on the host";
+export const REOPEN_REPLY = "REMOTE: reopened question answered on the host";
 export const STREAM_REPLY = "REMOTE: scripted turn streamed from the host";
 
 export function assertAcceptanceRunner(env = process.env, platform = process.platform) {
@@ -23,14 +24,36 @@ export function assertAcceptanceRunner(env = process.env, platform = process.pla
   }
 }
 
+/** Playwright AI snapshots quote YAML keys containing ':'; disabled nodes
+ * intentionally have no ref, but remain visible assertions.
+ */
+export function controlLabel(line) {
+  const match = line.match(/^\s*- '?\S+ "((?:\\.|[^"\\])*)"/u);
+  return match ? JSON.parse(`"${match[1]}"`) : null;
+}
+export function visibleControls(tree, role, name, { contains = false } = {}) {
+  return tree.split("\n").filter((line) => {
+    const actualRole = line.match(/^\s*- '?(\S+) /u)?.[1];
+    const label = controlLabel(line);
+    return actualRole === role && (contains ? label?.includes(name) : label === name);
+  });
+}
+/** Strip only displayed age tokens, never a Session's title/identity/state. */
+export function stableWaitingLabel(line) {
+  return controlLabel(line)
+    ?.replace(/\s*·\s*(?:now|just now|\d+(?:s|m|h|d|w|mo|y)(?: ago)?)$/u, "")
+    .trim();
+}
+
 export function acceptanceScript(turn) {
   // Auto-titling has no tools and must not consume the scripted conversation.
   if (!turn.body.tools?.some((tool) => tool.name === "ask_user")) return undefined;
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
-    if (String(last.output).includes("proceed")) return ANSWER_REPLY;
-    return "REMOTE: reopened question answered";
+    if (!String(last.output).includes("proceed"))
+      return "REMOTE: expected Proceed answer was not delivered";
+    return turn.text.includes("remote-reopen-question") ? REOPEN_REPLY : ANSWER_REPLY;
   }
   if (
     turn.text.includes("remote-answer-question") ||
@@ -118,16 +141,25 @@ export async function prepareRemoteAcceptance(layout, provider) {
     );
     const repo = await makeScratchRepo(layout.projectsDir, "remote-acceptance");
     const hostd = `${home}/.local/share/volli-hostd/current/bin/volli-hostd`;
-    const runHostd = (args) =>
+    const runHostd = (args, timeout = 90_000) =>
       exec("/usr/bin/ssh", [...fixture.sshArgs, `'${hostd}' ${args}`], {
         env: scratchSshEnv(),
-        timeout: 90_000,
+        timeout,
       });
     const stopHostd = async () => {
       // Fresh-runner checks above establish ownership; the management status
       // identifies this install, and signalling still checks pid + start time.
-      const { stdout } = await runHostd("status --json --user");
+      const { stdout } = await runHostd("status --json --user", 10_000).catch((error) => {
+        // Managed status prints valid JSON with documented non-serving exits.
+        if ([1, 3].includes(error.code) && error.stdout) return { stdout: error.stdout };
+        throw error;
+      });
       const status = JSON.parse(stdout.trim().split("\n").at(-1));
+      if (
+        status.v !== 1 ||
+        status.dataDir !== join(home, "Library/Application Support/volli-hostd")
+      )
+        throw new Error("Status did not name this fixture install");
       const pid = status.running?.pid;
       if (!pid) return;
       const identity = await processIdentity(pid);

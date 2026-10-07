@@ -1,6 +1,6 @@
 # volli-drive: an agent harness that drives a live, isolated, keychain-free build (VC-703)
 
-Status: **spike — prototype working, features 1 and 2 driven end to end on this Mac.** VC-718 adds a separate, CI-only flag-on acceptance lane; existing flag-off smokes are unchanged. See the [VC-579 acceptance guide](vc579-acceptance-guide.md) for its eight visible assertions, deployment setup, pending VC-710 marker and canary proof requirements.
+Status: **spike — prototype working, features 1 and 2 driven end to end on this Mac.** VC-718 adds a separate, CI-only flag-on acceptance lane; existing flag-off smokes are unchanged. See the [VC-579 acceptance guide](vc579-acceptance-guide.md) for its eight visible assertions, deployment setup, merged VC-710 project path and canary proof requirements.
 
 `volli-drive` is a CLI (`node apps/desktop/e2e/volli-drive/cli.mjs`) with one **supervisor process per instance**. The supervisor holds the Playwright `_electron` connection, a loopback fake model provider and the instance's evidence; CLI calls reach it over a unix socket in the instance's 0700 scratch dir and are served one at a time. The verbs mirror Volli's own Browser Tab tools (snapshot with `[ref=…]` refs and a generation, one `act`, fresh snapshot, screenshot, console), so an agent already knows the interface. The how-to is the project skill `.agents/skills/verify-volli/` (SKILL.md + a five-feature map).
 

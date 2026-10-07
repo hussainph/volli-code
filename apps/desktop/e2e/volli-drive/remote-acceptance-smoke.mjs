@@ -15,15 +15,16 @@ import {
   ANSWER_QUESTION,
   ANSWER_REPLY,
   REOPEN_QUESTION,
+  REOPEN_REPLY,
+  controlLabel,
+  visibleControls as controls,
+  stableWaitingLabel,
   REMOTE_HOST,
   REMOTE_PROJECT,
   STREAM_REPLY,
   assertAcceptanceRunner,
 } from "./lib/remote-acceptance.mjs";
 
-// Remove ONLY after VC-710 lands. Unexpected pass fails, never quietly waives
-// the new path. Descendants are BLOCKED, not successful acceptance evidence.
-const EXPECTED_FAILURE = { step: 2, ticket: "VC-710" };
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const TITLE = "Cloud acceptance ticket";
@@ -40,13 +41,6 @@ function record(number, status, assertion, detail = "") {
 }
 
 /** Refs always come from a fresh tree; ambiguity is a failure, not a guess. */
-function controls(tree, role, name, { contains = false } = {}) {
-  return tree.split("\n").filter((line) => {
-    const hit = line.trim().startsWith(`- ${role} `) && line.includes("[ref=");
-    const label = line.match(/^\s*- \S+ "(.*?)"/)?.[1];
-    return hit && (contains ? label?.includes(name) : label === name);
-  });
-}
 async function action(kind, role, name, extra = {}, options = {}) {
   const current = await snap();
   const hits = controls(current.text, role, name, options);
@@ -73,6 +67,8 @@ async function hostChip() {
   await click("button", "Host:", { contains: true });
 }
 async function selectHost(name) {
+  if (controls((await snap()).text, "button", `Host: ${name}`, { contains: true }).length === 1)
+    return;
   await hostChip();
   await click("button", name, { contains: true, first: true });
   await wait(`Host: ${name}`);
@@ -131,36 +127,12 @@ async function journey() {
     await click("button", "Done");
   });
 
-  // A narrowly identified missing UI surface is the ONLY expected failure.
-  // SSH/install/Pair failures, arbitrary exceptions and all later steps fail.
-  let projectSurface = await snap();
+  // VC-710 is on main: every production project action now has to pass.
+  const projectSurface = await snap();
   if (!projectSurface.text.includes(`Open a project on ${REMOTE_HOST}`)) {
     await hostChip();
-    projectSurface = await snap();
-    const hostRow = controls(projectSurface.text, "button", REMOTE_HOST, { contains: true })[0];
-    if (EXPECTED_FAILURE && hostRow?.includes("[disabled]")) {
-      record(
-        2,
-        "XFAIL",
-        "Open/create a remote project",
-        `${EXPECTED_FAILURE.ticket}: zero-project host row is disabled`,
-      );
-      for (let n = 3; n <= 8; n++)
-        record(n, "BLOCKED", "Requires remote project", EXPECTED_FAILURE.ticket);
-      await shot("step-2-VC-710-expected-failure");
-      return;
-    }
     await click("button", REMOTE_HOST, { contains: true, first: true });
-    projectSurface = await wait(`Open a project on ${REMOTE_HOST}`);
-  }
-  if (EXPECTED_FAILURE) {
-    record(
-      2,
-      "XPASS",
-      "Open/create a remote project",
-      "VC-710 surface now exists; remove expected-failure marker and run all eight steps",
-    );
-    throw new Error("VC-710 unexpectedly passed: remove its expected-failure marker");
+    await wait(`Open a project on ${REMOTE_HOST}`);
   }
   await step(2, "Create/open project: project label and selected remote Host chip", async () => {
     await click("button", "New project…");
@@ -228,6 +200,7 @@ async function journey() {
     await wait(ANSWER_QUESTION);
     await click("radio", "Proceed", { contains: true });
     await click("button", "Send answer");
+    await wait("Sent: Proceed");
     await wait(ANSWER_REPLY);
   });
   await step(
@@ -248,21 +221,22 @@ async function journey() {
       const before = await wait("Waiting for you");
       const row = controls(before.text, "button", "Waiting for you", { contains: true })[0];
       assert.ok(row, "Waiting remote Session row missing before quit");
-      const rowLabel = row.match(/- button "(.*?)"/)[1];
+      const rowLabel = stableWaitingLabel(row);
       const quit = await call("native-quit");
       assert.match(quit.label, /Quit/);
       await call("native-reopen");
       await wait(`Host: ${REMOTE_HOST}`);
       const reopened = await wait("Waiting for you");
-      assert.ok(
-        controls(reopened.text, "button", rowLabel).length === 1,
-        "Same remote Session row was not recovered",
-      );
-      await click("button", rowLabel);
+      const recovered = controls(reopened.text, "button", "Waiting for you", {
+        contains: true,
+      }).filter((line) => stableWaitingLabel(line) === rowLabel);
+      assert.equal(recovered.length, 1, "Same remote Session row was not recovered");
+      await click("button", controlLabel(recovered[0]));
       await wait(REOPEN_QUESTION);
       await click("radio", "Proceed", { contains: true });
       await click("button", "Send answer");
-      await wait(ANSWER_REPLY);
+      await wait("Sent: Proceed");
+      await wait(REOPEN_REPLY);
     },
   );
   await step(
@@ -298,17 +272,21 @@ try {
   if (instance) {
     const stopped = await exec(process.execPath, [cli, "stop", instance.id], {
       cwd: REPO,
-      timeout: 30_000,
+      timeout: 120_000,
     }).catch((error) => {
       failed = true;
       console.error(error.message);
       return null;
     });
     if (stopped) {
-      const manifest = JSON.parse(
-        await fs.readFile(join(instance.evidence, "manifest.json"), "utf8"),
-      );
-      if (
+      const manifest = await fs
+        .readFile(join(instance.evidence, "manifest.json"), "utf8")
+        .then(JSON.parse)
+        .catch(() => null);
+      if (!manifest) {
+        failed = true;
+        console.error("Stop returned without a guard/cleanup manifest");
+      } else if (
         manifest.keychainViolations.length ||
         manifest.keychainViolationExit ||
         manifest.leftovers.length ||
@@ -322,9 +300,9 @@ try {
     JSON.stringify(
       {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
-        complete: results.length === 8 && results.every((row) => row.status === "PASS"),
+        complete: !failed && results.length === 8 && results.every((row) => row.status === "PASS"),
         failed,
-        expectedFailure: EXPECTED_FAILURE,
+        expectedFailure: null,
         instance: instance?.id,
         results,
       },
@@ -335,7 +313,7 @@ try {
   if (process.env.GITHUB_STEP_SUMMARY)
     await fs.appendFile(
       process.env.GITHUB_STEP_SUMMARY,
-      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nXFAIL/BLOCKED is scaffolding, not canary acceptance. The canary SHA requires all eight PASS rows.\n`,
+      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nThe canary SHA requires all eight PASS rows and complete:true in acceptance.json.\n`,
     );
 }
 process.exitCode = failed ? 1 : 0;

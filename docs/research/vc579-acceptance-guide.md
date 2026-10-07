@@ -16,11 +16,10 @@ For a canary, check **that exact tag commit**, **CI gate**, **CodeQL**, and:
 - all eight result rows are `PASS`;
 - zero keychain violations and no cleanup error.
 
-While VC-710 is pending, step 2 is a narrowly scoped **XFAIL** only for the
-visible disabled zero-project host row. Steps 3–8 are **BLOCKED by VC-710**,
-not passes. A newly working project surface is **XPASS and fails CI**, requiring
-removal of the marker and a complete run. A scaffolding-green CI gate is **not
-permission to tag a canary**. There are no waivers for VC-711/712/713: they landed.
+VC-710 (#828, `81f7729de`) and VC-711/712/713 are on main. The initial
+VC-710 expected-failure marker has been removed: **all eight steps must pass**.
+There are no skips or acceptance waivers. An earlier scaffolding-green check
+is not permission to tag a canary.
 
 ## What the smoke asserts from the person's view
 
