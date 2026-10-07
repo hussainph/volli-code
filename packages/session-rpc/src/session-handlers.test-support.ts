@@ -22,6 +22,7 @@ import {
   type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
+  type SessionListingPage,
   type SessionReadVerb,
   type HostLogsBatch,
   type HostLogsQuery,
@@ -70,6 +71,10 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
     workspaceId: string,
     args: Record<string, unknown>,
   ) => Promise<AgentResponse>;
+  /** The Session listing (VC-713): a project's rows, or one ticket's. */
+  listSessions?: (
+    input: { projectId: string } | { ticketId: string },
+  ) => SessionListingPage | Promise<SessionListingPage>;
   /** Sign-ins on a host (VC-702), handler by handler; an absent one answers unavailable. */
   signIns?: Partial<SignInRouterHandlers>;
   /** The host's recent log (VC-699): host-core's ring. */
@@ -96,6 +101,7 @@ const RUNTIME = "The Session runtime is unavailable on this host";
 const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
 const SIGN_INS = "Sign-ins are unavailable on this host";
+const LISTING = "The Session listing is unavailable on this host";
 
 /** Each sign-in handler the test stated, or one that answers unavailable. */
 function signInHandlersFrom(stated: Partial<SignInRouterHandlers> = {}): SignInRouterHandlers {
@@ -205,6 +211,8 @@ export function sessionHandlersFrom(
       need(ports.readSessionVerb, SESSION_READS)("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
+    "session.listing": async (input) => need(ports.listSessions, LISTING)(input),
+    "session.listingForTicket": async (input) => need(ports.listSessions, LISTING)(input),
   };
   /** A remote hosts key: the case's own handler, or unavailable, as on hostd. */
   const remote = <Key extends keyof DesktopRouterHandlers>(key: Key): DesktopRouterHandlers[Key] =>
@@ -241,6 +249,9 @@ export function sessionHandlersFrom(
     "hosts.rename": remote("hosts.rename"),
     "hosts.devices": remote("hosts.devices"),
     "hostAdd.facts": remote("hostAdd.facts"),
+    "hostLink.query": remote("hostLink.query"),
+    "hostLink.mutate": remote("hostLink.mutate"),
+    "hostLink.subscribe": remote("hostLink.subscribe"),
   };
   return { ...handlers, ...desktop };
 }

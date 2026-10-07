@@ -91,6 +91,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "session.peek": "websocket-only",
   "session.answer": "websocket-only",
   "session.subscribeQueue": "websocket-only",
+  // A remote host's Session listing (VC-713): the window keeps its own
+  // listing IPC (`volli:session-list`), whose rows these are.
+  "session.listing": "websocket-only",
+  "session.listingForTicket": "websocket-only",
   "protocol.welcome": "websocket-only",
   // Sign-ins on a remote host (VC-702): a connection owns its flows, and the
   // desktop's own window signs in over its own Model Access IPC.
@@ -162,6 +166,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hosts.rename": "ipc",
   "hosts.devices": "ipc",
   "hostAdd.facts": "ipc",
+  // The Workspace link relay (VC-711).
+  "hostLink.query": "ipc",
+  "hostLink.mutate": "ipc",
+  "hostLink.subscribe": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

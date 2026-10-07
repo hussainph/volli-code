@@ -14,7 +14,8 @@ import {
   ticketSessionListingStateOf,
   useTicketSessionRecordsStore,
 } from "./ticket-session-records";
-import type { SessionActivityNotice } from "../../../ipc/contract";
+import type { SessionActivityNotice, SessionsResult } from "../../../ipc/contract";
+import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -602,5 +603,70 @@ describe("setSessionRead", () => {
 
     expect(store.getState().byTicket["t1"]?.[1]).toEqual(terminalRow({ id: "s1" }));
     expect(store.getState().byTicket["t-unknown"]).toBeUndefined();
+  });
+});
+
+describe("a remote ticket's listing (VC-713)", () => {
+  let unregister: (() => void) | null = null;
+  afterEach(() => {
+    unregister?.();
+    unregister = null;
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  function remote(listForTicket: (input: { ticketId: string }) => Promise<SessionsResult>) {
+    const reader = { list: () => Promise.reject(new Error("unused")), listForTicket };
+    unregister = setRemoteSessionListing({
+      forProject: () => null,
+      forTicket: (ticketId) => (ticketId === "remote-ticket" ? reader : null),
+    });
+  }
+
+  it("reads a remote ticket through its own reader, and This Mac's through window.api", async () => {
+    const local = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+    vi.stubGlobal("window", { api: { sessions: { listForTicket: local } } });
+    const listForTicket = vi.fn(async () => ({
+      ok: true as const,
+      sessions: [chatRow({ sessionId: "boxed", activity: "waiting", waitingOn: "question" })],
+    }));
+    remote(listForTicket);
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("remote-ticket");
+    await store.getState().refresh("t1");
+    expect(listForTicket).toHaveBeenCalledWith({ ticketId: "remote-ticket" });
+    expect(local.mock.calls).toEqual([[{ ticketId: "t1" }]]);
+    expect(store.getState().byTicket["remote-ticket"]).toMatchObject([
+      { record: { sessionId: "boxed", waitingOn: "question" } },
+    ]);
+  });
+
+  it("keeps a loaded ticket's rows through a quiet read, and says nothing when it fails", async () => {
+    let next: SessionsResult | Error = { ok: true, sessions: [chatRow({ sessionId: "kept" })] };
+    remote(async () => {
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("remote-ticket");
+    const states: string[] = [];
+    const stop = store.subscribe((state) => states.push(state.listingState["remote-ticket"]!));
+    next = { ok: false, error: "link dropped" };
+    await store.getState().refresh("remote-ticket", { quiet: true });
+    next = new Error("link dropped");
+    await store.getState().refresh("remote-ticket", { quiet: true });
+    stop();
+    expect(states).not.toContain("loading");
+    expect(ticketSessionListingStateOf(store.getState(), "remote-ticket")).toBe("loaded");
+    expect(store.getState().byTicket["remote-ticket"]).toHaveLength(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("stands a never-loaded ticket's skeleton down when a quiet read fails, silently", async () => {
+    remote(async () => ({ ok: false, error: "link dropped" }));
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("remote-ticket", { quiet: true });
+    expect(ticketSessionListingStateOf(store.getState(), "remote-ticket")).toBe("failed");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

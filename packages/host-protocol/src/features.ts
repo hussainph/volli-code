@@ -126,6 +126,13 @@ export const HOST_FEATURE_OPERATIONS = {
    * Client that cannot (a phone, a web page) leaves it out and pastes.
    */
   "auth.callback": ["auth.callback.deliver"],
+  /**
+   * A Workspace's Session listing rows (VC-713): the rows the desktop's own
+   * rail, Home and ticket panel paint, full ids included, so a Client of a
+   * remote host lists its Sessions and subscribes from a row. Its own name:
+   * `session.read` (the socket's short-id JSON) is frozen.
+   */
+  "sessions.listing": ["session.listing", "session.listingForTicket"],
 } as const satisfies Readonly<Record<HostFeature, readonly string[]>>;
 
 /** A feature this build can grant. */

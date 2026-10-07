@@ -178,6 +178,13 @@ describe("the map", () => {
     expect(await unavailable(() => empty["logs.tail"]({}, USER))).toBe(
       "This host keeps no log to read",
     );
+    // A launch with no Session Engine lists no Sessions (VC-713).
+    expect(await unavailable(() => empty["session.listing"]({ projectId: PROJECT }, USER))).toBe(
+      "The Session listing is unavailable on this host",
+    );
+    expect(
+      await unavailable(() => empty["session.listingForTicket"]({ ticketId: "t" }, USER)),
+    ).toBe("The Session listing is unavailable on this host");
     // A default needs Model Access as well as the database.
     expect(
       await unavailable(() =>
@@ -335,6 +342,76 @@ describe("sign-ins on a remote host, from this desktop (VC-702 PR 2)", () => {
     ]) {
       await expect(Promise.resolve().then(call)).rejects.toThrow("rejected [redacted]");
     }
+  });
+});
+
+describe("the Workspace link relay (VC-711)", () => {
+  const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+
+  it("answers unavailable without the port, a stream included", async () => {
+    const empty = handlers();
+    const quiet = { emit() {}, fail() {} };
+    for (const call of [
+      () => empty["hostLink.query"]({ workspaceId: WORKSPACE, path: "board.snapshot" }, USER),
+      () => empty["hostLink.mutate"]({ workspaceId: WORKSPACE, path: "board.setPriority" }, USER),
+      () =>
+        empty["hostLink.subscribe"]({ workspaceId: WORKSPACE, path: "board.changes" }, USER, quiet),
+    ]) {
+      expect(await unavailable(call)).toBe("Remote projects are unavailable on this host");
+    }
+  });
+
+  it("passes each call through the port once, a stream's events into its sink", async () => {
+    const stop = vi.fn();
+    const port = {
+      query: vi.fn(async () => ({ answered: "query" })),
+      mutate: vi.fn(async () => ({ answered: "mutate" })),
+      subscribe: vi.fn(
+        async (
+          _workspaceId: string,
+          _path: string,
+          _input: unknown,
+          listener: (event: unknown) => void,
+          _options?: { lastEventId?: string },
+        ) => {
+          listener({ kind: "data", data: 1, id: "1" });
+          listener({ kind: "complete" });
+          return stop;
+        },
+      ),
+    };
+    const map = handlers({ hostLinkRelay: port });
+    expect(
+      await map["hostLink.query"](
+        { workspaceId: WORKSPACE, path: "board.snapshot", input: { projectId: "p" } },
+        USER,
+      ),
+    ).toEqual({ answered: "query" });
+    expect(
+      await map["hostLink.mutate"]({ workspaceId: WORKSPACE, path: "board.setPriority" }, USER),
+    ).toEqual({ answered: "mutate" });
+    const emitted: unknown[] = [];
+    const into = { emit: (event: unknown) => void emitted.push(event), fail() {} };
+    expect(
+      await map["hostLink.subscribe"](
+        { workspaceId: WORKSPACE, path: "board.changes", input: {}, lastEventId: "9" },
+        USER,
+        into,
+      ),
+    ).toBe(stop);
+    await map["hostLink.subscribe"]({ workspaceId: WORKSPACE, path: "logs.follow" }, USER, into);
+    expect(emitted).toEqual([
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+    ]);
+    expect(port.query).toHaveBeenCalledWith(WORKSPACE, "board.snapshot", { projectId: "p" });
+    expect(port.mutate).toHaveBeenCalledWith(WORKSPACE, "board.setPriority", undefined);
+    expect(port.subscribe.mock.calls.map((call) => [call[1], call[2], call[4]])).toEqual([
+      ["board.changes", {}, { lastEventId: "9" }],
+      ["logs.follow", undefined, {}],
+    ]);
   });
 });
 
@@ -907,5 +984,29 @@ describe("the host's log (VC-699)", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(emitted).toMatchObject([{ entries: [{ record: { msg: "next" } }], gap: false }]);
     stop();
+  });
+});
+
+describe("the Session listing (VC-713)", () => {
+  it("answers a project's and a ticket's rows from the sources it was given, bounded", async () => {
+    ticket("t1");
+    const listSessions = vi.fn(async () => []);
+    const map = handlers({
+      sessionListing: { db: ctx.db, listSessions, liveAttachmentIds: () => new Set() },
+    });
+    expect(await map["session.listing"]({ projectId: PROJECT }, USER)).toEqual({
+      sessions: [],
+      omitted: 0,
+    });
+    expect(listSessions).toHaveBeenLastCalledWith({ projectId: PROJECT, scope: "all" });
+    expect(await map["session.listingForTicket"]({ ticketId: "t1" }, USER)).toEqual({
+      sessions: [],
+      omitted: 0,
+    });
+    expect(listSessions).toHaveBeenLastCalledWith({
+      projectId: PROJECT,
+      scope: "ticket",
+      ticketId: "t1",
+    });
   });
 });

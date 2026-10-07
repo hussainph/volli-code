@@ -266,6 +266,18 @@ export interface SessionComposerProps {
   modelPickerOpen?: boolean;
   /** The other half of a controlled model picker — the popover's own close travels back through here. */
   onModelPickerOpenChange?(open: boolean): void;
+  /**
+   * The Session runs on this remote host (VC-713): its model is the host's
+   * default, so the model and effort pills give way to a label naming it.
+   * Absent or null, the pills are exactly as before.
+   */
+  hostModelOnly?: string | null;
+  /**
+   * Why nothing can be attached here ("Not available on hetzner-1 yet",
+   * VC-713): the `+` menu's attach row says so, and a drop or paste attaches
+   * nothing.
+   */
+  attachUnavailable?: string | null;
   className?: string;
 }
 
@@ -398,6 +410,8 @@ export const SessionComposer = React.memo(function SessionComposer({
   imagesUnsupported = false,
   modelPickerOpen,
   onModelPickerOpenChange,
+  hostModelOnly = null,
+  attachUnavailable = null,
   className,
 }: SessionComposerProps) {
   // An attachment makes an otherwise-empty message a real one (VC-50): a
@@ -498,7 +512,13 @@ export const SessionComposer = React.memo(function SessionComposer({
         onSubmit={() => send(composerIntent({ working, steer: false }))}
         // Capture-phase, and that is load-bearing — see `file-drop.ts` for why
         // this composer must take the drop before `PromptInput`'s own listener.
-        {...fileAttachHandlers(onAttachFiles)}
+        // Where nothing can be attached (a remote host, VC-713), a dropped or
+        // pasted file is still TAKEN here — so the vendored `PromptInput`'s own
+        // listener never stages it in its hidden attachment state — and the
+        // person is told why, rather than the gesture vanishing.
+        {...fileAttachHandlers(
+          attachUnavailable === null ? onAttachFiles : () => toastError(attachUnavailable),
+        )}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
@@ -651,32 +671,47 @@ export const SessionComposer = React.memo(function SessionComposer({
           <ComposerAddMenu
             {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
             imagesUnsupported={imagesUnsupported === true}
+            attachUnavailable={attachUnavailable}
           />
           <PromptInputTools
             className={cn("min-w-0 flex-1 flex-wrap", working && "composer-live-config")}
           >
-            <ModelPill
-              models={models}
-              tiers={tiers}
-              selection={selection}
-              selectionProviderLabel={selectionProviderLabel}
-              selectionTier={selectionTier}
-              selectionAuto={selectionAuto}
-              disabled={modelChoiceDisabled}
-              onChange={onSelectionChange}
-              open={modelPickerOpen}
-              onOpenChange={onModelPickerOpenChange}
-              compactEffort={
-                effortStops.length > 1
-                  ? {
-                      levels: effortStops,
-                      value: selection.reasoningLevel,
-                      onChange: (reasoningLevel) =>
-                        onSelectionChange({ ...selection, reasoningLevel }),
-                    }
-                  : undefined
-              }
-            />
+            {hostModelOnly !== null ? (
+              // A remote Session runs the host's default model (VC-713): this
+              // Mac's catalog names models the box may not have, so there is
+              // no choice to offer, only the fact.
+              <span
+                data-slot="host-model"
+                className="truncate px-2 text-ui text-muted-foreground"
+                title={`${hostModelOnly}'s default model`}
+              >
+                {hostModelOnly}'s default model
+              </span>
+            ) : null}
+            {hostModelOnly !== null ? null : (
+              <ModelPill
+                models={models}
+                tiers={tiers}
+                selection={selection}
+                selectionProviderLabel={selectionProviderLabel}
+                selectionTier={selectionTier}
+                selectionAuto={selectionAuto}
+                disabled={modelChoiceDisabled}
+                onChange={onSelectionChange}
+                open={modelPickerOpen}
+                onOpenChange={onModelPickerOpenChange}
+                compactEffort={
+                  effortStops.length > 1
+                    ? {
+                        levels: effortStops,
+                        value: selection.reasoningLevel,
+                        onChange: (reasoningLevel) =>
+                          onSelectionChange({ ...selection, reasoningLevel }),
+                      }
+                    : undefined
+                }
+              />
+            )}
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
                 volatile choice is the one that is readable without opening
@@ -684,7 +719,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 model with one level has no decision, and a control naming one
                 option is worse than no control — the same rule the pill itself
                 follows when nothing is pickable. */}
-            {effortStops.length > 1 ? (
+            {hostModelOnly === null && effortStops.length > 1 ? (
               <EffortPill
                 levels={effortStops}
                 value={selection.reasoningLevel}

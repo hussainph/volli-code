@@ -435,15 +435,21 @@ function sleep(ms: number): Promise<void> {
 /** A subscription's whole life, recorded. */
 function record() {
   const seen: { kind: string; value?: unknown }[] = [];
+  /** The tracked id each emission was handed beside it (VC-711), `null` for none. */
+  const trackedIds: (string | null)[] = [];
   const handlers: HostLinkSubscriptionHandlers = {
     onStarted: () => seen.push({ kind: "started" }),
-    onData: (value) => seen.push({ kind: "data", value }),
+    onData: (value, meta) => {
+      trackedIds.push(meta?.id ?? null);
+      seen.push({ kind: "data", value });
+    },
     onResnapshot: (error) => seen.push({ kind: "resnapshot", value: error }),
     onError: (error) => seen.push({ kind: "error", value: readHostError(error) }),
     onComplete: () => seen.push({ kind: "complete" }),
   };
   return {
     seen,
+    tracked: trackedIds,
     handlers,
     ids: () =>
       seen.filter(({ kind }) => kind === "data").map(({ value }) => (value as { id: string }).id),
@@ -932,6 +938,8 @@ describe("subscriptions resume, resnapshot or end", () => {
     started.emit(1);
     await eventually(() => feed.ids().length === 6, "the live event");
     expect(feed.ids()).toStrictEqual(["1", "2", "3", "4", "5", "6"]);
+    // Each tracked emission names its id beside it, for an owner that resumes it.
+    expect(feed.tracked).toStrictEqual(["1", "2", "3", "4", "5", "6"]);
     expect(started.host.connections[1]!.log).toContain("feed:3");
     expect(feed.seen.filter(({ kind }) => kind === "started")).toHaveLength(2);
   });
@@ -947,6 +955,7 @@ describe("subscriptions resume, resnapshot or end", () => {
       { kind: "data", value: "tick" },
       { kind: "complete" },
     ]);
+    expect(ticks.tracked).toStrictEqual([null]);
   });
 
   it("starts from a cursor the subscriber already applied", async () => {

@@ -574,6 +574,20 @@ export default defineConfig(({ mode }) => ({
         // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
         // is gated by `src/stores/**` above.)
         "src/lib/board-protocol.ts",
+        // When a remote project's Session listing is read again (VC-713): a
+        // missed branch is a question nobody sees on reopen, or a poll that
+        // never stops.
+        "src/lib/remote-listing-refresh.ts",
+        // Which door a project's Session listing is read through (VC-713): a
+        // wrong branch calls `window.api` with a remote project's id.
+        "src/lib/session-listing-reader.ts",
+        // A remote Workspace's Session streams within the link's budget
+        // (VC-713, AM1): a missed branch is a blank chat or a leaked stream.
+        "src/lib/remote-session-streams.ts",
+        // A remote project's Workspace link as the window reaches it (VC-711):
+        // when a relayed stream resumes, waits for a slot, or ends is a rule
+        // no screenshot shows until a board silently stops following.
+        "src/lib/relay-host-link.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
@@ -705,6 +719,9 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/host-sign-ins/sign-in-runner.ts",
         "**/src/main/host-sign-ins/service.ts",
         "**/src/main/host-sign-ins/port.ts",
+        // The Workspace link relay (VC-711): which calls leave this Mac over a
+        // remote project's link, and each relayed stream's owner and budget.
+        "**/src/main/host-link-relay.ts",
         "src/components/hosts/sign-ins/host-sign-in-model.ts",
         "src/components/hosts/sign-ins/host-sign-in-controller.ts",
         "src/components/hosts/sign-ins/remote-host-sign-in-source.ts",

@@ -147,6 +147,7 @@ import {
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/use-remote-project";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -420,8 +421,12 @@ export function ChatPlane({
   const selectionTier =
     selectionAuto !== null ? "Auto" : modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
+  // A Session on a remote host runs the host's default model (VC-713): this
+  // Mac's catalog is not read for it, nothing is picked, and no default of
+  // this Mac's is frozen into its Draft.
+  const remoteHost = useRemoteHostName(projectId);
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
-    projection !== null || provisional !== undefined,
+    remoteHost === null && (projection !== null || provisional !== undefined),
   );
   // Before promotion, show the same policy main will resolve at create: an
   // explicit Draft choice, then the project's override, then the Role default.
@@ -434,7 +439,7 @@ export function ChatPlane({
   // way, and the mapping exists precisely so the NEXT Role is a decision in
   // one place rather than a silent `global` in this one.
   const provisionalModel =
-    provisional === undefined
+    provisional === undefined || remoteHost !== null
       ? null
       : (provisional.model ??
         projectModel ??
@@ -463,9 +468,10 @@ export function ChatPlane({
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable =
-    (provisional !== undefined
-      ? catalogState !== "loading"
-      : modelSelection !== null && catalogState !== "loading") &&
+    (remoteHost !== null ||
+      (provisional !== undefined
+        ? catalogState !== "loading"
+        : modelSelection !== null && catalogState !== "loading")) &&
     // A file import committed to the first message is still arriving. The box
     // stands down for that moment rather than taking a ⏎ it could only drop:
     // a second message cannot overtake the files the first one is holding open
@@ -1687,6 +1693,8 @@ export function ChatPlane({
               onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
               onRestoreAttachments={restoreAttachments}
               imagesUnsupported={imagesUnsupported}
+              hostModelOnly={remoteHost}
+              attachUnavailable={remoteHost === null ? null : notAvailableOn(remoteHost)}
             />
           </ComposerInteractionStack>
         </ContentColumn>

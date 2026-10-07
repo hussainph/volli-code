@@ -21,9 +21,16 @@
  * about who started a Session.
  */
 import type Database from "better-sqlite3";
-import type { SessionListingRow, SessionProjection } from "@volli/shared";
+import {
+  SESSION_LISTING_BOUNDS,
+  type ListSessionsQuery,
+  type SessionListingPage,
+  type SessionListingRow,
+  type SessionProjection,
+} from "@volli/shared";
 
 import { readSessionProvenance, readSessionProvenances } from "../db/session-provenance-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { readSessionUnread, readSessionUnreads } from "../db/session-read-repo";
 import { sessionListingRow, sessionListingRows } from "./listing-row";
 
@@ -50,6 +57,154 @@ export function sessionListingRowsForRoster(
     liveAttachmentIds,
     (session) => readOf(session.session.id),
   );
+}
+
+/**
+ * What a host's Session listing reads: its database, the Session Engine's
+ * roster, and which attachments have an executor bound in this process.
+ */
+export interface SessionListingSources {
+  readonly db: Database.Database;
+  readonly listSessions: (query: ListSessionsQuery) => Promise<readonly SessionProjection[]>;
+  readonly liveAttachmentIds: () => ReadonlySet<string>;
+}
+
+/**
+ * A project's whole listing: every Session, every scope. The one body both
+ * doors read — the desktop's `volli:session-list` and the host protocol's
+ * `session.listing` (VC-713) — so a remote row and a local row are built the
+ * same way.
+ */
+export async function projectSessionListing(
+  sources: SessionListingSources,
+  projectId: string,
+): Promise<SessionListingRow[]> {
+  const sessions = await sources.listSessions({ projectId, scope: "all" });
+  return sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds());
+}
+
+/**
+ * One ticket's listing (`volli:session-list-for-ticket`,
+ * `session.listingForTicket`). A ticket this host does not have lists nothing.
+ */
+export async function ticketSessionListing(
+  sources: SessionListingSources,
+  ticketId: string,
+): Promise<SessionListingRow[]> {
+  const ticket = getTicketRow(sources.db, ticketId);
+  if (ticket === undefined) return [];
+  const sessions = await sources.listSessions({
+    projectId: ticket.project_id,
+    scope: "ticket",
+    ticketId,
+  });
+  return sessionListingRowsForRoster(sources.db, sessions, sources.liveAttachmentIds());
+}
+
+/** The most rows one `session.listing` answer carries (VC-713). */
+export const SESSION_LISTING_LIMIT = SESSION_LISTING_BOUNDS.rows;
+
+/** A row a reopened app must show: a Session waiting on the person, or running now. */
+function urgent(row: SessionListingRow): boolean {
+  return (
+    row.kind === "chat" && (row.record.activity === "waiting" || row.record.activity === "working")
+  );
+}
+
+/** A display string past its bound, shortened with an ellipsis, never through a surrogate pair. */
+export function clipListingText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let end = max - 1;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
+}
+
+function clipNullable(text: string | null, max: number): string | null {
+  return text === null ? null : clipListingText(text, max);
+}
+
+/** A row with its display strings inside the wire's bounds; ids are never touched. */
+function clippedRow(row: SessionListingRow): SessionListingRow {
+  const { text, path } = SESSION_LISTING_BOUNDS;
+  const provenance =
+    row.provenance.kind === "automation"
+      ? {
+          ...row.provenance,
+          automationName: clipNullable(row.provenance.automationName, text),
+        }
+      : row.provenance.kind === "session"
+        ? { ...row.provenance, parentTitle: clipNullable(row.provenance.parentTitle, text) }
+        : row.provenance;
+  if (row.kind === "terminal") {
+    return {
+      ...row,
+      provenance,
+      record: {
+        ...row.record,
+        title: clipListingText(row.record.title, text),
+        cwd: clipListingText(row.record.cwd, path),
+      },
+    };
+  }
+  const origin = row.record.latestTurnOrigin;
+  return {
+    ...row,
+    provenance,
+    record: {
+      ...row.record,
+      title: clipListingText(row.record.title, text),
+      ...(origin?.kind === "automation"
+        ? {
+            latestTurnOrigin: {
+              ...origin,
+              automationName: clipNullable(origin.automationName, text),
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+/** A row's size on the wire: its UTF-8 JSON, escapes included. */
+function wireBytes(row: SessionListingRow): number {
+  return Buffer.byteLength(JSON.stringify(row), "utf8");
+}
+
+/**
+ * A listing bounded for the wire, in rows and in bytes, order kept. The rows a
+ * person must act on (`waiting`) or that are running (`working`) are taken
+ * first, since those are what a reopened app must show, then the rest by
+ * newest activity, each clipped to the wire's string bounds, until the next
+ * would pass {@link SESSION_LISTING_LIMIT} rows or `byteBudget` bytes of JSON.
+ * Everything not taken is counted in `omitted`, never silently dropped, and
+ * what is taken keeps the listing's own order.
+ */
+export function boundedSessionListing(
+  rows: readonly SessionListingRow[],
+  limit: number = SESSION_LISTING_LIMIT,
+  byteBudget: number = SESSION_LISTING_BOUNDS.bytes,
+): SessionListingPage {
+  const ranked = rows.toSorted(
+    (a, b) =>
+      Number(urgent(b)) - Number(urgent(a)) || b.record.lastActivityAt - a.record.lastActivityAt,
+  );
+  const kept = new Map<SessionListingRow, SessionListingRow>();
+  // The array's brackets; each row after the first adds its comma.
+  let bytes = 2;
+  for (const row of ranked) {
+    if (kept.size >= limit) break;
+    const clipped = clippedRow(row);
+    const size = wireBytes(clipped) + (kept.size === 0 ? 0 : 1);
+    if (bytes + size > byteBudget) break;
+    bytes += size;
+    kept.set(row, clipped);
+  }
+  const sessions = rows.flatMap((row) => {
+    const clipped = kept.get(row);
+    return clipped === undefined ? [] : [clipped];
+  });
+  return { sessions, omitted: rows.length - sessions.length };
 }
 
 /**

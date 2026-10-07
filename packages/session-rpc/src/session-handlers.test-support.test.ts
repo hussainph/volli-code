@@ -78,6 +78,9 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hosts.rename"]({ hostId: HOST, name: "Box" }, CALL),
     () => handlers["hosts.devices"]({ hostId: HOST }, CALL),
     () => handlers["hostAdd.facts"]({ flowId: "f" }, CALL),
+    () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
+    () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
+    () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
   ];
 }
 
@@ -148,10 +151,13 @@ describe("sessionHandlersFrom", () => {
         "hosts.rename": port as never,
         "hosts.devices": port as never,
         "hostAdd.facts": port as never,
+        "hostLink.query": port as never,
+        "hostLink.mutate": port as never,
+        "hostLink.subscribe": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(33);
+    expect(port).toHaveBeenCalledTimes(36);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -193,7 +199,8 @@ describe("sessionHandlersFrom", () => {
     // operations, four Session reads, the desktop-only tier's two (VC-608),
     // two log reads (VC-699), sixteen remote hosts commands (VC-700, rename,
     // devices and an add's facts among them) and ten sign-in operations (VC-702)
-    // and eight remote sign-in commands (VC-702).
-    expect(Object.keys(context.handlers)).toHaveLength(67);
+    // and eight remote sign-in commands (VC-702), the two Session listing
+    // reads (VC-713) and the Workspace link relay's three (VC-711).
+    expect(Object.keys(context.handlers)).toHaveLength(72);
   });
 });

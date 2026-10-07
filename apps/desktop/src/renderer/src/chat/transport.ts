@@ -52,3 +52,30 @@ export function browserChatTransport(): ChatSessionTransport {
       }),
   };
 }
+
+/**
+ * The transports for Sessions on a remote host (VC-713): one per Workspace,
+ * over its link, with the `"host-link"` stream recovery. Registered by
+ * whoever owns the Workspace links (the relay binding, behind `cloud`); with
+ * nothing registered, which is the flag off, every Session is This Mac's.
+ */
+export interface RemoteChatTransports {
+  forProject(projectId: string): ChatSessionTransport | null;
+}
+
+let remoteTransports: RemoteChatTransports | null = null;
+
+/** Registers the remote half; the returned function removes only this registration. */
+export function setRemoteChatTransports(transports: RemoteChatTransports): () => void {
+  remoteTransports = transports;
+  return () => {
+    if (remoteTransports === transports) remoteTransports = null;
+  };
+}
+
+/** The transport a project's Sessions use: its host's for a remote project, IPC otherwise. */
+export function chatTransportFor(projectId: string | null): ChatSessionTransport {
+  return (
+    (projectId === null ? null : remoteTransports?.forProject(projectId)) ?? browserChatTransport()
+  );
+}
