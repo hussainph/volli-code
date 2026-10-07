@@ -397,7 +397,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       )!.payload;
       if (surface.kind !== "session.input.recorded" || surface.input.kind !== "tool-surface")
         throw new Error("No frozen surface");
-      expect(surface.input.tools).not.toContain("ask_user");
+      expect(surface.input.tools).toContain("ask_user");
       expect(surface.input.tools).not.toContain("request_secret");
       expect(surface.input.tools.some((name) => name.startsWith("browser_"))).toBe(false);
       expect(surface.input.tools).toContain("shell_start");
@@ -417,6 +417,106 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
     } finally {
       unsubscribe();
     }
+  }, 20_000);
+
+  it("births roots with ask_user but withholds it from their real delegated children (VC-721)", async () => {
+    const f = await fixture([
+      {
+        tool: { name: "session_delegate", args: { task: "Answer briefly", title: "Child proof" } },
+      },
+      { text: "Finished" },
+      { text: "Finished" },
+      { text: "Acknowledged" },
+    ]);
+    const started = await f.cli(
+      "session",
+      "start",
+      "VC-1",
+      "--model",
+      "scripted-fixture/scripted",
+      "--reasoning",
+      "off",
+      "--title",
+      "Parent proof",
+      "-m",
+      "Delegate a bounded task",
+    );
+    await vi.waitFor(
+      async () => {
+        const sessions = await f.core.sessionEngine.listSessions({ projectId: "p", scope: "all" });
+        const child = sessions.find(({ session }) => session.parentSessionId === started.sessionId);
+        expect(child?.session.role).toBe("subagent");
+        for (const [sessionId, hasQuestion] of [
+          [started.sessionId, true],
+          [child!.session.id, false],
+        ] as const) {
+          const events = await f.core.sessionEngine.listEvents({ sessionId });
+          const surface = events.find(
+            ({ payload }) =>
+              payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
+          )?.payload;
+          expect(surface).toBeDefined();
+          if (surface?.kind !== "session.input.recorded" || surface.input.kind !== "tool-surface")
+            throw new Error("No frozen surface");
+          expect(surface.input.tools.includes("ask_user")).toBe(hasQuestion);
+          expect(surface.input.tools).not.toContain("request_secret");
+        }
+      },
+      { timeout: 5_000 },
+    );
+    // Join the detached kickoff and its parent notice before closing SQLite.
+    await vi.waitFor(
+      async () => {
+        expect(f.script.requests).toHaveLength(4);
+        const sessions = await f.core.sessionEngine.listSessions({ projectId: "p", scope: "all" });
+        expect(
+          sessions.every(
+            (projection) => !projection.turnActive && projection.lastTurnOutcome === "completed",
+          ),
+        ).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
+  }, 20_000);
+
+  it("withdraws a parked question on hostd stop, like desktop shutdown, and preserves its history", async () => {
+    const f = await fixture([
+      { tool: { name: "ask_user", args: { question: "Which path?" } } },
+      { text: "Finished" },
+    ]);
+    const started = await f.cli(
+      "session",
+      "start",
+      "VC-1",
+      "--model",
+      "scripted-fixture/scripted",
+      "--reasoning",
+      "off",
+      "--title",
+      "Restart proof",
+      "-m",
+      "Ask before continuing",
+    );
+    await vi.waitFor(
+      async () => {
+        const projection = await f.core.sessionEngine.getSession({ sessionId: started.sessionId });
+        expect(projection!.interactions.active).toEqual([
+          expect.objectContaining({ kind: "question", title: "Which path?" }),
+        ]);
+      },
+      { timeout: 5_000 },
+    );
+    const recovered = live(await f.restart());
+    const projection = await recovered.sessionEngine.getSession({ sessionId: started.sessionId });
+    expect(projection!.interactions.active).toEqual([]);
+    expect(projection!.turnActive).toBe(false);
+    const events = await recovered.sessionEngine.listEvents({ sessionId: started.sessionId });
+    expect(events.map(({ payload }) => payload)).toContainEqual(
+      expect.objectContaining({ kind: "interaction.cancelled", reason: "withdrawn" }),
+    );
+    expect(events.map(({ payload }) => payload)).not.toContainEqual(
+      expect.objectContaining({ kind: "interaction.resolved" }),
+    );
   }, 20_000);
 
   it.each(["locked", "refused", "corrupt"] as const)(
