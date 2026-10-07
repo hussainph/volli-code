@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import type Database from "better-sqlite3";
 import { createProject, type DetachedWorkPort } from "@volli/host-core/board";
 import { listProjects } from "@volli/host-core/db";
+import { hostLogger } from "@volli/host-core/log";
 import {
   COMMAND_INTENT_CONFLICT,
   HOST_WORKSPACE_BOUNDS as bounds,
@@ -374,7 +375,14 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
           onCreated: (project) => {
             // The insert committed even if its notification fails: keep its clone.
             registered = true;
-            options.onCreated?.(project);
+            try {
+              options.onCreated?.(project);
+            } catch {
+              hostLogger("host-workspaces").warn(
+                "Project registered, but its change announcement failed",
+                { projectId: project.id },
+              );
+            }
           },
           detectBaseBranch: async (directory) => {
             // This awaited port is also the final shutdown fence before core's synchronous DB write.

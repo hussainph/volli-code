@@ -81,6 +81,8 @@ An exclusive 0700 target reservation prevents competing clones. Failed clones
 remove only their still-owned target, never a replacement directory. Shared
 registration announces `data-changed` after a new insert, stamping the same
 board feed as `volli project add`; existing registrations and retries do not.
+An announcement failure is logged without private error text; it cannot turn a
+committed host registration into a retained failure or remove its clone.
 
 - Retain at most **1,000 command outcomes**; lazily prune settled entries after
   **one hour** on create admission. Refuse new commands with `capacity` while

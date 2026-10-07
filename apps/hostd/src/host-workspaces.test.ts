@@ -18,7 +18,7 @@ import {
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { insertProject, listProjects, openVolliDb } from "@volli/host-core/db";
-import { testProject } from "@volli/host-core/testing";
+import { captureHostLog, testProject } from "@volli/host-core/testing";
 import { COMMAND_INTENT_CONFLICT, type HostWorkspaceCreateInput } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createHostWorkspaces, type HostWorkspacesOptions } from "./host-workspaces";
@@ -105,6 +105,36 @@ function fakeGit(
 }
 
 describe("host-owned workspace registration", () => {
+  it.each(["path", "clone"] as const)(
+    "keeps the committed %s registration success when its announcement throws",
+    async (source) => {
+      const log = captureHostLog();
+      cleanups.push(() => log.restore());
+      const onCreated = vi.fn(() => {
+        throw new Error("Observer failed with private details");
+      });
+      const f = fixture({ onCreated, testOnly: { allowFileUrls: true } });
+      const path = f.folder("repo");
+      const request = source === "clone" ? cloneInput(pathToFileURL(path).href) : input(path);
+      if (source === "clone") f.git("init", path);
+      const result = await f.service.create(request);
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error("Registration failed");
+      expect(existsSync(result.workspace.path)).toBe(true);
+      expect(listProjects(f.db)).toHaveLength(1);
+      expect(await f.service.create(request)).toBe(result);
+      expect(await f.service.create(input(result.workspace.path))).toEqual(result);
+      expect(onCreated).toHaveBeenCalledOnce();
+      expect(log.of("host-workspaces")).toMatchObject([
+        {
+          level: "warn",
+          msg: "Project registered, but its change announcement failed",
+          projectId: result.workspace.id,
+        },
+      ]);
+      expect(JSON.stringify(log.records)).not.toContain("private details");
+    },
+  );
   it("expires settled outcomes after one hour, recovers capacity and naturally replays existing paths", async () => {
     let at = 100;
     const onCreated = vi.fn();
