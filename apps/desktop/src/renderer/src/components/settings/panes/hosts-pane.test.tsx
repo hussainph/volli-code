@@ -10,6 +10,8 @@ import {
 } from "@renderer/components/hosts/hosts.test-support";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { useHostConnectionStore, type HostLinkView } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
@@ -54,6 +56,11 @@ afterEach(async () => {
 
 async function renderPane(hosts = [HETZNER, IDLE]): Promise<HTMLElement> {
   world = hostWorld();
+  const snapshot = world.remote.getSnapshot();
+  world.remote.set({
+    ...snapshot,
+    hosts: [...snapshot.hosts, remoteHost(IDLE.id, IDLE.name, { os: "macos" })],
+  });
   useRemoteHostsStore.getState().setHosts(hosts);
   return world.render(
     <TooltipProvider>
@@ -89,10 +96,71 @@ describe("Settings → Hosts", () => {
     expect(rows[1]).toContain("hetzner-1");
     expect(rows[1]).toContain("SSH · deploy@hetzner-1 · 1.1.0");
     expect(rows[1]).toContain("Online");
-    // studio serves no project here: no health to claim.
+    // studio serves no project here, but still has engine-owned host health.
     expect(rows[2]).toContain("No projects yet");
-    expect(rows[2]).not.toContain("Online");
+    expect(rows[2]).toContain("Online");
     expect(root.textContent).toContain("Add a host…");
+  });
+
+  it.each<{ link: HostLinkView; label: string }>([
+    { link: { status: "connecting" }, label: "Connecting" },
+    { link: { status: "open" }, label: "Online" },
+    { link: { status: "offline", since: 0, retryAt: null }, label: "Offline" },
+  ])("shows $label in the list and detail for a zero-project host", async ({ link, label }) => {
+    const root = await renderPane();
+    act(() => world!.remote.setHost(IDLE.id, { link }));
+    expect(
+      Object.values(useHostConnectionStore.getState().projects).filter(
+        (claim) => claim.hostId === IDLE.id,
+      ),
+    ).toHaveLength(0);
+    expect(rowNames(root)[2]).toContain("No projects yet");
+    expect(rowNames(root)[2]).toContain(label);
+    if (link.status !== "offline") {
+      expect(root.querySelector('[aria-label="Retry studio"]')).toBeNull();
+    }
+
+    await openHost(root, "studio");
+    await vi.waitFor(() => expect(root.querySelector("[data-host-row]")).toBeNull());
+    const header = root.querySelector("h2")!.parentElement!.parentElement!;
+    expect(header.textContent).toContain("No projects yet");
+    expect(header.textContent).toContain(label);
+    if (link.status !== "offline") {
+      expect(header.querySelector('[aria-label="Retry studio"]')).toBeNull();
+    }
+  });
+
+  it("retries a zero-project offline host from both list and detail through its owning source", async () => {
+    const root = await renderPane();
+    act(() =>
+      world!.remote.setHost(IDLE.id, {
+        link: { status: "offline", since: 0, retryAt: null },
+      }),
+    );
+    await click(root, "Retry studio");
+    expect(world!.remote.calls).toEqual([{ kind: "retry", hostId: IDLE.id }]);
+    expect(world!.local.calls).toEqual([]);
+    expect(root.querySelector('[aria-label="All hosts"]')).toBeNull();
+    expect(rowNames(root)[2]).toContain("Offline");
+
+    await openHost(root, "studio");
+    await vi.waitFor(() => expect(root.querySelector("[data-host-row]")).toBeNull());
+    await click(root, "Retry studio");
+    expect(world!.remote.calls).toEqual([
+      { kind: "retry", hostId: IDLE.id },
+      { kind: "retry", hostId: IDLE.id },
+    ]);
+    // Intent alone does not claim recovery; only a new engine projection does.
+    const header = root.querySelector("h2")!.parentElement!.parentElement!;
+    expect(header.textContent).toContain("Offline");
+    act(() => world!.remote.setHost(IDLE.id, { link: { status: "connecting" } }));
+    expect(header.textContent).toContain("Connecting");
+    expect(header.querySelector('[aria-label="Retry studio"]')).toBeNull();
+    act(() => world!.remote.setHost(IDLE.id, { link: { status: "open" } }));
+    expect(header.textContent).toContain("Online");
+    await click(root, "All hosts");
+    await vi.waitFor(() => expect(rowNames(root)[2]).toContain("Online"));
+    expect(root.querySelector('[aria-label="Retry studio"]')).toBeNull();
   });
 
   it("offers Add a host… as the one row when only This Mac is here", async () => {

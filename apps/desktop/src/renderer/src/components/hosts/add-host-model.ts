@@ -115,7 +115,9 @@ function foundOf(id: ChecklistRowId, view: AddHostFlowView): string {
       if (facts.keepsRunning === false) return "Stops when you log out";
       return view.startup ?? NOUNS.start;
     case "pair":
-      return facts.alreadyPaired ? "Already paired with this Mac" : "Paired with this Mac";
+      // VC-719: the flow proved SSH (and pairing), not that hostd answered —
+      // the engine's health probe says ready, on the host, afterwards.
+      return facts.alreadyPaired ? "Already paired with this Mac" : "Connected over SSH";
   }
 }
 
@@ -284,7 +286,9 @@ const OS_NAMES = { linux: "Linux", macos: "macOS" } as const;
 /**
  * The finished sheet's one-line summary, from what the add found:
  * "Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0"; the registry's OS where
- * the add did not say.
+ * the add did not say. When it says nothing of the host, the one proved
+ * claim stands (VC-719): never "Ready" — that is the engine's health to
+ * say, on the host, after the sheet closes.
  */
 export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined): string {
   const { facts } = view;
@@ -295,7 +299,7 @@ export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined
     facts.arch,
     version === null ? null : `Volli host ${version}`,
   ].filter((part): part is string => part !== null);
-  return parts.length === 0 ? "Ready" : parts.join(" · ");
+  return parts.length === 0 ? "Connected over SSH" : parts.join(" · ");
 }
 
 /**
@@ -318,4 +322,44 @@ export function agentsShareAccountLine(host: string): string {
 export function validTarget(raw: string): boolean {
   const value = raw.trim();
   return value !== "" && !/\s/u.test(value) && !value.startsWith("-") && !value.startsWith(":");
+}
+
+/** Once upload/install may have changed the box, leaving is an explicit confirmation. */
+export function cancelNeedsConfirmation(view: AddHostView | null): boolean {
+  if (view === null || view.status === "done" || view.status === "cancelled") return false;
+  return view.steps.some(
+    ({ id, status }) =>
+      ["deliver", "install", "start", "enroll", "link"].includes(id) &&
+      (status === "running" || status === "done" || status === "failed"),
+  );
+}
+
+/** known_hosts indexes the SSH host, not its login user; nonstandard ports use brackets. */
+export function changedHostKeyCommand(target: string, detail: string | null = null): string | null {
+  // OpenSSH names its actual known_hosts lookup key in this diagnostic,
+  // including HostName/HostKeyAlias and a nonstandard configured port.
+  const reported = /Host key for (\S+) has changed/u.exec(detail ?? "")?.[1];
+  if (reported !== undefined) {
+    const command = commandForKnownHost(reported);
+    if (command !== null) return command;
+  }
+  const match =
+    /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*@)?([A-Za-z0-9_][A-Za-z0-9._-]*|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?$/u.exec(
+      target.trim(),
+    );
+  if (match === null) return null;
+  const host = match[1]!.replace(/^\[|\]$/gu, "");
+  const port = match[2] === undefined ? 22 : Number(match[2]);
+  if (port < 1 || port > 65_535) return null;
+  const key = port === 22 ? host : `[${host}]:${port}`;
+  return commandForKnownHost(key);
+}
+
+function commandForKnownHost(key: string): string | null {
+  if (/^[A-Za-z0-9_][A-Za-z0-9._-]*$/u.test(key)) return `ssh-keygen -R ${key}`;
+  if (/^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*$/u.test(key)) return `ssh-keygen -R '${key}'`;
+  const match =
+    /^\[(?:[A-Za-z0-9_][A-Za-z0-9._-]*|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*)\]:(\d{1,5})$/u.exec(key);
+  if (match === null || Number(match[1]) < 1 || Number(match[1]) > 65_535) return null;
+  return `ssh-keygen -R '${key}'`;
 }

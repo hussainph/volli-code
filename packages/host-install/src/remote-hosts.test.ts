@@ -139,6 +139,10 @@ describe("adding a host end to end", () => {
           deviceId: DEVICE_ID,
           addedAt: new Date(NOW).toISOString(),
           liveSessions: null,
+          reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          lastWelcome: null,
+          signInExpiry: null,
+          lastSshFailure: null,
           system: "Ubuntu 24.04.1 LTS",
           arch: "x86-64",
           hostKeys: [],
@@ -741,11 +745,13 @@ describe("a host's lifecycle", () => {
     expect(h.links.made).toHaveLength(0);
   });
 
-  it("derives the link from the tunnel while no Workspace is open", () => {
+  it("derives health from status over the tunnel while no Workspace is open", async () => {
     const h = harness({ tunnelMode: "hold", registry: registry(hostEntry()) });
     const tunnel = h.tunnels.made[0]!;
     const link = () => h.engine.hostLink(h.engine.snapshot().hosts[0]!.id);
     tunnel.set({ status: "up", url: tunnel.url, localPort: 1 });
+    expect(link().state.status).toBe("connecting");
+    await flush();
     expect(link()).toEqual({ state: { status: "ready" }, everReady: true, droppedAt: null });
     h.clock.now = NOW + 10_000;
     tunnel.set({ status: "down", error: "ssh exited 255", retryInMs: 4_000 });
@@ -1284,6 +1290,7 @@ describe("refusals", () => {
       () => h.engine.workspaceLink(WS1),
       () => h.engine.rename(HOST_ID, "Renamed"),
       () => h.engine.subscribeAdd("flow-1", () => {}),
+      () => h.engine.activeAdds(),
     ];
     for (const call of calls) expect(call).toThrow(RemoteHostsUnavailableError);
     for (const call of [

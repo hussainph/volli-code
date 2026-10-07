@@ -28,9 +28,8 @@ export interface RemoteHostLinkError {
 /**
  * A host's link, as VC-670's `HostLinkState` says it, minus the welcome a
  * `ready` link carries (the registry keeps what it needs of it). While no
- * Workspace on the host is open, the SSH tunnel answers for the link:
- * starting is `connecting`, up is `ready`, retrying is `unreachable`, closed
- * is `closed`.
+ * Workspace on the host is open, a bounded hostd status probe answers for
+ * the link. A tunnel's TCP listener alone never means `ready`.
  */
 export type RemoteHostLinkState =
   | { readonly status: "connecting"; readonly attempt: number }
@@ -56,7 +55,7 @@ export interface RemoteHostLink {
   readonly state: RemoteHostLinkState;
   /** Whether the link has been `ready` since this launch opened it. */
   readonly everReady: boolean;
-  /** Epoch ms it last left `ready`, or `null`. */
+  /** Epoch ms this outage began: leaving ready, or a never-ready host's first failure; null while ready. */
   readonly droppedAt: number | null;
 }
 
@@ -84,6 +83,26 @@ export interface RemoteHost {
   readonly addedAt: string;
   /** Sessions running there now, `null` while nothing reports it. */
   readonly liveSessions: number | null;
+  /** Engine-owned health; a TCP route alone is not ready. */
+  readonly reachability?: RemoteHostLink;
+  /** Last validated Workspace welcome, retained across link loss. */
+  readonly lastWelcome?: {
+    readonly at: number;
+    readonly hostId: string;
+    readonly version: string;
+    readonly protocol: number;
+    readonly features: readonly string[];
+  } | null;
+  /** Unknown unless the engine has provider expiry facts. */
+  readonly signInExpiry?:
+    | readonly {
+        readonly providerId: string;
+        readonly name: string;
+        readonly expiresAt: number | null;
+        readonly expired: boolean;
+      }[]
+    | null;
+  readonly lastSshFailure?: { readonly code: string; readonly line: string } | null;
   /** The OS as the host names itself ("Ubuntu 24.04.1 LTS", "macOS 15.1"), from its check; `null` when not known. */
   readonly system: string | null;
   /** Its architecture as people read it ("x86-64", "arm64"); `null` when not known. */
@@ -116,7 +135,7 @@ export interface RemoteProjectLink {
 /** Every remote host, and each remote project with its own link. */
 export interface RemoteHostsSnapshot {
   readonly v: 1;
-  /** A host has no link of its own: its projects each have one. */
+  /** Hosts carry engine-owned reachability, including hosts with no projects. */
   readonly hosts: readonly RemoteHost[];
   /** Project id → its host and its link. Empty until a remote project is opened (VC-700 PR 3). */
   readonly projects: Readonly<Record<string, RemoteProjectLink>>;
@@ -261,6 +280,28 @@ export interface AddHostStartInput {
   /** What to call it; the target when absent. */
   readonly name?: string;
 }
+
+/**
+ * One add flow desktop main still owns (VC-720): a reference a reopened or
+ * reloaded window reads to find an install that outlived the one that started
+ * it, and to subscribe to it again by `flowId`. Not a view: the steps, the
+ * question and the failure travel whole only through `hostAdd.subscribe`'s
+ * replay. Nothing here is a secret — the same target and name `hostAdd.start`
+ * took, and the status the checklist's headline shows.
+ */
+export interface ActiveAddHost {
+  /** The flow's id: what `hostAdd.subscribe` and `hostAdd.cancel` take. */
+  readonly flowId: string;
+  /** The SSH target the flow is adding: `you@box`, or a `~/.ssh/config` alias. */
+  readonly target: string;
+  /** What the flow calls it; the target when none was given. */
+  readonly name: string;
+  /** Still under way: never `done` or `cancelled`, which leave the list. */
+  readonly status: "running" | "question" | "failed";
+}
+
+/** The most flows `hostAdd.active` answers: bounds the list, not the installs. */
+export const MAX_ACTIVE_ADD_HOSTS = 20;
 
 /** Every link to one host this Mac opens at most: other Macs and reconnects keep the rest of hostd's 32. */
 export const REMOTE_HOST_LINK_CAP = 24;

@@ -119,7 +119,60 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "hostAdd.active": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "flowId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "question",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "flowId",
+              "target",
+              "name",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "readOnly": true,
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hostAdd.answer": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -234,6 +287,7 @@
         "voidOutput": false
       },
       "hostAdd.cancel": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -259,6 +313,7 @@
         "voidOutput": false
       },
       "hostAdd.facts": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -375,6 +430,7 @@
         "voidOutput": false
       },
       "hostAdd.retry": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -412,6 +468,7 @@
         "voidOutput": false
       },
       "hostAdd.start": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -451,6 +508,7 @@
         "voidOutput": false
       },
       "hostAdd.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1121,6 +1179,7 @@
         "voidOutput": false
       },
       "hostAdd.sudoPassword": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1158,6 +1217,7 @@
         "voidOutput": false
       },
       "hostLink.mutate": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1189,6 +1249,7 @@
         "voidOutput": false
       },
       "hostLink.query": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1220,6 +1281,7 @@
         "voidOutput": false
       },
       "hostLink.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1402,6 +1464,7 @@
         "voidOutput": false
       },
       "hostSignIns.answer": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1449,6 +1512,7 @@
         "voidOutput": false
       },
       "hostSignIns.cancel": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1485,6 +1549,7 @@
         "voidOutput": false
       },
       "hostSignIns.macKeys": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -1502,6 +1567,7 @@
         "voidOutput": false
       },
       "hostSignIns.run": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1850,6 +1916,7 @@
         "voidOutput": false
       },
       "hostSignIns.sendFromThisMac": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2033,6 +2100,7 @@
         "voidOutput": false
       },
       "hostSignIns.setApiKey": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2177,6 +2245,7 @@
         "voidOutput": false
       },
       "hostSignIns.setGitCredential": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2327,6 +2396,7 @@
         "voidOutput": false
       },
       "hostSignIns.status": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2459,6 +2529,7 @@
         "voidOutput": false
       },
       "hosts.cancelScheduledUpdate": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2484,6 +2555,7 @@
         "voidOutput": false
       },
       "hosts.closeWorkspace": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2515,6 +2587,7 @@
         "voidOutput": false
       },
       "hosts.createProject": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2668,6 +2741,7 @@
         "voidOutput": false
       },
       "hosts.devices": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2757,6 +2831,7 @@
         "voidOutput": false
       },
       "hosts.forget": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2782,6 +2857,7 @@
         "voidOutput": false
       },
       "hosts.openWorkspace": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2813,6 +2889,7 @@
         "voidOutput": false
       },
       "hosts.projects": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2937,6 +3014,7 @@
         "voidOutput": false
       },
       "hosts.rename": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2968,6 +3046,7 @@
         "voidOutput": false
       },
       "hosts.retry": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2993,6 +3072,7 @@
         "voidOutput": false
       },
       "hosts.signIn": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -3024,6 +3104,7 @@
         "voidOutput": false
       },
       "hosts.snapshot": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -3080,6 +3161,76 @@
                   "id": {
                     "type": "string"
                   },
+                  "lastSshFailure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "line": {
+                            "maxLength": 600,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "line"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastWelcome": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "at": {
+                            "type": "number"
+                          },
+                          "features": {
+                            "items": {
+                              "maxLength": 128,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "readOnly": true,
+                            "type": "array"
+                          },
+                          "hostId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "protocol": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "hostId",
+                          "version",
+                          "protocol",
+                          "features"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "liveSessions": {
                     "anyOf": [
                       {
@@ -3110,6 +3261,271 @@
                           "macos"
                         ],
                         "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reachability": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "droppedAt": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "everReady": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "status": {
+                                "const": "connecting",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "ready",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "retryAt": {
+                                "type": "number"
+                              },
+                              "status": {
+                                "const": "unreachable",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt",
+                              "error",
+                              "closeCode",
+                              "retryAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "refused",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error",
+                              "closeCode"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "fenced",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "closed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "everReady",
+                      "droppedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "signInExpiry": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "expired": {
+                              "type": "boolean"
+                            },
+                            "expiresAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "name": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "maxLength": 128,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerId",
+                            "name",
+                            "expiresAt",
+                            "expired"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 128,
+                        "readOnly": true,
+                        "type": "array"
                       },
                       {
                         "type": "null"
@@ -3409,6 +3825,7 @@
         "voidOutput": false
       },
       "hosts.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -3465,6 +3882,76 @@
                   "id": {
                     "type": "string"
                   },
+                  "lastSshFailure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "line": {
+                            "maxLength": 600,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "line"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastWelcome": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "at": {
+                            "type": "number"
+                          },
+                          "features": {
+                            "items": {
+                              "maxLength": 128,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "readOnly": true,
+                            "type": "array"
+                          },
+                          "hostId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "protocol": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "hostId",
+                          "version",
+                          "protocol",
+                          "features"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "liveSessions": {
                     "anyOf": [
                       {
@@ -3495,6 +3982,271 @@
                           "macos"
                         ],
                         "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reachability": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "droppedAt": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "everReady": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "status": {
+                                "const": "connecting",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "ready",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "retryAt": {
+                                "type": "number"
+                              },
+                              "status": {
+                                "const": "unreachable",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt",
+                              "error",
+                              "closeCode",
+                              "retryAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "refused",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error",
+                              "closeCode"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "fenced",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "closed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "everReady",
+                      "droppedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "signInExpiry": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "expired": {
+                              "type": "boolean"
+                            },
+                            "expiresAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "name": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "maxLength": 128,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerId",
+                            "name",
+                            "expiresAt",
+                            "expired"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 128,
+                        "readOnly": true,
+                        "type": "array"
                       },
                       {
                         "type": "null"
@@ -3794,6 +4546,7 @@
         "voidOutput": false
       },
       "hosts.updateHost": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -3827,6 +4580,7 @@
         "voidOutput": false
       },
       "project.reorder": {
+        "compatibility": "host-command",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
@@ -3852,6 +4606,7 @@
         "voidOutput": false
       },
       "worktree.trimSettings": {
+        "compatibility": "host-command",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"

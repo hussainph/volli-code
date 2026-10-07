@@ -27,6 +27,7 @@
  * Every method may answer synchronously or with a promise.
  */
 import type {
+  ActiveAddHost,
   AddHostAnswer,
   AddHostEvent,
   AddHostFacts,
@@ -104,4 +105,12 @@ export interface RemoteHostsPort {
   openWorkspace(hostId: string, workspaceId: string): Answer<void>;
   /** Closes it on this Mac; the project on the host is untouched. */
   closeWorkspace(hostId: string, workspaceId: string): Answer<void>;
+  /* ── The add flows main still owns (VC-720) ── */
+  /**
+   * One secret-free {@link ActiveAddHost} per flow not yet done or
+   * cancelled, newest first, at most `MAX_ACTIVE_ADD_HOSTS`: what a reopened
+   * window reads to find an install it lost the subscription to. Each view
+   * travels whole only through {@link RemoteHostsPort.subscribeAdd}.
+   */
+  activeAdds(): Answer<readonly ActiveAddHost[]>;
 }

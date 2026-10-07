@@ -124,9 +124,15 @@ export type Handler = (
 export function fakeBoxes(...overrides: Handler[]) {
   const scripts: { script: string; stdin: string | null }[] = [];
   const transports: { target: SshTarget; closed: boolean }[] = [];
+  // Host status is automatic read-only work, separate from user-command evidence.
+  const statusScripts: { script: string; stdin: string | null }[] = [];
+  const statusTransports: { target: SshTarget; closed: boolean }[] = [];
   const box = {
     scripts,
     transports,
+    statusScripts,
+    statusTransports,
+    statusCloseFails: 0,
     enrollHostId: HOST_ID,
     enrollDeviceId: DEVICE_ID,
     /** Whether the person accepted the box's host key: until then, ssh refuses it. */
@@ -136,10 +142,16 @@ export function fakeBoxes(...overrides: Handler[]) {
     ran: () => scripts.map((entry) => entry.script),
     open(target: SshTarget): SshTransport {
       const record = { target, closed: false };
+      let status = false;
       transports.push(record);
       return {
         target,
         async exec(script, options = {}) {
+          status = options.label === "host-status";
+          if (status) {
+            transports.splice(transports.indexOf(record), 1);
+            statusTransports.push(record);
+          }
           let stdin: string | null = null;
           if (typeof options.stdin === "string") stdin = options.stdin;
           else if (options.stdin !== undefined) {
@@ -147,7 +159,7 @@ export function fakeBoxes(...overrides: Handler[]) {
             for await (const chunk of options.stdin as Readable) sent += (chunk as Buffer).length;
             stdin = `<${sent} bytes>`;
           }
-          scripts.push({ script, stdin });
+          (status ? statusScripts : scripts).push({ script, stdin });
           for (const handler of [...overrides, defaults]) {
             const result = await handler(script, options);
             if (result !== undefined) return { code: 0, stdout: "", stderr: "", ...result };
@@ -156,8 +168,9 @@ export function fakeBoxes(...overrides: Handler[]) {
         },
         close: async () => {
           record.closed = true;
-          if (box.closeFails > 0) {
-            box.closeFails -= 1;
+          const counter = status ? "statusCloseFails" : "closeFails";
+          if (box[counter] > 0) {
+            box[counter] -= 1;
             throw new Error("ssh would not close");
           }
         },
@@ -171,6 +184,13 @@ export function fakeBoxes(...overrides: Handler[]) {
         : { code: 255, stderr: "Host key verification failed.\n" };
     }
     if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
+    if (options.label === "host-status")
+      return json({
+        v: 1,
+        management: 1,
+        verdict: "serving",
+        running: { state: "serving", hostId: box.enrollHostId, version: "1.1.0", listen: LISTEN },
+      });
     if (options.label === "upload: check") return { stdout: "\n" };
     if (script.includes("cat > ")) return {};
     if (script.includes(".part' 2>/dev/null; } | cut")) return { stdout: `${SHA}\n` };

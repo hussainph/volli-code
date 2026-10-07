@@ -20,6 +20,8 @@ import {
   REMOTE_HOST_PROJECTS_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   REMOTE_PROJECT_FAILURE_TEXT_MAX,
+  MAX_ACTIVE_ADD_HOSTS,
+  type ActiveAddHost,
   type CreateRemoteProjectResult,
   type RemoteHostProjects,
   type AddHostEvent,
@@ -47,6 +49,7 @@ import {
 } from "./desktop-router";
 import { RpcDiagnosticLog } from "./index";
 import {
+  activeAddHostsSchema,
   addHostEventSchema,
   addHostFactsSchema,
   createProjectResultSchema,
@@ -178,6 +181,11 @@ const FACTS: AddHostFacts = {
   keepsRunning: null,
   alreadyPaired: false,
 };
+/** The add flows main still owns (VC-720): the newest first, views elsewhere. */
+const ACTIVE: readonly ActiveAddHost[] = [
+  { flowId: "flow-2", target: "you@other:2222", name: "Other box", status: "running" },
+  { flowId: FLOW, target: "you@box", name: "you@box", status: "question" },
+];
 const FAILED: AddHostEvent = {
   kind: "view",
   view: {
@@ -273,6 +281,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hosts.rename": record("hosts.rename", null),
     "hosts.devices": record("hosts.devices", DEVICES),
     "hostAdd.facts": record("hostAdd.facts", FACTS),
+    "hostAdd.active": record("hostAdd.active", ACTIVE),
     "hosts.projects": record("hosts.projects", PROJECTS),
     "hosts.createProject": record("hosts.createProject", CREATED),
     "hosts.openWorkspace": record("hosts.openWorkspace", null),
@@ -351,6 +360,7 @@ function everyRemoteCall(client: TRPCClient<DesktopRouter>) {
     "hosts.rename": () => client.hosts.rename.mutate({ hostId: HOST, name: "Build box" }),
     "hosts.devices": () => client.hosts.devices.query({ hostId: HOST }),
     "hostAdd.facts": () => client.hostAdd.facts.query({ flowId: FLOW }),
+    "hostAdd.active": () => client.hostAdd.active.query(),
     "hosts.projects": () => client.hosts.projects.query({ hostId: HOST }),
     "hosts.createProject": () => client.hosts.createProject.mutate({ hostId: HOST, path: "/a" }),
     "hosts.openWorkspace": () =>
@@ -698,6 +708,7 @@ describeContract<Host, DesktopRouter>(
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW })).toBeNull();
       expect(await client.hostAdd.cancel.mutate({ flowId: FLOW })).toBeNull();
       expect(await client.hostAdd.facts.query({ flowId: FLOW })).toEqual(FACTS);
+      expect(await client.hostAdd.active.query()).toEqual(ACTIVE);
       expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
         ["hosts.snapshot", undefined],
         ["hosts.retry", { hostId: HOST }],
@@ -715,6 +726,7 @@ describeContract<Host, DesktopRouter>(
         ["hostAdd.retry", { flowId: FLOW }],
         ["hostAdd.cancel", { flowId: FLOW }],
         ["hostAdd.facts", { flowId: FLOW }],
+        ["hostAdd.active", undefined],
       ]);
       for (const { call } of fixture.calls) expect(call).toEqual(WINDOW_CALL);
     });
@@ -1108,6 +1120,7 @@ describe("the desktop router's grammar", () => {
         "hosts.rename",
         "hosts.devices",
         "hostAdd.facts",
+        "hostAdd.active",
         "hosts.projects",
         "hosts.createProject",
         "hosts.openWorkspace",
@@ -1134,6 +1147,8 @@ describe("the desktop router's grammar", () => {
     expect(schemas["hosts.devices"]!.output).toBe(remoteHostDevicesSchema);
     expect(schemas["hostAdd.facts"]).toMatchObject({ type: "query" });
     expect(schemas["hostAdd.facts"]!.output).toBe(addHostFactsSchema);
+    expect(schemas["hostAdd.active"]).toMatchObject({ type: "query", noInput: true });
+    expect(schemas["hostAdd.active"]!.output).toBe(activeAddHostsSchema);
     expect(schemas["hosts.projects"]).toMatchObject({ type: "query" });
     expect(schemas["hosts.projects"]!.output).toBe(remoteHostProjectsSchema);
     expect(schemas["hosts.createProject"]).toMatchObject({ type: "mutation" });
@@ -1173,6 +1188,79 @@ describe("the desktop router's grammar", () => {
       remoteHostsSnapshotSchema.safeParse(granting(["x".repeat(MAX_GRANTED_FEATURE_LENGTH + 1)]))
         .success,
     ).toBe(false);
+  });
+
+  it("answers the flows main still owns: exactly four secret-free fields, no terminal one (VC-720)", () => {
+    expect(activeAddHostsSchema.parse(ACTIVE)).toEqual(ACTIVE);
+    // Nothing of the view crosses: a step row is an unknown key, refused.
+    expect(activeAddHostsSchema.safeParse([{ ...ACTIVE[0]!, steps: [] }]).success).toBe(false);
+    // Closed status: a finished flow has left the list.
+    for (const status of ["done", "cancelled", "paused"] as const) {
+      expect(activeAddHostsSchema.safeParse([{ ...ACTIVE[0]!, status }]).success, status).toBe(
+        false,
+      );
+    }
+    // Bounded, as the engine bounds it: `MAX_ACTIVE_ADD_HOSTS` in, one past out.
+    const full = Array.from({ length: MAX_ACTIVE_ADD_HOSTS }, (_, index): ActiveAddHost => ({
+      flowId: `flow-${index}`,
+      target: `you@box-${index}`,
+      name: `box-${index}`,
+      status: "running",
+    }));
+    expect(activeAddHostsSchema.parse(full)).toHaveLength(MAX_ACTIVE_ADD_HOSTS);
+    expect(activeAddHostsSchema.safeParse([...full, ...ACTIVE]).success).toBe(false);
+    // Empty is a fine answer: no flow under way.
+    expect(activeAddHostsSchema.parse([])).toEqual([]);
+  });
+
+  it("accepts additive engine-owned health facts while preserving older hosts and unknown expiry", () => {
+    const withFacts: RemoteHostsSnapshot = {
+      ...SNAPSHOT,
+      hosts: [
+        {
+          ...SNAPSHOT.hosts[0]!,
+          reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          lastWelcome: {
+            at: 123,
+            hostId: HOST,
+            version: "1.2.0",
+            protocol: 1,
+            features: ["sessions"],
+          },
+          signInExpiry: null,
+          lastSshFailure: { code: "host-key-changed", line: "The host key changed." },
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.parse(withFacts)).toEqual(withFacts);
+    expect(remoteHostsSnapshotSchema.parse(SNAPSHOT)).toEqual(SNAPSHOT);
+    const known = {
+      ...withFacts,
+      hosts: [
+        {
+          ...withFacts.hosts[0]!,
+          lastWelcome: null,
+          lastSshFailure: null,
+          signInExpiry: [
+            { providerId: "anthropic", name: "Anthropic", expiresAt: 456, expired: false },
+          ],
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.parse(known)).toEqual(known);
+    const oversized = {
+      ...withFacts,
+      hosts: [
+        {
+          ...withFacts.hosts[0]!,
+          lastWelcome: {
+            ...withFacts.hosts[0]!.lastWelcome!,
+            features: ["x".repeat(MAX_GRANTED_FEATURE_LENGTH + 1)],
+          },
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.safeParse(oversized).success).toBe(false);
   });
 
   it("describes the wire's own values: a snapshot, a view with an open question, a log line", () => {

@@ -3,6 +3,8 @@ import type { AddHostStepStatus, RemoteHost } from "@volli/shared";
 
 import {
   agentsShareAccountLine,
+  cancelNeedsConfirmation,
+  changedHostKeyCommand,
   flowBadge,
   questionPrompt,
   readyFacts,
@@ -126,7 +128,7 @@ describe("the checklist's rows", () => {
       "Ubuntu 24.04.1 LTS · x86-64 · 8 GB",
       "Volli host 1.1.0",
       "Keeps running when you log out",
-      "Paired with this Mac",
+      "Connected over SSH",
     ]);
     // A user unit that does not linger, a Mac's login start, and what a skipped row found.
     const rows = stepRows(
@@ -159,9 +161,24 @@ describe("the checklist's rows", () => {
       "Check the system",
       "Install",
       "Start",
-      "Paired with this Mac",
+      "Connected over SSH",
     ]);
     expect(memoryText(1)).toBe("1 MB");
+  });
+
+  it("claims the tunnel, not the host: done says Connected over SSH (VC-719)", () => {
+    // The flow proved SSH and pairing; whether the host ANSWERS is the
+    // engine's health, read on the host after the sheet closes. The last
+    // row never claims ready or a serving hostd.
+    const rows = stepRows(view({ status: "done", steps: all("done") }));
+    expect(rows[4]).toMatchObject({ id: "pair", mark: "done", label: "Connected over SSH" });
+    expect(readySummary(view({ status: "done", steps: all("done") }), undefined)).toBe(
+      "Connected over SSH",
+    );
+    // A check that found this Mac paired already still says what it found.
+    expect(
+      stepRows(view({ facts: { ...NO_FACTS, alreadyPaired: true }, steps: all("done") }))[4],
+    ).toMatchObject({ label: "Already paired with this Mac" });
   });
 
   it("marks the row a question waits on for attention, and a failed row failed", () => {
@@ -359,8 +376,8 @@ describe("ready", () => {
     expect(readySummary(view(), host())).toBe("Linux · Volli host 1.1.0");
     expect(readySummary(view(), host({ os: "macos", version: null }))).toBe("macOS");
     expect(readySummary(view({ facts: { ...NO_FACTS, os: "macos" } }), undefined)).toBe("macOS");
-    expect(readySummary(view(), host({ os: null, version: null }))).toBe("Ready");
-    expect(readySummary(view(), undefined)).toBe("Ready");
+    expect(readySummary(view(), host({ os: null, version: null }))).toBe("Connected over SSH");
+    expect(readySummary(view(), undefined)).toBe("Connected over SSH");
   });
 
   it("states when it starts and whose account its agents share", () => {
@@ -385,5 +402,61 @@ describe("the address", () => {
     expect(validTarget("a b")).toBe(false);
     expect(validTarget("-oProxyCommand=x")).toBe(false);
     expect(validTarget(":22")).toBe(false);
+  });
+});
+
+describe("detaching and explicit cancellation", () => {
+  it("confirms after upload begins, including failures and questions, not before or after completion", () => {
+    expect(cancelNeedsConfirmation(null)).toBe(false);
+    expect(cancelNeedsConfirmation(view())).toBe(false);
+    for (const status of ["running", "done", "failed"] as const) {
+      expect(cancelNeedsConfirmation(view({ steps: [{ id: "deliver", status }] }))).toBe(true);
+    }
+    expect(
+      cancelNeedsConfirmation(
+        view({ status: "question", steps: [{ id: "install", status: "running" }] }),
+      ),
+    ).toBe(true);
+    expect(cancelNeedsConfirmation(view({ steps: [{ id: "deliver", status: "skipped" }] }))).toBe(
+      false,
+    );
+    expect(
+      cancelNeedsConfirmation(view({ status: "done", steps: [{ id: "install", status: "done" }] })),
+    ).toBe(false);
+    expect(cancelNeedsConfirmation(view({ status: "cancelled" }))).toBe(false);
+  });
+});
+
+describe("changed SSH host key repair", () => {
+  it.each([
+    [
+      "Host key for real.example has changed and you have requested strict checking.",
+      "ssh-keygen -R real.example",
+    ],
+    ["Host key for [real.example]:2200 has changed", "ssh-keygen -R '[real.example]:2200'"],
+    ["Host key for host-key-alias has changed", "ssh-keygen -R host-key-alias"],
+    ["Host key for 2001:db8::1 has changed", "ssh-keygen -R '2001:db8::1'"],
+    ["Host key for [2001:db8::1]:2200 has changed", "ssh-keygen -R '[2001:db8::1]:2200'"],
+    ["Host key for -bad has changed", "ssh-keygen -R my-alias"],
+    ["Host key for box;echo has changed", "ssh-keygen -R my-alias"],
+    ["Host key for [box]:0 has changed", "ssh-keygen -R my-alias"],
+    ["Host key for [box]:65536 has changed", "ssh-keygen -R my-alias"],
+  ])("prefers the actual known_hosts identifier reported by SSH: %s", (detail, command) => {
+    expect(changedHostKeyCommand("my-alias", detail)).toBe(command);
+  });
+
+  it.each([
+    ["deploy@box", "ssh-keygen -R box"],
+    [" my-alias ", "ssh-keygen -R my-alias"],
+    ["deploy@box:22", "ssh-keygen -R box"],
+    ["deploy@box:2222", "ssh-keygen -R '[box]:2222'"],
+    ["deploy@[2001:db8::1]:2222", "ssh-keygen -R '[2001:db8::1]:2222'"],
+    ["[::1]", "ssh-keygen -R '::1'"],
+    ["box:0", null],
+    ["box:65536", null],
+    ["-oProxyCommand=x", null],
+    ["box;rm", null],
+  ])("uses SSH's host for %s, never the display name or login", (target, command) => {
+    expect(changedHostKeyCommand(target)).toBe(command);
   });
 });

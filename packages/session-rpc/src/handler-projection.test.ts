@@ -95,6 +95,7 @@ const SAMPLE_INPUTS: {
   "hosts.openWorkspace": { hostId: HOST, workspaceId: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b" },
   "hosts.closeWorkspace": { hostId: HOST, workspaceId: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b" },
   "hostAdd.facts": { flowId: FLOW },
+  "hostAdd.active": undefined,
   "hostLink.query": { workspaceId: HOST, path: "board.snapshot", input: { projectId: HOST } },
   "hostLink.mutate": { workspaceId: HOST, path: "board.setPriority", input: { priority: 1 } },
   "hostLink.subscribe": { workspaceId: HOST, path: "board.changes", lastEventId: "7" },

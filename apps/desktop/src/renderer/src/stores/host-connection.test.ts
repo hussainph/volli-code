@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import { hostError, type HostWelcome } from "@volli/host-protocol";
+import type { RemoteHostLinkState } from "@volli/shared";
 
 import {
   aggregateLink,
@@ -36,6 +37,27 @@ function thisMac(projects: readonly string[]) {
 }
 
 describe("host-connection store", () => {
+  it("never calls a remote host with unknown health ready, even if its projects are ready", () => {
+    const store = createHostConnectionStore();
+    const { link: _link, ...unknown } = HETZNER;
+    const source = createFakeHostSource({
+      hosts: [unknown],
+      projects: { p1: { hostId: HETZNER.id, link: OPEN_LINK } },
+    });
+    store.getState().attach(source);
+    expect(store.getState().hosts[0]?.link).toEqual({ status: "connecting" });
+    source.set({ hosts: [unknown], projects: {} });
+    expect(store.getState().hosts[0]?.link).toEqual({ status: "connecting" });
+    const { link: _localLink, ...local } = THIS_MAC_HOST;
+    source.set({ hosts: [local], projects: {} });
+    expect(store.getState().hosts[0]?.link).toBe(OPEN_LINK);
+    source.set({
+      hosts: [local],
+      projects: { local: { hostId: THIS_MAC_HOST_ID, link: OPEN_LINK } },
+    });
+    expect(store.getState().hosts[0]?.link).toBe(OPEN_LINK);
+  });
+
   it("starts empty and answers This Mac, open, for any project", () => {
     const store = createHostConnectionStore();
     expect(store.getState().hosts).toEqual([]);
@@ -155,8 +177,8 @@ describe("host-connection store", () => {
     expect(canWriteProject(store.getState(), "a")).toBe(false);
     expect(canWriteProject(store.getState(), "b")).toBe(true);
     expect(canWriteProject(store.getState(), "c")).toBe(true);
-    // The chip reads the host's aggregate: the worst of its projects.
-    expect(hostOfProject(store.getState(), "b").link).toBe(FENCED);
+    // The source owns host health; one project refusal cannot declare it down.
+    expect(hostOfProject(store.getState(), "b").link).toBe(OPEN_LINK);
 
     remote.setProjectLink("nobody", OFFLINE);
     expect(projectLinkOf(store.getState(), "nobody")).toBe(OPEN_LINK);
@@ -177,16 +199,16 @@ describe("host-connection store", () => {
     expect(store.getState().projects).toBe(projects);
 
     remote.setProjectLink("b", OFFLINE);
-    expect(store.getState().hosts).not.toBe(hosts);
+    expect(store.getState().hosts).toBe(hosts);
     expect(hostOfProject(store.getState(), "a")).toBe(hetzner);
-    expect(hostOfProject(store.getState(), "b").link).toBe(OFFLINE);
+    expect(hostOfProject(store.getState(), "b").link).toBe(OPEN_LINK);
 
     // A project dropping out changes the claims, not the hosts.
     const before = store.getState().hosts;
     remote.set({ ...remote.getSnapshot(), projects: { a: remote.getSnapshot().projects.a! } });
     expect(Object.keys(store.getState().projects)).toEqual(["a"]);
     expect(hostOfProject(store.getState(), "a")).toBe(hetzner);
-    expect(store.getState().hosts).not.toBe(before);
+    expect(store.getState().hosts).toBe(before);
   });
 
   it("routes each action to the source that owns the host, and drops one for no host", () => {
@@ -304,6 +326,7 @@ describe("hostLinkView", () => {
       status: "offline",
       since: 1_000,
       retryAt: 9_000,
+      detail: "gone",
     });
     // The retry starts a millisecond later: still offline, its countdown at "Retrying".
     expect(hostLinkView(retrying, { ...base, now: offlineAt + 1 })).toEqual({
@@ -325,13 +348,62 @@ describe("hostLinkView", () => {
       status: "offline",
       since: 1_000,
       retryAt: 9_000,
+      detail: "gone",
     });
     // Never served: unreachable is offline at once, since now.
     expect(hostLinkView(unreachable, { everReady: false, droppedAt: null, now: 5 })).toEqual({
       status: "offline",
       since: 5,
       retryAt: 9_000,
+      detail: "gone",
     });
+  });
+
+  it("sanitizes peer close reasons and both refusal diagnostic fields at the mapping boundary", () => {
+    const raw =
+      "closed\u0007\n https://user:p4ss@host/path?token=verysecret#fragment-secret ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const safe = "closed https://host/path?[redacted] [redacted]";
+    const context: HostLinkContext = { everReady: false, droppedAt: null, now: 0 };
+    expect(
+      hostLinkView({ ...unreachable, error: hostError("host-unreachable", raw) }, context),
+    ).toMatchObject({ status: "offline", detail: safe });
+    for (const error of [
+      { code: "UNAUTHORIZED", reason: raw, message: "refused" },
+      { code: raw, reason: "", message: "refused" },
+    ]) {
+      const state: RemoteHostLinkState = { status: "refused", error, closeCode: 4401 };
+      expect(hostLinkView(state, context)).toMatchObject({
+        status: "incompatible",
+        reason: "refused",
+        refusalCode: safe,
+      });
+    }
+    // A diagnostic made only of controls must not publish an empty visible detail.
+    expect(
+      hostLinkView({ ...unreachable, error: hostError("host-unreachable", "\u0007\n\t") }, context),
+    ).not.toHaveProperty("detail");
+  });
+
+  it("keeps a refusal code when no reason is supplied, and permits an empty transport detail", () => {
+    expect(
+      hostLinkView(
+        {
+          status: "refused",
+          error: { code: "FORBIDDEN", reason: "", message: "" },
+          closeCode: null,
+        },
+        base,
+      ),
+    ).toMatchObject({ refusalCode: "FORBIDDEN" });
+    expect(
+      hostLinkView(
+        {
+          ...unreachable,
+          error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "" },
+        },
+        { everReady: false, droppedAt: null, now: 0 },
+      ),
+    ).not.toHaveProperty("detail");
   });
 
   it("reads a refused protocol as the side that is behind, and any other refusal as refused", () => {
@@ -355,7 +427,7 @@ describe("hostLinkView", () => {
         { status: "refused", error: hostError("credential-invalid", "no"), closeCode: 4401 },
         base,
       ),
-    ).toEqual({ status: "incompatible", reason: "refused" });
+    ).toEqual({ status: "incompatible", reason: "refused", refusalCode: "credential-invalid" });
     // Desktop main's own refusal past its link cap (VC-700), never a host's.
     expect(
       hostLinkView(
@@ -463,6 +535,7 @@ describe("createHostLinkTracker", () => {
       status: "offline",
       since: 100,
       retryAt: 500,
+      detail: "gone",
     });
     expect(tracker.view(connecting(1), 500).link).toEqual({
       status: "offline",

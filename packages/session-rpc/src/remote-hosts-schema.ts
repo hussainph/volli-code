@@ -9,12 +9,15 @@
  * no custom parsers. A question's own fields are open JSON (`z.json()`).
  */
 import {
+  MAX_ACTIVE_ADD_HOSTS,
+  REMOTE_HOST_HEALTH_LIMITS,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
   REMOTE_PROJECT_FAILURE_TEXT_MAX,
+  type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
   type AddHostFailure,
@@ -52,8 +55,8 @@ const flowId = z.string().min(1).max(MAX_FLOW_ID_LENGTH);
 /** The id of the question an answer is for (`AddHostQuestion.id`). */
 export const MAX_QUESTION_ID_LENGTH = 64;
 /** A project link's granted features (VC-712): a welcome's own bounds, 256 of at most 128 characters. */
-export const MAX_GRANTED_FEATURES = 256;
-export const MAX_GRANTED_FEATURE_LENGTH = 128;
+export const MAX_GRANTED_FEATURES = REMOTE_HOST_HEALTH_LIMITS.features;
+export const MAX_GRANTED_FEATURE_LENGTH = REMOTE_HOST_HEALTH_LIMITS.feature;
 const questionId = z.string().min(1).max(MAX_QUESTION_ID_LENGTH);
 
 /** The add flow's steps, in order (`@volli/host-install`'s `STEP_ORDER`). */
@@ -133,20 +136,31 @@ export const renameHostInputSchema = z.strictObject({
 const linkError = z.object({ code: z.string(), reason: z.string(), message: z.string() });
 const attempt = z.number().int().nonnegative();
 const closeCode = z.number().int().nullable();
-const linkState = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("connecting"), attempt }),
-  z.object({ status: z.literal("ready") }),
+function linkStateWith(error: typeof linkError) {
+  return z.discriminatedUnion("status", [
+    z.object({ status: z.literal("connecting"), attempt }),
+    z.object({ status: z.literal("ready") }),
+    z.object({
+      status: z.literal("unreachable"),
+      attempt,
+      error,
+      closeCode,
+      retryAt: z.number(),
+    }),
+    z.object({ status: z.literal("refused"), error, closeCode }),
+    z.object({ status: z.literal("fenced"), error }),
+    z.object({ status: z.literal("closed") }),
+  ]);
+}
+const linkState = linkStateWith(linkError);
+// Only the new host-health field is bounded: existing project-link errors stay compatible.
+const healthLinkState = linkStateWith(
   z.object({
-    status: z.literal("unreachable"),
-    attempt,
-    error: linkError,
-    closeCode,
-    retryAt: z.number(),
+    code: z.string().max(REMOTE_HOST_HEALTH_LIMITS.errorCode),
+    reason: z.string().max(REMOTE_HOST_HEALTH_LIMITS.errorReason),
+    message: z.string().max(REMOTE_HOST_HEALTH_LIMITS.diagnostic),
   }),
-  z.object({ status: z.literal("refused"), error: linkError, closeCode }),
-  z.object({ status: z.literal("fenced"), error: linkError }),
-  z.object({ status: z.literal("closed") }),
-]);
+);
 const remoteHost = z.object({
   id: z.string(),
   name: z.string(),
@@ -164,6 +178,47 @@ const remoteHost = z.object({
   system: z.string().nullable(),
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
+  // Reuses the existing CLOSED link-state union; no new output enum.
+  reachability: z
+    .object({
+      state: healthLinkState,
+      everReady: z.boolean(),
+      droppedAt: z.number().nullable(),
+    })
+    .optional(),
+  lastWelcome: z
+    .object({
+      at: z.number(),
+      hostId: z.string().max(REMOTE_HOST_HEALTH_LIMITS.hostId),
+      version: z.string().max(REMOTE_HOST_HEALTH_LIMITS.version),
+      protocol: z.number().int().positive(),
+      features: z
+        .array(z.string().max(MAX_GRANTED_FEATURE_LENGTH))
+        .max(MAX_GRANTED_FEATURES)
+        .readonly(),
+    })
+    .nullable()
+    .optional(),
+  signInExpiry: z
+    .array(
+      z.object({
+        providerId: z.string().max(REMOTE_HOST_HEALTH_LIMITS.providerId),
+        name: z.string().max(REMOTE_HOST_HEALTH_LIMITS.providerName),
+        expiresAt: z.number().nullable(),
+        expired: z.boolean(),
+      }),
+    )
+    .max(REMOTE_HOST_HEALTH_LIMITS.signInExpiry)
+    .readonly()
+    .nullable()
+    .optional(),
+  lastSshFailure: z
+    .object({
+      code: z.string().max(REMOTE_HOST_HEALTH_LIMITS.sshCode),
+      line: z.string().max(REMOTE_HOST_HEALTH_LIMITS.diagnostic),
+    })
+    .nullable()
+    .optional(),
 });
 const remoteProjectLink = z.object({
   hostId: z.string(),
@@ -238,6 +293,24 @@ export const addHostFactsSchema = z.object({
   keepsRunning: z.boolean().nullable(),
   alreadyPaired: z.boolean(),
 });
+/**
+ * `ActiveAddHost` (VC-720): what `hostAdd.active` answers per flow — exactly
+ * the four fields, nothing of the view, and the status closed to the three a
+ * flow under way can hold (`done` and `cancelled` leave the list). A name
+ * defaults to its target, so both take the target's bound; the ids are main's
+ * own, bounded like every flow id here.
+ */
+export const activeAddHostSchema = z.strictObject({
+  flowId: z.string().min(1).max(MAX_FLOW_ID_LENGTH),
+  target: z.string().min(1).max(MAX_TARGET_LENGTH),
+  name: z.string().min(1).max(MAX_TARGET_LENGTH),
+  status: z.enum(["running", "question", "failed"]),
+});
+/** `hostAdd.active`: the bounded list of them, newest first. */
+export const activeAddHostsSchema = z
+  .array(activeAddHostSchema)
+  .max(MAX_ACTIVE_ADD_HOSTS)
+  .readonly();
 const addHostLogLine = z.object({
   at: z.string(),
   level: z.enum(["debug", "info", "warn", "error"]),
@@ -334,6 +407,9 @@ export type RemoteHostsOutputSchemasMatch = AssertNever<
       : "remoteHostsSnapshotSchema")
   | (z.output<typeof addHostEventSchema> extends AddHostEvent ? never : "addHostEventSchema")
   | (z.output<typeof addHostFactsSchema> extends AddHostFacts ? never : "addHostFactsSchema")
+  | (z.output<typeof activeAddHostsSchema> extends readonly ActiveAddHost[]
+      ? never
+      : "activeAddHostsSchema")
   | (z.output<typeof remoteHostDevicesSchema> extends RemoteHostDevices
       ? never
       : "remoteHostDevicesSchema")
@@ -367,6 +443,7 @@ export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteProjectLink, z.output<typeof remoteProjectLink>>
   | MissingKeys<AddHostView, z.output<typeof addHostView>>
   | MissingKeys<AddHostFacts, z.output<typeof addHostFactsSchema>>
+  | MissingKeys<ActiveAddHost, z.output<typeof activeAddHostSchema>>
   | MissingKeys<AddHostFailure, z.output<typeof addHostFailure>>
   | MissingKeys<AddHostLogLine, z.output<typeof addHostLogLine>>
   | MissingKeys<RemoteHostDevices, z.output<typeof remoteHostDevicesSchema>>

@@ -5,7 +5,7 @@ import {
   DESKTOP_ENTRIES,
   desktopCatalogEntry,
   type DesktopEntryPlacement,
-} from "./desktop-entries";
+} from "./index";
 import { catalogActorOf, catalogEntriesFrom, verbTier } from "./verb-registry";
 
 describe("the desktop-only tier", () => {
@@ -40,10 +40,25 @@ describe("the desktop-only tier", () => {
     }
   });
 
+  it("classifies every entry without changing its placement or policy", () => {
+    const hostCommands = DESKTOP_ENTRIES.filter(
+      ({ compatibility }) => compatibility === "host-command",
+    );
+    expect(hostCommands.map(({ key }) => key)).toEqual([
+      "project.reorder",
+      "worktree.trimSettings",
+    ]);
+    for (const entry of DESKTOP_ENTRIES) {
+      const clientLocal = /^(hosts|hostAdd|hostSignIns|hostLink)\./u.test(entry.key);
+      expect(entry.compatibility, entry.key).toBe(clientLocal ? "client-local" : "host-command");
+    }
+  });
+
   it("scopes a host-placed command to the host", () => {
     expect(
       desktopCatalogEntry({
         key: "example.hostPlaced",
+        compatibility: "host-command",
         placement: "host",
         idempotency: "natural",
         summary: "A host-level setting.",
@@ -78,6 +93,7 @@ describe("the desktop-only tier", () => {
       "hosts.createProject",
       "hosts.openWorkspace",
       "hosts.closeWorkspace",
+      "hostAdd.active",
     ]);
     for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
     expect(
@@ -89,6 +105,7 @@ describe("the desktop-only tier", () => {
       "hosts.devices",
       "hostAdd.facts",
       "hosts.projects",
+      "hostAdd.active",
     ]);
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });
