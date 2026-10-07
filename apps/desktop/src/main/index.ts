@@ -2445,6 +2445,11 @@ const appStartup = app.whenReady().then(async () => {
             // A reveal that reused this window took it back: keep it.
             if (!retiringWindows.has(window) || window.isDestroyed()) return;
             retiringWindows.delete(window);
+            if (process.env["VOLLI_DIAG_DESTROY_MODE"] === "crash-first") {
+              diagSpan("closeAll.window.crashRenderer", () =>
+                window.webContents.forcefullyCrashRenderer(),
+              );
+            }
             diagSpan("closeAll.window.destroy", () => window.destroy());
           }),
         ).then(({ unanswered }) => {

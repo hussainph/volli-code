@@ -92,6 +92,7 @@ export function initDiag(isDev: boolean): void {
     phase: diagPhase,
     dump: diagDump,
     now: () => performance.now(),
+    markAt: (name: string) => state?.marks.find(([n]) => n === name)?.[1],
   };
 }
 

@@ -41,7 +41,10 @@ async function identifies() {
 }
 
 const flagOn = variant !== "noenter-off";
-const enters = variant === "early" || variant === "late" || variant === "late-dock";
+const dflDelay = /^dfl\+(\d+)/.exec(variant)?.[1];
+const crashFirst = variant.endsWith("-crash");
+const enters =
+  variant === "early" || variant === "late" || variant === "late-dock" || dflDelay !== undefined;
 const t0 = Date.now();
 const smoke = { variant, tag, events: [] };
 const ev = (name, extra = {}) => smoke.events.push({ name, ms: Date.now() - t0, ...extra });
@@ -57,6 +60,7 @@ const app = await launch({
     VOLLI_DIAG_TAG: tag,
     VOLLI_DIAG_PROFILE: profile,
     ...(variant === "late-dock" ? { VOLLI_QUIET_WINDOWS: "0" } : {}),
+    ...(crashFirst ? { VOLLI_DIAG_DESTROY_MODE: "crash-first" } : {}),
   },
 });
 const child = app.process();
@@ -83,12 +87,26 @@ try {
   smoke.processStartOffset = await app.evaluate(() => Date.now() - globalThis.volliDiag.now());
 
   if (variant.startsWith("late")) await sleep(Math.max(0, 25_000 - (Date.now() - t0)));
+  if (dflDelay !== undefined) {
+    const sinceDfl = await waitUntil(
+      "did-finish-load",
+      () =>
+        app.evaluate(() => {
+          const d = globalThis.volliDiag;
+          const at = d.markAt("mainWindow.did-finish-load");
+          return at === undefined ? null : d.now() - at;
+        }),
+      { timeout: 30000, interval: 50 },
+    );
+    await sleep(Math.max(0, Number(dflDelay) - sinceDfl));
+  }
   if (enters) {
     const rendererAge = await page.evaluate(() => Math.round(performance.now()));
     const homeRail = await page.getByTestId("home-rail").count();
     ev("pre-enter", { rendererAge, homeRail });
     smoke.startupPhase = await app.evaluate(() => globalThis.volliDiag.phase("startup"));
     smoke.preEnterLongTasks = await page.evaluate(() => globalThis.volliDiagLongTasks.slice());
+    await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics());
     const entered = await app.evaluate(({ BrowserWindow }) => {
       const startedAt = globalThis.volliDiag.now();
       globalThis.volliMenuBarHost.enter();
@@ -107,6 +125,15 @@ try {
         ),
       { timeout: 15000, interval: 100 },
     ).catch(() => -1);
+    smoke.metricsOverDestroy = await app.evaluate(({ app: electronApp }) =>
+      electronApp
+        .getAppMetrics()
+        .map((m) => ({ type: m.type, name: m.name, cpu: Math.round(m.cpu.percentCPUUsage) })),
+    );
+    smoke.dflToEnter = await app.evaluate(
+      () =>
+        globalThis.volliDiagEnteredAt - globalThis.volliDiag.markAt("mainWindow.did-finish-load"),
+    );
     ev("destroyed", { destroyedAfterMs });
     await sleep(10_000);
     smoke.postEnterPhase = await app.evaluate(() => globalThis.volliDiag.phase("post-enter"));
