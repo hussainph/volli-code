@@ -47,7 +47,8 @@ import {
 import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { remoteHostNameNow } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostNow } from "@renderer/stores/remote-project";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { chatTransportFor } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -330,6 +331,8 @@ export function createChatSessionsStore(
       input: CreateChatSessionInput,
       makeClient: boolean,
     ): Promise<string | null> => {
+      // Keep the identity the request addresses even if project selection or pairing changes.
+      const remoteHost = remoteHostNow(input.projectId);
       let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
       try {
         created = await edge.createSession({
@@ -347,15 +350,21 @@ export function createChatSessionsStore(
           ...(input.autoSelect === undefined ? {} : { autoSelect: input.autoSelect }),
         });
       } catch (failure) {
-        // A create refused for the missing default model is a predictable
-        // configuration state, not an error: the recovery is Model Access,
-        // so this opens it instead of raising a toast about it (VC-53).
+        // A missing default has one recovery: local Model Access (VC-53),
+        // or the named host's picker (VC-729), never this Mac's preferences
+        // for a remote Session.
         if (isDefaultModelRequired(errorMessage(failure))) {
-          // A remote host runs its own default (VC-713), which this Mac's
-          // Model Access cannot set: say whose it is instead of opening ours.
-          const host = remoteHostNameNow(input.projectId);
-          if (host !== null) {
-            toastError(`Could not start Session: ${host} has no default model yet`);
+          if (remoteHost !== null) {
+            toastError(`Could not start Session: ${remoteHost.name} has no default model yet`, {
+              action: {
+                label: "Choose a model",
+                onClick: () =>
+                  useHostModelSheet.getState().open({
+                    hostId: remoteHost.id,
+                    hostName: remoteHost.name,
+                  }),
+              },
+            });
             return null;
           }
           useUiStore.getState().setSettingsOpen(true, "model-access");

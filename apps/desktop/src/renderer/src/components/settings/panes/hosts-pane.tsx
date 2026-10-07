@@ -35,6 +35,7 @@ import { toast } from "sonner";
 
 import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { EASE_OUT, HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
 import { hostBadge } from "@renderer/components/hosts/host-surface-model";
 import {
@@ -472,6 +473,15 @@ function HostPage({
             }
           >
             Sign-ins…
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              useHostModelSheet.getState().open({ hostId: remote.id, hostName: remote.name })
+            }
+          >
+            Models…
           </Button>
         </PrefRow>
       </PrefSection>

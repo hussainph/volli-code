@@ -2,10 +2,10 @@
  * Which host a project's Sessions run on, for the rules a remote Session
  * follows in v1 (VC-713):
  *
- * - **Model:** the host's default only. A remote host offers no Model Access
- *   to a device yet (`model-access` is not in hostd's offer, VC-572), so this
- *   Mac's catalog would name models the box cannot run. The picker gives way
- *   to a label, and a Session is created and attached with no model of this
+ * - **Model:** the host's default only. Models on the host configures that
+ *   default over its dedicated HOST connection (VC-729), not in the composer:
+ *   this Mac's catalog would name models the box cannot run. The picker gives
+ *   way to a label, and a Session is created and attached with no model of this
  *   Mac's choosing.
  * - **Attachments:** blobs live in this Mac's store, which the box cannot
  *   read, so the composer's attach row says "Not available on <host> yet" and

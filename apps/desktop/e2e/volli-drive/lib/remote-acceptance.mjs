@@ -77,6 +77,53 @@ export function snapshotSubtree(tree, role, name) {
   return lines.slice(start, end).join("\n");
 }
 
+/** Native snapshots expose the model sheet's title as a heading and Select's
+ * value as child text, not accessible names on the dialog/combobox themselves.
+ * Bind only the Board row inside that host's sheet; ambiguity fails closed.
+ */
+export function boardDefaultControl(tree, hostName, displayedValue) {
+  const lines = tree.split("\n");
+  const subtree = (start) => {
+    const indent = lines[start].search(/\S/u);
+    let end = start + 1;
+    while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+    return lines.slice(start, end);
+  };
+  const sheets = lines.flatMap((line, index) => {
+    if (!/^\s*- '?dialog(?: |:|$)/u.test(line)) return [];
+    const surface = subtree(index).join("\n");
+    return visibleControls(surface, "heading", `Models on ${hostName}`).length === 1
+      ? [subtree(index)]
+      : [];
+  });
+  if (sheets.length !== 1) return null;
+  const sheet = sheets[0];
+  const labels = sheet.filter((line) =>
+    /^\s*- generic(?: \[ref=[^\]]+\])?: Board chats$/u.test(line),
+  );
+  if (labels.length !== 1) return null;
+  const label = lines.indexOf(labels[0]);
+  const indent = lines[label].search(/\S/u);
+  let row = label - 1;
+  while (row >= 0 && lines[row].search(/\S/u) >= indent) row--;
+  if (row < 0 || !sheet.includes(lines[row])) return null;
+  const matches = subtree(row).filter((line) => {
+    if (!/^\s*- '?combobox(?: |:|$)/u.test(line)) return false;
+    const content = subtree(lines.indexOf(line)).slice(1);
+    return (
+      controlLabel(line) === displayedValue ||
+      content.some(
+        (child) =>
+          /^\s*- generic(?: |:|$)/u.test(child) &&
+          (controlLabel(child) === displayedValue || child.endsWith(`: ${displayedValue}`)),
+      )
+    );
+  });
+  return matches.length === 1 && matches[0].includes("[ref=") && !matches[0].includes("[disabled]")
+    ? matches[0]
+    : null;
+}
+
 /** VC-724 is optional until it lands; a visible self-add question is never skipped. */
 export function acceptanceHostAddState(tree, hostName) {
   const answers = visibleControls(tree, "button", "Add anyway");
@@ -371,8 +418,8 @@ export async function prepareRemoteAcceptance(layout, provider) {
           }
         }
       },
-      // Deployment precondition, NOT an acceptance action: a host has a
-      // default model configured by its operator. v1 hides the remote picker.
+      // Deployment precondition only: route Azure to the fake provider.
+      // Step 4 stores the key and chooses the default through production UI.
       async configureModel() {
         assertAcceptanceRunner();
         const plist = join(home, "Library/LaunchAgents/com.volli.hostd.plist");
@@ -405,21 +452,6 @@ export async function prepareRemoteAcceptance(layout, provider) {
         // `start` is idempotent. Cleanly stop the freshly installed daemon so
         // its next production start re-reads the operator's environment.
         await stopHostd();
-        const db = join(home, "Library/Application Support/volli-hostd/volli.db");
-        const defaults = JSON.stringify({ global: provider.pin, ticket: provider.pin }).replaceAll(
-          "'",
-          "''",
-        );
-        // Same persisted default as volli-drive's standard seedDefaultModel.
-        // No tickets, projects, Sessions, answers or logs are seeded here.
-        await exec(
-          "sqlite3",
-          [
-            db,
-            `PRAGMA busy_timeout=10000; INSERT INTO app_state(key,value,updated_at) VALUES('volli:model-access-defaults','${defaults}',${Date.now()}) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;`,
-          ],
-          { timeout: 15_000 },
-        );
         daemonIdentity = null;
         await runHostd("start --user");
         await captureDaemon();

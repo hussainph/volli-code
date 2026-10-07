@@ -88,6 +88,19 @@ describe("the v1 feature table", () => {
       "auth.callback": ["auth.callback.deliver"],
       "sessions.listing": ["session.listing", "session.listingForTicket"],
       "host.workspaces": ["workspaces.list", "workspaces.create"],
+      "host.model-defaults": [
+        "hostModels.inspect",
+        "hostModels.defaults",
+        "hostModels.setDefault",
+        "hostModels.hiddenModels",
+        "hostModels.setHiddenModels",
+        "hostModels.compactionPolicy",
+        "hostModels.setCompactionPolicy",
+        "hostModels.codeModePolicy",
+        "hostModels.setCodeModePolicy",
+        "hostModels.pickerView",
+        "hostModels.setPickerView",
+      ],
     });
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
@@ -103,6 +116,7 @@ describe("the v1 feature table", () => {
       "auth.callback",
       "sessions.listing",
       "host.workspaces",
+      "host.model-defaults",
     ]);
     expect(HOST_V1_FEATURES.every(isHostFeature)).toBe(true);
   });

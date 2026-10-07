@@ -36,12 +36,32 @@ export const DOOR_LOCAL_CATALOG_KEYS = Object.freeze([
 
 export type DoorLocalCatalogKey = (typeof DOOR_LOCAL_CATALOG_KEYS)[number];
 
-/** The public tier's handler keys: the catalog, less what a door answers itself. */
-export type PublicHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey>;
+/** Public wire aliases that project existing handlers rather than adding domain commands.
+ * VC-729 keeps the frozen model-access feature unchanged; hostModels uses
+ * the same Model Access commands under host-connection-only admission.
+ */
+export const HANDLER_PROJECTION_KEYS = Object.freeze([
+  "hostModels.inspect",
+  "hostModels.defaults",
+  "hostModels.setDefault",
+  "hostModels.hiddenModels",
+  "hostModels.setHiddenModels",
+  "hostModels.compactionPolicy",
+  "hostModels.setCompactionPolicy",
+  "hostModels.codeModePolicy",
+  "hostModels.setCodeModePolicy",
+  "hostModels.pickerView",
+  "hostModels.setPickerView",
+] as const satisfies readonly CatalogKey[]);
+
+export type HandlerProjectionKey = (typeof HANDLER_PROJECTION_KEYS)[number];
+
+/** The public tier's domain handler keys: no door-local answers or wire aliases. */
+export type PublicHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey | HandlerProjectionKey>;
 
 /**
  * Every key the host's ONE handler map answers (D-A1 = (c) hybrid): the public
- * catalog's handler keys and the desktop-only tier's (`DESKTOP_ENTRIES`,
+ * catalog's domain handler keys (wire aliases reuse these) and the desktop-only tier's (`DESKTOP_ENTRIES`,
  * VC-608), together. The map is total over both, so a key of either tier with
  * no handler fails `pnpm typecheck`, and promoting a desktop entry to the
  * public tier keeps its key, and so its handler.
@@ -54,7 +74,10 @@ type AssertNever<Type extends never> = Type;
 export type DesktopKeysDisjoint = AssertNever<Extract<DesktopKey, VerbKey>>;
 
 /** The handler keys among some entries: what one router family projects from the map. */
-export type HostHandlerKeyOf<E extends VerbEntry> = Exclude<CatalogKeyOf<E>, DoorLocalCatalogKey>;
+export type HostHandlerKeyOf<E extends VerbEntry> = Exclude<
+  CatalogKeyOf<E>,
+  DoorLocalCatalogKey | HandlerProjectionKey
+>;
 
 /**
  * Both-door keys whose map entry runs the socket verb's own handler, rather
@@ -124,12 +147,15 @@ export type HostHandler<Input, Output> = (
   call: HandlerCall,
 ) => Output | Promise<Output>;
 
-const doorLocal: readonly string[] = DOOR_LOCAL_CATALOG_KEYS;
+const projected: ReadonlySet<string> = new Set([
+  ...DOOR_LOCAL_CATALOG_KEYS,
+  ...HANDLER_PROJECTION_KEYS,
+]);
 
 /** {@link PublicHandlerKey}, at runtime, in declaration order. */
 export const PUBLIC_HANDLER_KEYS: readonly PublicHandlerKey[] = Object.freeze(
   CATALOG_ENTRIES.map((entry) => entry.key).filter(
-    (key) => !doorLocal.includes(key),
+    (key) => !projected.has(key),
   ) as PublicHandlerKey[],
 );
 

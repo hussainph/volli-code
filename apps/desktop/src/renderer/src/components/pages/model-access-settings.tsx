@@ -144,7 +144,8 @@ function inheritLabel(purpose: ModelPurpose): string | null {
 
 export function ModelAccessSettings({
   autoSignInProviderId,
-}: { autoSignInProviderId?: string } = {}) {
+  hostName,
+}: { autoSignInProviderId?: string; hostName?: string } = {}) {
   const client = useModelAccessClient();
   // The deep-linked sign-in, taken once and spent as it is taken.
   //
@@ -165,6 +166,15 @@ export function ModelAccessSettings({
   const [hidden, setHidden] = React.useState<readonly HiddenModelRef[]>([]);
   const [compaction, setCompaction] = React.useState<CompactionPolicy>(DEFAULT_COMPACTION_POLICY);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      loadGeneration.current += 1;
+    };
+  }, []);
   const [saving, setSaving] = React.useState(false);
   // A sign-in the Decision model section asked for (VC-478): the Accounts list
   // remounts under a new key so the named provider's row presses its own
@@ -192,12 +202,13 @@ export function ModelAccessSettings({
         // the stale value until the pane is reopened. An ordinary open has no
         // repair to wait for, so it still asks for everything at once.
         const access = refresh ? await client.inspect({ refresh: true }) : undefined;
+        if (!mounted.current) return;
         // Said the moment the refresh answered, not after the reads below.
         // The shared revision's bump wakes this pane too, and the pass it
         // wakes sees the refreshed catalog with no report of its own — so a
         // pass that only re-reads says nothing, and this is the one that
         // pressed Refresh and says what it did.
-        if (access !== undefined && access.refresh !== undefined) {
+        if (mounted.current && access !== undefined && access.refresh !== undefined) {
           announceRefresh(refreshOutcome(access.refresh));
         }
         const [opened, configured, curated, policy] = await Promise.all([
@@ -206,7 +217,8 @@ export function ModelAccessSettings({
           client.hiddenModels(),
           client.compactionPolicy(),
         ]);
-        if (generation !== loadGeneration.current) return;
+        if (!mounted.current || generation !== loadGeneration.current) return;
+        setLoadError(null);
         setModels(opened.models);
         setProviders(opened.providers);
         setDefaults(configured);
@@ -214,13 +226,14 @@ export function ModelAccessSettings({
         setCompaction(policy);
       } catch (error) {
         if (generation === loadGeneration.current) {
-          toastError(`Couldn't load models: ${errorMessage(error)}`);
+          setLoadError(errorMessage(error));
+          if (hostName === undefined) toastError(`Couldn't load models: ${errorMessage(error)}`);
         }
       } finally {
         if (generation === loadGeneration.current) setLoading(false);
       }
     },
-    [client],
+    [client, hostName],
   );
 
   React.useEffect(() => {
@@ -233,11 +246,12 @@ export function ModelAccessSettings({
     if (saving) return;
     setSaving(true);
     try {
-      setDefaults(await client!.setDefault(purpose, selection));
+      const saved = await client!.setDefault(purpose, selection);
+      if (mounted.current) setDefaults(saved);
     } catch (error) {
-      toastError(`Couldn't save the default model: ${errorMessage(error)}`);
+      if (mounted.current) toastError(`Couldn't save the default model: ${errorMessage(error)}`);
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 
@@ -249,10 +263,13 @@ export function ModelAccessSettings({
     const before = hidden;
     setHidden(next);
     try {
-      setHidden(await client!.setHiddenModels(next));
+      const saved = await client!.setHiddenModels(next);
+      if (mounted.current) setHidden(saved);
     } catch (error) {
-      setHidden(before);
-      toastError(`Couldn't save model visibility: ${errorMessage(error)}`);
+      if (mounted.current) {
+        setHidden(before);
+        toastError(`Couldn't save model visibility: ${errorMessage(error)}`);
+      }
     }
   }
 
@@ -268,10 +285,13 @@ export function ModelAccessSettings({
     const before = compaction;
     setCompaction(next);
     try {
-      setCompaction(await client!.setCompactionPolicy(next));
+      const saved = await client!.setCompactionPolicy(next);
+      if (mounted.current) setCompaction(saved);
     } catch (error) {
-      setCompaction(before);
-      toastError(`Couldn't save compaction settings: ${errorMessage(error)}`);
+      if (mounted.current) {
+        setCompaction(before);
+        toastError(`Couldn't save compaction settings: ${errorMessage(error)}`);
+      }
     }
   }
 
@@ -286,6 +306,16 @@ export function ModelAccessSettings({
   async function retry(): Promise<void> {
     await load(true);
   }
+
+  if (hostName !== undefined && loadError !== null)
+    return (
+      <div role="alert" className="flex items-center justify-between gap-4 text-ui">
+        <span>Couldn’t load models on {hostName}</span>
+        <Button size="sm" disabled={loading} onClick={() => void load()}>
+          Retry now
+        </Button>
+      </div>
+    );
 
   const offerable = offerableModels(models);
   const sees = acceptsImageInputIn(models);
@@ -314,7 +344,11 @@ export function ModelAccessSettings({
       <PrefSection
         title="Default models"
         icon={CpuIcon}
-        hint={<>A project with a pinned model uses that model instead.</>}
+        hint={
+          hostName === undefined ? (
+            <>A project with a pinned model uses that model instead.</>
+          ) : undefined
+        }
         action={
           <Button
             size="icon-sm"
@@ -343,17 +377,19 @@ export function ModelAccessSettings({
           {PURPOSE_ROWS.filter((row) => row.depth === 1).map((row) => renderDefaultRow(row))}
         </div>
       </PrefSection>
-      <DecisionModelSettings
-        onSignIn={(providerId) => {
-          setDecisionSignIn((current) => ({ providerId, nonce: (current?.nonce ?? 0) + 1 }));
-          // The row is further down the page; bring it to the person.
-          requestAnimationFrame(() =>
-            document
-              .querySelector(`[data-testid="account-${CSS.escape(providerId)}"]`)
-              ?.scrollIntoView({ block: "center", behavior: "smooth" }),
-          );
-        }}
-      />
+      {hostName === undefined ? (
+        <DecisionModelSettings
+          onSignIn={(providerId) => {
+            setDecisionSignIn((current) => ({ providerId, nonce: (current?.nonce ?? 0) + 1 }));
+            // The row is further down the page; bring it to the person.
+            requestAnimationFrame(() =>
+              document
+                .querySelector(`[data-testid="account-${CSS.escape(providerId)}"]`)
+                ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+            );
+          }}
+        />
+      ) : null}
       <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
           <Switch
@@ -384,13 +420,15 @@ export function ModelAccessSettings({
           onSaveVisibility={(model, visible) => void saveVisibility(model, visible)}
         />
       ) : null}
-      <ModelAccessAccounts
-        key={decisionSignIn?.nonce ?? 0}
-        providers={providers}
-        autoSignInProviderId={decisionSignIn?.providerId ?? deepLinkedProviderId}
-        onRecover={() => void retry()}
-        onChanged={() => load(true)}
-      />
+      {hostName === undefined ? (
+        <ModelAccessAccounts
+          key={decisionSignIn?.nonce ?? 0}
+          providers={providers}
+          autoSignInProviderId={decisionSignIn?.providerId ?? deepLinkedProviderId}
+          onRecover={() => void retry()}
+          onChanged={() => load(true)}
+        />
+      ) : null}
     </>
   );
 }

@@ -16,8 +16,19 @@ import {
   hostdBoardFeed,
   hostResourceWorkspace,
   isLiteralLoopback,
+  parseListen,
   sessionWorkspace,
 } from "./host-protocol";
+
+describe("the loopback listen address", () => {
+  it("parses IPv4 and IPv6 and refuses malformed, non-loopback and out-of-range addresses", () => {
+    expect(parseListen("127.0.0.1:0")).toEqual({ host: "127.0.0.1", port: 0 });
+    expect(parseListen("[::1]:7420")).toEqual({ host: "::1", port: 7420 });
+    expect(parseListen("malformed")).toContain("takes <host>:<port>");
+    expect(parseListen("127.0.0.1:65536")).toContain("port must be");
+    expect(parseListen("localhost:7420")).toContain("loopback address");
+  });
+});
 
 describe("the cloud flag", () => {
   it("is on only when the environment's opt-in list names it", () => {
@@ -30,7 +41,7 @@ describe("the cloud flag", () => {
 });
 
 describe("what hostd offers", () => {
-  it("is every v1 feature it composes, and not Model Access, which it does not", () => {
+  it("offers host model preferences separately from the frozen model-access feature", () => {
     expect(HOSTD_FEATURES).toStrictEqual([
       "sessions",
       "sessions.queue",
@@ -43,6 +54,7 @@ describe("what hostd offers", () => {
       "sign-ins",
       "auth.callback",
       "host.workspaces",
+      "host.model-defaults",
       // The Session listing rows (VC-713).
       "sessions.listing",
     ]);

@@ -20,6 +20,7 @@ import {
   snapshotSubtree,
   visibleControls as controls,
   hasActionableControl,
+  boardDefaultControl,
   stableWaitingLabel,
   visibleServingRow,
   visibleAnswerReceipt,
@@ -287,28 +288,65 @@ async function journey() {
     assert.ok(current.text.includes(TITLE));
     assert.ok(current.text.includes(`Running on ${REMOTE_HOST}`));
   });
-  await step(4, "Paste fake API key: Signed in on host · API key", async () => {
-    await hostChip();
-    await click("button", `Sign-ins on ${REMOTE_HOST}…`);
-    const current = await wait("Azure OpenAI");
-    // Match the Azure provider's following action, never another provider's
-    // identically named Add key. Verify the key field names Azure afterwards.
-    const lines = current.text.split("\n");
-    const start = lines.findIndex((line) => line.includes("Azure OpenAI"));
-    const add = lines
-      .slice(start)
-      .find((line) => line.includes('button "Add key"') && line.includes("[ref="));
-    assert.ok(add, "Azure OpenAI Add key missing");
-    await call("act", {
-      gen: current.generation,
-      ref: add.match(/\[ref=([^\]]+)\]/)[1],
-      kind: "click",
-    });
-    await type(`Azure OpenAI API key, stored on ${REMOTE_HOST}`, "volli-drive-fake-key");
-    await click("button", "Save");
-    await wait(`Signed in on ${REMOTE_HOST} · API key`);
-    await press("Escape");
-  });
+  await step(
+    4,
+    "Paste fake API key and choose the box default through Models on host",
+    async () => {
+      await hostChip();
+      await click("button", `Sign-ins on ${REMOTE_HOST}…`);
+      const current = await wait("Azure OpenAI");
+      // Match the Azure provider's following action, never another provider's
+      // identically named Add key. Verify the key field names Azure afterwards.
+      const lines = current.text.split("\n");
+      const start = lines.findIndex((line) => line.includes("Azure OpenAI"));
+      const add = lines
+        .slice(start)
+        .find((line) => line.includes('button "Add key"') && line.includes("[ref="));
+      assert.ok(add, "Azure OpenAI Add key missing");
+      await call("act", {
+        gen: current.generation,
+        ref: add.match(/\[ref=([^\]]+)\]/)[1],
+        kind: "click",
+      });
+      await type(`Azure OpenAI API key, stored on ${REMOTE_HOST}`, "volli-drive-fake-key");
+      await click("button", "Save");
+      await wait(`Signed in on ${REMOTE_HOST} · API key`);
+      await press("Escape");
+      await waitUntil(
+        "sign-in sheet exits and the host chip is actionable",
+        async () => hasActionableControl((await snap()).text, "button", `Host: ${REMOTE_HOST}`),
+        { timeout: 10_000, interval: 100 },
+      );
+      await hostChip();
+      await click("button", `Models on ${REMOTE_HOST}…`);
+      await waitUntil(
+        "the box catalog offers its unconfigured Board default",
+        async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "Choose a model"),
+        { timeout: 10_000, interval: 100 },
+      );
+      const modelSnapshot = await snap();
+      const boardDefault = boardDefaultControl(modelSnapshot.text, REMOTE_HOST, "Choose a model");
+      assert.ok(boardDefault, "Expected the box's enabled Board model control once");
+      await call("act", {
+        gen: modelSnapshot.generation,
+        ref: boardDefault.match(/\[ref=([^\]]+)\]/)[1],
+        kind: "click",
+      });
+      await click("option", "GPT-4.1 mini");
+      await waitUntil(
+        "the box saved its selected default",
+        async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "GPT-4.1 mini"),
+        { timeout: 10_000, interval: 100 },
+      );
+      await shot("step-4-model-default");
+      await press("Escape");
+      await waitUntil(
+        "model sheet exits and the host chip is actionable",
+        async () => hasActionableControl((await snap()).text, "button", `Host: ${REMOTE_HOST}`),
+        { timeout: 10_000, interval: 100 },
+      );
+    },
+  );
   await step(
     5,
     "Start Session: Stop turn, streamed scripted response, remote host pill",

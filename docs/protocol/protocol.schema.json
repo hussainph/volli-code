@@ -61,6 +61,19 @@
       "logs.tail",
       "logs.follow"
     ],
+    "host.model-defaults": [
+      "hostModels.inspect",
+      "hostModels.defaults",
+      "hostModels.setDefault",
+      "hostModels.hiddenModels",
+      "hostModels.setHiddenModels",
+      "hostModels.compactionPolicy",
+      "hostModels.setCompactionPolicy",
+      "hostModels.codeModePolicy",
+      "hostModels.setCodeModePolicy",
+      "hostModels.pickerView",
+      "hostModels.setPickerView"
+    ],
     "host.workspaces": [
       "workspaces.list",
       "workspaces.create"
@@ -9792,6 +9805,1203 @@
             "ticket"
           ],
           "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.codeModePolicy": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "models": {
+              "additionalProperties": {
+                "enum": [
+                  "off",
+                  "both",
+                  "only"
+                ],
+                "type": "string"
+              },
+              "propertyNames": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "enabled",
+            "models"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.compactionPolicy": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "autoCompaction": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "autoCompaction"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.defaults": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "deep": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fast": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "global": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ticket": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "utility": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visual": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "global",
+            "ticket",
+            "utility",
+            "fast",
+            "deep",
+            "visual"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.hiddenModels": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "modelId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerId",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 2000,
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.inspect": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "refresh": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "models": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "acceptsImageInput": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "contextWindow": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "providerId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reasoningLevels": {
+                    "items": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "state": {
+                    "enum": [
+                      "available",
+                      "authentication-required",
+                      "unavailable"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "modelId",
+                  "label",
+                  "state",
+                  "reasoningLevels",
+                  "acceptsImageInput"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "observedAt": {
+              "type": "number"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "accountLabel": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "billingSource": {
+                    "enum": [
+                      "subscription",
+                      "api-key",
+                      "gateway",
+                      "local",
+                      "ambient",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  },
+                  "hasStoredCredential": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "recovery": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "sign-in",
+                              "retry"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "signIn": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "state": {
+                    "enum": [
+                      "available",
+                      "authentication-required",
+                      "unavailable"
+                    ],
+                    "type": "string"
+                  },
+                  "usageLimits": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "checkedAt": {
+                        "type": "number"
+                      },
+                      "unavailable": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "reason": {
+                            "enum": [
+                              "unsupported",
+                              "probeFailed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "reason"
+                        ],
+                        "type": "object"
+                      },
+                      "windows": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "session",
+                                "weekly",
+                                "monthly",
+                                "other"
+                              ],
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "resetsAt": {
+                              "type": "string"
+                            },
+                            "usedPercent": {
+                              "maximum": 100,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "windowDurationMins": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "label",
+                            "usedPercent"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "checkedAt",
+                      "windows"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "state",
+                  "accountLabel",
+                  "billingSource",
+                  "recovery",
+                  "signIn",
+                  "hasStoredCredential"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "refresh": {
+              "additionalProperties": false,
+              "properties": {
+                "added": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "failedProviderIds": {
+                  "items": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "refreshedProviderIds": {
+                  "items": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "rejected": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "removed": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "added",
+                "removed",
+                "rejected",
+                "refreshedProviderIds",
+                "failedProviderIds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "observedAt",
+            "providers",
+            "models"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.pickerView": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "enum": [
+            "all",
+            "defaults"
+          ],
+          "type": "string"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.setCodeModePolicy": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "models": {
+              "additionalProperties": {
+                "enum": [
+                  "off",
+                  "both",
+                  "only"
+                ],
+                "type": "string"
+              },
+              "propertyNames": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "enabled",
+            "models"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "models": {
+              "additionalProperties": {
+                "enum": [
+                  "off",
+                  "both",
+                  "only"
+                ],
+                "type": "string"
+              },
+              "propertyNames": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "enabled",
+            "models"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.setCompactionPolicy": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "autoCompaction": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "autoCompaction"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "autoCompaction": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "autoCompaction"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.setDefault": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "purpose": {
+              "enum": [
+                "global",
+                "ticket",
+                "utility",
+                "fast",
+                "deep",
+                "visual"
+              ],
+              "type": "string"
+            },
+            "selection": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "purpose",
+            "selection"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "deep": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fast": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "global": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ticket": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "utility": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visual": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "modelId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "providerId": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevel": {
+                      "enum": [
+                        "off",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "providerId",
+                    "modelId",
+                    "reasoningLevel"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "global",
+            "ticket",
+            "utility",
+            "fast",
+            "deep",
+            "visual"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.setHiddenModels": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "properties": {
+              "modelId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerId",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 2000,
+          "type": "array"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "modelId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "providerId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerId",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 2000,
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostModels.setPickerView": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "enum": [
+            "all",
+            "defaults"
+          ],
+          "type": "string"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "enum": [
+            "all",
+            "defaults"
+          ],
+          "type": "string"
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false

@@ -137,10 +137,19 @@ export function ModelAccessProvider({
   // — a sign-out landed while it ran — must not put its older answer back, and
   // this is how it can tell.
   const generation = React.useRef(0);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      generation.current += 1;
+    };
+  }, []);
 
   const value = React.useMemo<ModelAccessContextValue>(() => {
     /** Drop everything held and wake every surface that reads it. */
     const invalidate = (): void => {
+      if (!mounted.current) return;
       generation.current += 1;
       inspectRead.current = null;
       defaultsRead.current = null;
