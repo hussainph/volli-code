@@ -10,7 +10,7 @@ import {
   HOST_FEATURE_OPERATIONS,
   HOST_TRACE_FIELD,
 } from "@volli/host-protocol";
-import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
+import { CATALOG_ENTRIES, DESKTOP_ENTRIES, type DesktopEntryDeclaration } from "@volli/shared";
 import { z } from "zod";
 
 import { sessionProcedureSchemas, type ProcedureSchema } from "./index";
@@ -37,7 +37,7 @@ export interface ProtocolSchemaProvider {
 }
 
 // The desktop-only tier (VC-608) is generated and diffed like the public one:
-// no public ceremony, but the same additive-only gate.
+// host commands stay additive-only; client-local entries are report-only.
 export function generateProtocolSchema(
   providers: readonly ProtocolSchemaProvider[] = [
     { tier: "public", procedures: sessionProcedureSchemas },
@@ -45,7 +45,10 @@ export function generateProtocolSchema(
     { tier: "desktop", procedures: desktopProcedureSchemas },
   ],
   publicEntries: readonly { key: string }[] = CATALOG_ENTRIES,
-  desktopEntries: readonly { key: string }[] = DESKTOP_ENTRIES,
+  desktopEntries: readonly Pick<
+    DesktopEntryDeclaration,
+    "key" | "compatibility"
+  >[] = DESKTOP_ENTRIES,
 ) {
   const tiers: Record<string, Record<string, unknown>> = { public: {}, desktop: {} };
   const seen = new Set<string>();
@@ -57,6 +60,9 @@ export function generateProtocolSchema(
       seen.add(key);
       (tier === "public" ? publicKeys : desktopKeys).add(key);
       tiers[tier]![key] = {
+        ...(tier === "desktop"
+          ? { compatibility: desktopEntries.find((entry) => entry.key === key)?.compatibility }
+          : {}),
         kind: procedure.type,
         input: z.toJSONSchema(procedure.input, { io: "input" }),
         output: z.toJSONSchema(procedure.output, { io: "output" }),
