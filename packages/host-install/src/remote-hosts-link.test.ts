@@ -75,7 +75,16 @@ describe("a host's link from its Workspace links", () => {
 describe("a host's link from its tunnel, with no Workspace open", () => {
   it("maps each tunnel state", () => {
     expect(of([], { status: "starting" })).toEqual({ status: "connecting", attempt: 4 });
-    expect(of([], UP)).toEqual({ status: "ready" });
+    expect(of([], UP)).toEqual({ status: "connecting", attempt: 4 });
+    expect(
+      remoteHostLinkState({
+        tunnel: UP,
+        attempt: 4,
+        retryAt: 0,
+        links: [],
+        health: { status: "ready" },
+      }),
+    ).toEqual({ status: "ready" });
     expect(of([], { status: "down", error: "ssh exited 255", retryInMs: 2_000 })).toEqual({
       status: "unreachable",
       attempt: 4,
@@ -88,6 +97,18 @@ describe("a host's link from its tunnel, with no Workspace open", () => {
 });
 
 describe("ready since launch, and when it dropped", () => {
+  it("anchors a never-ready host's first failure across retries and clears the outage on readiness", () => {
+    const initial = nextRemoteHostLink(null, { status: "connecting", attempt: 0 }, 10);
+    const failure = nextRemoteHostLink(initial, { status: "closed" }, 20);
+    expect(failure).toMatchObject({ everReady: false, droppedAt: 20 });
+    const retry = nextRemoteHostLink(failure, { status: "connecting", attempt: 1 }, 30);
+    expect(retry).toMatchObject({ everReady: false, droppedAt: 20 });
+    expect(nextRemoteHostLink(null, { status: "closed" }, 40).droppedAt).toBe(40);
+    const ready = nextRemoteHostLink(retry, { status: "ready" }, 50);
+    expect(ready).toMatchObject({ everReady: true, droppedAt: null });
+    expect(nextRemoteHostLink(ready, { status: "closed" }, 60).droppedAt).toBe(60);
+  });
+
   it("tracks everReady and droppedAt across changes", () => {
     const first = nextRemoteHostLink(null, { status: "connecting", attempt: 0 }, 10);
     expect(first).toEqual({

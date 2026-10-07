@@ -3080,6 +3080,76 @@
                   "id": {
                     "type": "string"
                   },
+                  "lastSshFailure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "line": {
+                            "maxLength": 600,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "line"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastWelcome": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "at": {
+                            "type": "number"
+                          },
+                          "features": {
+                            "items": {
+                              "maxLength": 128,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "readOnly": true,
+                            "type": "array"
+                          },
+                          "hostId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "protocol": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "hostId",
+                          "version",
+                          "protocol",
+                          "features"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "liveSessions": {
                     "anyOf": [
                       {
@@ -3110,6 +3180,271 @@
                           "macos"
                         ],
                         "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reachability": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "droppedAt": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "everReady": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "status": {
+                                "const": "connecting",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "ready",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "retryAt": {
+                                "type": "number"
+                              },
+                              "status": {
+                                "const": "unreachable",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt",
+                              "error",
+                              "closeCode",
+                              "retryAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "refused",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error",
+                              "closeCode"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "fenced",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "closed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "everReady",
+                      "droppedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "signInExpiry": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "expired": {
+                              "type": "boolean"
+                            },
+                            "expiresAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "name": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "maxLength": 128,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerId",
+                            "name",
+                            "expiresAt",
+                            "expired"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 128,
+                        "readOnly": true,
+                        "type": "array"
                       },
                       {
                         "type": "null"
@@ -3465,6 +3800,76 @@
                   "id": {
                     "type": "string"
                   },
+                  "lastSshFailure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "line": {
+                            "maxLength": 600,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "line"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastWelcome": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "at": {
+                            "type": "number"
+                          },
+                          "features": {
+                            "items": {
+                              "maxLength": 128,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "readOnly": true,
+                            "type": "array"
+                          },
+                          "hostId": {
+                            "maxLength": 128,
+                            "type": "string"
+                          },
+                          "protocol": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "hostId",
+                          "version",
+                          "protocol",
+                          "features"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "liveSessions": {
                     "anyOf": [
                       {
@@ -3495,6 +3900,271 @@
                           "macos"
                         ],
                         "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reachability": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "droppedAt": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "everReady": {
+                        "type": "boolean"
+                      },
+                      "state": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "status": {
+                                "const": "connecting",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "ready",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "retryAt": {
+                                "type": "number"
+                              },
+                              "status": {
+                                "const": "unreachable",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "attempt",
+                              "error",
+                              "closeCode",
+                              "retryAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "closeCode": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "refused",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error",
+                              "closeCode"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "error": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "maxLength": 600,
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "maxLength": 128,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "reason",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              "status": {
+                                "const": "fenced",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "error"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "status": {
+                                "const": "closed",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "everReady",
+                      "droppedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "signInExpiry": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "expired": {
+                              "type": "boolean"
+                            },
+                            "expiresAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "name": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "maxLength": 128,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerId",
+                            "name",
+                            "expiresAt",
+                            "expired"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 128,
+                        "readOnly": true,
+                        "type": "array"
                       },
                       {
                         "type": "null"

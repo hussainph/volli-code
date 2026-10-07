@@ -7,11 +7,16 @@
  * `ready` if any is (the host serves), else `refused`, else `fenced` (the
  * host answered and will not serve until the person acts), else
  * `unreachable`, else `connecting`. A ready link's welcome is dropped. With
- * none, the tunnel answers: starting is `connecting`, up is `ready`, down is
- * `unreachable`, closed is `closed`.
+ * none, host-scoped status evidence answers; TCP alone stays connecting.
  */
 import type { HostLinkState } from "@volli/host-protocol/client-link";
-import type { RemoteHostLink, RemoteHostLinkError, RemoteHostLinkState } from "@volli/shared";
+import {
+  remoteHostDiagnostic,
+  REMOTE_HOST_HEALTH_LIMITS,
+  type RemoteHostLink,
+  type RemoteHostLinkError,
+  type RemoteHostLinkState,
+} from "@volli/shared";
 
 import { compareVersions } from "./probe";
 import type { TunnelState } from "./tunnel";
@@ -23,10 +28,16 @@ export interface LinkInputs {
   /** Epoch ms of the tunnel's next attempt, when it is down. */
   readonly retryAt: number;
   readonly links: readonly HostLinkState[];
+  /** Validated hostd status, only for host health (never a Workspace's readiness). */
+  readonly health?: RemoteHostLinkState;
 }
 
 function errorOf(error: { code: string; message: string; reason?: string }): RemoteHostLinkError {
-  return { code: error.code, reason: error.reason ?? "", message: error.message };
+  return {
+    code: remoteHostDiagnostic(error.code, REMOTE_HOST_HEALTH_LIMITS.errorCode),
+    reason: remoteHostDiagnostic(error.reason ?? "", REMOTE_HOST_HEALTH_LIMITS.errorReason),
+    message: remoteHostDiagnostic(error.message),
+  };
 }
 
 /** The first link in `status`, in the order links were opened. */
@@ -68,12 +79,16 @@ export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {
     case "starting":
       return { status: "connecting", attempt: inputs.attempt };
     case "up":
-      return { status: "ready" };
+      return inputs.health ?? { status: "connecting", attempt: inputs.attempt };
     case "down":
       return {
         status: "unreachable",
         attempt: inputs.attempt,
-        error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: tunnel.error },
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          reason: "host-unreachable",
+          message: remoteHostDiagnostic(tunnel.error),
+        },
         closeCode: null,
         retryAt: inputs.retryAt,
       };
@@ -82,7 +97,7 @@ export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {
   }
 }
 
-/** `previous`, moved on to `state`: ready ever since launch, and when it last left ready. */
+/** `previous`, moved on to `state`: ready ever since launch, and the current outage's start. */
 export function nextRemoteHostLink(
   previous: RemoteHostLink | null,
   state: RemoteHostLinkState,
@@ -93,7 +108,11 @@ export function nextRemoteHostLink(
   return {
     state,
     everReady: (previous?.everReady ?? false) || ready,
-    droppedAt: wasReady && !ready ? now : (previous?.droppedAt ?? null),
+    droppedAt: ready
+      ? null
+      : wasReady
+        ? now
+        : (previous?.droppedAt ?? (state.status === "connecting" ? null : now)),
   };
 }
 

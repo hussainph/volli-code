@@ -85,7 +85,11 @@ describe("the ssh tunnel", () => {
       child.exit(255);
     });
     await expect(refused.tunnel.start()).rejects.toThrow("Permission denied (publickey).");
-    expect(refused.tunnel.state).toMatchObject({ status: "down", retryInMs: 0 });
+    expect(refused.tunnel.state).toMatchObject({
+      status: "down",
+      retryInMs: 0,
+      sshFailure: { kind: "key-refused", detail: "Permission denied (publickey)." },
+    });
     const silent = harness((child) => child.exit(1));
     await expect(silent.tunnel.start()).rejects.toThrow("ssh exited 1");
     const missing = harness((child) =>
@@ -115,6 +119,27 @@ describe("the ssh tunnel", () => {
     expect(downs.map((state) => state.status === "down" && state.retryInMs)).toEqual([5, 10, 20]);
     expect(h.children.map(portOf)).toEqual([41000, 41000, 41000, 41000]);
     expect(h.remotes).toHaveLength(4);
+    h.tunnel.close();
+  });
+
+  it("does not invent an SSH class for clean exits or remote-resolution errors", async () => {
+    let failRemote = false;
+    const h = harness((child) => h.open.add(portOf(child)), {
+      resolveRemote: async () => {
+        if (failRemote) throw new Error("listener unknown");
+        return REMOTE;
+      },
+    });
+    await h.tunnel.start();
+    failRemote = true;
+    h.children[0]!.exit(0);
+    await until(() => h.tunnel.state.status === "down");
+    expect(h.tunnel.state).toMatchObject({ status: "down" });
+    expect(h.tunnel.state).not.toHaveProperty("sshFailure");
+    await until(() =>
+      h.states.some((state) => state.status === "down" && state.error === "listener unknown"),
+    );
+    expect(h.tunnel.state).not.toHaveProperty("sshFailure");
     h.tunnel.close();
   });
 
