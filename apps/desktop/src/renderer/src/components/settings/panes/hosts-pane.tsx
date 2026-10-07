@@ -80,6 +80,7 @@ import {
   type HostRecord,
 } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
 import { remoteHosts, useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { deviceMeta, hostFacts, hostHealth, hostRowMeta, orderDevices } from "./hosts-pane-model";
@@ -546,6 +547,14 @@ function ProjectsSection({ hostId }: { hostId: string }) {
   const mine = projects.filter(
     (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === hostId,
   );
+  // A project this host serves whose board it does not offer this Mac (an
+  // older host, VC-711): no row came, so it is listed here with the reason.
+  const unavailable = useRemoteBoardAvailabilityStore((state) => state.unavailable);
+  const retry = useRemoteBoardAvailabilityStore((state) => state.retry);
+  const refused = Object.entries(unavailable).filter(
+    ([projectId]) =>
+      claims[projectId]?.hostId === hostId && !mine.some(({ id }) => id === projectId),
+  );
   const sheet = (start: "list" | "new") => () =>
     useRemoteHostsStore.getState().openProjectSheet(hostId, start);
   return (
@@ -559,16 +568,32 @@ function ProjectsSection({ hostId }: { hostId: string }) {
         </span>
       }
     >
-      {mine.length === 0 ? (
+      {mine.length === 0 && refused.length === 0 ? (
         <Empty>{openHere(claims, hostId)}</Empty>
       ) : (
-        mine.map((project) => (
-          <ItemRow
-            key={project.id}
-            name={project.name}
-            leading={<Mark icon={FolderSimpleIcon} />}
-          />
-        ))
+        <>
+          {mine.map((project) => (
+            <ItemRow
+              key={project.id}
+              name={project.name}
+              leading={<Mark icon={FolderSimpleIcon} />}
+            />
+          ))}
+          {refused.map(([projectId, reason]) => (
+            <ItemRow
+              key={projectId}
+              name={reason}
+              leading={<Mark icon={FolderSimpleIcon} />}
+              testId="host-board-unavailable"
+            >
+              {retry === null ? null : (
+                <Button size="sm" variant="ghost" onClick={() => retry(projectId)}>
+                  Try again
+                </Button>
+              )}
+            </ItemRow>
+          ))}
+        </>
       )}
     </PrefSection>
   );

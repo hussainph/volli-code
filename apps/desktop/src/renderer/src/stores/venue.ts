@@ -34,6 +34,7 @@
  */
 import { create } from "zustand";
 import { errorMessage, type VenueSnapshot } from "@volli/shared";
+import { notAvailableOn, remoteHostNow } from "./remote-project";
 
 /**
  * What is known about one venue right now.
@@ -201,6 +202,10 @@ export function createVenueStore() {
 
 /** One read, with both failure shapes folded onto the same entry. */
 async function read(projectId: string, ticketId: string | null): Promise<VenueEntry> {
+  // A remote project's checkout is on its host (VC-711): this Mac measures
+  // none, and is not asked about an id it does not hold.
+  const host = remoteHostNow(projectId);
+  if (host !== null) return { status: "error", error: notAvailableOn(host) };
   try {
     const result = await window.api.venue.snapshot(projectId, ticketId);
     if (!result.ok) return { status: "error", error: result.error };

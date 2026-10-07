@@ -36,6 +36,7 @@ import {
 
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { remoteHostNow } from "@renderer/stores/remote-project";
 
 /** The two tiers, always committed together. */
 interface PromptLists {
@@ -88,6 +89,10 @@ export function promptSupplyKey(
 }
 
 async function readSupply(projectId: string): Promise<SupplyRead> {
+  // A remote project's commands and skills are its host's (VC-711): none here.
+  if (remoteHostNow(projectId) !== null) {
+    return { ok: true, lists: { templates: [], skills: [] } };
+  }
   try {
     const result = await window.api.files.promptTemplates({ projectId });
     if (!result.ok) return { ok: false, error: result.error };

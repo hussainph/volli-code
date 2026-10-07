@@ -30,6 +30,7 @@ import {
 } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
+import { refuseRemote } from "@renderer/stores/remote-project";
 
 /** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
@@ -181,6 +182,8 @@ async function bootSession(
 ): Promise<string | null> {
   // Terminals too: a new or resumed Session is a write to the project's host.
   if (!guardWrite(scope.projectId)) return null;
+  // A terminal runs on this Mac: a remote project's is not available yet (VC-711).
+  if (refuseRemote(scope.projectId)) return null;
   return underOwnerGuard(scope, terminalStarting, async (project) => {
     try {
       const result = await window.api.terminal.create(
@@ -537,6 +540,9 @@ export async function bootChatSession(
   // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
   // here. A project whose host cannot serve (VC-576) starts none, and says why.
   if (!guardWrite(scope.projectId)) return null;
+  // A remote project's Sessions run on its host: VC-713 routes them there.
+  // Until then this Mac starts none for it, and says so.
+  if (refuseRemote(scope.projectId)) return null;
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       if (!createsSessionNow) {

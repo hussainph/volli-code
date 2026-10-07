@@ -33,6 +33,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { cn } from "@renderer/lib/utils";
+import { notAvailableOn, remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
  * The chip row's branch relationship: `base ▾ → destination ▾`.
@@ -64,6 +65,12 @@ export function useBranchListing(projectId: string): BranchListingState {
 
   React.useEffect(() => {
     const token = guard.claim();
+    // A remote project's refs are on its host (VC-711): this Mac lists none.
+    const host = remoteHostNow(projectId);
+    if (host !== null) {
+      setState({ status: "failed", error: notAvailableOn(host) });
+      return;
+    }
     setState({ status: "loading" });
     void (async () => {
       try {

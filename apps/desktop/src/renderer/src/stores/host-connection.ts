@@ -344,6 +344,16 @@ export function hostIdOfProject(state: HostReadable, projectId: string | null): 
     : (state.projects[projectId]?.hostId ?? THIS_MAC_HOST_ID);
 }
 
+/**
+ * Whether a remote host serves the project (VC-711): its board goes over that
+ * Workspace's link, and this Mac's local-only surfaces (files, terminals,
+ * worktrees, automations, MCP, attachments) stand down for it rather than ask
+ * this Mac's `window.api` about an id it does not hold.
+ */
+export function isRemoteProject(state: HostReadable, projectId: string | null): boolean {
+  return hostIdOfProject(state, projectId) !== THIS_MAC_HOST_ID;
+}
+
 /** The host a project runs on, with the host's aggregate link (the chip's). */
 export function hostOfProject(state: HostReadable, projectId: string | null): HostRecord {
   const hostId = hostIdOfProject(state, projectId);

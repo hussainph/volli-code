@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   BoardSync,
   isAmbiguousBoardFailure,
+  isBoardUnavailable,
   placeholderTicketId,
   READ_LOG_ENTITIES,
   type BoardFeedBatch,
@@ -2809,5 +2810,128 @@ describe("re-check: per-aspect order, body freshness, generation-scoped reads", 
     sync.adoptBody("A", "# Read since");
     await vi.advanceTimersByTimeAsync(100);
     expect(last().tickets.find((t) => t.id === "A")?.body).toBe("# Read since");
+  });
+});
+
+// ---- routing by Workspace (VC-711) ----------------------------------------------------------
+
+/** Lets the fake hosts answer: they answer on a timer, even at no latency. */
+async function go<Answer>(call: Promise<Answer>): Promise<Answer> {
+  const state = { settled: false };
+  void call.finally(() => (state.settled = true)).catch(() => {});
+  for (let tick = 0; tick < 400; tick++) {
+    if (state.settled) return call;
+    await vi.advanceTimersByTimeAsync(25);
+  }
+  throw new Error("never settled");
+}
+
+describe("routing each Workspace to its own host", () => {
+  it("sends every read, feed and write of a Workspace to that Workspace's transport", async () => {
+    const local = new FakeHost();
+    local.tickets = [ticket("A", "todo", 0)];
+    const remote = new FakeHost();
+    remote.projects.set("r1", project("r1"));
+    remote.tickets = [ticket("R", "todo", 0, { projectId: "r1" })];
+    remote.labels = [label("box", "r1")];
+    const { view, last } = recorder();
+    let minted = 0;
+    const sync = new BoardSync({
+      transport: (projectId) => (projectId === "r1" ? remote : local),
+      view,
+      mintCommandId: () => `cmd-${++minted}`,
+    });
+    await go(sync.open("p1"));
+    await go(sync.open("r1"));
+    expect(last("r1").tickets.map(({ id }) => id)).toEqual(["R"]);
+    expect(remote.subscriptions.map(({ projectId }) => projectId)).toEqual(["r1"]);
+    expect(local.subscriptions.map(({ projectId }) => projectId)).toEqual(["p1"]);
+
+    const made = await go(sync.createTicket("r1", { status: "todo", title: "On the box" }));
+    await go(sync.setPriority("r1", "R", "high"));
+    await go(sync.updateTicket("r1", { ticketId: "R", title: "Renamed" }));
+    await go(sync.setLabels("r1", "R", ["box"]));
+    await go(sync.setLabelColor("r1", remote.labels[0]!.id, "#ff0000"));
+    await go(sync.moveTickets("r1", ["R"], "doing", 0));
+    await go(sync.archiveTicket("r1", made!.id));
+    const archived = await go(sync.archivedTickets("r1"));
+    await go(sync.unarchiveTicket("r1", archived![0]!));
+    await go(sync.setPriority("p1", "A", "low"));
+
+    expect(remote.calls.map(({ method }) => method)).toEqual(
+      expect.arrayContaining([
+        "snapshot",
+        "createTicket",
+        "setPriority",
+        "updateTicket",
+        "setLabels",
+        "setLabelColor",
+        "moveTickets",
+        "archiveTicket",
+        "archivedTickets",
+        "unarchiveTicket",
+      ]),
+    );
+    expect(local.calls.map(({ method }) => method)).toEqual(["snapshot", "setPriority"]);
+  });
+});
+
+// ---- what a closed Workspace owns, and a host with no board (VC-711) ----------------------
+
+const failure = (reason?: string) => ({ data: { hostError: { code: "X", message: "m", reason } } });
+
+describe("a Workspace's own commands, and a host that offers no board", () => {
+  it("ends a per-surface command made for a Workspace when that Workspace closes", async () => {
+    const { host, sync } = harness();
+    await go(sync.open("p1"));
+    const send = vi.fn(() => Promise.reject(unreachable));
+    const owned = sync.command({
+      verb: "add comment",
+      owner: "p1",
+      send,
+      fromFeed: () => "fed",
+    });
+    const unowned = sync.command({
+      verb: "add comment",
+      send: () => Promise.reject(unreachable),
+      fromFeed: () => "fed",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    sync.close("p1");
+    expect(await owned).toEqual({ ok: false, error: "The board closed before the host answered" });
+    const attempts = send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(send).toHaveBeenCalledTimes(attempts);
+    // A command no Workspace owns is not this close's.
+    sync.closeAll();
+    expect(await unowned).toMatchObject({ ok: false });
+    expect(host.calls.map(({ method }) => method)).toEqual(["snapshot"]);
+  });
+
+  it("stops opening a Workspace whose host refuses its board, and follows it no more", async () => {
+    const { host, sync } = harness();
+    for (const reason of ["verb-refused", "operation-unavailable", "workspace-unknown"]) {
+      host.fail("snapshot", { data: { hostError: { code: "FORBIDDEN", message: "no", reason } } });
+      await expect(go(sync.open("p1"))).rejects.toBeDefined();
+      expect(sync.follows("p1")).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(host.callsTo("snapshot")).toHaveLength(3);
+    // An outage is still retried, with backoff, until it lands.
+    host.fail("snapshot", unreachable);
+    await expect(go(sync.open("p1"))).rejects.toBeDefined();
+    expect(sync.follows("p1")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.callsTo("snapshot")).toHaveLength(5);
+  });
+
+  it("names only a refusal of the board itself as one it cannot get past", () => {
+    expect(isBoardUnavailable(failure("verb-refused"))).toBe(true);
+    expect(isBoardUnavailable(failure("operation-unavailable"))).toBe(true);
+    expect(isBoardUnavailable(failure("workspace-unknown"))).toBe(true);
+    expect(isBoardUnavailable(failure("host-unreachable"))).toBe(false);
+    expect(isBoardUnavailable(failure())).toBe(false);
+    expect(isBoardUnavailable(new Error("x"))).toBe(false);
+    expect(isBoardUnavailable(null)).toBe(false);
   });
 });
