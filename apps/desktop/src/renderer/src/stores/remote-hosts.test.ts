@@ -59,6 +59,8 @@ vi.mock("../lib/session-rpc-ipc-link", () => ({ sessionRpcClient: () => bridge.c
 import {
   createRemoteHostsStore,
   remoteHostOf,
+  readdHostToUpdate,
+  useRemoteHostsStore,
   remoteHosts,
   setRemoteHostsApi,
 } from "./remote-hosts";
@@ -198,6 +200,19 @@ describe("the remote hosts store", () => {
     expect(remoteHostOf([host], host.id)).toBe(host);
     expect(remoteHostOf([host], null)).toBeUndefined();
     expect(remoteHostOf([host], "other")).toBeUndefined();
+  });
+});
+
+describe("the re-add update path", () => {
+  it("prefills a known host's target and ignores a removed host", () => {
+    useRemoteHostsStore.setState({ hosts: [], addHost: { open: false, target: "" } });
+    readdHostToUpdate("gone");
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    const host = registryHost();
+    useRemoteHostsStore.getState().setHosts([host]);
+    readdHostToUpdate(host.id);
+    expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: host.target });
+    useRemoteHostsStore.setState({ hosts: [], addHost: { open: false, target: "" } });
   });
 });
 

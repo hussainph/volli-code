@@ -3,6 +3,8 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useUiStore } from "@renderer/stores/ui";
+import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { registryHost } from "@renderer/stores/remote-hosts.test-support";
 
 import { remoteHost } from "@renderer/stores/host-sources";
 
@@ -139,7 +141,7 @@ describe("connection Island", () => {
     expect(island()?.querySelector("button")).toBeNull();
   });
 
-  it("offers Update host for a host too old, or with a newer database", async () => {
+  it("offers Re-add to update for a host too old, or with a newer database", async () => {
     world = hostWorld({
       hetzner: {
         link: { status: "incompatible", reason: "host-too-old", requiredVersion: "0.3.0" },
@@ -147,8 +149,10 @@ describe("connection Island", () => {
     });
     await world.render(<HostIsland />);
     expect(island()?.textContent).toContain("hetzner-1 needs Volli host 0.3.0 · Read-only");
-    await click(island() as HTMLElement, "Update host");
-    expect(world.remote.calls).toEqual([{ kind: "updateHost", hostId: HETZNER_ID, when: "now" }]);
+    useRemoteHostsStore.getState().setHosts([registryHost({ id: HETZNER_ID })]);
+    await click(island() as HTMLElement, "Re-add to update");
+    expect(world.remote.calls).toEqual([]);
+    expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: "deploy@box" });
   });
 
   it("says a newer database in its own line", async () => {
@@ -159,7 +163,7 @@ describe("connection Island", () => {
     expect(island()?.textContent).toContain(
       "hetzner-1’s database is from a newer Volli · Read-only",
     );
-    expect(island()?.textContent).toContain("Update host");
+    expect(island()?.textContent).toContain("Re-add to update");
   });
 
   it("offers Update Volli for a host newer than the app", async () => {

@@ -6,7 +6,9 @@
  *
  * Scenarios: Straight through; Unknown host key; Needs a sudo password (or
  * "Install for my account only", which lands a user-mode host whose agents
- * share your account); An older Volli host is there; Already paired; The
+ * share your account); An older Volli host is there (restart warning copy
+ * previews with and without a count); Adding this Mac (Add anyway or Cancel);
+ * Already paired; The
  * host's identity changed; A Mac (finishes with "Starts when you log in" and
  * "Agents share your account"); Can't reach it (a failure, then Try again);
  * Hosts file from a newer Volli (read-only: no Add, Rename or Forget).
@@ -28,6 +30,7 @@ import type {
   RemoteHost,
 } from "@volli/shared";
 
+import { questionPrompt } from "@renderer/components/hosts/add-host-model";
 import { HostsChrome } from "@renderer/components/hosts/hosts-chrome";
 import { HostsPane } from "@renderer/components/settings/panes/hosts-pane";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -42,7 +45,7 @@ import {
 
 export const title = "Add a host — the shipped Checklist and Settings → Hosts";
 export const note =
-  "VC-700 PR 3: the real sheet and pane over a scripted main (every question, a failure, a Mac, read-only)";
+  "The real sheet and pane over scripted events: self-add buttons, restart warning copy previews, every question, a failure, read-only";
 
 type Scenario =
   | "happy"
@@ -51,6 +54,7 @@ type Scenario =
   | "host-key"
   | "sudo"
   | "existing"
+  | "self-add"
   | "paired"
   | "identity"
   | "mac"
@@ -63,7 +67,8 @@ const SCENARIOS: readonly { value: Scenario; label: string }[] = [
   { value: "host-key-changed", label: "Changed SSH key (port 2222)" },
   { value: "host-key", label: "Unknown host key" },
   { value: "sudo", label: "Needs a sudo password (or: my account only)" },
-  { value: "existing", label: "An older Volli host is there" },
+  { value: "existing", label: "An older Volli host (restart warning previews)" },
+  { value: "self-add", label: "Adding this Mac (Add anyway or Cancel)" },
   { value: "paired", label: "Already paired with this Mac" },
   { value: "identity", label: "The host’s identity changed" },
   { value: "mac", label: "A Mac (starts at login, runs as you)" },
@@ -157,6 +162,12 @@ function stopFor(scenario: Scenario, step: AddHostStepId): Partial<AddHostView> 
       },
     };
   }
+  if (scenario === "self-add" && step === "probe") {
+    return {
+      status: "question",
+      question: { id: "q1", kind: "self-add", step: "probe" },
+    };
+  }
   if (scenario === "paired" && step === "probe") {
     return {
       status: "question",
@@ -223,7 +234,7 @@ export default function HostAddLiveScratch() {
      * it (the check, the install, the start), as the engine's `flowFacts`.
      */
     const factsAt = (flow: { at: number; userMode: boolean }): AddHostFacts => {
-      const mac = scenarioRef.current === "mac";
+      const mac = scenarioRef.current === "mac" || scenarioRef.current === "self-add";
       const done = (step: AddHostStepId) => flow.at > STEPS.indexOf(step);
       return {
         ...NO_FACTS,
@@ -248,7 +259,7 @@ export default function HostAddLiveScratch() {
       const target = flow.target;
       const facts = factsAt(flow);
       if (step === undefined) {
-        const mac = scenarioRef.current === "mac";
+        const mac = scenarioRef.current === "mac" || scenarioRef.current === "self-add";
         // A Mac always runs as the person; Linux does when they chose their account only.
         const user = mac || flow.userMode;
         const host = registryHost({
@@ -454,7 +465,11 @@ export default function HostAddLiveScratch() {
               const store = useRemoteHostsStore.getState();
               if (store.readOnly === null)
                 store.openAddHost(
-                  scenario === "host-key-changed" ? "deploy@box:2222" : "deploy@box",
+                  scenario === "host-key-changed"
+                    ? "deploy@box:2222"
+                    : scenario === "self-add"
+                      ? "you@localhost"
+                      : "deploy@box",
                 );
             }}
           >
@@ -467,11 +482,45 @@ export default function HostAddLiveScratch() {
         <p className="text-ui text-muted-foreground">
           Simulated backend: the shipped UI over scripted flow events; no SSH or main process.
         </p>
+        {scenario === "existing" ? <RestartWarningPreviews /> : null}
         <HostsChrome />
         <div className="max-w-2xl">
           <HostsPane />
         </div>
       </div>
     </TooltipProvider>
+  );
+}
+
+/** Pure production-copy previews, not a pretend sessions.listing backend. */
+function RestartWarningPreviews() {
+  const question = stopFor("existing", "probe")?.question;
+  if (question === undefined || question === null) return null;
+  return (
+    <section aria-label="Restart warning copy previews" className="flex flex-col gap-4">
+      <p className="text-ui text-muted-foreground">
+        Production warning copy with fixture inputs only. The sheet has no live project link and
+        shows no count; these previews do not simulate a Session listing.
+      </p>
+      <div className="flex flex-wrap gap-4">
+        {[null, 3].map((count) => {
+          const prompt = questionPrompt(question, "deploy@box", count);
+          if (prompt.kind !== "existing-hostd") return null;
+          return (
+            <figure key={count ?? "unknown"} className="flex w-full max-w-[30rem] flex-col gap-2">
+              <figcaption className="text-ui text-muted-foreground">
+                {count === null ? "No live count" : "With live count (fixture: 3)"}
+              </figcaption>
+              <div className="flex flex-col gap-2 rounded-lg border border-border bg-background px-6 py-4">
+                <p role="status" className="text-ui text-attention">
+                  {prompt.line}
+                </p>
+                <p className="text-ui text-muted-foreground">{prompt.note}</p>
+              </div>
+            </figure>
+          );
+        })}
+      </div>
+    </section>
   );
 }

@@ -210,6 +210,7 @@ function ports(box: ReturnType<typeof fakeBox>, overrides: Partial<SshProviderPo
   const tunnels: unknown[] = [];
   const value: SshProviderPorts = {
     ssh: box.ssh,
+    localMachine: { hostname: "this-mac.local", sshHostKeys: ["ssh-ed25519 AAAA local"] },
     hostKeys: { discover: async () => OFFER, accept: async (offer) => void accepted.push(offer) },
     artifact: async (target): Promise<HostdArtifact> => ({
       version: "1.1.0",
@@ -605,6 +606,58 @@ describe("probe", () => {
       code: "connection-lost",
       step: "probe",
     });
+  });
+
+  it.each([
+    ["0.3.0-canary.10", "0.3.0-canary.9"],
+    ["0.3.0", "0.3.0-canary.10"],
+  ])("refuses host prerelease %s newer than app %s", async (hostVersion, appVersion) => {
+    const box = probing(probeOutput({}, existing(hostVersion, "system", { verdict: "serving" })));
+    expect(stoppedWith(await advanceWith(start({ appVersion }), ports(box)))).toMatchObject({
+      code: "host-newer",
+      version: hostVersion,
+    });
+    expect(box.ran().some((script) => script.includes(" install --"))).toBe(false);
+  });
+
+  it("offers updating canary.9 when the app is canary.10", async () => {
+    const box = probing(
+      probeOutput({}, existing("0.3.0-canary.9", "system", { verdict: "serving" })),
+    );
+    expect(
+      stoppedWith(await advanceWith(start({ appVersion: "0.3.0-canary.10" }), ports(box))),
+    ).toMatchObject({
+      kind: "existing-hostd",
+      version: "0.3.0-canary.9",
+    });
+  });
+
+  it.each(["localhost", "127.0.0.1", "[::1]", "this-mac.local"])(
+    "asks before installing on %s, then proceeds only on Add anyway",
+    async (name) => {
+      const box = fakeBox();
+      const p = ports(box, {
+        ssh: { ...box.ssh, target: { destination: `me@${name}`, port: 2222, label: "custom" } },
+      });
+      const asked = await advanceWith(start(), p);
+      expect(stoppedWith(asked)).toEqual({ kind: "self-add", step: "probe" });
+      expect(p.steps).toEqual(["connect", "probe"]);
+      expect(box.ran().some((script) => script.includes(" install --"))).toBe(false);
+      const done = await advanceWith(answer(asked, { kind: "open" }), p);
+      expect(done.status).toBe("done");
+      expect(done.decisions.selfAdd).toBe(true);
+      expect(retry(done, "probe").decisions.selfAdd).toBeUndefined();
+    },
+  );
+
+  it("recognizes aliases by public sshd key, not unrelated public keys", async () => {
+    const box = probing(probeOutput({}, "ssh_host_key=ssh-ed25519 AAAA remote comment"));
+    expect(stoppedWith(await advanceWith(start(), ports(box)))).toEqual({
+      kind: "self-add",
+      step: "probe",
+    });
+    const other = probing(probeOutput({}, "ssh_host_key=ssh-ed25519 BBBB"));
+    expect((await advanceWith(start(), ports(other))).status).toBe("done");
   });
 
   it("refuses a hostd newer than this app", async () => {

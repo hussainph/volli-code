@@ -19,7 +19,7 @@ import {
   type HostConnectionState,
   type HostRecord,
 } from "@renderer/stores/host-connection";
-import { remoteHosts } from "@renderer/stores/remote-hosts";
+import { readdHostToUpdate, remoteHosts } from "@renderer/stores/remote-hosts";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -261,7 +261,7 @@ export function runHostAction(action: HostSurfaceAction, host: HostRecord): void
       store.retry(host.id);
       return;
     case "update-host":
-      store.updateHost(host.id, "now");
+      readdHostToUpdate(host.id);
       return;
     case "update-app":
       useUiStore.getState().setSettingsOpen(true, "updates");

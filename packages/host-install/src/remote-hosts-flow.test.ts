@@ -176,6 +176,7 @@ describe("what an add has found", () => {
     memoryBytes: 4_000_000_000,
     sudo: "nopasswd",
     existing: null,
+    sshHostKeys: [],
     artifactTarget: "linux-arm64",
   } as const;
 

@@ -21,6 +21,10 @@ import { click, hostWorld, type HostWorld } from "./hosts.test-support";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast, Toaster: () => null }));
+// These sheet tests have no persistence bridge; unrelated UI debounce must not toast.
+vi.mock("@renderer/lib/app-state-storage", () => ({
+  appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+}));
 
 let world: HostWorld | null = null;
 let api: FakeRemoteHostsApi;
@@ -308,6 +312,49 @@ describe("Add a host", () => {
     expect(button("Open deploy@box")?.disabled).toBe(false);
   });
 
+  it("asks before a self-add and offers Add anyway or Cancel", async () => {
+    await startFlow("me@localhost");
+    const question = flowView({
+      status: "question",
+      at: "probe",
+      done: 1,
+      question: { id: "self", kind: "self-add", step: "probe" },
+    });
+    await emit({ kind: "view", view: question });
+    expect(sheet().textContent).toContain(
+      "This is the Mac you’re using. Its projects already run here. Add it anyway (for testing)?",
+    );
+    expect(button("Back")).toBeUndefined();
+    await click(sheet(), "Add anyway");
+    expect(api.calls).toContainEqual(["answerAdd", "flow-1", "open", "self"]);
+    await click(sheet(), "Cancel");
+    expect(api.calls).toContainEqual(["cancelAdd", "flow-1"]);
+  });
+
+  it("names the known host in the restart warning and does not guess a count without its project link", async () => {
+    await startFlow();
+    act(() => useRemoteHostsStore.getState().setHosts([registryHost({ name: "My box" })]));
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        at: "probe",
+        done: 1,
+        question: {
+          id: "existing",
+          kind: "existing-hostd",
+          step: "probe",
+          version: "0.2.4",
+          adoptable: false,
+        },
+      }),
+    });
+    expect(sheet().textContent).toContain(
+      "Its projects stay. Running Sessions on My box will stop.",
+    );
+    expect(sheet().textContent).not.toContain("connected projects");
+  });
+
   it("answers an older host, a restored host and a password retry each their own way", async () => {
     await startFlow();
     await emit({
@@ -326,6 +373,9 @@ describe("Add a host", () => {
         },
       }),
     });
+    expect(sheet().textContent).toContain(
+      "Its projects stay. Running Sessions on deploy@box will stop.",
+    );
     await click(sheet(), "Use 0.2.4");
     await click(sheet(), "Update and pair");
     await emit({
