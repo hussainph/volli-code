@@ -19,6 +19,7 @@ import {
   visibleControls,
   stableWaitingLabel,
   visibleServingRow,
+  snapshotSubtree,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -120,6 +121,14 @@ test("visible controls handle colon-quoted YAML keys and disabled rows without r
   );
   assert.equal(visibleControls(tree, "button", "volli-acceptance", { contains: true }).length, 1);
   assert.equal(visibleControls(tree, "button", "Connect").length, 1);
+});
+test("host selection is scoped to the switcher, excluding background rename controls", () => {
+  const tree = `- generic:\n  - button "volli-acceptance Rename" [ref=e1]\n- dialog "Switch host" [ref=e2]:\n  - group "Hosts":\n    - button "volli-acceptance 0 projects" [ref=e3]\n- button "More for volli-acceptance" [ref=e4]`;
+  const scope = snapshotSubtree(tree, "dialog", "Switch host");
+  const hits = visibleControls(scope, "button", "volli-acceptance", { contains: true });
+  assert.equal(hits.length, 1);
+  assert.equal(controlLabel(hits[0]), "volli-acceptance 0 projects");
+  assert.throws(() => snapshotSubtree(tree, "dialog", "Missing"), /found 0/u);
 });
 test("log proof requires a real row, not search/filter or other-host names", () => {
   const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;

@@ -17,7 +17,7 @@ import {
   ANSWER_REPLY,
   REOPEN_QUESTION,
   REOPEN_REPLY,
-  controlLabel,
+  snapshotSubtree,
   visibleControls as controls,
   stableWaitingLabel,
   visibleServingRow,
@@ -45,7 +45,10 @@ function record(number, status, assertion, detail = "") {
 /** Refs always come from a fresh tree; ambiguity is a failure, not a guess. */
 async function action(kind, role, name, extra = {}, options = {}) {
   const current = await snap();
-  const hits = controls(current.text, role, name, options);
+  const surface = options.scope
+    ? snapshotSubtree(current.text, options.scope.role, options.scope.name)
+    : current.text;
+  const hits = controls(surface, role, name, options);
   const hit = options.first ? hits[0] : hits.length === 1 ? hits[0] : null;
   assert.ok(hit, `Expected ${role} "${name}" once; found ${hits.length}\n${current.text}`);
   assert.ok(!hit.includes("[disabled]"), `${name} is disabled`);
@@ -67,12 +70,14 @@ async function send(text) {
 }
 async function hostChip() {
   await click("button", "Host:", { contains: true });
+  await wait("Switch host");
 }
+const SWITCHER = { scope: { role: "dialog", name: "Switch host" }, contains: true, first: true };
 async function selectHost(name) {
   if (controls((await snap()).text, "button", `Host: ${name}`, { contains: true }).length === 1)
     return;
   await hostChip();
-  await click("button", name, { contains: true, first: true });
+  await click("button", name, SWITCHER);
   await wait(`Host: ${name}`);
 }
 async function card() {
@@ -144,7 +149,7 @@ async function journey() {
       { timeout: 30_000, interval: 200 },
     );
     await shot("step-1-paired-device");
-    await press("Escape");
+    await click("button", "Home");
   });
 
   // VC-710 is on main: every production project action now has to pass.
@@ -152,7 +157,7 @@ async function journey() {
     const projectSurface = await snap();
     if (!projectSurface.text.includes(`Open a project on ${REMOTE_HOST}`)) {
       await hostChip();
-      await click("button", REMOTE_HOST, { contains: true, first: true });
+      await click("button", REMOTE_HOST, SWITCHER);
       await wait(`Open a project on ${REMOTE_HOST}`);
     }
     await click("button", "New project…");
@@ -251,7 +256,11 @@ async function journey() {
         contains: true,
       }).filter((line) => stableWaitingLabel(line) === rowLabel);
       assert.equal(recovered.length, 1, "Same remote Session row was not recovered");
-      await click("button", controlLabel(recovered[0]));
+      await call("act", {
+        gen: reopened.generation,
+        ref: recovered[0].match(/\[ref=([^\]]+)\]/u)[1],
+        kind: "click",
+      });
       await wait(REOPEN_QUESTION);
       await click("radio", "Proceed", { contains: true });
       await click("button", "Send answer");

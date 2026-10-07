@@ -38,6 +38,18 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** The visible subtree of one named surface, not matching background controls. */
+export function snapshotSubtree(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  if (hits.length !== 1) throw new Error(`Expected one ${role} ${name}; found ${hits.length}`);
+  const lines = tree.split("\n");
+  const start = lines.indexOf(hits[0]);
+  const indent = lines[start].search(/\S/u);
+  let end = start + 1;
+  while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+  return lines.slice(start, end).join("\n");
+}
+
 /** Require source, component and message within one visible log list row. */
 export function visibleServingRow(tree, host) {
   const lines = tree.split("\n");
