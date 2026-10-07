@@ -15,7 +15,11 @@ import {
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
+  REMOTE_HOST_PROJECT_TEXT_MAX,
+  REMOTE_HOST_PROJECTS_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  type CreateRemoteProjectResult,
+  type RemoteHostProjects,
   type AddHostEvent,
   type AddHostFacts,
   type HandlerCall,
@@ -42,7 +46,9 @@ import { RpcDiagnosticLog } from "./index";
 import {
   addHostEventSchema,
   addHostFactsSchema,
+  createProjectResultSchema,
   remoteHostDevicesSchema,
+  remoteHostProjectsSchema,
   remoteHostsSnapshotSchema,
 } from "./remote-hosts-schema";
 
@@ -123,6 +129,16 @@ const DEVICES: RemoteHostDevices = {
       thisMac: false,
     },
   ],
+};
+const PROJECTS: RemoteHostProjects = {
+  hostId: HOST,
+  projects: [{ id: WORKSPACE, name: "Acme", prefix: "AC", path: "/srv/volli/acme", tickets: 2 }],
+  adds: { kind: "needs-operator", command: "sudo volli-hostd operator-token --for 'you'" },
+};
+const CREATED: CreateRemoteProjectResult = {
+  ok: true,
+  created: true,
+  project: PROJECTS.projects[0]!,
 };
 const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
   kind: "view",
@@ -252,6 +268,10 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hosts.rename": record("hosts.rename", null),
     "hosts.devices": record("hosts.devices", DEVICES),
     "hostAdd.facts": record("hostAdd.facts", FACTS),
+    "hosts.projects": record("hosts.projects", PROJECTS),
+    "hosts.createProject": record("hosts.createProject", CREATED),
+    "hosts.openWorkspace": record("hosts.openWorkspace", null),
+    "hosts.closeWorkspace": record("hosts.closeWorkspace", null),
     ...fixture.overrides,
   };
 }
@@ -323,6 +343,12 @@ function everyRemoteCall(client: TRPCClient<DesktopRouter>) {
     "hosts.rename": () => client.hosts.rename.mutate({ hostId: HOST, name: "Build box" }),
     "hosts.devices": () => client.hosts.devices.query({ hostId: HOST }),
     "hostAdd.facts": () => client.hostAdd.facts.query({ flowId: FLOW }),
+    "hosts.projects": () => client.hosts.projects.query({ hostId: HOST }),
+    "hosts.createProject": () => client.hosts.createProject.mutate({ hostId: HOST, path: "/a" }),
+    "hosts.openWorkspace": () =>
+      client.hosts.openWorkspace.mutate({ hostId: HOST, workspaceId: WORKSPACE }),
+    "hosts.closeWorkspace": () =>
+      client.hosts.closeWorkspace.mutate({ hostId: HOST, workspaceId: WORKSPACE }),
     "hostAdd.start": () => client.hostAdd.start.mutate({ target: "you@box" }),
     "hostAdd.subscribe": () =>
       collect((handlers) => client.hostAdd.subscribe.subscribe({ flowId: FLOW }, handlers)).failed,
@@ -925,6 +951,10 @@ describe("the desktop router's grammar", () => {
         "hosts.rename",
         "hosts.devices",
         "hostAdd.facts",
+        "hosts.projects",
+        "hosts.createProject",
+        "hosts.openWorkspace",
+        "hosts.closeWorkspace",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
@@ -944,6 +974,12 @@ describe("the desktop router's grammar", () => {
     expect(schemas["hosts.devices"]!.output).toBe(remoteHostDevicesSchema);
     expect(schemas["hostAdd.facts"]).toMatchObject({ type: "query" });
     expect(schemas["hostAdd.facts"]!.output).toBe(addHostFactsSchema);
+    expect(schemas["hosts.projects"]).toMatchObject({ type: "query" });
+    expect(schemas["hosts.projects"]!.output).toBe(remoteHostProjectsSchema);
+    expect(schemas["hosts.createProject"]).toMatchObject({ type: "mutation" });
+    expect(schemas["hosts.createProject"]!.output).toBe(createProjectResultSchema);
+    expect(schemas["hosts.openWorkspace"]).toMatchObject({ type: "mutation" });
+    expect(schemas["hosts.closeWorkspace"]).toMatchObject({ type: "mutation" });
     for (const key of ["hosts.subscribe", "hostAdd.subscribe", "hostSignIns.run"]) {
       expect(schemas[key], key).toMatchObject({
         type: "subscription",
@@ -1004,3 +1040,134 @@ describe("the desktop router's grammar", () => {
     ).toHaveLength(REMOTE_HOST_DEVICES_MAX);
   });
 });
+
+// A host's projects (VC-710): listed and created over SSH, opened and closed on this Mac.
+describeContract<Host, DesktopRouter>(
+  "a remote host's projects, on the desktop tier",
+  [
+    ipcContractLink({ router: createDesktopRouter(), createContext: context }),
+    webSocketContractLink({ router: createDesktopRouter(), createContext: context }),
+  ],
+  ({ connect }) => {
+    it("serves the window each, through the host's map", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.hosts.projects.query({ hostId: HOST })).toEqual(PROJECTS);
+      const git = {
+        hostId: HOST,
+        gitUrl: "https://github.com/me/acme.git",
+        path: "/srv/volli/acme",
+        name: "n".repeat(REMOTE_HOST_NAME_MAX),
+      };
+      expect(await client.hosts.createProject.mutate(git)).toEqual(CREATED);
+      expect(await client.hosts.createProject.mutate({ hostId: HOST, path: "/a" })).toEqual(
+        CREATED,
+      );
+      const workspace = { hostId: HOST, workspaceId: WORKSPACE };
+      expect(await client.hosts.openWorkspace.mutate(workspace)).toBeNull();
+      expect(await client.hosts.closeWorkspace.mutate(workspace)).toBeNull();
+      expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
+        ["hosts.projects", { hostId: HOST }],
+        ["hosts.createProject", git],
+        ["hosts.createProject", { hostId: HOST, path: "/a" }],
+        ["hosts.openWorkspace", workspace],
+        ["hosts.closeWorkspace", workspace],
+      ]);
+    });
+
+    it("answers a refused create as a result, with its one line and command", async () => {
+      const refused: CreateRemoteProjectResult = {
+        ok: false,
+        failure: {
+          code: "not-operator",
+          message: "This Mac can’t add projects on box yet.",
+          command: "sudo volli-hostd operator-token --for 'you'",
+        },
+      };
+      const fixture = host(LOCAL_DESKTOP_CALLER, { "hosts.createProject": () => refused });
+      const client = await connect(fixture);
+      expect(await client.hosts.createProject.mutate({ hostId: HOST, path: "/a" })).toEqual(
+        refused,
+      );
+    });
+
+    it("refuses a malformed, unbounded or unknown-keyed input before the handler", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const malformed: [string, () => Promise<unknown>][] = [
+        ["projects of no host", () => client.hosts.projects.query({ hostId: "box" })],
+        ["neither a folder nor a URL", () => client.hosts.createProject.mutate({ hostId: HOST })],
+        [
+          "a path too long",
+          () =>
+            client.hosts.createProject.mutate({
+              hostId: HOST,
+              path: "p".repeat(REMOTE_HOST_PROJECT_TEXT_MAX + 1),
+            }),
+        ],
+        [
+          "a URL too long",
+          () => client.hosts.createProject.mutate({ hostId: HOST, gitUrl: "u".repeat(2049) }),
+        ],
+        [
+          "a name too long",
+          () =>
+            client.hosts.createProject.mutate({
+              hostId: HOST,
+              path: "/a",
+              name: "n".repeat(REMOTE_HOST_NAME_MAX + 1),
+            }),
+        ],
+        [
+          "an unknown key",
+          () => client.hosts.createProject.mutate({ hostId: HOST, path: "/a", sudo: 1 } as never),
+        ],
+        [
+          "a Workspace that is no id",
+          () => client.hosts.openWorkspace.mutate({ hostId: HOST, workspaceId: "acme" }),
+        ],
+        [
+          "a close of no host",
+          () => client.hosts.closeWorkspace.mutate({ workspaceId: WORKSPACE } as never),
+        ],
+      ];
+      for (const [what, call] of malformed) {
+        expect((await expectHostError(call())).code, what).toBe("BAD_REQUEST");
+      }
+      expect(fixture.calls).toEqual([]);
+    });
+
+    it("describes a host's projects strictly and boundedly", () => {
+      expect(remoteHostProjectsSchema.parse(PROJECTS)).toEqual(PROJECTS);
+      const row = PROJECTS.projects[0]!;
+      for (const [what, value] of [
+        ["an extra field", { ...PROJECTS, projects: [{ ...row, archived: 1 }] }],
+        ["no adds", { ...PROJECTS, adds: undefined }],
+        ["an unknown adds", { ...PROJECTS, adds: { kind: "maybe" } }],
+        [
+          "too many",
+          {
+            ...PROJECTS,
+            projects: Array.from({ length: REMOTE_HOST_PROJECTS_MAX + 1 }, () => row),
+          },
+        ],
+        [
+          "a path too long",
+          {
+            ...PROJECTS,
+            projects: [{ ...row, path: "p".repeat(REMOTE_HOST_PROJECT_TEXT_MAX + 1) }],
+          },
+        ],
+      ] as const) {
+        expect(() => remoteHostProjectsSchema.parse(value), what).toThrow();
+      }
+      expect(createProjectResultSchema.parse(CREATED)).toEqual(CREATED);
+      expect(() =>
+        createProjectResultSchema.parse({
+          ok: false,
+          failure: { code: "made-up", message: "x", command: null },
+        }),
+      ).toThrow();
+    });
+  },
+);

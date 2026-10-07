@@ -23,6 +23,7 @@ import { homedir, hostname } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
 import type { RemoteHostsPort } from "@volli/host-core/handlers";
+import type { HostFeature } from "@volli/host-protocol";
 import { createHostLink } from "@volli/host-protocol/client-link";
 import {
   acceptHostKeys,
@@ -186,8 +187,24 @@ export interface DesktopRemoteHostsOptions {
   readonly wake?: WakePlatform;
 }
 
-/** What every Workspace link to a remote host asks for. */
-export const REMOTE_HOST_LINK_FEATURES = ["sign-ins", "auth.callback"] as const;
+/**
+ * What every Workspace link to a remote host asks for: its sign-ins and the
+ * relay this Mac performs for a browser sign-in (VC-702), and (VC-710) its
+ * board, its Sessions and its log, which the later relay tickets use. Granted
+ * is asked ∩ offered, so a host from before any of them grants less.
+ */
+export const REMOTE_HOST_LINK_FEATURES = [
+  "sign-ins",
+  "auth.callback",
+  "board.read",
+  "board.write",
+  "sessions",
+  "sessions.subscribe",
+  "sessions.history",
+  "sessions.queue",
+  "session.read",
+  "host.logs",
+] as const satisfies readonly HostFeature[];
 
 /** The engine, composed with this app's ports. */
 export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): RemoteHosts {
@@ -213,8 +230,6 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
     deviceName: hostname().replace(/\.local$/u, ""),
     tunnel: (tunnel) => createSshTunnel({ ...tunnel }),
     link: (link) => createHostLink(link),
-    // Sign-ins on the host (VC-702): its `sign-ins` operations, and the
-    // relay this Mac performs for a browser sign-in.
     linkFeatures: REMOTE_HOST_LINK_FEATURES,
     ...(options.wake === undefined ? {} : { wake: desktopWakeSource(options.wake) }),
     now: Date.now,
@@ -261,5 +276,10 @@ export function remoteHostsPort(
     retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
     cancelAdd: (flowId) => hosts.cancelAdd(flowId),
     addFacts: (flowId) => hosts.addFacts(flowId),
+    // A host's projects (VC-710).
+    projects: (hostId) => hosts.projects(hostId),
+    createProject: (input) => hosts.createProject(input),
+    openWorkspace: (hostId, workspaceId) => hosts.openWorkspace(hostId, workspaceId),
+    closeWorkspace: (hostId, workspaceId) => hosts.closeWorkspace(hostId, workspaceId),
   };
 }

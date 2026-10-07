@@ -254,8 +254,20 @@ describe("the remote hosts port's sign-in (VC-702)", () => {
     const preflight = vi.fn(async () => {});
     await remoteHostsPort(engine, preflight).signIn("h", "claude");
     expect(preflight).toHaveBeenCalledWith("h", "claude");
-    // Every Workspace link asks for the host's sign-ins and the relay.
-    expect(REMOTE_HOST_LINK_FEATURES).toEqual(["sign-ins", "auth.callback"]);
+    // Every Workspace link asks for the host's sign-ins and the relay, and
+    // (VC-710) its board, Sessions and log.
+    expect(REMOTE_HOST_LINK_FEATURES).toEqual([
+      "sign-ins",
+      "auth.callback",
+      "board.read",
+      "board.write",
+      "sessions",
+      "sessions.subscribe",
+      "sessions.history",
+      "sessions.queue",
+      "session.read",
+      "host.logs",
+    ]);
   });
 });
 
@@ -276,5 +288,27 @@ describe("the engine as the handler map's port", () => {
     expect(engine.devices).toHaveBeenCalledWith(HOST);
     expect(port.addFacts("flow-1")).toBe(facts);
     expect(engine.addFacts).toHaveBeenCalledWith("flow-1");
+  });
+
+  it("passes a host's projects, a create, an open and a close straight to the engine (VC-710)", async () => {
+    const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
+    const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+    const projects = { hostId: HOST, projects: [], adds: { kind: "ready" } };
+    const created = { ok: true };
+    const engine = {
+      projects: vi.fn(async () => projects),
+      createProject: vi.fn(async () => created),
+      openWorkspace: vi.fn(),
+      closeWorkspace: vi.fn(),
+    };
+    const port = remoteHostsPort(engine as unknown as RemoteHosts);
+    expect(await port.projects(HOST)).toBe(projects);
+    const input = { hostId: HOST, path: "/srv/volli/acme" };
+    expect(await port.createProject(input)).toBe(created);
+    expect(engine.createProject).toHaveBeenCalledWith(input);
+    expect(port.openWorkspace(HOST, WORKSPACE)).toBeUndefined();
+    expect(engine.openWorkspace).toHaveBeenCalledWith(HOST, WORKSPACE);
+    expect(port.closeWorkspace(HOST, WORKSPACE)).toBeUndefined();
+    expect(engine.closeWorkspace).toHaveBeenCalledWith(HOST, WORKSPACE);
   });
 });

@@ -32,7 +32,10 @@ import type {
   AddHostFacts,
   AddHostStartInput,
   AddHostStepId,
+  CreateRemoteProjectInput,
+  CreateRemoteProjectResult,
   RemoteHostDevices,
+  RemoteHostProjects,
   RemoteHostsSnapshot,
 } from "@volli/shared";
 
@@ -92,4 +95,13 @@ export interface RemoteHostsPort {
   cancelAdd(flowId: string): Answer<void>;
   /** What the flow has found about its host so far: read beside its view. */
   addFacts(flowId: string): Answer<AddHostFacts>;
+  /* ── A host's projects (VC-710) ── */
+  /** The projects the host has, read over SSH now, never cached; and whether this Mac can add one. */
+  projects(hostId: string): Answer<RemoteHostProjects>;
+  /** The host's own `volli project add` over SSH; a refusal answers, in one line. */
+  createProject(input: CreateRemoteProjectInput): Answer<CreateRemoteProjectResult>;
+  /** Opens one of the host's projects on this Mac: remembered, and linked. */
+  openWorkspace(hostId: string, workspaceId: string): Answer<void>;
+  /** Closes it on this Mac; the project on the host is untouched. */
+  closeWorkspace(hostId: string, workspaceId: string): Answer<void>;
 }

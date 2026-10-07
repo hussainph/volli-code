@@ -36,6 +36,8 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type CreateRemoteProjectInput,
+  type CreateRemoteProjectResult,
   type DesktopCatalogEntry,
   type DesktopKey,
   type HandlerCall,
@@ -45,7 +47,9 @@ import {
   type HostSignInSendResult,
   type HostSignInStatus,
   type RemoteHostDevices,
+  type RemoteHostProjects,
   type RemoteHostsSnapshot,
+  type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
   type WorktreeTrimSettings,
 } from "@volli/shared";
@@ -69,14 +73,18 @@ import {
   flowInputSchema,
   hostAddAnswerInputSchema,
   addHostFactsSchema,
+  createProjectInputSchema,
+  createProjectResultSchema,
   hostAddRetryInputSchema,
   hostInputSchema,
   remoteHostDevicesSchema,
+  remoteHostProjectsSchema,
   remoteHostsSnapshotSchema,
   renameHostInputSchema,
   signInInputSchema,
   sudoPasswordInputSchema,
   updateHostInputSchema,
+  workspaceInputSchema,
 } from "./remote-hosts-schema";
 import {
   hostSignInStatusSchema,
@@ -160,6 +168,11 @@ export interface DesktopRouterHandlers {
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
   readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
+  /** A host's projects (VC-710): listed and created over SSH, opened and closed on this Mac. */
+  readonly "hosts.projects": HostHandler<{ hostId: string }, RemoteHostProjects>;
+  readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
+  readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -369,6 +382,27 @@ export function createDesktopRouter() {
         .input(hostInputSchema)
         .output(remoteHostDevicesSchema)
         .query(({ ctx, input }) => ctx.handlers["hosts.devices"](input, ctx.call)),
+      /* ── A host's projects (VC-710) ── */
+      /** The projects the host has, read over SSH when asked, never cached. */
+      projects: hostProcedure("hosts.projects")
+        .input(hostInputSchema)
+        .output(remoteHostProjectsSchema)
+        .query(({ ctx, input }) => ctx.handlers["hosts.projects"](input, ctx.call)),
+      /** The host's own `volli project add` over SSH; a refusal is an answer, in one line. */
+      createProject: hostProcedure("hosts.createProject")
+        .input(createProjectInputSchema)
+        .output(createProjectResultSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["hosts.createProject"](input, ctx.call)),
+      /** Remembered on this Mac, and linked whenever the host's tunnel is up. */
+      openWorkspace: hostProcedure("hosts.openWorkspace")
+        .input(workspaceInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["hosts.openWorkspace"](input, ctx.call)),
+      /** Forgotten on this Mac, its link closed; the project on the host is untouched. */
+      closeWorkspace: hostProcedure("hosts.closeWorkspace")
+        .input(workspaceInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["hosts.closeWorkspace"](input, ctx.call)),
     },
     hostAdd: {
       start: hostProcedure("hostAdd.start")

@@ -12,6 +12,8 @@ import {
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
+  REMOTE_HOST_PROJECT_TEXT_MAX,
+  REMOTE_HOST_PROJECTS_MAX,
   type AddHostEvent,
   type AddHostFacts,
   type AddHostFailure,
@@ -19,10 +21,16 @@ import {
   type AddHostStepId,
   type AddHostStepStatus,
   type AddHostView,
+  type CreateRemoteProjectInput,
+  type CreateRemoteProjectResult,
   type RemoteHost,
   type RemoteHostDevice,
   type RemoteHostDevices,
+  type RemoteHostProject,
+  type RemoteHostProjects,
+  type RemoteProjectFailure,
   type RemoteProjectLink,
+  type RemoteWorkspaceInput,
   type RemoteHostsSnapshot,
   type RenameRemoteHostInput,
 } from "@volli/shared";
@@ -235,6 +243,69 @@ export const addHostEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("log"), flowId: z.string(), line: addHostLogLine }),
 ]);
 
+/* ── A host's projects (VC-710) ─────────────────────────────────────────── */
+
+/** The longest git URL the window may send; the engine judges what it clones. */
+export const MAX_GIT_URL_LENGTH = 2048;
+
+/**
+ * `CreateRemoteProjectInput`: a folder on the host, or a git URL (and,
+ * optionally, the folder to clone it into), and an optional name. Which of
+ * them the host can use is the engine's to judge, in one line.
+ */
+export const createProjectInputSchema = z
+  .strictObject({
+    hostId,
+    path: z.string().max(REMOTE_HOST_PROJECT_TEXT_MAX).optional(),
+    gitUrl: z.string().max(MAX_GIT_URL_LENGTH).optional(),
+    name: z.string().max(REMOTE_HOST_NAME_MAX).optional(),
+  })
+  .refine((input) => input.path !== undefined || input.gitUrl !== undefined, {
+    message: "A project needs a folder or a git URL.",
+  });
+/** `RemoteWorkspaceInput`: one of the host's projects, by its Workspace id. */
+export const workspaceInputSchema = z.strictObject({ hostId, workspaceId: z.uuid() });
+
+const projectText = z.string().max(REMOTE_HOST_PROJECT_TEXT_MAX);
+const remoteHostProject = z.strictObject({
+  id: projectText,
+  name: projectText,
+  prefix: projectText,
+  path: projectText,
+  tickets: z.number().int().nonnegative(),
+});
+/** `RemoteHostProjects`: what `hosts.projects` answers, read from the host when asked. */
+export const remoteHostProjectsSchema = z.strictObject({
+  hostId: z.string(),
+  projects: z.array(remoteHostProject).max(REMOTE_HOST_PROJECTS_MAX).readonly(),
+  adds: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("ready") }),
+    z.strictObject({ kind: z.literal("needs-operator"), command: z.string() }),
+    z.strictObject({ kind: z.literal("user-install") }),
+  ]),
+});
+const remoteProjectFailure = z.strictObject({
+  code: z.enum([
+    "host-unreachable",
+    "not-operator",
+    "user-install",
+    "hostd-unreachable",
+    "refused",
+    "bad-url",
+    "destination-exists",
+    "needs-sudo",
+    "clone-failed",
+    "unavailable",
+  ]),
+  message: z.string(),
+  command: z.string().nullable(),
+});
+/** `CreateRemoteProjectResult`: the project, or the one line (and command) that says why not. */
+export const createProjectResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({ ok: z.literal(true), created: z.boolean(), project: remoteHostProject }),
+  z.strictObject({ ok: z.literal(false), failure: remoteProjectFailure }),
+]);
+
 /** Each output schema reads as its wire type: nothing it accepts is outside it. */
 export type RemoteHostsOutputSchemasMatch = AssertNever<
   | (z.output<typeof remoteHostsSnapshotSchema> extends RemoteHostsSnapshot
@@ -245,13 +316,25 @@ export type RemoteHostsOutputSchemasMatch = AssertNever<
   | (z.output<typeof remoteHostDevicesSchema> extends RemoteHostDevices
       ? never
       : "remoteHostDevicesSchema")
+  | (z.output<typeof remoteHostProjectsSchema> extends RemoteHostProjects
+      ? never
+      : "remoteHostProjectsSchema")
+  | (z.output<typeof createProjectResultSchema> extends CreateRemoteProjectResult
+      ? never
+      : "createProjectResultSchema")
 >;
 
 /** Each input schema yields its wire type. */
 export type RemoteHostsInputSchemasMatch = AssertNever<
-  z.output<typeof renameHostInputSchema> extends RenameRemoteHostInput
-    ? never
-    : "renameHostInputSchema"
+  | (z.output<typeof renameHostInputSchema> extends RenameRemoteHostInput
+      ? never
+      : "renameHostInputSchema")
+  | (z.output<typeof createProjectInputSchema> extends CreateRemoteProjectInput
+      ? never
+      : "createProjectInputSchema")
+  | (z.output<typeof workspaceInputSchema> extends RemoteWorkspaceInput
+      ? never
+      : "workspaceInputSchema")
 >;
 
 type MissingKeys<Wire, Schema> = Exclude<keyof Wire, keyof Schema>;
@@ -268,4 +351,9 @@ export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteHostDevices, z.output<typeof remoteHostDevicesSchema>>
   | MissingKeys<RemoteHostDevice, z.output<typeof remoteHostDevice>>
   | MissingKeys<RenameRemoteHostInput, z.output<typeof renameHostInputSchema>>
+  | MissingKeys<RemoteHostProjects, z.output<typeof remoteHostProjectsSchema>>
+  | MissingKeys<RemoteHostProject, z.output<typeof remoteHostProject>>
+  | MissingKeys<RemoteProjectFailure, z.output<typeof remoteProjectFailure>>
+  | MissingKeys<CreateRemoteProjectInput, z.output<typeof createProjectInputSchema>>
+  | MissingKeys<RemoteWorkspaceInput, z.output<typeof workspaceInputSchema>>
 >;

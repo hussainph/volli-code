@@ -16,6 +16,8 @@ import {
   type HandlerCall,
   type ModelAccessSnapshot,
   type RemoteHostDevices,
+  type RemoteHostProjects,
+  type CreateRemoteProjectResult,
   type RemoteHostsSnapshot,
   type TicketEventActor,
 } from "@volli/shared";
@@ -613,6 +615,18 @@ describe("remote hosts commands", () => {
     alreadyPaired: false,
   };
 
+  const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+  const PROJECTS: RemoteHostProjects = {
+    hostId: HOST,
+    projects: [{ id: WORKSPACE, name: "Acme", prefix: "AC", path: "/srv/volli/acme", tickets: 0 }],
+    adds: { kind: "ready" },
+  };
+  const CREATED: CreateRemoteProjectResult = {
+    ok: true,
+    created: true,
+    project: PROJECTS.projects[0]!,
+  };
+
   function port(overrides: Partial<RemoteHostsPort> = {}) {
     const unsubscribe = vi.fn();
     const remote = {
@@ -638,6 +652,10 @@ describe("remote hosts commands", () => {
       rename: vi.fn(),
       devices: vi.fn(async () => DEVICES),
       addFacts: vi.fn(() => FACTS),
+      projects: vi.fn(async () => PROJECTS),
+      createProject: vi.fn(async () => CREATED),
+      openWorkspace: vi.fn(),
+      closeWorkspace: vi.fn(),
       ...overrides,
     } satisfies RemoteHostsPort;
     return { remote, unsubscribe };
@@ -670,6 +688,10 @@ describe("remote hosts commands", () => {
         () => map["hosts.rename"]({ hostId: HOST, name: "Box" }, WINDOW),
         () => map["hosts.devices"]({ hostId: HOST }, WINDOW),
         () => map["hostAdd.facts"]({ flowId: FLOW }, WINDOW),
+        () => map["hosts.projects"]({ hostId: HOST }, WINDOW),
+        () => map["hosts.createProject"]({ hostId: HOST, path: "/a" }, WINDOW),
+        () => map["hosts.openWorkspace"]({ hostId: HOST, workspaceId: WORKSPACE }, WINDOW),
+        () => map["hosts.closeWorkspace"]({ hostId: HOST, workspaceId: WORKSPACE }, WINDOW),
       ];
       for (const call of calls) {
         expect(await unavailable(call)).toBe("Remote hosts are unavailable on this host");
@@ -708,7 +730,17 @@ describe("remote hosts commands", () => {
     expect(await map["hosts.rename"]({ hostId: HOST, name: "Build box" }, WINDOW)).toBeNull();
     expect(await map["hosts.devices"]({ hostId: HOST }, WINDOW)).toBe(DEVICES);
     expect(await map["hostAdd.facts"]({ flowId: FLOW }, WINDOW)).toBe(FACTS);
+    expect(await map["hosts.projects"]({ hostId: HOST }, WINDOW)).toBe(PROJECTS);
+    const create = { hostId: HOST, gitUrl: "https://github.com/me/acme", name: "Acme" };
+    expect(await map["hosts.createProject"](create, WINDOW)).toBe(CREATED);
+    const workspace = { hostId: HOST, workspaceId: WORKSPACE };
+    expect(await map["hosts.openWorkspace"](workspace, WINDOW)).toBeNull();
+    expect(await map["hosts.closeWorkspace"](workspace, WINDOW)).toBeNull();
 
+    expect(remote.projects).toHaveBeenCalledWith(HOST);
+    expect(remote.createProject).toHaveBeenCalledWith(create);
+    expect(remote.openWorkspace).toHaveBeenCalledWith(HOST, WORKSPACE);
+    expect(remote.closeWorkspace).toHaveBeenCalledWith(HOST, WORKSPACE);
     expect(remote.retry).toHaveBeenCalledWith(HOST);
     expect(remote.updateHost).toHaveBeenCalledWith(HOST, "when-idle");
     expect(remote.cancelScheduledUpdate).toHaveBeenCalledWith(HOST);

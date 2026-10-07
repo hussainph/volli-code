@@ -77,8 +77,12 @@ import {
   type ModelSelection,
   type LatestSessionSignal,
   type RemoteHostDevices,
+  type RemoteHostProjects,
   type RemoteHostsSnapshot,
+  type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
+  type CreateRemoteProjectInput,
+  type CreateRemoteProjectResult,
   type SessionReadVerb,
   type Ticket,
   type WorktreeTrimSettings,
@@ -311,6 +315,11 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
   readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
+  /** A host's projects (VC-710): listed and created over SSH, opened and closed on this Mac. */
+  readonly "hosts.projects": HostHandler<{ hostId: string }, RemoteHostProjects>;
+  readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
+  readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -752,5 +761,11 @@ function hostHandlerEntries(
     "hosts.rename": ({ hostId, name }) => done(() => remoteHosts().rename(hostId, name)),
     "hosts.devices": ({ hostId }) => remoteHosts().devices(hostId),
     "hostAdd.facts": ({ flowId }) => remoteHosts().addFacts(flowId),
+    "hosts.projects": ({ hostId }) => remoteHosts().projects(hostId),
+    "hosts.createProject": (input) => remoteHosts().createProject(input),
+    "hosts.openWorkspace": ({ hostId, workspaceId }) =>
+      done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
+    "hosts.closeWorkspace": ({ hostId, workspaceId }) =>
+      done(() => remoteHosts().closeWorkspace(hostId, workspaceId)),
   };
 }

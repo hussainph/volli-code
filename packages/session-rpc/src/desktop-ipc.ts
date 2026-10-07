@@ -161,6 +161,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostSignIns.cancel": "ipc",
   "hosts.rename": "ipc",
   "hosts.devices": "ipc",
+  "hosts.projects": "ipc",
+  "hosts.createProject": "ipc",
+  "hosts.openWorkspace": "ipc",
+  "hosts.closeWorkspace": "ipc",
   "hostAdd.facts": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
