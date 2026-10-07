@@ -381,7 +381,7 @@ describe("watchSessionActivity", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("reports a fold failure through console.warn when given no diagnostics seam", async () => {
+  it("reports a fold failure to the host log when given no diagnostics seam", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const engine = stubEngine(() => projection());
     (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
@@ -393,7 +393,9 @@ describe("watchSessionActivity", () => {
     await watch.engine.observe({} as never);
     await watch.flush();
 
-    expect(warn).toHaveBeenCalledWith("[volli] session activity watch:", expect.any(Error));
+    expect(warn).toHaveBeenCalledWith("[activity-watch] session activity watch failed", {
+      error: expect.objectContaining({ name: "Error", message: "ledger gone" }),
+    });
     warn.mockRestore();
     watch.stop();
   });

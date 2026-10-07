@@ -4,6 +4,7 @@ import {
   ModelAccessFirstRun,
   useModelAccessReady,
 } from "@renderer/components/sessions/model-access-first-run";
+import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -46,7 +47,9 @@ import { useUiStore } from "@renderer/stores/ui";
  * existing empty state rather than a new panel, and it is a button plus a menu
  * rather than prose.
  */
-export function BoardEmpty({ className }: { className?: string }) {
+export function BoardEmpty({ projectId, className }: { projectId: string; className?: string }) {
+  // The project's host cannot serve (VC-576): the invitation stands down too.
+  const canWrite = useCanWrite(projectId);
   // Asked only while this state is on screen, and re-asked on every Model
   // Access revision — finishing sign-in flips the block back to the ticket line
   // without a reload. `null` means unanswered: neither branch draws yet, which
@@ -64,6 +67,7 @@ export function BoardEmpty({ className }: { className?: string }) {
           </p>
           <Button
             className="gap-1 px-2 text-ui"
+            {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >
             <PlusIcon className="size-3.5" />

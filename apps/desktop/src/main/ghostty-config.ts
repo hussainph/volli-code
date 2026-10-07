@@ -34,6 +34,9 @@ import type {
 } from "@volli/shared";
 import type { VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { FsDeps } from "./fs-deps";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("ghostty");
 
 /**
  * The resolution path's slice of {@link FsDeps} (`defaultFsDeps` supplies the
@@ -125,7 +128,7 @@ function projectOverlayPathFor(
 function resolveConfigText(entryPath: string, deps: GhosttyConfigDeps): string | null {
   const { text, warnings } = resolveGhosttyConfigText(entryPath, deps.readFile);
   for (const warning of warnings) {
-    console.warn(`[ghostty-config] ${warning}`);
+    log.warn("config warning", { warning });
   }
   return text;
 }
@@ -245,7 +248,7 @@ function watchConfigDir(
       if (changedName !== null && matches(changedName)) scheduleReload();
     });
   } catch (error) {
-    console.warn(`[ghostty-config] could not watch ${dir}: ${errorMessage(error)}`);
+    log.warn("could not watch config directory", { dir, error });
   }
 }
 
@@ -282,7 +285,7 @@ function watchForChanges(deps: GhosttyConfigDeps, appearance: () => ResolvedAppe
   try {
     deps.ensureDir(projectsDir); // recursive — creates `overlayDir` on the way
   } catch (error) {
-    console.warn(`[ghostty-config] could not create ${projectsDir}: ${errorMessage(error)}`);
+    log.warn("could not create project overlay directory", { dir: projectsDir, error });
   }
   watchConfigDir(overlayDir, isConfigFile, scheduleReload, deps);
   watchConfigDir(projectsDir, isProjectOverlayFile, scheduleReload, deps);

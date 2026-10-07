@@ -31,6 +31,9 @@ import type {
 
 import type { AgentBrowserBackend, AgentBrowserPort } from "./agent-port";
 import type { BrowserTraceStepInput } from "./trace-store";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("browser");
 
 type NavigateInput = Parameters<RuntimeBrowserPort["navigate"]>[0];
 type ActInput = Parameters<RuntimeBrowserPort["act"]>[0];
@@ -60,7 +63,7 @@ async function report<I extends { signal: AbortSignal }, O>(
     try {
       recorder(step);
     } catch (error) {
-      console.warn("[volli] Browser Trace step was not recorded:", error);
+      log.warn("browser trace step was not recorded", { error });
     }
   };
   let answer: O;

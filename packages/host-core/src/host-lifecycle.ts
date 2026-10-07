@@ -34,6 +34,10 @@
  */
 import { errorMessage } from "@volli/shared";
 
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("host");
+
 /** The step a failure came from, so a host can report it in its own words. */
 export type HostLifecycleStep =
   | "stop-producers"
@@ -127,10 +131,7 @@ export function createHostLifecycle(
       ports.reportSkippedCleanClose?.(reason);
     } catch (error) {
       // Diagnostics must not change whether teardown proceeds or stamps.
-      console.error(
-        "[host] failed to report a skipped clean-close watermark:",
-        errorMessage(error),
-      );
+      log.error("failed to report a skipped clean-close watermark", { error });
     }
   }
 
@@ -161,7 +162,7 @@ export function createHostLifecycle(
         ports.reportFailure(step, error);
       } catch (reportError) {
         // A reporter that throws must not strand the database open.
-        console.error(`[host] failed to report a ${step} failure:`, errorMessage(reportError));
+        log.error("failed to report a shutdown step failure", { step, error: reportError });
       }
     };
     const settle = (step: HostLifecycleStep, result: StepResult): void => {

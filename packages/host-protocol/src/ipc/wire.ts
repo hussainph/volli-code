@@ -9,9 +9,16 @@
  * half ({@link ipcLink}) is a terminating tRPC link. Neither half holds a
  * list of procedures: what crosses is decided where the routers are composed.
  *
+ * Traced (VC-699): a request carries the operation's `{ traceId, spanId }`
+ * beside its input, never in it, as the WebSocket frame's `volliTrace` does.
+ * The server hands it to its `scope`, which a host uses to log the call
+ * under it; a server without one ignores it.
+ *
  * Transport-free: no Electron, no Node. The desktop's preload carries these
  * values over its three channels (`SESSION_RPC_*_CHANNEL`, `@volli/shared`).
  */
+
+import type { HostTrace } from "../trace";
 
 /** A tRPC operation's type, as tRPC's links name it. */
 export type IpcProcedureType = "query" | "mutation" | "subscription";
@@ -21,6 +28,13 @@ export interface IpcRequest {
   readonly path: string;
   readonly type: IpcProcedureType;
   readonly input: unknown;
+  /**
+   * The operation this request belongs to (VC-699): the caller's, named in
+   * tRPC's operation context (`{ context: { trace: { traceId } } }`), with a
+   * fresh span per request; otherwise a fresh trace. Optional: a server
+   * judges it before it uses it.
+   */
+  readonly trace?: HostTrace;
 }
 
 /**

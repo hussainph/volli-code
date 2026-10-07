@@ -1117,6 +1117,7 @@ export function TicketSessionsPanel({
           }
         >
           <NewSessionControl
+            projectId={projectId}
             disabled={effectiveCreating}
             placement="rail"
             align="end"

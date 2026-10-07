@@ -258,10 +258,12 @@ describe.each(ACTORS)("executeTicketMove with $kind actor", (actor) => {
         kind: "ticket",
       });
       expect(log).toHaveBeenCalledWith(
-        "[volli] failed to record armed-column arrival after committed move: arrival failed",
+        "[ticket-move] failed to record armed-column arrival after committed move",
+        { error: expect.objectContaining({ name: "Error", message: "arrival failed" }) },
       );
       expect(log).toHaveBeenCalledWith(
-        "[volli] failed to interrupt ticket sessions after committed move: interrupt failed",
+        "[ticket-move] failed to interrupt ticket sessions after committed move",
+        { error: expect.objectContaining({ name: "Error", message: "interrupt failed" }) },
       );
       expect(listTicketEvents(ctx.db, "target").map((event) => event.payload.kind)).toEqual([
         "created",
@@ -444,7 +446,8 @@ describe("group commit and post-commit wakes", () => {
     ]);
     expect(statusEvents("b")).toHaveLength(1);
     expect(log).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: second interrupt failed",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      { error: expect.objectContaining({ name: "Error", message: "second interrupt failed" }) },
     );
   });
 
@@ -498,7 +501,8 @@ describe("group commit and post-commit wakes", () => {
     ]);
     expect(wakes.map((wake) => wake.event)).toEqual(statusEvents("target"));
     expect(log).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: attachment unavailable",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      { error: expect.objectContaining({ name: "Error", message: "attachment unavailable" }) },
     );
   });
 });
@@ -641,7 +645,14 @@ describe("shutdown drain of the detached Done trim (VC-627)", () => {
     ports.detachedWork = tracker;
     const events: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...line: unknown[]) => {
-      events.push(line.join(" "));
+      // The error's stack is where it was thrown, not part of what this asserts.
+      events.push(
+        line
+          .map((part) =>
+            JSON.stringify(part, (key, value: unknown) => (key === "stack" ? undefined : value)),
+          )
+          .join(" "),
+      );
     });
     const pending = deferred<TrimFinishOutcome>();
     vi.spyOn(worktree, "trimFinishedWorktree").mockReturnValue(pending.promise);
@@ -656,7 +667,8 @@ describe("shutdown drain of the detached Done trim (VC-627)", () => {
     pending.reject(new Error("trim failed"));
     await drained;
     expect(events).toEqual([
-      "[volli] could not trim the worktree of target: trim failed",
+      '"[ticket-move] could not trim the ticket\'s worktree" ' +
+        '{"ticketId":"target","error":{"name":"Error","message":"trim failed"}}',
       "drained",
     ]);
     expect(reportFailure).not.toHaveBeenCalled();
@@ -809,10 +821,10 @@ describe("background Done trim", () => {
       ]);
       expect(wakes.map((wake) => wake.event)).toEqual(statusEvents("target"));
       if (outcome === "rejected")
-        expect(log).toHaveBeenCalledWith(
-          "[volli] could not trim the worktree of target:",
-          "trim failed",
-        );
+        expect(log).toHaveBeenCalledWith("[ticket-move] could not trim the ticket's worktree", {
+          ticketId: "target",
+          error: expect.objectContaining({ name: "Error", message: "trim failed" }),
+        });
       else expect(log).not.toHaveBeenCalled();
     },
   );

@@ -82,6 +82,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "session.editQueued": "ipc",
   "session.cancelInteraction": "ipc",
   "session.reconcile": "ipc",
+  // This Mac's own log (VC-699): the dev log viewer's local stream, the same
+  // `host.logs` operations a remote host serves over the WebSocket.
+  "logs.tail": "ipc",
+  "logs.follow": "ipc",
   "session.list": "websocket-only",
   "session.show": "websocket-only",
   "session.peek": "websocket-only",

@@ -41,6 +41,9 @@ import {
   type ReclaimPorts,
   type TrimFinishPorts,
 } from "./retention";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("worktree-watch");
 
 export type { TicketRetentionState } from "@volli/shared";
 
@@ -253,10 +256,10 @@ export async function pollRetention(
         });
         if (!discovered.ok) {
           result.failed += 1;
-          console.error(
-            `[retention] discover failed for ${ticket.id}:`,
-            discovered.failure.message,
-          );
+          log.error("pull request discovery failed", {
+            ticketId: ticket.id,
+            error: discovered.failure.message,
+          });
           continue;
         }
         if (discovered.value.url !== null) {
@@ -289,7 +292,10 @@ export async function pollRetention(
       const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
       if (!status.ok) {
         result.failed += 1;
-        console.error(`[retention] status failed for ${ticket.id}:`, status.failure.message);
+        log.error("pull request status failed", {
+          ticketId: ticket.id,
+          error: status.failure.message,
+        });
         continue;
       }
 
@@ -338,7 +344,7 @@ export async function pollRetention(
       // half the question of whether a Done ticket is finished.
       if (await maybeReclaim(deps, ticket, observation.prState)) result.changed = true;
     } catch (error) {
-      console.error(`[retention] poll failed for ${ticket.id}:`, error);
+      log.error("retention poll failed", { ticketId: ticket.id, error });
     }
   }
 
@@ -383,13 +389,15 @@ async function runTrimPass(
       });
       if (outcome.kind !== "trimmed") continue;
       changed = true;
-      console.log(
-        `[retention] trimmed ${outcome.report.removed.length} ignored path(s) ` +
-          `(${outcome.report.totalBytes} bytes, kept ${outcome.report.kept.length}) ` +
-          `from ${outcome.report.worktreePath}`,
-      );
+      log.info("ignored paths trimmed", {
+        ticketId,
+        removed: outcome.report.removed.length,
+        bytes: outcome.report.totalBytes,
+        kept: outcome.report.kept.length,
+        worktreePath: outcome.report.worktreePath,
+      });
     } catch (error) {
-      console.error(`[retention] trim failed for ${ticketId}:`, error);
+      log.error("trim failed", { ticketId, error });
     }
   }
   return changed;
@@ -449,7 +457,7 @@ function stampDiscoveredPr(deps: RetentionPollPorts, ticket: TicketRow, url: str
     write();
     return true;
   } catch (error) {
-    console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
+    log.error("failed to stamp discovered pull request", { ticketId: ticket.id, error });
     // Operational, and deliberately outside the switches: this is a durable
     // write that failed in a background pass with no other user-visible
     // surface (CLAUDE.md's never-swallow rule). A "worktree maintenance"
@@ -622,7 +630,7 @@ export class RetentionWatcher {
     } catch (error) {
       // Defensive: pollRetention already swallows per-ticket read failures, but a
       // catastrophic failure must never leave an unhandled rejection.
-      console.error("[retention] poll cycle failed:", error);
+      log.error("retention poll cycle failed", { error });
       this.failures += 1;
     } finally {
       this.inFlight = null;

@@ -75,6 +75,9 @@ import {
   SHELL_NOTIFY_LINE_MAX_CHARS,
   type ShellNotifyPattern,
 } from "./notify-pattern";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("background-shell");
 
 /** The renderer's snapshot of one shell is client wire vocabulary (`@volli/shared`, VC-632). */
 export type { BackgroundShellState } from "@volli/shared";
@@ -565,10 +568,7 @@ export class BackgroundShellHost {
     try {
       this.deps.onNotice?.(notice);
     } catch (error) {
-      console.error(
-        "[volli] background shell notice failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.error("background shell notice failed", { error });
     }
   }
 

@@ -413,14 +413,30 @@ supervisor restarts it.
 
 ## Logs
 
-One JSON object per line on stdout: `ts` (ISO 8601), `level`, `msg`, and
-fields. `console.*` from host-core is routed through the same logger.
-`VOLLI_HOSTD_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`. No line
-carries a key, a secret or a request payload.
+One JSON object per line on stdout: `ts` (ISO 8601), `level`, `component`,
+`msg`, and fields: host-core's structured log (VC-699; HP § Tracing and logs),
+installed once at boot, so hostd's own lines and every host-core module's go
+to the same stream. Anything still writing to `console.*` is routed through it
+too. `VOLLI_HOSTD_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`.
+No line carries a key, a secret or a request payload; fields named like a
+credential are redacted.
+
+A line written while serving a host-protocol request carries the Client's
+trace (`traceId`, `spanId`) and the door (`door`, `connection`, `operation`),
+joined to the Session, turn and command it touched, so one operation can be
+followed from the desktop that started it. Background work (an executor's
+listeners, a follow-up released later) joins a trace only through its
+command or turn id, and otherwise carries its ids and no trace:
 
 ```sh
-journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .msg] | @tsv'
+journalctl -u volli-hostd -o cat | jq -rR 'fromjson? | [.ts, .level, .component, .msg] | @tsv'
+journalctl -u volli-hostd -o cat | jq -cR 'fromjson? | select(.traceId == "<trace>")'
 ```
+
+hostd also keeps its most recent lines in memory (10,000 lines or 8 MiB),
+which a paired device reads over the host protocol's `host.logs` feature
+(`logs.tail`, `logs.follow`) with no SSH session: the desktop's log viewer
+does. A Session's credential cannot read it.
 
 ## Packaging
 

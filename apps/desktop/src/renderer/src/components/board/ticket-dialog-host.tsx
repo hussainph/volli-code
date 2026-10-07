@@ -1,6 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { RemoveWorktreeDialog } from "@renderer/components/ticket/remove-worktree-dialog";
 import { useBoardStore } from "@renderer/stores/board";
@@ -80,6 +81,9 @@ function TicketDialogs({
     ref,
     (): TicketDialogHandle => ({
       archive(ticketId) {
+        // Read-only (VC-576): an archive asked for before the host went away
+        // says why instead of going.
+        if (!guardWrite(projectId)) return;
         if (archiving.current) {
           toast("Only one archive at a time");
           return;
@@ -101,6 +105,8 @@ function TicketDialogs({
           // Reached either straight off an idle probe or on confirm; the only
           // other exit is cancel, which clears the gate below.
           archiving.current = false;
+          // The confirm can outlive the host: check again as it lands.
+          if (!guardWrite(projectId)) return;
           void useBoardStore.getState().archiveTicket(projectId, ticketId);
         });
       },
@@ -137,6 +143,7 @@ function TicketDialogs({
       />
       {removeWorktree === null ? null : (
         <RemoveWorktreeDialog
+          projectId={projectId}
           ticketId={removeWorktree.ticketId}
           open={removeWorktree.open}
           onOpenChange={(open) =>

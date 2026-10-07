@@ -1,3 +1,4 @@
+import type { RendererLogEntry } from "@volli/shared";
 import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
@@ -2583,6 +2584,10 @@ export interface VolliSendContract {
   // stopping the frames, which the renderer is already listening for — an ack
   // would only be a second way to learn the same thing, later.
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
+  // Send-based (ipcRenderer.send, not invoke): a renderer warning or error
+  // for main's log (VC-699). Nobody waits on a log line, and an invoke per
+  // line would put a round-trip on the path of whatever is failing.
+  "volli:renderer-log": { args: [entry: RendererLogEntry] };
   // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
   // `volli:client-state-flush` push (VC-577) — every pending client-local
   // write it held has been acknowledged by main. Main asked, so main is the

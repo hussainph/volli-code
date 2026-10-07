@@ -16,6 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { toastError } from "@renderer/lib/toast";
 
 /**
@@ -41,14 +42,18 @@ const CONFIRMABLE_REFUSALS = [
 ] as const;
 
 export function RemoveWorktreeDialog({
+  projectId,
   ticketId,
   open,
   onOpenChange,
 }: {
+  /** Whose host removes the worktree: read-only there stands the removal down (VC-576). */
+  projectId: string;
   ticketId: string;
   open: boolean;
   onOpenChange(open: boolean): void;
 }) {
+  const canWrite = useCanWrite(projectId);
   const [step, setStep] = React.useState<"confirm" | "dirty">("confirm");
   const [dirtyReason, setDirtyReason] = React.useState("");
   const [pending, setPending] = React.useState(false);
@@ -64,6 +69,7 @@ export function RemoveWorktreeDialog({
   }, [open]);
 
   async function removeClean() {
+    if (!guardWrite(projectId)) return;
     setPending(true);
     try {
       const result = await window.api.worktree.remove(ticketId, false);
@@ -93,6 +99,7 @@ export function RemoveWorktreeDialog({
   }
 
   async function removeForced() {
+    if (!guardWrite(projectId)) return;
     setPending(true);
     try {
       const result = await window.api.worktree.remove(ticketId, true);
@@ -132,7 +139,7 @@ export function RemoveWorktreeDialog({
           <AlertDialogCancel onClick={() => onOpenChange(false)}>Cancel</AlertDialogCancel>
           {step === "confirm" ? (
             <AlertDialogAction
-              disabled={pending}
+              disabled={pending || !canWrite}
               onClick={(event) => {
                 event.preventDefault();
                 void removeClean();
@@ -143,7 +150,7 @@ export function RemoveWorktreeDialog({
           ) : (
             <AlertDialogAction
               variant="destructive"
-              disabled={pending}
+              disabled={pending || !canWrite}
               onClick={(event) => {
                 event.preventDefault();
                 void removeForced();

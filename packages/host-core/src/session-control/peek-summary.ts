@@ -8,7 +8,6 @@
  */
 import {
   cheapestReasoningLevel,
-  errorMessage,
   UtilityCompletionError,
   SESSION_PEEK_REFRESH_MS,
   SESSION_PEEK_ENTRIES,
@@ -19,6 +18,9 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("peek-summary");
 
 export const PEEK_SUMMARY_SESSION_GAP_MS = SESSION_PEEK_REFRESH_MS;
 export const PEEK_SUMMARY_GLOBAL_GAP_MS = 10_000;
@@ -67,7 +69,7 @@ export function createPeekSummarizer(options: PeekSummarizerOptions): PeekSummar
     try {
       await options.recordUsage(sessionId, usage);
     } catch (failure) {
-      console.error(`[volli] peek summary usage was not recorded: ${errorMessage(failure)}`);
+      log.error("peek summary usage was not recorded", { sessionId, error: failure });
     }
   }
 
@@ -152,7 +154,7 @@ export function createPeekSummarizer(options: PeekSummarizerOptions): PeekSummar
       if (failure instanceof UtilityCompletionError && failure.usage !== null) {
         await bill(sessionId, failure.usage);
       }
-      console.warn(`[volli] peek summary skipped for ${sessionId}: ${errorMessage(failure)}`);
+      log.warn("peek summary skipped", { sessionId, error: failure });
       return cached.text;
     } finally {
       busy = false;

@@ -9,17 +9,13 @@ import {
   type PiModelAccess,
   type CodeModeSandboxAssets,
 } from "@volli/agent-runtime";
-import {
-  displayTicketId,
-  errorMessage,
-  VOLLI_SOCKET_ENV,
-  type SessionExecutionVenue,
-} from "@volli/shared";
+import { displayTicketId, VOLLI_SOCKET_ENV, type SessionExecutionVenue } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
 import type { BoardChangeFeed } from "@volli/host-core/board";
 import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
+import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
 import {
@@ -110,6 +106,8 @@ export function createHeadlessSessionRuntime(input: {
   /** The agent socket this host serves; every Session command is pointed at it. */
   socketPath: string;
   options: HeadlessRuntimeOptions;
+  /** The host's recent log (VC-699), when the process keeps one: what `host.logs` reads. */
+  logs?: LogRing | null;
 }) {
   const { host, ports, env, options } = input;
   const db = host.database.db;
@@ -275,10 +273,11 @@ export function createHeadlessSessionRuntime(input: {
       return releaseAgentSites(recovered.runtime, directory, {
         newCommandId: randomUUID,
         onError: (sessionId, error) =>
-          ports.log.error(
-            `[volli] could not release Session ${sessionId} from ${directory}:`,
-            errorMessage(error),
-          ),
+          ports.log.error("could not release session from directory", {
+            sessionId,
+            directory,
+            error,
+          }),
       });
     },
   };
@@ -369,6 +368,7 @@ export function createHeadlessSessionRuntime(input: {
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
           signIns,
+          logs: input.logs ?? null,
           ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
           ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
         }),

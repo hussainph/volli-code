@@ -22,10 +22,10 @@ describe("the JSON line logger", () => {
       true,
     );
     expect(parsed()).toEqual([
-      { ts: AT.toISOString(), level: "debug", msg: "d" },
-      { socketPath: "/s", ts: AT.toISOString(), level: "info", msg: "i" },
-      { ts: AT.toISOString(), level: "warn", msg: "w" },
-      { ts: AT.toISOString(), level: "error", msg: "e" },
+      { ts: AT.toISOString(), level: "debug", component: "hostd", msg: "d" },
+      { socketPath: "/s", ts: AT.toISOString(), level: "info", component: "hostd", msg: "i" },
+      { ts: AT.toISOString(), level: "warn", component: "hostd", msg: "w" },
+      { ts: AT.toISOString(), level: "error", component: "hostd", msg: "e" },
     ]);
   });
 
@@ -40,7 +40,12 @@ describe("the JSON line logger", () => {
   it("never lets a field forge ts, level or msg", () => {
     const { logger, parsed } = capture("info");
     logger.info("real", { msg: "forged", level: "error", ts: "then" });
-    expect(parsed()[0]).toEqual({ ts: AT.toISOString(), level: "info", msg: "real" });
+    expect(parsed()[0]).toEqual({
+      ts: AT.toISOString(),
+      level: "info",
+      component: "hostd",
+      msg: "real",
+    });
   });
 
   it("serialises errors by name and message, and bigints as strings", () => {

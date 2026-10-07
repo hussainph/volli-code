@@ -719,7 +719,10 @@ describe("agent staging ports", () => {
     } as never);
     await Promise.resolve();
     await Promise.resolve();
-    expect(log.error).toHaveBeenCalledWith(expect.stringContaining("child"), "rearm failed");
+    expect(log.error).toHaveBeenCalledWith("could not re-arm the notice for a resumed subagent", {
+      childSessionId: "child",
+      error: expect.objectContaining({ message: "rearm failed" }),
+    });
     const other = await fixture();
     expect(() => agents.toolDoor(other.ready)).toThrow("different runtime");
   });

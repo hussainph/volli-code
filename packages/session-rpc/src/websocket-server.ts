@@ -48,6 +48,14 @@ import { assertHostFeatureReadiness } from "./feature-readiness";
  * - **Replay bounds** (`SUBSCRIPTION_REPLAY_BOUNDS`, D9, unless the limits
  *   lower them: `maxReplayEvents`, `maxReplayBytes`), set in the context.
  *
+ * - **Every request in its own trace** (VC-699; HP § Tracing and logs). Each
+ *   inbound frame is read for the optional trace beside its id
+ *   (`HOST_TRACE_FIELD`), and tRPC handles it inside the composition root's
+ *   `requestScope`, so every line the host logs while serving it (the
+ *   handler, the Session runtime, the turn it opens) carries that trace. A
+ *   batch is split, one scope per request. The hello frame's trace is the
+ *   connection's: its handshake and close are logged under it.
+ *
  * Credentials are never logged: the log names a connection by a random id,
  * and a refusal by its reason.
  */
@@ -59,6 +67,7 @@ import { createServer as createTcpServer, type AddressInfo, type Socket } from "
 import { type AnyRouter, type inferRouterContext } from "@trpc/server";
 import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import {
+  HOST_TRACE_FIELD,
   HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_MAX_FRAME_BYTES,
   HOST_PROTOCOL_VERSIONS,
@@ -78,6 +87,7 @@ import {
   type WorkspaceEpoch,
   type WorkspaceId,
 } from "@volli/host-protocol";
+import { readTraceContext, type TraceContext } from "@volli/shared";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import type {
@@ -171,28 +181,57 @@ export const DEFAULT_LISTENER_LIMITS: HostProtocolListenerLimits = Object.freeze
   pingMs: 30_000,
 });
 
-/** What the listener reports. Never a credential, a hello or a payload. */
+/**
+ * What the listener reports. Never a credential, a hello or a payload. An
+ * event about a connection carries the trace its hello sent, when it sent one.
+ */
 export type HostProtocolListenerEvent =
   | {
       readonly kind: "connection-refused";
       readonly reason: "connection-limit" | "handshake-rate";
     }
-  | {
+  | ConnectionEvent<{
       readonly kind: "handshake-refused";
-      readonly connection: string;
       readonly reason: HostErrorReason;
-    }
-  | {
+    }>
+  | ConnectionEvent<{
       readonly kind: "connected";
-      readonly connection: string;
       readonly actor: HostActorKind;
       readonly workspaceId: WorkspaceId;
-    }
-  | { readonly kind: "revoked"; readonly connection: string; readonly streams: number }
-  | { readonly kind: "slow-peer"; readonly connection: string; readonly unsentBytes: number }
-  | { readonly kind: "oversized-frame"; readonly connection: string; readonly bytes: number }
-  | { readonly kind: "hello-timeout"; readonly connection: string }
-  | { readonly kind: "closed"; readonly connection: string; readonly code: number };
+    }>
+  | ConnectionEvent<{ readonly kind: "revoked"; readonly streams: number }>
+  | ConnectionEvent<{ readonly kind: "slow-peer"; readonly unsentBytes: number }>
+  | ConnectionEvent<{ readonly kind: "oversized-frame"; readonly bytes: number }>
+  | ConnectionEvent<{ readonly kind: "hello-timeout" }>
+  | ConnectionEvent<{ readonly kind: "closed"; readonly code: number }>;
+
+type ConnectionEvent<Event> = Event & {
+  readonly connection: string;
+  /** The trace the connection's hello frame carried. */
+  readonly traceId?: string;
+};
+
+/**
+ * One inbound request, as the listener hands it to the composition root's
+ * {@link HostProtocolListenerOptions.requestScope}: identifiers only.
+ */
+export interface HostProtocolRequest {
+  /** The connection's random id. */
+  readonly connection: string;
+  /** The trace the frame carried, when well formed; the scope mints one otherwise. */
+  readonly trace: TraceContext | null;
+  /** `connectionParams` for the hello, else the JSON-RPC method (`query`, `mutation`, …). */
+  readonly method: string | null;
+  /** The procedure path, for a call. */
+  readonly path: string | null;
+}
+
+/**
+ * Runs `handle` (tRPC's handling of one request) inside the host's
+ * correlation context for it: hostd and the desktop open an
+ * `AsyncLocalStorage` scope here (`@volli/host-core/log`'s `withTrace`).
+ */
+export type HostProtocolRequestScope = (request: HostProtocolRequest, handle: () => void) => void;
 
 /** A Workspace this host serves, and the epoch it holds it under. */
 export interface ServedWorkspace {
@@ -222,6 +261,8 @@ export interface HostProtocolListenerOptions<Router extends AnyRouter> {
   readonly features: readonly HostFeature[];
   readonly limits?: Partial<HostProtocolListenerLimits>;
   readonly log?: (event: HostProtocolListenerEvent) => void;
+  /** The scope each inbound request is handled in. Absent: handled as it arrives. */
+  readonly requestScope?: HostProtocolRequestScope;
 }
 
 export interface HostProtocolListener {
@@ -234,6 +275,56 @@ export interface HostProtocolListener {
   readonly streams: number;
   /** Stops accepting and closes every connection; its subscriptions end with it. */
   close(): Promise<void>;
+}
+
+/** The connection's id and its hello's trace, for an event about it. */
+function named(connection: Connection): { connection: string; traceId?: string } {
+  return connection.trace === null
+    ? { connection: connection.id }
+    : { connection: connection.id, traceId: connection.trace.traceId };
+}
+
+/** One inbound request, read from its frame: what its scope is told, and the frame itself. */
+interface InboundRequest {
+  readonly request: Omit<HostProtocolRequest, "connection">;
+  readonly method: string | null;
+  readonly trace: TraceContext | null;
+  readonly frame: unknown;
+}
+
+/**
+ * The requests in one text frame, or null when it is not JSON (the heartbeat,
+ * or garbage tRPC answers itself). Only identifiers are read: the trace, the
+ * method and the path.
+ */
+export function readRequests(data: unknown): readonly InboundRequest[] | null {
+  if (!Buffer.isBuffer(data)) return null;
+  const first = data[0];
+  // `{` or `[`: anything else is no request (PING and PONG among them).
+  if (first !== 0x7b && first !== 0x5b) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.toString("utf8"));
+  } catch {
+    return null;
+  }
+  const frames = Array.isArray(parsed) ? parsed : [parsed];
+  return frames.map((frame) => {
+    const message = (typeof frame === "object" && frame !== null ? frame : {}) as {
+      method?: unknown;
+      params?: { path?: unknown } | null;
+      [HOST_TRACE_FIELD]?: unknown;
+    };
+    const trace = readTraceContext(message[HOST_TRACE_FIELD]);
+    const method = typeof message.method === "string" ? message.method : null;
+    const path =
+      typeof message.params === "object" &&
+      message.params !== null &&
+      typeof message.params.path === "string"
+        ? message.params.path
+        : null;
+    return { request: { trace, method, path }, method, trace, frame };
+  });
 }
 
 /** Until VC-575 brings TLS and device keys, a host protocol listener binds loopback only (Q5). */
@@ -310,6 +401,8 @@ interface Connection {
   streams: number;
   revoked: boolean;
   readonly disposers: (() => void)[];
+  /** The trace its hello frame carried. */
+  trace: TraceContext | null;
 }
 
 /** A refused connection's context: the refusal, and no caller any handler could use. */
@@ -400,11 +493,13 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       streams: 0,
       revoked: false,
       disposers: [],
+      trace: null,
     };
     connections.set(socket, connection);
     boundOutbound(connection);
+    scopeRequests(connection);
     connection.helloTimer = setTimeout(() => {
-      log({ kind: "hello-timeout", connection: connection.id });
+      log({ kind: "hello-timeout", ...named(connection) });
       socket.close(HOST_PROTOCOL_CLOSE_CODES.helloTimeout, "hello-timeout");
     }, limits.handshakeTimeoutMs);
     connection.disposers.push(() => clearTimeout(connection.helloTimer));
@@ -413,7 +508,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       // Every in-flight call and open stream on it ends here.
       connection.admission.abort();
       for (const dispose of connection.disposers.splice(0)) dispose();
-      log({ kind: "closed", connection: connection.id, code });
+      log({ kind: "closed", ...named(connection), code });
     });
   });
 
@@ -426,9 +521,44 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
 
   function boundOutbound(connection: Connection): void {
     boundOutboundSends(connection.socket, limits, {
-      shed: (unsentBytes) => log({ kind: "slow-peer", connection: connection.id, unsentBytes }),
-      oversized: (bytes) => log({ kind: "oversized-frame", connection: connection.id, bytes }),
+      shed: (unsentBytes) => log({ kind: "slow-peer", ...named(connection), unsentBytes }),
+      oversized: (bytes) => log({ kind: "oversized-frame", ...named(connection), bytes }),
     });
+  }
+
+  /**
+   * Hands each inbound request to tRPC inside the composition root's scope
+   * (HP § Tracing and logs). `ws` delivers a frame by emitting `message`;
+   * the emit is wrapped, so tRPC's own listener runs in the scope and every
+   * promise it starts keeps it. A batch is re-emitted one request at a time,
+   * so each keeps its own trace.
+   */
+  function scopeRequests(connection: Connection): void {
+    const scope = options.requestScope;
+    const socket = connection.socket;
+    const emit = socket.emit.bind(socket) as (
+      event: string | symbol,
+      ...args: unknown[]
+    ) => boolean;
+    socket.emit = ((event: string | symbol, ...args: unknown[]): boolean => {
+      if (event !== "message" || args[1] === true) return emit(event, ...args);
+      const requests = readRequests(args[0]);
+      // Not a request (PING, PONG, or something tRPC answers with its own error).
+      if (requests === null || requests.length === 0) return emit(event, ...args);
+      const hello = requests.find((request) => request.method === "connectionParams");
+      if (hello !== undefined && connection.trace === null) connection.trace = hello.trace;
+      if (scope === undefined) return emit(event, ...args);
+      if (requests.length === 1) {
+        scope({ connection: connection.id, ...requests[0]!.request }, () => emit(event, ...args));
+        return true;
+      }
+      for (const { request, frame } of requests) {
+        scope({ connection: connection.id, ...request }, () =>
+          emit(event, Buffer.from(JSON.stringify(frame)), false),
+        );
+      }
+      return true;
+    }) as typeof socket.emit;
   }
 
   /** The admission the catalog judges this connection's calls and streams by. */
@@ -474,7 +604,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     admit(connection, grant);
     log({
       kind: "connected",
-      connection: connection.id,
+      ...named(connection),
       actor: grant.actor.kind,
       workspaceId: welcome.workspace.id,
     });
@@ -508,7 +638,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     reason: HostErrorReason,
     message: string,
   ): inferRouterContext<Router> {
-    log({ kind: "handshake-refused", connection: connection.id, reason });
+    log({ kind: "handshake-refused", ...named(connection), reason });
     connection.state = "refused";
     clearTimeout(connection.helloTimer);
     const timer = setTimeout(
@@ -558,7 +688,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const revoke = (): void => {
       if (connection.revoked) return;
       connection.revoked = true;
-      log({ kind: "revoked", connection: connection.id, streams: connection.streams });
+      log({ kind: "revoked", ...named(connection), streams: connection.streams });
       // Every open stream ends with credential-invalid, which tRPC answers
       // under the client's own request id; every parked call is refused at
       // its resolver. The close follows once those answers are queued.

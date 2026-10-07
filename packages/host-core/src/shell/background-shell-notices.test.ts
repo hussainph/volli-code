@@ -418,9 +418,15 @@ describe("a notice sink that fails", () => {
         shell: { state: "exited", code: 2 },
         output: "hit\n",
       });
-      expect(errors.map((args) => String(args[1]))).toEqual([
-        expect.stringContaining("sink down"),
-        expect.stringContaining("sink down"),
+      expect(errors).toEqual([
+        [
+          "[background-shell] background shell notice failed",
+          { error: expect.objectContaining({ message: "sink down" }) },
+        ],
+        [
+          "[background-shell] background shell notice failed",
+          { error: expect.objectContaining({ message: "sink down" }) },
+        ],
       ]);
     } finally {
       console.error = originalError;

@@ -52,6 +52,9 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("auto-title");
 
 /**
  * The whole refinement's budget — the provider probe and the completion share
@@ -120,7 +123,7 @@ export interface AutoTitler {
 }
 
 function logSkip(sessionId: string, detail: string): void {
-  console.warn(`[volli] auto-title skipped for session ${sessionId}: ${detail}`);
+  log.warn("auto-title skipped", { sessionId, reason: detail });
 }
 
 /**
@@ -140,9 +143,7 @@ async function bill(
   try {
     await options.recordUsage(sessionId, usage);
   } catch (failure) {
-    console.error(
-      `[volli] auto-title usage for session ${sessionId} was not recorded: ${errorMessage(failure)}`,
-    );
+    log.error("auto-title usage was not recorded", { sessionId, error: failure });
   }
 }
 
@@ -295,9 +296,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
       }
       await options.retitle(request.sessionId, title);
     } catch (failure) {
-      console.error(
-        `[volli] auto-title for session ${request.sessionId} did not stick: ${errorMessage(failure)}`,
-      );
+      log.error("auto-title did not stick", { sessionId: request.sessionId, error: failure });
     }
   }
 

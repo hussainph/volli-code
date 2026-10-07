@@ -366,6 +366,8 @@ describe("startBoardProtocol / stopBoardProtocol", () => {
       path: "board.snapshot",
       type: "query",
       input: { projectId: "p1" },
+      // Every bridge request carries a trace (VC-699).
+      trace: { traceId: expect.stringMatching(/^[0-9a-f]{32}$/u), spanId: expect.any(String) },
     });
   });
 });
