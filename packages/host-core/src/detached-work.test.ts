@@ -116,7 +116,9 @@ describe("createDetachedWorkTracker", () => {
     const failure = new Error("unhandled");
     tracker.track(Promise.reject(failure));
     await tracker.drain();
-    expect(log).toHaveBeenCalledExactlyOnceWith("[volli] detached work failed:", failure);
+    expect(log).toHaveBeenCalledExactlyOnceWith("[detached-work] detached work failed", {
+      error: expect.objectContaining({ name: "Error", message: "unhandled" }),
+    });
   });
 
   it("keeps a throwing failure reporter from failing the drain", async () => {

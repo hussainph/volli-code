@@ -1,6 +1,9 @@
 import { statSync } from "node:fs";
 
-export const MIGRATION_COMPACTION_LOG_PREFIX = "[migration compaction]";
+import type { Logger } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const compactionLog = hostLogger("migration-compaction");
 
 const MINIMUM_FREE_BYTES = 32 * 1024 * 1024;
 const MINIMUM_FREE_RATIO = 0.2;
@@ -257,8 +260,8 @@ function isFailure(report: MigrationCompactionReport): boolean {
 /** Logging stays outside the operation so callers control where reports go. */
 export function logMigrationCompaction(
   report: MigrationCompactionReport,
-  logger: Pick<Console, "info" | "error"> = console,
+  logger: Pick<Logger, "info" | "error"> = compactionLog,
 ): void {
-  if (isFailure(report)) logger.error(MIGRATION_COMPACTION_LOG_PREFIX, report);
-  else logger.info(MIGRATION_COMPACTION_LOG_PREFIX, report);
+  if (isFailure(report)) logger.error("migration compaction failed", { ...report });
+  else logger.info(report.ran ? "database compacted" : "compaction skipped", { ...report });
 }

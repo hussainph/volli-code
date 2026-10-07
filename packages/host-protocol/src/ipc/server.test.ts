@@ -180,6 +180,46 @@ describe("createIpcServer", () => {
     ).resolves.toEqual({ ok: false, error: { code: "CONFLICT", message: "plain conflict" } });
   });
 
+  it("runs each well-formed request inside its scope, a subscription's frames included (VC-699)", async () => {
+    const seen: { path: string; trace: unknown }[] = [];
+    let inScope: string | null = null;
+    const frames: (string | null)[] = [];
+    const bridge = createIpcServer({
+      routers: [router, plainRouter],
+      served: SERVED,
+      createContext: () => ({ who: "desktop" }),
+      scope: async (request, run) => {
+        seen.push({ path: request.path, trace: request.trace });
+        const previous = inScope;
+        inScope = request.path;
+        try {
+          return await run();
+        } finally {
+          inScope = previous;
+        }
+      },
+    });
+    const trace = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
+    await expect(
+      bridge.request(peer(), { path: "who", type: "query", input: undefined, trace }),
+    ).resolves.toEqual({ ok: true, data: "desktop" });
+    const watcher = peer();
+    const send = watcher.send;
+    watcher.send = (event) => {
+      frames.push(inScope);
+      send(event);
+    };
+    await bridge.request(watcher, { path: "stream", type: "subscription", input: {} });
+    await bridge.request(peer(), null);
+    expect(seen).toEqual([
+      { path: "who", trace },
+      { path: "stream", trace: undefined },
+    ]);
+    await flush();
+    expect(frames.length).toBeGreaterThan(0);
+    await bridge.close();
+  });
+
   it("refuses to serve one path from two routers", () => {
     expect(() =>
       createIpcServer({

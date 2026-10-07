@@ -62,8 +62,11 @@ describe("SpawnLedger", () => {
 
   it("reports a failed write instead of failing the spawn that asked for it", () => {
     const { db } = testDb();
-    const errors: string[] = [];
-    const ledger = new SpawnLedger(db, { createId: () => "row-1", onError: (m) => errors.push(m) });
+    const errors: Array<Record<string, unknown>> = [];
+    const ledger = new SpawnLedger(db, {
+      createId: () => "row-1",
+      onError: (msg, fields) => errors.push({ msg, ...fields }),
+    });
     ledger.recordSpawn(spawn);
     // A duplicate id is the cheapest real write failure; every door behaves the
     // same way when SQLite refuses.
@@ -73,7 +76,7 @@ describe("SpawnLedger", () => {
     expect(ledger.listOpen()).toEqual([]);
     expect(ledger.prune()).toBe(0);
     expect(errors).toHaveLength(4);
-    expect(errors[0]).toContain("pid 321");
+    expect(errors[0]).toMatchObject({ msg: "could not record spawned pid", pid: 321 });
   });
 
   it("warns on the main log when no reporter was supplied", () => {

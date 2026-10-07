@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { errorMessage, type ObservabilitySink, type SessionExecutionVenue } from "@volli/shared";
+import type { ObservabilitySink, SessionExecutionVenue } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
@@ -10,6 +10,8 @@ import {
 } from "@volli/session-engine";
 import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
+import type { Logger } from "../log/logger";
+import { correlatedExecutor } from "./correlated-executor";
 import { createSessionLocationResolver } from "./location";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
@@ -22,7 +24,7 @@ export interface HostSessionRuntimeOptions {
    * The host's log port. hostd turns it into structured records; a failed
    * automatic follow-up release is reported here, never to a bare console.
    */
-  log: Pick<Console, "error">;
+  log: Pick<Logger, "error">;
   dataDir: string;
   transcriptDirectory: string;
   executor: NativeHarnessAdapter;
@@ -57,9 +59,9 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
     followUps: createSqliteSessionFollowUpLedger(options.db),
     // The payload stays durable and the Session raises Attention; this is the
     // operator's record of why an automatic release did not go out.
-    onFollowUpFailure: (error) =>
-      options.log.error("[volli] follow-up queue release failed:", errorMessage(error)),
-    executor: options.executor,
+    onFollowUpFailure: (error) => options.log.error("follow-up queue release failed", { error }),
+    // Attachments start detached, commands run under their own trace (VC-699).
+    executor: correlatedExecutor(options.executor),
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createSessionLocationResolver(
       options.db,
@@ -76,6 +78,7 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
   });
 }
 
+export { correlatedExecutor } from "./correlated-executor";
 export { createSessionLocationResolver } from "./location";
 export {
   createFileTranscriptArtifactStore,

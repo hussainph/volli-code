@@ -14,6 +14,9 @@
  * `sessionId` rather than as nested `Target.sendMessageToTarget` envelopes.
  */
 import type { Readable, Writable } from "node:stream";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("chromium");
 
 /** One protocol event: a method, its params, and the flattened session it came from. */
 export interface CdpEvent {
@@ -351,7 +354,7 @@ export class CdpPipeConnection {
       } catch (error) {
         // One listener's bug must not starve the rest of the events, and no
         // caller awaits an event; it stays visible in the host's log.
-        console.error(`[volli] Chromium event listener failed on ${event.method}:`, error);
+        log.error("chromium event listener failed", { method: event.method, error });
       }
     }
   }

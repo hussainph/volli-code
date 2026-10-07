@@ -20,6 +20,7 @@ import {
   type HostHello,
   type HostWelcome,
 } from "../handshake";
+import { HOST_TRACE_FIELD, type HostTrace } from "../trace";
 import {
   createHostLink,
   createHostLinkRegistry,
@@ -29,6 +30,7 @@ import {
   hostLinkTrpcLink,
   validateHostLinkTiming,
   type HostLink,
+  type HostLinkLogEvent,
   type HostLinkOptions,
   type HostLinkState,
   type HostLinkSubscription,
@@ -209,6 +211,9 @@ async function startHost(overrides: Partial<HostState> = {}) {
 
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
+  /** Every text frame a client sent, as it arrived. */
+  const frames: string[] = [];
+  server.on("connection", (socket) => socket.on("message", (data) => frames.push(String(data))));
   const handler = applyWSSHandler({
     wss: server,
     router,
@@ -269,6 +274,7 @@ async function startHost(overrides: Partial<HostState> = {}) {
   return {
     host,
     proxy,
+    frames,
     url: proxy.url,
     emit(count = 1) {
       for (let index = 0; index < count; index++) {
@@ -1729,3 +1735,237 @@ function failingSends(pattern: RegExp, active: () => boolean = () => true): type
   }
   return Failing as unknown as typeof WebSocket;
 }
+
+/* ---------------------------------------------------------- tracing (VC-699) */
+
+const FLOW = "4bf92f3577b34da6a3ce929d0e0e4736";
+const OTHER_FLOW = "a3ce929d0e0e47364bf92f3577b34da6";
+
+/** Each frame a client sent, parsed: the trace it carried, by what it was. */
+function sentTraces(frames: readonly string[]) {
+  return frames
+    .filter((frame) => frame.startsWith("{") || frame.startsWith("["))
+    .flatMap((frame) => {
+      const parsed = JSON.parse(frame) as unknown;
+      return (Array.isArray(parsed) ? parsed : [parsed]) as {
+        method?: string;
+        params?: { path?: string };
+        [HOST_TRACE_FIELD]?: HostTrace;
+      }[];
+    })
+    .map((message) => ({
+      what:
+        message.method === "connectionParams"
+          ? "hello"
+          : `${message.params?.path ?? message.method}`,
+      trace: message[HOST_TRACE_FIELD],
+    }));
+}
+
+describe("every frame carries its operation's trace", () => {
+  it("sends the link's flow trace with a fresh span on the hello, the welcome and each call", async () => {
+    const started = await startHost();
+    const { link: subject } = link(started.url, { traceId: FLOW });
+    await until(subject, "ready");
+    await subject.query("echo", "a");
+    await subject.mutate("record", { id: "r" }, { trace: { traceId: OTHER_FLOW } });
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers, { trace: { traceId: OTHER_FLOW } });
+    await eventually(() => started.host.connections[0]!.log.includes("feed"), "the stream");
+    const sent = sentTraces(started.frames);
+    expect(sent.map(({ what, trace }) => [what, trace?.traceId])).toStrictEqual([
+      ["hello", FLOW],
+      ["protocol.welcome", FLOW],
+      ["echo", FLOW],
+      ["record", OTHER_FLOW],
+      ["feed", OTHER_FLOW],
+    ]);
+    const spans = sent.map(({ trace }) => trace!.spanId);
+    expect(new Set(spans).size).toBe(spans.length);
+    for (const span of spans) expect(span).toMatch(/^[0-9a-f]{16}$/u);
+    // The heartbeat goes as it is.
+    expect(
+      started.frames.filter((frame) => !frame.startsWith("{") && !frame.startsWith("[")),
+    ).not.toContainEqual(expect.stringContaining(HOST_TRACE_FIELD));
+  });
+
+  it("makes each call its own trace when the link serves no flow, and resumes a stream on its own", async () => {
+    const started = await startHost();
+    const { link: subject } = link(started.url);
+    await until(subject, "ready");
+    await subject.query("echo", "a");
+    await subject.query("echo", "b");
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    started.emit(1);
+    await eventually(() => feed.ids().length === 1, "one event");
+    started.proxy.down();
+    await until(subject, "unreachable");
+    started.proxy.up();
+    await until(subject, "ready");
+    await eventually(
+      () => started.host.connections[1]?.log.includes("feed") === true,
+      "the resume",
+    );
+    const sent = sentTraces(started.frames);
+    const echoes = sent.filter(({ what }) => what === "echo").map(({ trace }) => trace!.traceId);
+    expect(new Set(echoes).size).toBe(2);
+    const feeds = sent.filter(({ what }) => what === "feed").map(({ trace }) => trace!);
+    expect(feeds).toHaveLength(2);
+    expect(feeds[0]!.traceId).toBe(feeds[1]!.traceId);
+    expect(feeds[0]!.spanId).not.toBe(feeds[1]!.spanId);
+    const hellos = sent.filter(({ what }) => what === "hello").map(({ trace }) => trace!.traceId);
+    expect(new Set(hellos).size).toBe(2);
+  });
+
+  it("carries a typed call's trace from its operation context, and ignores a malformed one", async () => {
+    const started = await startHost();
+    const { link: subject } = link(started.url, { traceId: FLOW });
+    const client = createTRPCClient({ links: [hostLinkTrpcLink(subject)] }) as unknown as {
+      echo: { query(input: string, opts?: { context?: Record<string, unknown> }): Promise<string> };
+      feed: {
+        subscribe(
+          input: undefined,
+          handlers: { onData?(data: unknown): void; context?: Record<string, unknown> },
+        ): { unsubscribe(): void };
+      };
+    };
+    await until(subject, "ready");
+    await client.echo.query("a", { context: { trace: { traceId: OTHER_FLOW } } });
+    await client.echo.query("b", { context: { trace: { traceId: "nope" } } });
+    await client.echo.query("c", { context: { trace: "nope" } });
+    client.feed.subscribe(undefined, { context: { trace: { traceId: OTHER_FLOW } } });
+    await eventually(() => started.host.connections[0]!.log.includes("feed"), "the stream");
+    expect(
+      sentTraces(started.frames)
+        .filter(({ what }) => what === "echo" || what === "feed")
+        .map(({ trace }) => trace!.traceId),
+    ).toStrictEqual([OTHER_FLOW, FLOW, FLOW, OTHER_FLOW]);
+  });
+});
+
+describe("the link's log says why", () => {
+  it("reports each state change with its reason, a wake, a resume and a resnapshot", async () => {
+    const started = await startHost();
+    const events: HostLinkLogEvent[] = [];
+    const { link: subject } = link(started.url, {
+      traceId: FLOW,
+      log: (event) => events.push(event),
+    });
+    await until(subject, "ready");
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    started.emit(1);
+    await eventually(() => feed.ids().length === 1, "one event");
+    subject.wake("power-resume");
+    started.proxy.down();
+    await until(subject, "unreachable");
+    started.proxy.up();
+    await until(subject, "ready");
+    await eventually(
+      () => started.host.connections[1]?.log.includes("feed:1") === true,
+      "the resume",
+    );
+    started.proxy.down();
+    await until(subject, "unreachable");
+    started.host.floor = 5;
+    started.proxy.up();
+    await until(subject, "ready");
+    await eventually(() => feed.last()?.kind === "resnapshot", "the resnapshot");
+    subject.close();
+    expect(events.every((event) => event.traceId === FLOW)).toBe(true);
+    expect(
+      events.map((event) => (event.kind === "state" ? `${event.from}>${event.to}` : event.kind)),
+    ).toStrictEqual([
+      "connecting>connecting",
+      "connecting>ready",
+      "wake",
+      "ready>unreachable",
+      "unreachable>connecting",
+      "connecting>ready",
+      "resubscribe",
+      "ready>unreachable",
+      "unreachable>connecting",
+      "connecting>ready",
+      "resubscribe",
+      "resnapshot",
+      "ready>closed",
+    ]);
+    expect(events.find((event) => event.kind === "state" && event.to === "ready")).toMatchObject({
+      hostId: HOST,
+      epoch: 2,
+    });
+    expect(
+      events.find((event) => event.kind === "state" && event.to === "unreachable"),
+    ).toMatchObject({
+      attempt: 1,
+      reason: "host-unreachable",
+      retryInMs: expect.any(Number),
+    });
+    expect(events.find((event) => event.kind === "resubscribe")).toMatchObject({
+      path: "feed",
+      resumed: true,
+      why: "welcome",
+    });
+    expect(events.find((event) => event.kind === "wake")).toMatchObject({
+      cause: "power-resume",
+      status: "ready",
+    });
+  });
+
+  it("reports a refusal, a fence and an overflow resume", async () => {
+    const refusedHost = await startHost({ credentials: new Set() });
+    const refusals: HostLinkLogEvent[] = [];
+    const { link: refused } = link(refusedHost.url, { log: (event) => refusals.push(event) });
+    await until(refused, "refused");
+    expect(refusals.at(-1)).toMatchObject({
+      kind: "state",
+      to: "refused",
+      reason: "credential-invalid",
+    });
+
+    const unnamedHost = await startHost({
+      closeOnConnect: { code: 4400, reason: "something new" },
+    });
+    const unnamed: HostLinkLogEvent[] = [];
+    const { link: closed } = link(unnamedHost.url, { log: (event) => unnamed.push(event) });
+    await until(closed, "refused");
+    expect(unnamed.at(-1)).toMatchObject({
+      kind: "state",
+      to: "refused",
+      reason: "BAD_REQUEST",
+      closeCode: 4400,
+    });
+
+    const fencedHost = await startHost();
+    const fences: HostLinkLogEvent[] = [];
+    const { link: fenced } = link(fencedHost.url, {
+      lastSeen: { epoch: 2, hostId: OTHER_HOST },
+      log: (event) => fences.push(event),
+    });
+    await until(fenced, "fenced");
+    expect(fences.at(-1)).toMatchObject({
+      kind: "state",
+      to: "fenced",
+      reason: "workspace-split-brain",
+    });
+
+    const busy = await startHost();
+    const overflows: HostLinkLogEvent[] = [];
+    const { link: subject } = link(busy.url, { log: (event) => overflows.push(event) });
+    await until(subject, "ready");
+    busy.host.overflowAfter = 2;
+    const feed = record();
+    subject.subscribe("feed", undefined, feed.handlers);
+    busy.emit(3);
+    await eventually(() => feed.ids().length === 3, "all three, across the overflow");
+    expect(overflows).toContainEqual(
+      expect.objectContaining({
+        kind: "resubscribe",
+        why: "overflow",
+        resumed: true,
+        path: "feed",
+      }),
+    );
+  });
+});

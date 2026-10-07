@@ -59,7 +59,9 @@ function assertServedOnly(client: ReturnType<typeof toyClient>): void {
 void assertServedOnly;
 
 interface FakeBridge extends IpcBridge {
+  /** What crossed, less its trace (VC-699), which {@link traces} keeps. */
   readonly requests: IpcRequest[];
+  readonly traces: (IpcRequest["trace"] | undefined)[];
   readonly cancelled: string[];
   readonly listenerCount: () => number;
   /** Answers the oldest unanswered request. */
@@ -70,6 +72,7 @@ interface FakeBridge extends IpcBridge {
 
 function fakeBridge(): FakeBridge {
   const requests: IpcRequest[] = [];
+  const traces: (IpcRequest["trace"] | undefined)[] = [];
   const cancelled: string[] = [];
   const listeners = new Set<(event: IpcEvent) => void>();
   const pending: { resolve(value: IpcResponse): void; reject(error: Error): void }[] = [];
@@ -80,10 +83,12 @@ function fakeBridge(): FakeBridge {
   };
   return {
     requests,
+    traces,
     cancelled,
     listenerCount: () => listeners.size,
-    request: (request) => {
+    request: ({ trace, ...request }) => {
       requests.push(request);
+      traces.push(trace);
       return new Promise((resolve, reject) => pending.push({ resolve, reject }));
     },
     onEvent: (listener) => {
@@ -118,6 +123,30 @@ afterEach(() => {
 });
 
 describe("query and mutation", () => {
+  it("carries the operation's trace from the call's context, with a fresh span per request (VC-699)", async () => {
+    const bridge = fakeBridge();
+    const client = toyClient(bridge);
+    const flow = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const traced = { context: { trace: { traceId: flow } } };
+    void client.session.projection.query({ sessionId: "s" }, traced);
+    void client.session.projection.query({ sessionId: "s" }, traced);
+    void client.session.projection.query(
+      { sessionId: "s" },
+      { context: { trace: { traceId: "bad" } } },
+    );
+    void client.session.projection.query({ sessionId: "s" }, { context: { trace: "bad" } });
+    void client.session.projection.query({ sessionId: "s" });
+    await flush();
+    const traces = bridge.traces.map((trace) => trace!);
+    expect(traces.slice(0, 2).map(({ traceId }) => traceId)).toEqual([flow, flow]);
+    expect(traces[0]!.spanId).not.toBe(traces[1]!.spanId);
+    for (const trace of traces.slice(2)) {
+      expect(trace.traceId).toMatch(/^[0-9a-f]{32}$/u);
+      expect(trace.traceId).not.toBe(flow);
+      expect(trace.spanId).toMatch(/^[0-9a-f]{16}$/u);
+    }
+  });
+
   it("routes a query through the bridge and resolves its data", async () => {
     const bridge = fakeBridge();
     const client = toyClient(bridge);
@@ -154,7 +183,7 @@ describe("query and mutation", () => {
         kind: "round-trip",
         procedure: "session.projection",
         durationMs: 2,
-        requestBytes: 78,
+        requestBytes: 161,
         responseBytes: 56,
         outcome: "ok",
       },
@@ -203,7 +232,7 @@ describe("query and mutation", () => {
         kind: "round-trip",
         procedure: "session.projection",
         durationMs: 3,
-        requestBytes: 78,
+        requestBytes: 161,
         responseBytes: 0,
         outcome: "transport-error",
       },

@@ -16,12 +16,15 @@
  * a throwing insert is caught, logged, and never escapes the pty hot path).
  */
 import type Database from "better-sqlite3";
-import { errorMessage, trimWorktreeFailureStderr } from "@volli/shared";
+import { trimWorktreeFailureStderr } from "@volli/shared";
 import type { WorktreePhase } from "@volli/shared";
 
 import { recordTicketEvent } from "../db/events-repo";
 import { setPhase } from "./phase";
 import { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("worktree-setup");
 
 /**
  * The cap on the retained setup-output tail. Installs are slow and chatty; only
@@ -109,7 +112,7 @@ export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): Set
         now(),
       );
     } catch (error) {
-      console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
+      log.error("failed to record setup failure", { ticketId: params.ticketId, error });
     }
   }
 

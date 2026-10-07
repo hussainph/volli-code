@@ -43,6 +43,10 @@
  */
 import type { SessionEvent, SessionProjection } from "@volli/shared";
 
+import { hostLogger } from "../log/root";
+
+const liveWorkLog = hostLogger("live-work");
+
 /** The host's live work, as one value a quit decision can read synchronously. */
 export interface HostLiveWork {
   /** Sessions with a turn open on an executor binding this process holds, or about to start one. */
@@ -93,7 +97,7 @@ export interface HostLiveWorkPorts {
   pendingStartSessionIds?(): ReadonlySet<string>;
   /** The runtime's start latch (`holdTurnStarts` / `releaseTurnStarts`). Absent: nothing to hold. */
   starts?: { hold(): void; release(): void };
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log (`live-work`). */
   onError?: (error: unknown) => void;
 }
 
@@ -131,7 +135,8 @@ export interface HostLiveWorkWatch {
 }
 
 export function createHostLiveWork(ports: HostLiveWorkPorts): HostLiveWorkWatch {
-  const onError = ports.onError ?? ((error: unknown) => console.warn("[volli] live work:", error));
+  const onError =
+    ports.onError ?? ((error: unknown) => liveWorkLog.warn("live work listener failed", { error }));
   /** Sessions whose committed facts have a turn open — bound or not; the read intersects. */
   const turnsOpen = new Set<string>();
   /** The newest fact sequence applied per Session; its presence also retires the fold seed. */
