@@ -12,13 +12,9 @@
  * relay binding, behind `cloud`); with nothing registered, which is the flag
  * off, every read is the local one.
  */
-import type { SessionsResult } from "../../../ipc/contract";
+import type { SessionListingReader } from "./remote-session-wire";
 
-/** One door to a project's Session listing rows. */
-export interface SessionListingReader {
-  list(input: { projectId: string }): Promise<SessionsResult>;
-  listForTicket(input: { ticketId: string }): Promise<SessionsResult>;
-}
+export type { SessionListingReader } from "./remote-session-wire";
 
 /** Which reader serves a project, or a ticket, when it is on a remote host; `null` for This Mac. */
 export interface RemoteSessionListing {
