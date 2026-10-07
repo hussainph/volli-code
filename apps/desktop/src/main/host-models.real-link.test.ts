@@ -1,6 +1,10 @@
 // @vitest-environment node
 /** A hostile enrolled HOST peer cannot bypass main's Model Access output validation. */
 import { initTRPC } from "@trpc/server";
+import {
+  inspectPiModelAccess,
+  type PiModelAccessSource,
+} from "../../../../packages/agent-runtime/src/pi/model-access";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import type { HostConnectionWelcome } from "@volli/host-protocol";
 import { createHostScopeLink } from "@volli/host-protocol/client-link";
@@ -10,6 +14,7 @@ import {
   createDesktopRouter,
   LOCAL_DESKTOP_CALLER,
   RpcDiagnosticLog,
+  sessionProcedureSchemas,
   type DesktopIpcRouter,
 } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
@@ -67,7 +72,10 @@ const cases = [
   { method: "setPickerView", kind: "mutate", input: "all", value: "all" },
 ] as const;
 
-async function fixture(features: readonly string[] = ["host.model-defaults"]) {
+async function fixture(
+  features: readonly string[] = ["host.model-defaults"],
+  credential = "test-only-device",
+) {
   let answer: unknown;
   const calls: string[] = [];
   const t = initTRPC.context<{ welcome?: HostConnectionWelcome }>().create();
@@ -109,7 +117,7 @@ async function fixture(features: readonly string[] = ["host.model-defaults"]) {
     url: listener.url,
     hostId: HOST,
     client: { kind: "desktop", version: "1.2.0" },
-    credential: () => "test-only-device",
+    credential: () => credential,
     features: ["host.model-defaults"],
   });
   cleanups.push(() => link.close());
@@ -217,6 +225,150 @@ describe("HOST models across real loopback and renderer IPC", () => {
     f.link.close();
     await expect(f.view.query("hostModels.defaults")).rejects.toThrow("can’t be reached");
   });
+  it("accepts the production built-in catalog through loopback and renderer IPC", async () => {
+    // Load the same pinned catalog hostd uses, but never resolve ambient auth,
+    // provider credentials, OAuth refreshes or network availability probes.
+    const { builtinModels } = (await import(
+      new URL(
+        "../../../../packages/agent-runtime/node_modules/@earendil-works/pi-ai/dist/providers/all.js",
+        import.meta.url,
+      ).href
+    )) as {
+      builtinModels(options: unknown): PiModelAccessSource["models"];
+    };
+    const builtin = builtinModels({
+      credentials: { read: async () => undefined, list: async () => [] },
+      authContext: { env: async () => undefined, fileExists: async () => false },
+    });
+    const models = {
+      getProviders: () => builtin.getProviders(),
+      getModels: (id?: string) => builtin.getModels(id),
+      getAllModels: (id?: string) => builtin.getAllModels(id),
+      checkAuth: async () => undefined,
+      getAvailable: async () => [],
+    } as unknown as PiModelAccessSource["models"];
+    const catalog = await inspectPiModelAccess({ models, credentials: null }, () => 1);
+    const gemma = catalog.models.find(
+      (model) =>
+        model.providerId === "openrouter" && model.modelId === "google/gemma-4-26b-a4b-it:free",
+    );
+    expect(gemma?.label).toBe("Google: Gemma 4 26B A4B  (free)");
+    expect(
+      catalog.providers.find((provider) => provider.id === "amazon-bedrock")?.signIn[0]?.label,
+    ).toBe("AWS credentials or bearer token");
+    const output = sessionProcedureSchemas()["hostModels.inspect"]!.output.parse(catalog);
+    const f = await fixture();
+    f.answer(catalog);
+    expect(await f.view.query("hostModels.inspect", {})).toEqual(output);
+  });
+  it("preserves catalog prose but refuses secrets in every label and identity", async () => {
+    const f = await fixture();
+    const provider = {
+      id: "amazon-bedrock",
+      label: "Amazon  Bedrock\nPublic catalog",
+      state: "authentication-required",
+      accountLabel: `A public account description\nwith\tspacing. ${"Plain  text. ".repeat(80)}`,
+      billingSource: "unknown",
+      recovery: { kind: "sign-in" },
+      signIn: [
+        { type: "api-key", label: "AWS credentials or bearer token", isSubscription: false },
+      ],
+      hasStoredCredential: false,
+      usageLimits: {
+        checkedAt: 1,
+        windows: [{ id: "weekly", kind: "weekly", label: "Weekly\nwindow", usedPercent: 0 }],
+      },
+    };
+    const model = {
+      providerId: provider.id,
+      modelId: "provider/model",
+      label: "A descriptive catalog label\nwith  spacing.",
+      state: "authentication-required",
+      reasoningLevels: ["off"],
+      acceptsImageInput: true,
+    };
+    const answer = { observedAt: 1, providers: [provider], models: [model] };
+    f.answer(answer);
+    expect(await f.view.query("hostModels.inspect", {})).toEqual(answer);
+    const refusal = {
+      data: {
+        hostError: {
+          reason: "response-invalid",
+          message: "The host returned an invalid response.",
+        },
+      },
+    };
+    // Every public text position still refuses the same payload secrets; no
+    // multiline/long description, known provider or method label exempts them.
+    for (const secret of [
+      "test-only-device",
+      "vdc1.fixture.signature",
+      "sk-fixture",
+      "Bearer fixture",
+      '"token":"fixture"',
+      "API_KEY=fixture",
+      "https://user:fixture@example.com/models",
+      "https://example.com/models?key=fixture",
+      "https://example.com/models#fixture",
+      "\u0007",
+      "\u200b",
+    ]) {
+      const text = `Public description\n${secret}\nmore  text`;
+      for (const hostile of [
+        { ...answer, models: [{ ...model, label: text }] },
+        { ...answer, models: [{ ...model, modelId: text }] },
+        { ...answer, models: [{ ...model, providerId: text }] },
+        { ...answer, providers: [{ ...provider, id: text }] },
+        { ...answer, providers: [{ ...provider, label: text }] },
+        { ...answer, providers: [{ ...provider, accountLabel: text }] },
+        {
+          ...answer,
+          providers: [{ ...provider, signIn: [{ ...provider.signIn[0], label: text }] }],
+        },
+        {
+          ...answer,
+          providers: [
+            {
+              ...provider,
+              signIn: [
+                { ...provider.signIn[0], label: `AWS credentials or bearer token\n${secret}` },
+              ],
+            },
+          ],
+        },
+        {
+          ...answer,
+          providers: [
+            {
+              ...provider,
+              usageLimits: {
+                ...provider.usageLimits,
+                windows: [{ ...provider.usageLimits.windows[0], label: text }],
+              },
+            },
+          ],
+        },
+      ]) {
+        f.answer(hostile);
+        await expect(f.view.query("hostModels.inspect", {})).rejects.toMatchObject(refusal);
+      }
+    }
+    const held = await fixture(["host.model-defaults"], "bearer token");
+    held.answer(answer);
+    await expect(held.view.query("hostModels.inspect", {})).rejects.toMatchObject(refusal);
+    for (const hostile of [
+      { ...answer, models: [{ ...model, modelId: "provider/model\nmore" }] },
+      { ...answer, models: [{ ...model, label: "AWS credentials or bearer token" }] },
+      { ...answer, providers: [{ ...provider, id: "other-provider" }] },
+      {
+        ...answer,
+        providers: [{ ...provider, signIn: [{ ...provider.signIn[0], type: "oauth" }] }],
+      },
+    ]) {
+      f.answer(hostile);
+      await expect(f.view.query("hostModels.inspect", {})).rejects.toMatchObject(refusal);
+    }
+  });
   it.each([
     { method: "codeModePolicy", kind: "query" },
     { method: "setCodeModePolicy", kind: "mutate" },
@@ -231,7 +383,15 @@ describe("HOST models across real loopback and renderer IPC", () => {
       expect(await f.view[kind](path, input)).toEqual(safe);
       const heldKey = "fixture/test-only-device";
       expect(f.link.redactDiagnostic(heldKey)).not.toBe(heldKey);
-      for (const key of [heldKey, "fixture/vdc1.fixture.signature", "fixture/model\u0007"]) {
+      for (const key of [
+        heldKey,
+        "fixture/vdc1.fixture.signature",
+        "fixture/sk-fixture",
+        "fixture/model\u0007",
+        "fixture/model\nmore",
+        "fixture/https://example.com?key=fixture",
+        "fixture/https://user:fixture@example.com",
+      ]) {
         f.answer({ enabled: true, models: { [key]: "only" } });
         await expect(f.view[kind](path, input)).rejects.toMatchObject({
           data: {

@@ -80,6 +80,7 @@ import {
   type HostWorkspaceList,
   type HostWorkspaceCreateResult,
   type HostLogsBatch,
+  type ModelAccessSnapshot,
   HOST_LINK_RELAY_STREAMS_PER_LINK,
   HOST_LINK_RELAY_SUBSCRIPTION_CAP,
   type HostLinkRelayError,
@@ -299,15 +300,39 @@ function hostOutput(link: HostScopeLink, path: string, answer: unknown): unknown
       })),
     };
   }
-  // Remaining HOST fields (including proofs and preference record keys) are
-  // identities, not diagnostic prose. Refuse unsafe strings without rewriting them.
-  const safeBootstrap = (value: unknown): boolean => {
-    if (typeof value === "string")
-      return remoteHostDiagnostic(link.redactDiagnostic(value), Number.MAX_SAFE_INTEGER) === value;
-    if (Array.isArray(value)) return value.every(safeBootstrap);
+  // Catalog labels/account descriptions are plain text, not identities: keep
+  // their spacing/newlines, while still refusing every secret the diagnostic
+  // scrubber detects. Keys, ids, proofs and preferences retain exact checks.
+  const catalog = path === "hostModels.inspect";
+  const bedrockMethods = new Set<object>();
+  if (catalog) {
+    for (const provider of (parsed.data as ModelAccessSnapshot).providers) {
+      for (const method of provider.signIn) {
+        if (provider.id === "amazon-bedrock" && method.type === "api-key")
+          bedrockMethods.add(method);
+      }
+    }
+  }
+  const safeBootstrap = (value: unknown, prose = false, bedrockMethod = false): boolean => {
+    if (typeof value === "string") {
+      // Check the held credential before any prose exception or normalization.
+      if (link.redactDiagnostic(value) !== value) return false;
+      // Pi's exact, static method label describes a credential, not its value.
+      // Never exempt arbitrary "bearer token" text, suffixes or other fields.
+      if (bedrockMethod && value === "AWS credentials or bearer token") return true;
+      const expected = prose ? value.replace(/\s+/gu, " ").trim() : value;
+      return remoteHostDiagnostic(value, Number.MAX_SAFE_INTEGER) === expected;
+    }
+    if (Array.isArray(value)) return value.every((field) => safeBootstrap(field));
     if (value !== null && typeof value === "object")
       return Object.entries(value).every(
-        ([key, field]) => safeBootstrap(key) && safeBootstrap(field),
+        ([key, field]) =>
+          safeBootstrap(key) &&
+          safeBootstrap(
+            field,
+            catalog && (key === "label" || key === "accountLabel"),
+            key === "label" && bedrockMethods.has(value),
+          ),
       );
     return true;
   };
