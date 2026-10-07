@@ -138,3 +138,148 @@ describe("the host's recent log", () => {
     expect(lost).toMatchObject([{ entries: [], gap: true }]);
   });
 });
+
+/* ---------------------------------------------------- byte-safe (VC-712) */
+
+const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+/** About `size` bytes of message: `glyph` repeated, so a test can choose ASCII or not. */
+const sized = (index: number, size: number, glyph = "x") =>
+  `${index}:`.padEnd(Math.floor(size / Buffer.byteLength(glyph)), glyph);
+/** hostd's frame budget for one answer: its 2 MiB frame less the envelope. */
+const FRAME_BUDGET = 2 * 1024 * 1024 - 4096;
+
+describe("the host's recent log, in bytes (VC-712)", () => {
+  it("counts encoded bytes, not UTF-16 units", () => {
+    const ring = createLogRing();
+    const [record, text] = line("héllo — 日本語 🚀");
+    ring.write(record, text);
+    expect(ring.size().bytes).toBe(Buffer.byteLength(text, "utf8") + 1);
+    expect(ring.size().bytes).toBeGreaterThan(text.length + 1);
+    // Eviction by bytes reads the same count: three-byte glyphs fill it three times as fast.
+    const small = createLogRing({ maxBytes: 3_000 });
+    for (let index = 0; index < 10; index += 1) small.write(...line(sized(index, 900, "語")));
+    expect(small.size().bytes).toBeLessThanOrEqual(3_000);
+    expect(small.size().lines).toBe(3);
+  });
+
+  it("sizes an answer exactly: a budget its JSON fills holds every line, a byte less does not", () => {
+    const ring = createLogRing();
+    for (let index = 0; index < 5; index += 1) ring.write(...line(sized(index, 300, "é")));
+    const whole = ring.read({});
+    const exact = bytesOf(whole);
+    expect(ring.read({ maxBytes: exact })).toEqual(whole);
+    const short = ring.read({ maxBytes: exact - 1 });
+    expect(short.entries).toEqual(whole.entries.slice(1));
+    expect(short.gap).toBe(true);
+    expect(bytesOf(short)).toBeLessThanOrEqual(exact - 1);
+  });
+
+  it("tails 600 lines of 5 KiB inside a 2 MiB frame: the newest that fit, and a gap", () => {
+    const ring = createLogRing();
+    for (let index = 0; index < 600; index += 1) ring.write(...line(sized(index, 5 * 1024)));
+    const page = ring.read({ limit: 500, maxBytes: FRAME_BUDGET });
+    expect(bytesOf(page)).toBeLessThanOrEqual(FRAME_BUDGET);
+    expect(page.entries.length).toBeGreaterThan(350);
+    expect(page.entries.length).toBeLessThan(500);
+    expect(page.gap).toBe(true);
+    expect(page.entries.at(-1)!.record.msg).toBe(sized(599, 5 * 1024));
+    expect(page.cursor).toBe(page.entries.at(-1)!.cursor);
+    // Unbounded (the desktop's IPC), the count alone limits it, as before.
+    expect(ring.read({ limit: 500 })).toMatchObject({ gap: false });
+    expect(ring.read({ limit: 500 }).entries).toHaveLength(500);
+  });
+
+  it("answers past a line no answer can carry with no lines, a gap, and the newest cursor", () => {
+    const ring = createLogRing();
+    ring.write(...line(sized(0, 2_000)));
+    expect(ring.read({ maxBytes: 500 })).toEqual({
+      entries: [],
+      gap: true,
+      cursor: `${ring.instance}:1`,
+    });
+    // A budget that is no number bounds nothing.
+    expect(ring.read({ maxBytes: 0 }).entries).toHaveLength(1);
+  });
+
+  it("follows in batches inside the budget, each with its own newest cursor", async () => {
+    const ring = createLogRing();
+    const batches: HostLogsBatch[] = [];
+    ring.follow({ maxBytes: 4_000 }, (batch) => batches.push(batch));
+    for (let index = 0; index < 3; index += 1) ring.write(...line(sized(index, 1_000)));
+    await tick();
+    for (let index = 3; index < 6; index += 1) ring.write(...line(sized(index, 1_000)));
+    await tick();
+    expect(batches.flatMap(msgs)).toEqual([0, 1, 2, 3, 4, 5].map((index) => sized(index, 1_000)));
+    for (const batch of batches) {
+      expect(bytesOf(batch)).toBeLessThanOrEqual(4_000);
+      expect(batch.cursor).toBe(batch.entries.at(-1)!.cursor);
+      expect(batch.gap).toBe(false);
+    }
+  });
+
+  it("holds one budget unsent: a burst past it keeps the newest and says the rest are missing", async () => {
+    const ring = createLogRing();
+    const batches: HostLogsBatch[] = [];
+    ring.follow({ maxBytes: FRAME_BUDGET }, (batch) => batches.push(batch));
+    for (let index = 0; index < 600; index += 1) ring.write(...line(sized(index, 5 * 1024, "ü")));
+    await tick();
+    expect(batches).toHaveLength(1);
+    const [burst] = batches;
+    expect(burst!.gap).toBe(true);
+    expect(bytesOf(burst)).toBeLessThanOrEqual(FRAME_BUDGET);
+    expect(burst!.entries.at(-1)!.record.msg).toBe(sized(599, 5 * 1024, "ü"));
+    // The next batch is whole again.
+    ring.write(...line("calm"));
+    await tick();
+    expect(batches[1]).toMatchObject({ gap: false });
+    expect(msgs(batches[1]!)).toEqual(["calm"]);
+  });
+
+  it("never sends a line no batch can carry; the next batch says it is missing", async () => {
+    const ring = createLogRing();
+    const batches: HostLogsBatch[] = [];
+    ring.follow({ maxBytes: 600 }, (batch) => batches.push(batch));
+    ring.write(...line(sized(0, 1_000)));
+    await tick();
+    expect(batches).toEqual([]);
+    ring.write(...line("fits"));
+    await tick();
+    expect(batches).toMatchObject([{ gap: true }]);
+    expect(msgs(batches[0]!)).toEqual(["fits"]);
+  });
+
+  it("bounds unsent lines by count too, and compacts what it dropped", async () => {
+    const ring = createLogRing({ maxLines: 3 });
+    const batches: HostLogsBatch[] = [];
+    ring.follow({}, (batch) => batches.push(batch));
+    for (let index = 0; index < 3_000; index += 1) ring.write(...line(`n${index}`));
+    await tick();
+    expect(batches).toHaveLength(1);
+    expect(msgs(batches[0]!)).toEqual(["n2997", "n2998", "n2999"]);
+    expect(batches[0]!.gap).toBe(true);
+  });
+
+  it("splits a burst of small lines by count, each batch carrying its own cursor", async () => {
+    const ring = createLogRing();
+    const batches: HostLogsBatch[] = [];
+    ring.follow({ maxBytes: FRAME_BUDGET }, (batch) => batches.push(batch));
+    for (let index = 0; index < LOG_PAGE_LIMIT + 1; index += 1) ring.write(...line(`n${index}`));
+    await tick();
+    expect(batches.map((batch) => batch.entries.length)).toEqual([LOG_PAGE_LIMIT, 1]);
+    expect(batches[0]!.cursor).toBe(batches[0]!.entries.at(-1)!.cursor);
+    expect(batches[0]!.cursor).not.toBe(batches[1]!.cursor);
+  });
+
+  it("bounds a follower's backlog like a read", () => {
+    const ring = createLogRing();
+    ring.write(...line("start"));
+    const cursor = ring.read({}).cursor;
+    for (let index = 0; index < 10; index += 1) ring.write(...line(sized(index, 1_000)));
+    const batches: HostLogsBatch[] = [];
+    ring.follow({ after: cursor, maxBytes: 3_500 }, (batch) => batches.push(batch));
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.gap).toBe(true);
+    expect(bytesOf(batches[0])).toBeLessThanOrEqual(3_500);
+    expect(msgs(batches[0]!).at(-1)).toBe(sized(9, 1_000));
+  });
+});

@@ -24,7 +24,7 @@ import {
   type ModelSelection,
   type SessionReadVerb,
   type HostLogsBatch,
-  type HostLogsQuery,
+  type HostLogsRead,
 } from "@volli/shared";
 
 import type { DesktopRouterHandlers } from "./desktop-router";
@@ -73,9 +73,9 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
   /** Sign-ins on a host (VC-702), handler by handler; an absent one answers unavailable. */
   signIns?: Partial<SignInRouterHandlers>;
   /** The host's recent log (VC-699): host-core's ring. */
-  readLogs?: (query: HostLogsQuery) => HostLogsBatch;
+  readLogs?: (query: HostLogsRead) => HostLogsBatch;
   followLogs?: (
-    query: HostLogsQuery,
+    query: HostLogsRead,
     listener: (batch: HostLogsBatch) => void,
     fail: (error: unknown) => void,
   ) => () => void;
