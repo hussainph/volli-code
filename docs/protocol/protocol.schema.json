@@ -24,6 +24,9 @@
     }
   },
   "features": {
+    "auth.callback": [
+      "auth.callback.deliver"
+    ],
     "board.read": [
       "board.snapshot",
       "board.roster",
@@ -96,11 +99,1775 @@
     ],
     "sessions.subscribe": [
       "session.subscribe"
+    ],
+    "sign-ins": [
+      "signIns.status",
+      "signIns.setApiKey",
+      "signIns.signOut",
+      "signIns.start",
+      "signIns.subscribe",
+      "signIns.answer",
+      "signIns.cancel",
+      "signIns.setGitCredential",
+      "signIns.clearGitCredential"
     ]
   },
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "hostAdd.answer": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "accept-host-key",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "update",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "adopt",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "open",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "user-install",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "repair",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "questionId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "questionId",
+            "answer"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostAdd.cancel": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostAdd.retry": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "from": {
+              "enum": [
+                "connect",
+                "probe",
+                "deliver",
+                "install",
+                "start",
+                "enroll",
+                "link"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostAdd.start": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostAdd.subscribe": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$defs": {
+            "__schema0": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "replay",
+                  "type": "string"
+                },
+                "log": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "at": {
+                        "type": "string"
+                      },
+                      "fields": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "level": {
+                        "enum": [
+                          "debug",
+                          "info",
+                          "warn",
+                          "error"
+                        ],
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "at",
+                      "level",
+                      "message",
+                      "fields"
+                    ],
+                    "type": "object"
+                  },
+                  "readOnly": true,
+                  "type": "array"
+                },
+                "omitted": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "view": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "line": {
+                              "type": "string"
+                            },
+                            "recovery": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "retry",
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "enum": [
+                                        "connect",
+                                        "probe",
+                                        "deliver",
+                                        "install",
+                                        "start",
+                                        "enroll",
+                                        "link"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label",
+                                    "from"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "back",
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "step",
+                            "line",
+                            "recovery",
+                            "detail"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "flowId": {
+                      "type": "string"
+                    },
+                    "hostId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "step"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startup": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "running",
+                        "question",
+                        "failed",
+                        "done",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "enum": [
+                              "connect",
+                              "probe",
+                              "deliver",
+                              "install",
+                              "start",
+                              "enroll",
+                              "link"
+                            ],
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "running",
+                              "done",
+                              "skipped",
+                              "failed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "flowId",
+                    "target",
+                    "name",
+                    "status",
+                    "steps",
+                    "question",
+                    "failure",
+                    "hostId",
+                    "startup"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "view",
+                "log",
+                "omitted"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "view",
+                  "type": "string"
+                },
+                "view": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "line": {
+                              "type": "string"
+                            },
+                            "recovery": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "retry",
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "enum": [
+                                        "connect",
+                                        "probe",
+                                        "deliver",
+                                        "install",
+                                        "start",
+                                        "enroll",
+                                        "link"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label",
+                                    "from"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "back",
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "step",
+                            "line",
+                            "recovery",
+                            "detail"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "flowId": {
+                      "type": "string"
+                    },
+                    "hostId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "step"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startup": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "running",
+                        "question",
+                        "failed",
+                        "done",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "enum": [
+                              "connect",
+                              "probe",
+                              "deliver",
+                              "install",
+                              "start",
+                              "enroll",
+                              "link"
+                            ],
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "running",
+                              "done",
+                              "skipped",
+                              "failed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "flowId",
+                    "target",
+                    "name",
+                    "status",
+                    "steps",
+                    "question",
+                    "failure",
+                    "hostId",
+                    "startup"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "view"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "flowId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "log",
+                  "type": "string"
+                },
+                "line": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "at": {
+                      "type": "string"
+                    },
+                    "fields": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "level": {
+                      "enum": [
+                        "debug",
+                        "info",
+                        "warn",
+                        "error"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "at",
+                    "level",
+                    "message",
+                    "fields"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "flowId",
+                "line"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "hostAdd.sudoPassword": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "password": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            "questionId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "questionId",
+            "password"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.cancelScheduledUpdate": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.forget": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.retry": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.signIn": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "providerId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "providerId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.snapshot": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hosts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "addedAt": {
+                    "type": "string"
+                  },
+                  "agentsShareAccount": {
+                    "type": "boolean"
+                  },
+                  "availableUpdate": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "deviceId": {
+                    "type": "string"
+                  },
+                  "hostIsNewer": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "liveSessions": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "mode": {
+                    "enum": [
+                      "system",
+                      "user"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "os": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "linux",
+                          "macos"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "const": "ssh-tunnel",
+                    "type": "string"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "target",
+                  "transport",
+                  "os",
+                  "mode",
+                  "agentsShareAccount",
+                  "version",
+                  "availableUpdate",
+                  "hostIsNewer",
+                  "deviceId",
+                  "addedAt",
+                  "liveSessions"
+                ],
+                "type": "object"
+              },
+              "readOnly": true,
+              "type": "array"
+            },
+            "projects": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "hostId": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "status": {
+                            "const": "connecting",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "attempt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "ready",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "closeCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "retryAt": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "const": "unreachable",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "attempt",
+                          "error",
+                          "closeCode",
+                          "retryAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "closeCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "status": {
+                            "const": "refused",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "error",
+                          "closeCode"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "status": {
+                            "const": "fenced",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "error"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "closed",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "hostId",
+                  "link"
+                ],
+                "type": "object"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "readOnly": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "v": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "v",
+            "hosts",
+            "projects",
+            "readOnly"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.subscribe": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hosts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "addedAt": {
+                    "type": "string"
+                  },
+                  "agentsShareAccount": {
+                    "type": "boolean"
+                  },
+                  "availableUpdate": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "deviceId": {
+                    "type": "string"
+                  },
+                  "hostIsNewer": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "liveSessions": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "mode": {
+                    "enum": [
+                      "system",
+                      "user"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "os": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "linux",
+                          "macos"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "const": "ssh-tunnel",
+                    "type": "string"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "target",
+                  "transport",
+                  "os",
+                  "mode",
+                  "agentsShareAccount",
+                  "version",
+                  "availableUpdate",
+                  "hostIsNewer",
+                  "deviceId",
+                  "addedAt",
+                  "liveSessions"
+                ],
+                "type": "object"
+              },
+              "readOnly": true,
+              "type": "array"
+            },
+            "projects": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "hostId": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "status": {
+                            "const": "connecting",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "attempt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "ready",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "closeCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "retryAt": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "const": "unreachable",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "attempt",
+                          "error",
+                          "closeCode",
+                          "retryAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "closeCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "status": {
+                            "const": "refused",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "error",
+                          "closeCode"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "error": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "reason",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "status": {
+                            "const": "fenced",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "error"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "const": "closed",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "hostId",
+                  "link"
+                ],
+                "type": "object"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "readOnly": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "v": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "v",
+            "hosts",
+            "projects",
+            "readOnly"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "hosts.updateHost": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "when": {
+              "enum": [
+                "now",
+                "when-idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "when"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "project.reorder": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -158,6 +1925,48 @@
       }
     },
     "public": {
+      "auth.callback.deliver": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pathAndQuery": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "pattern": "^\\/.*",
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "pathAndQuery"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "board.archiveTicket": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29375,6 +31184,1091 @@
           "type": "object"
         },
         "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.answer": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "promptId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "maxLength": 16384,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "promptId",
+            "value"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": true
+      },
+      "signIns.cancel": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": true
+      },
+      "signIns.clearGitCredential": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "host": {
+              "maxLength": 260,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.setApiKey": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "key": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId",
+            "key"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.setGitCredential": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "host": {
+              "maxLength": 260,
+              "minLength": 1,
+              "type": "string"
+            },
+            "password": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            "username": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "username",
+            "password"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.signOut": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.start": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "api-key",
+                "oauth"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.status": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.subscribe": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "instructions": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "kind": {
+                  "const": "auth-url",
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "url",
+                "instructions"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expiresInSeconds": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "intervalSeconds": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "kind": {
+                  "const": "device-code",
+                  "type": "string"
+                },
+                "userCode": {
+                  "type": "string"
+                },
+                "verificationUri": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "userCode",
+                "verificationUri",
+                "intervalSeconds",
+                "expiresInSeconds"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "info",
+                  "type": "string"
+                },
+                "links": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "label": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "url",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message",
+                "links"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "progress",
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "flowId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "auth-callback",
+                  "type": "string"
+                },
+                "redirectUri": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "flowId",
+                "redirectUri"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prompt",
+                  "type": "string"
+                },
+                "prompt": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "text",
+                        "secret",
+                        "select",
+                        "manual-code"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "description"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "placeholder": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "promptId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "promptId",
+                    "kind",
+                    "message",
+                    "placeholder",
+                    "options"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "prompt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prompt-withdrawn",
+                  "type": "string"
+                },
+                "promptId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "promptId"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "done",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "failed",
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ],
+          "x-volli-open-union": "kind"
+        },
+        "outputValidation": "documented-yield",
         "voidOutput": false
       },
       "ticket.move": {

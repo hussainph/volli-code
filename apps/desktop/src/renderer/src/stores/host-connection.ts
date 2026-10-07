@@ -25,6 +25,7 @@
  */
 import { create } from "zustand";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
+import { REMOTE_HOST_TOO_MANY_PROJECTS } from "@volli/shared";
 
 /** A host's id: the host's own UUID for a remote one, {@link THIS_MAC_HOST_ID} for this Mac. */
 export type HostId = string;
@@ -45,13 +46,17 @@ export type HostOs = "macos" | "linux";
  * - `refused`: the host no longer accepts this Mac's credential. Manage hosts.
  * - `fenced`: the project's authority moved, or two hosts claim it
  *   (`workspace-epoch-fenced` / `workspace-split-brain`). Manage hosts.
+ * - `too-many-projects`: this Mac opens at most `REMOTE_HOST_LINK_CAP` links
+ *   to one host, and this project is past it (VC-700). Never the host's
+ *   fault, so a host's own link never reads it. Manage hosts.
  */
 export type HostIncompatibility =
   | "host-too-old"
   | "host-too-new"
   | "database-too-new"
   | "refused"
-  | "fenced";
+  | "fenced"
+  | "too-many-projects";
 
 /**
  * A host's link as the UI reads it — a projection of the client host link's
@@ -397,6 +402,7 @@ const INCOMPATIBILITY_RANK: Readonly<Record<HostIncompatibility, number>> = {
   fenced: 2,
   "host-too-new": 3,
   "host-too-old": 4,
+  "too-many-projects": 5,
 };
 const STATUS_RANK: Readonly<Record<HostLinkStatus, number>> = {
   incompatible: 0,
@@ -408,6 +414,10 @@ const STATUS_RANK: Readonly<Record<HostLinkStatus, number>> = {
 };
 
 function linkRank(link: HostLinkView): [number, number] {
+  // This Mac's own limit, not the host's state: a host's link never reads it.
+  if (link.status === "incompatible" && link.reason === "too-many-projects") {
+    return [STATUS_RANK.open + 1, 0];
+  }
   if (link.status === "incompatible") return [0, INCOMPATIBILITY_RANK[link.reason]];
   // The longest outage first: it is the one a person has waited on.
   if (link.status === "offline") return [STATUS_RANK.offline, link.since];
@@ -501,6 +511,10 @@ export function hostLinkView(state: HostLinkState, context: HostLinkContext): Ho
       return { status: "offline", since, retryAt: state.retryAt };
     }
     case "refused":
+      // Desktop main's own refusal, past its link cap: a reason no host sends.
+      if ((state.error.reason as string | undefined) === REMOTE_HOST_TOO_MANY_PROJECTS) {
+        return { status: "incompatible", reason: "too-many-projects" };
+      }
       if (state.error.reason !== "protocol-version-unsupported") {
         return { status: "incompatible", reason: "refused" };
       }

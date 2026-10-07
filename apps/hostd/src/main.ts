@@ -14,6 +14,7 @@ import { VOLLI_OPERATOR_TOKEN_ENV } from "@volli/shared";
 import { parseHostdArgs, USAGE, type HostdCommand } from "./args";
 import { socketActivationFd } from "./activation";
 import { runCredentialsReset } from "./credentials";
+import { readAll, runGitCredential } from "./git-credential";
 import { runDatabaseRestore } from "./database";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
 import {
@@ -119,6 +120,11 @@ async function main(): Promise<number> {
         now: () => new Date(),
         out: (text) => process.stdout.write(text),
         err: (text) => process.stderr.write(text),
+      });
+    case "git-credential":
+      return runGitCredential(command, {
+        stdin: () => readAll(process.stdin),
+        out: (text) => process.stdout.write(text),
       });
     case "install":
     case "start":

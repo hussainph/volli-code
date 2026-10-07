@@ -8,6 +8,19 @@
  */
 export type { HostDecisions } from "../decision/host-decisions";
 export { ModelAccessSignInService, type SignInOwner } from "../model-access/sign-in-service";
+export {
+  answerGitCredential,
+  appendGitConfig,
+  fileGitCredentialStore,
+  GIT_CREDENTIALS_FILE,
+  gitCredentialHelperEnv,
+  HostSignIns,
+  parseGitCredentialRequest,
+  shellWord,
+  type GitCredentialStore,
+  type HostSignInKeyProvider,
+  type HostSignInsOptions,
+} from "../host-sign-ins";
 export { PiSessionOrphanService } from "../pi-session-orphans";
 export { removeTicketToolOutput } from "../pi-tool-output";
 export { buildSessionEnvReport } from "../session-env";

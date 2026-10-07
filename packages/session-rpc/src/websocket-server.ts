@@ -117,7 +117,8 @@ type ListenerContextKey =
   | "replayBounds"
   | "refused"
   | "admission"
-  | "maxResponseBytes";
+  | "maxResponseBytes"
+  | "connectionId";
 
 export interface HostProtocolListenerLimits {
   /** Sockets open at once, at every stage from TCP accept to close. */
@@ -620,6 +621,7 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
       replayBounds: { events: limits.maxReplayEvents, bytes: limits.maxReplayBytes },
       admission: admissionOf(connection),
       maxResponseBytes: limits.maxFrameBytes - FRAME_ENVELOPE_BYTES,
+      connectionId: connection.id,
     };
     return {
       ...options.context({ id: connection.id, welcome, caller }),

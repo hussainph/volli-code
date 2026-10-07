@@ -17,26 +17,7 @@
  *
  * Elsewhere (Linux), nothing changes unless a helper is given.
  */
-
-/**
- * `env` with command-scope git configuration (`GIT_CONFIG_COUNT`,
- * `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n`, git 2.31+) appended after
- * whatever it already holds, so two writers of the same record compose
- * instead of overwriting each other's count.
- */
-export function appendGitConfig(
-  env: Readonly<Record<string, string>>,
-  entries: readonly (readonly [key: string, value: string])[],
-): Record<string, string> {
-  const held = Number(env["GIT_CONFIG_COUNT"] ?? "0");
-  const start = Number.isSafeInteger(held) && held > 0 ? held : 0;
-  const out: Record<string, string> = { ...env, GIT_CONFIG_COUNT: String(start + entries.length) };
-  entries.forEach(([key, value], offset) => {
-    out[`GIT_CONFIG_KEY_${start + offset}`] = key;
-    out[`GIT_CONFIG_VALUE_${start + offset}`] = value;
-  });
-  return out;
-}
+import { appendGitConfig, gitCredentialHelperEnv } from "@volli/host-core/session-runtime";
 
 /**
  * The record a Session command on this host gets, with git kept off the
@@ -50,4 +31,18 @@ export function withAgentGit(
 ): Record<string, string> {
   if (platform !== "darwin") return { ...env };
   return { ...appendGitConfig(env, [["credential.helper", ""]]), GIT_TERMINAL_PROMPT: "0" };
+}
+
+/**
+ * The git part of every Session command's record, composed once: on a Mac the
+ * helper-list reset first ({@link withAgentGit}), then Volli's push-credential
+ * helper (VC-702) when there is one, appended after it, never over it.
+ */
+export function sessionGitEnv(
+  env: Readonly<Record<string, string>>,
+  platform: string,
+  volliHelper: string | null,
+): Record<string, string> {
+  const reset = withAgentGit(env, platform);
+  return volliHelper === null ? reset : gitCredentialHelperEnv(volliHelper, reset);
 }

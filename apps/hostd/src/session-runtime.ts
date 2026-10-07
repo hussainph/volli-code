@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  piHostCredentials,
   piOwnedModelAccess,
+  piSignIn,
   type PiModelAccess,
   type CodeModeSandboxAssets,
 } from "@volli/agent-runtime";
@@ -33,6 +35,9 @@ import {
   recoveredSessionAutomationPorts,
   recoveredRuntimeSessionServices,
   createSessionRuntimeLifecycle,
+  fileGitCredentialStore,
+  GIT_CREDENTIALS_FILE,
+  HostSignIns,
 } from "@volli/host-core/session-runtime";
 import {
   agentSitesWithin,
@@ -43,7 +48,7 @@ import {
 } from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
-import { withAgentGit } from "./agent-git-env";
+import { sessionGitEnv } from "./agent-git-env";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -51,6 +56,14 @@ export interface HeadlessRuntimeOptions {
   codeModeSandbox?: CodeModeSandboxAssets;
   /** A scripted provider replaces only the wire in host-container and integration proofs. */
   modelAccess?: PiModelAccess;
+  /**
+   * Volli's git credential helper (VC-702), as git's `credential.helper`
+   * value: a `!`-command that answers from this host's push-credential
+   * store. Set, every Session command's environment installs it as
+   * command-scope git configuration; absent or null (the `cloud` flag off),
+   * Sessions push exactly as before.
+   */
+  gitCredentialHelper?: string | null;
   /** The box's platform (`process.platform`): on a Mac, Session git never reaches the keychain. */
   platform?: string;
 }
@@ -115,6 +128,8 @@ export function createHeadlessSessionRuntime(input: {
     log: (message) => ports.log.warn(message),
   });
   const secrets = new SecretService(input.secrets.store);
+  const gitHelper = options.gitCredentialHelper ?? null;
+
   const delegation = createTicketSessionDelegationStore(db);
   const tokens = createSessionTokenRegistry();
   const identities = createAttachmentIdentities({
@@ -169,15 +184,17 @@ export function createHeadlessSessionRuntime(input: {
     // with operators and bakes nothing. Without it the agent's `volli` answers
     // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
     // The Session's identity is still composed after this, never from here.
-    // On a Mac, git's keychain helper is never run by a Session (VC-700):
-    // its reset is the record's first git configuration entry.
+    // A Session's git (VC-700, VC-702): on a Mac the keychain helper is reset
+    // first, and Volli's push-credential helper (behind `cloud`) is appended
+    // after it, never over it.
     concurrencyEnvFor: async (sessionId) =>
-      withAgentGit(
+      sessionGitEnv(
         {
           ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
           [VOLLI_SOCKET_ENV]: input.socketPath,
         },
         options.platform ?? process.platform,
+        gitHelper,
       ),
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
@@ -300,6 +317,25 @@ export function createHeadlessSessionRuntime(input: {
         return sites;
       };
       recovered = { busyWorktreeSites, runtime };
+      // Sign-ins on this host (VC-702): keys and push credentials a Client
+      // sends land in the host's own stores (Pi's auth storage; the
+      // push-credential file under the data directory), and subscription
+      // logins run here, over the same Pi collection the runtime reads.
+      const signIns =
+        modelAccess === null || piRuntimeHost === null
+          ? null
+          : new HostSignIns({
+              pi: piSignIn(modelAccess.models, {
+                // Sign in with ChatGPT names the installation to OpenAI: on
+                // a host, its persisted host id, a UUID.
+                deviceId: () => options.venue.id,
+              }),
+              inspect: () => piRuntimeHost.inspectModelAccess({}),
+              keys: {
+                models: piHostCredentials(modelAccess.credentials),
+                git: fileGitCredentialStore(join(host.dataDir, GIT_CREDENTIALS_FILE)),
+              },
+            });
       let sessionReads: SessionReadPort | undefined;
       return {
         ...recoveredSessionCommandPorts(ready),
@@ -331,6 +367,7 @@ export function createHeadlessSessionRuntime(input: {
           // Served before any door opens: hostd hands it over before it
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+          signIns,
           logs: input.logs ?? null,
           ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
           ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),

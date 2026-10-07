@@ -626,28 +626,34 @@ export function describeBrowserBackendSuite(name: string, create: BackendFactory
       backend.close(personal.tabId);
     });
 
-    it("caps a Session's headless tabs", async () => {
-      const capped = portFor("capped");
-      for (let i = 0; i < BROWSER_MAX_TABS_PER_SESSION; i += 1) {
-        await capped.navigate({
-          navigation: { kind: "url", url: fixture.url("/second") },
-          signal: signal(),
-        });
-      }
-      const refused = await refusalOf(
-        capped.navigate({
-          navigation: { kind: "url", url: fixture.url("/second") },
-          signal: signal(),
-        }),
-      );
-      expect(refused.rule).toBe("browser.session-tab-limit");
-      capped.dispose();
-      await eventually(
-        async () =>
-          backend.list({ projectId: PROJECT }).filter((tab) => tab.ownerSessionId === "capped"),
-        (tabs) => tabs.length === 0,
-      );
-    });
+    // Six complete navigations: retain the usual 5 s allowance per call,
+    // rather than making the aggregate quota assertion a 5 s latency bench.
+    it(
+      "caps a Session's headless tabs",
+      async () => {
+        const capped = portFor("capped");
+        for (let i = 0; i < BROWSER_MAX_TABS_PER_SESSION; i += 1) {
+          await capped.navigate({
+            navigation: { kind: "url", url: fixture.url("/second") },
+            signal: signal(),
+          });
+        }
+        const refused = await refusalOf(
+          capped.navigate({
+            navigation: { kind: "url", url: fixture.url("/second") },
+            signal: signal(),
+          }),
+        );
+        expect(refused.rule).toBe("browser.session-tab-limit");
+        capped.dispose();
+        await eventually(
+          async () =>
+            backend.list({ projectId: PROJECT }).filter((tab) => tab.ownerSessionId === "capped"),
+          (tabs) => tabs.length === 0,
+        );
+      },
+      BROWSER_MAX_TABS_PER_SESSION * 5_000,
+    );
 
     it("cancels a withdrawn call cleanly, and the port keeps working", async () => {
       const controller = new AbortController();

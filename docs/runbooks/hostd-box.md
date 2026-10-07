@@ -241,6 +241,12 @@ means it is still booting: run it again a few seconds later.
 
 ## 5. Sign in to a model provider
 
+> **With the `cloud` flag on and a paired desktop (VC-702),** the desktop does
+> this for you: it sends an API key over the host link into this same
+> `auth.json`, and runs a subscription login *on the box* while you approve
+> in your Mac's browser (a device code, or the browser's redirect relayed to
+> the box's own listener). The steps below are the manual path.
+
 Sessions run on Pi, which reads its sign-ins from
 `$HOME/.pi/agent/auth.json` of the account hostd runs as:
 `/var/lib/volli-hostd/.pi/agent/auth.json`. It is separate from Volli's sealed
@@ -302,6 +308,24 @@ No restart is needed: Pi reads the file when a Session asks. You check it in
 step 7, once you can reach the socket.
 
 ## 6. Git: credentials first, then the checkout
+
+> **With the `cloud` flag on (VC-702),** a push token sent from the desktop is
+> kept in `/var/lib/volli-hostd/credentials/git-push.json` (`0600`), and every
+> Session command finds it through Volli's own credential helper
+> (`volli-hostd git-credential`, installed as command-scope git configuration,
+> never in a git config file or a remote URL). Git still asks any helper you
+> configure below first. The helper answers for **any repository on that git
+> host**, for fetch and clone as well as push, so the token's own scope (a
+> fine-grained token limited to one repository) is the real limit.
+>
+> **What `0600` protects.** On a system install every Session runs as the
+> same account as hostd (`volli`). The file modes fence out *other* users
+> only: any Session can read `git-push.json` and `auth.json` directly, for
+> example with `cat`. Volli's structured read tools refuse those paths, but
+> that is not a sandbox. The boundary is what you agreed to when you sent the
+> credential: the box keeps a copy of it, for its Sessions.
+>
+> The steps below are the manual path.
 
 The agent commits and pushes as `volli`, with `volli`'s git identity and
 credential. Set the identity and the shared checkout folder:
@@ -1007,6 +1031,27 @@ grant would then cover whatever that user put there. The AppArmor profile is wha
 let that one binary make user namespaces; never answer "No usable sandbox!"
 with `--no-sandbox`. Why the unit allows `RestrictNamespaces=user pid net`:
 `apps/hostd/README.md`, "Running under systemd".
+
+## Added from a Mac ("Add a host", M2)
+
+When the desktop adds this box for you (VC-700) rather than you following
+the steps above:
+
+- **Host keys.** Trusting the box adds its key to your `~/.ssh/known_hosts`,
+  as `ssh`'s own prompt would. If the box is reinstalled its key changes, and
+  the connection stops until you remove the old line on your Mac:
+  `ssh-keygen -R <host>`.
+- **Old enrollments.** Re-adding the box enrolls your Mac afresh; the old
+  device stays enrolled until you revoke it here:
+
+  ```bash
+  sudo volli-hostd devices list --system          # or: volli-hostd devices list --user
+  sudo volli-hostd devices revoke <deviceId> --system
+  ```
+
+- **A crash mid-add** can leave that add's device key in the Mac's sealed
+  inventory. It is never used; the inventory cannot list its keys yet, so
+  nothing collects it.
 
 ## What M1 does not cover
 

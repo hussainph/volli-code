@@ -19,7 +19,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { CHROMIUM_HISTORY_TIMEOUT_MS, ChromiumBrowserBackend } from "./chromium-backend";
+import {
+  CHROMIUM_HISTORY_TIMEOUT_MS,
+  CHROMIUM_LOAD_TIMEOUT_MS,
+  ChromiumBrowserBackend,
+} from "./chromium-backend";
 import {
   CHROMIUM_ENV_ALLOWLIST,
   chromiumEnvironment,
@@ -27,11 +31,18 @@ import {
   sweepStaleChromiumProfiles,
 } from "./chromium-launch";
 import { CdpPipeConnection } from "./chromium-pipe";
+import {
+  BLOCKED_BROWSER_NAVIGATION,
+  CHROMIUM_NAVIGATION_GUARD_BINDING,
+  CHROMIUM_NAVIGATION_GUARD_SOURCE,
+  CHROMIUM_NAVIGATION_GUARD_WORLD,
+} from "./chromium-navigation-guard";
 import { eventually, suitePorts } from "./test-support/backend-suite";
 import { fakeChromium, settle, type FakeChromium } from "./test-support/fake-chromium";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 const root = (): string => {
@@ -294,6 +305,214 @@ describe("ChromiumBrowserBackend over a fake browser", () => {
     }
   });
 
+  it("does not settle the requested navigation on the target's startup about:blank load", async () => {
+    const fake = fakeChromium();
+    fake.hold("Runtime.runIfWaitingForDebugger");
+    fake.hold("Page.navigate");
+    const { backend, restore } = backendOver(fake);
+    try {
+      const url = "http://fixture.test/blob";
+      const tab = backend.open({ url, projectId: "p", ticketId: null, createdBy: "user" });
+      let settled = false;
+      const waiting = backend.waitForLoad(tab.tabId, AbortSignal.timeout(2_000)).then(() => {
+        settled = true;
+      });
+      await opened(fake, 1);
+      fake.event(
+        "Page.frameNavigated",
+        { frame: { id: "target-1", url: "about:blank" } },
+        "session-1",
+      );
+      fake.event("Page.frameStoppedLoading", { frameId: "target-1" }, "session-1");
+      await settle();
+      expect(settled).toBe(false);
+      fake.release("Runtime.runIfWaitingForDebugger");
+      await settle();
+      expect(fake.held.get("Page.navigate")).toHaveLength(1);
+      expect(settled).toBe(false);
+      fake.event("Page.frameStartedLoading", { frameId: "target-1" }, "session-1");
+      fake.event("Page.frameNavigated", { frame: { id: "target-1", url } }, "session-1");
+      fake.release("Page.navigate", { loaderId: "fixture-loader" });
+      await settle();
+      expect(settled).toBe(false);
+      fake.event("Page.frameStoppedLoading", { frameId: "target-1" }, "session-1");
+      await waiting;
+      expect(backend.list({ projectId: "p" })[0]).toMatchObject({ url, loading: false });
+    } finally {
+      restore();
+      await backend.dispose();
+    }
+  });
+
+  it.each(["abort", "timeout"] as const)(
+    "keeps a pending product navigation's load wait bounded by %s",
+    async (end) => {
+      const fake = fakeChromium();
+      fake.hold("Page.navigate");
+      const { backend, restore } = backendOver(fake);
+      try {
+        const tab = open(backend);
+        await opened(fake, 1);
+        await settle();
+        // The startup load stops, but the requested navigation has not answered.
+        fake.event("Page.frameStoppedLoading", { frameId: "target-1" }, "session-1");
+        await settle();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const controller = new AbortController();
+        let settled = false;
+        const waiting = backend.waitForLoad(tab.tabId, controller.signal).then(() => {
+          settled = true;
+        });
+        await settle();
+        expect(settled).toBe(false);
+        if (end === "abort") controller.abort();
+        else await vi.advanceTimersByTimeAsync(CHROMIUM_LOAD_TIMEOUT_MS);
+        await waiting;
+        expect(settled).toBe(true);
+        // A bounded wait is not a claim that an unanswered navigation loaded.
+        expect(backend.list({ projectId: "p" })[0]!.loading).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        fake.release("Page.navigate", { loaderId: "late-loader" });
+        restore();
+        await backend.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "pins the blob guard's backstop when the commit beats stopLoading: %s",
+    async (commits) => {
+      const fake = fakeChromium();
+      const { backend, restore } = backendOver(fake);
+      try {
+        const url = "http://fixture.test/blob";
+        const tab = backend.open({ url, projectId: "p", ticketId: null, createdBy: "user" });
+        await opened(fake, 1);
+        await settle();
+        fake.event("Page.frameNavigated", { frame: { id: "target-1", url } }, "session-1");
+        fake.event("Page.frameStoppedLoading", { frameId: "target-1" }, "session-1");
+        await backend.waitForLoad(tab.tabId, AbortSignal.timeout(2_000));
+        const blob = "blob:http://fixture.test/document";
+        fake.event(
+          "Page.frameRequestedNavigation",
+          { frameId: "target-1", url: blob },
+          "session-1",
+        );
+        fake.event("Page.frameStartedLoading", { frameId: "target-1" }, "session-1");
+        if (commits) {
+          fake.event("Page.frameNavigated", { frame: { id: "target-1", url: blob } }, "session-1");
+        }
+        await settle();
+        expect(fake.commands).toContainEqual(
+          expect.objectContaining({ method: "Page.stopLoading", sessionId: "session-1" }),
+        );
+        const fallback = fake.commands.filter(
+          (command) =>
+            command.method === "Page.navigate" && command.params["url"] === "about:blank",
+        );
+        expect(fallback).toHaveLength(commits ? 1 : 0);
+        if (commits) {
+          fake.event("Page.frameStartedLoading", { frameId: "target-1" }, "session-1");
+          fake.event(
+            "Page.frameNavigated",
+            { frame: { id: "target-1", url: "about:blank" } },
+            "session-1",
+          );
+        }
+        fake.event("Page.frameStoppedLoading", { frameId: "target-1" }, "session-1");
+        await backend.waitForLoad(tab.tabId, AbortSignal.timeout(2_000));
+        expect(backend.list({ projectId: "p" })[0]).toMatchObject({
+          url: commits ? "about:blank" : url,
+          loading: false,
+        });
+        expect(backend.consoleOf(tab.tabId).messages.map((message) => message.text)).toEqual(
+          Array(commits ? 2 : 1).fill("Blocked a page navigation to a non-HTTP(S) address"),
+        );
+      } finally {
+        restore();
+        await backend.dispose();
+      }
+    },
+  );
+
+  it("ends a pending navigation wait on a renderer crash, without awaiting the command", async () => {
+    const fake = fakeChromium();
+    fake.hold("Page.navigate");
+    const { backend, restore } = backendOver(fake);
+    try {
+      const tab = open(backend);
+      await opened(fake, 1);
+      await settle();
+      const waiting = backend.waitForLoad(tab.tabId, AbortSignal.timeout(2_000));
+      fake.event("Target.targetCrashed", { targetId: "target-1", status: "crashed" });
+      await waiting;
+      expect(fake.held.get("Page.navigate")).toHaveLength(1);
+      expect(backend.list({ projectId: "p" })[0]).toMatchObject({
+        loading: false,
+        error: "The page stopped responding and its renderer exited (crashed).",
+      });
+    } finally {
+      fake.release("Page.navigate", { errorText: "net::ERR_ABORTED" });
+      restore();
+      await backend.dispose();
+    }
+  });
+
+  it("installs the isolated navigation guard before letting page scripts run", async () => {
+    const fake = fakeChromium();
+    const { backend, restore } = backendOver(fake);
+    try {
+      open(backend);
+      await opened(fake, 1);
+      const guard = fake.commands.findIndex(
+        (command) => command.method === "Page.addScriptToEvaluateOnNewDocument",
+      );
+      const resumed = fake.commands.findIndex(
+        (command) =>
+          command.method === "Runtime.runIfWaitingForDebugger" && command.sessionId === "session-1",
+      );
+      const binding = fake.commands.findIndex((command) => command.method === "Runtime.addBinding");
+      expect(binding).toBeGreaterThanOrEqual(0);
+      expect(binding).toBeLessThan(guard);
+      expect(fake.commands[binding]!.params).toEqual({
+        name: CHROMIUM_NAVIGATION_GUARD_BINDING,
+        executionContextName: CHROMIUM_NAVIGATION_GUARD_WORLD,
+      });
+      expect(guard).toBeGreaterThanOrEqual(0);
+      expect(guard).toBeLessThan(resumed);
+      expect(fake.commands[guard]!.params).toEqual({
+        source: CHROMIUM_NAVIGATION_GUARD_SOURCE,
+        worldName: CHROMIUM_NAVIGATION_GUARD_WORLD,
+        runImmediately: true,
+      });
+    } finally {
+      restore();
+      await backend.dispose();
+    }
+  });
+
+  it("accepts only the guard binding's fixed refusal notice", async () => {
+    const fake = fakeChromium();
+    const { backend, restore } = backendOver(fake);
+    try {
+      const tab = open(backend);
+      await opened(fake, 1);
+      for (const params of [
+        { name: "other", payload: BLOCKED_BROWSER_NAVIGATION },
+        { name: CHROMIUM_NAVIGATION_GUARD_BINDING, payload: "arbitrary page bytes" },
+        { name: CHROMIUM_NAVIGATION_GUARD_BINDING, payload: BLOCKED_BROWSER_NAVIGATION },
+      ])
+        fake.event("Runtime.bindingCalled", params, "session-1");
+      expect(backend.consoleOf(tab.tabId).messages).toEqual([
+        { level: "error", text: BLOCKED_BROWSER_NAVIGATION },
+      ]);
+    } finally {
+      restore();
+      await backend.dispose();
+    }
+  });
+
   it("forgets its tabs when the browser crashes, and the next tab launches another (B1)", async () => {
     const fake = fakeChromium();
     const profileRoot = root();
@@ -532,40 +751,44 @@ describe("ChromiumBrowserBackend over a fake browser", () => {
     }
   });
 
-  it("closes a target whose setup failed, rather than leave it paused and unclosable", async () => {
-    const fake = fakeChromium();
-    const { backend, restore } = backendOver(fake);
-    try {
-      fake.fail("Fetch.enable");
-      const tab = open(backend);
-      const closed = await eventually(
-        async () => fake.commands,
-        (commands) =>
-          commands.some(
+  it.each(["Fetch.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"])(
+    "closes a target whose %s setup failed, rather than leave it paused and unclosable",
+    async (method) => {
+      const fake = fakeChromium();
+      const { backend, restore } = backendOver(fake);
+      try {
+        fake.fail(method);
+        const tab = open(backend);
+        const closed = await eventually(
+          async () => fake.commands,
+          (commands) =>
+            commands.some(
+              (command) =>
+                command.method === "Target.closeTarget" &&
+                command.params["targetId"] === "target-1",
+            ),
+        );
+        expect(closed).toBeTruthy();
+        // It never ran unguarded.
+        expect(
+          fake.commands.some(
             (command) =>
-              command.method === "Target.closeTarget" && command.params["targetId"] === "target-1",
+              command.method === "Runtime.runIfWaitingForDebugger" &&
+              command.sessionId === "session-1",
           ),
-      );
-      expect(closed).toBeTruthy();
-      // It never ran unguarded.
-      expect(
-        fake.commands.some(
-          (command) =>
-            command.method === "Runtime.runIfWaitingForDebugger" &&
-            command.sessionId === "session-1",
-        ),
-      ).toBe(false);
-      await eventually(
-        async () => backend.list({ projectId: "p" })[0]!,
-        (state) => !state.loading,
-      );
-      expect(backend.list({ projectId: "p" })[0]!.error).toMatch(/could not open this tab/);
-      backend.close(tab.tabId);
-    } finally {
-      restore();
-      await backend.dispose();
-    }
-  });
+        ).toBe(false);
+        await eventually(
+          async () => backend.list({ projectId: "p" })[0]!,
+          (state) => !state.loading,
+        );
+        expect(backend.list({ projectId: "p" })[0]!.error).toMatch(/could not open this tab/);
+        backend.close(tab.tabId);
+      } finally {
+        restore();
+        await backend.dispose();
+      }
+    },
+  );
 
   it("waits, on dispose, for a browser that was already shutting down", async () => {
     const fake = fakeChromium();

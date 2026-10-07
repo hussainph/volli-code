@@ -9,10 +9,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 import { browserAgentPort } from "./agent-port";
-import { ChromiumBrowserBackend } from "./chromium-backend";
+import { CHROMIUM_LOAD_TIMEOUT_MS, ChromiumBrowserBackend } from "./chromium-backend";
+import { CdpPipeConnection } from "./chromium-pipe";
 import {
   describeBrowserBackendSuite,
   eventually,
@@ -36,6 +37,30 @@ function chromiumBackend(deviceScaleFactor = 1): ChromiumBrowserBackend {
   });
 }
 
+/** Launch/attach is fixture setup, not part of the first test's 5 s budget. */
+async function readyBackend(backend: ChromiumBrowserBackend): Promise<void> {
+  const tab = backend.open({
+    url: "about:blank",
+    projectId: "chromium-readiness",
+    ticketId: null,
+    createdBy: "user",
+  });
+  try {
+    const ready = AbortSignal.timeout(CHROMIUM_LOAD_TIMEOUT_MS);
+    await backend.waitForLoad(tab.tabId, ready, "current");
+    ready.throwIfAborted();
+    expect(backend.list({ projectId: "chromium-readiness" })[0]).toMatchObject({
+      url: "about:blank",
+      loading: false,
+      error: null,
+    });
+    backend.close(tab.tabId);
+  } catch (error) {
+    await backend.dispose();
+    throw error;
+  }
+}
+
 describeBrowserBackendSuite(
   "Chromium over a CDP pipe",
   chromium === null
@@ -48,6 +73,7 @@ describeBrowserBackendSuite(
           deviceScaleFactor: 1,
           screencastQuality: 70,
         });
+        await readyBackend(backend);
         return { backend, dispose: () => backend.dispose() };
       },
 );
@@ -63,7 +89,10 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     fixture = await startBrowserFixture();
     // Drawn at 2x, so one browser can serve a Retina viewer and a 1x one.
     backend = chromiumBackend(2);
-  });
+    await readyBackend(backend);
+    // The readiness wait uses the existing 10 s load bound; allow setup and
+    // failure cleanup here, without increasing any individual test's budget.
+  }, 30_000);
 
   afterAll(async () => {
     await backend?.dispose();
@@ -165,6 +194,88 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     const tab = backend.list({ projectId: PROJECT }).find((each) => each.tabId === nav.tabId)!;
     expect(tab.url).toBe(fixture.url("/external"));
     driver.dispose();
+  });
+
+  it.each([false, true])(
+    "refuses a blob synchronously despite no CDP stop and page tampering (process swap: %s)",
+    async (swap) => {
+      const driver = port("blob-no-cdp-stop", null);
+      const send = CdpPipeConnection.prototype.send;
+      const fellBack = vi.fn();
+      const stopped = vi
+        .spyOn(CdpPipeConnection.prototype, "send")
+        .mockImplementation(function (this: CdpPipeConnection, method, params, sessionId, options) {
+          // Model a stop that cannot win: never send it to Chromium. The guard
+          // must cancel in the renderer, not depend on the Node/pipe round trip.
+          if (method === "Page.stopLoading") return Promise.resolve({});
+          if (
+            method === "Page.navigate" &&
+            (params as { url?: unknown } | undefined)?.url === "about:blank"
+          )
+            fellBack();
+          return send.call(this, method, params, sessionId, options);
+        });
+      try {
+        // A cross-site navigation moves the renderer, not the installed policy.
+        const previous = swap
+          ? await driver.navigate({
+              navigation: { kind: "url", url: fixture.url("/start") },
+              signal: signal(),
+            })
+          : undefined;
+        const url = swap
+          ? fixture.url("/blob-tampered").replace("127.0.0.1", "localhost")
+          : fixture.url("/blob-tampered");
+        const nav = await driver.navigate({
+          ...(previous === undefined ? {} : { tabId: previous.tabId }),
+          navigation: { kind: "url", url },
+          signal: signal(),
+        });
+        await driver.act({
+          tabId: nav.tabId,
+          generation: nav.generation,
+          kind: "click",
+          ref: refNamed(nav.snapshotText, "Go to blob"),
+          signal: signal(),
+        });
+        const tab = backend.list({ projectId: PROJECT }).find((each) => each.tabId === nav.tabId)!;
+        expect(tab.url).toBe(url);
+        expect(tab.title).toBe("Blob opener");
+        expect(tab.loading).toBe(false);
+        expect(tab.generation).toBe(nav.generation);
+        expect(fellBack).not.toHaveBeenCalled();
+        expect(backend.consoleOf(nav.tabId).messages.map((message) => message.text)).toContain(
+          BLOCKED,
+        );
+      } finally {
+        stopped.mockRestore();
+        driver.dispose();
+      }
+    },
+  );
+
+  it("preserves long HTTP(S) in-page state updates", async () => {
+    const driver = port("long-hash", null);
+    try {
+      const nav = await driver.navigate({
+        navigation: { kind: "url", url: fixture.url("/long-hash") },
+        signal: signal(),
+      });
+      const changed = await driver.act({
+        tabId: nav.tabId,
+        generation: nav.generation,
+        kind: "click",
+        ref: refNamed(nav.snapshotText, "Long fragment"),
+        signal: signal(),
+      });
+      expect(changed.title).toBe("hash-length:9001");
+      expect(changed.url).toContain("/long-hash#xxx");
+      expect(backend.consoleOf(nav.tabId).messages.map((message) => message.text)).not.toContain(
+        BLOCKED,
+      );
+    } finally {
+      driver.dispose();
+    }
   });
 
   it("guards frames: out-of-process iframes and redirect hops are held to HTTP(S)", async () => {
@@ -436,16 +547,26 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
     driver.dispose();
   });
 
-  it("forgets every tab when the browser exits, and launches again for the next", async () => {
-    const lonely = chromiumBackend();
-    const tab = lonely.open({
-      url: fixture.url("/second"),
-      projectId: PROJECT,
-      ticketId: null,
-      createdBy: "user",
+  describe("a separate browser lifetime", () => {
+    let lonely: ChromiumBrowserBackend;
+    beforeAll(async () => {
+      lonely = chromiumBackend();
+      await readyBackend(lonely);
+    }, 30_000);
+    afterAll(async () => {
+      await lonely?.dispose();
+    }, 30_000);
+
+    it("forgets every tab when the browser exits, and launches again for the next", async () => {
+      const tab = lonely.open({
+        url: fixture.url("/second"),
+        projectId: PROJECT,
+        ticketId: null,
+        createdBy: "user",
+      });
+      await lonely.waitForLoad(tab.tabId, signal(), "current");
+      await lonely.dispose();
+      expect(lonely.list({ projectId: PROJECT })).toEqual([]);
     });
-    await lonely.waitForLoad(tab.tabId, signal(), "current");
-    await lonely.dispose();
-    expect(lonely.list({ projectId: PROJECT })).toEqual([]);
   });
 });

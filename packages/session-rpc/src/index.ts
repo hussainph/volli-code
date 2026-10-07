@@ -69,6 +69,17 @@ import {
 } from "./catalog";
 import { AsyncQueue } from "./async-queue";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
+import {
+  SIGN_IN_VOID_OUTPUTS,
+  signInProcedures,
+  signInSupplementalOutputs,
+  type SignInRouterHandlers,
+} from "./sign-ins";
+export {
+  hostSignInStatusSchema,
+  hostSignInUpdateSchema,
+  type SignInRouterHandlers,
+} from "./sign-ins";
 import { replayExceedsEvents, ReplayMeter, resnapshotRequired } from "./replay-bound";
 import {
   readSession,
@@ -162,8 +173,8 @@ export {
   type DesktopIpcRouters,
   type IpcExposureTable,
 } from "./desktop-ipc";
-export { sanitizeDiagnosticText } from "./diagnostic-text";
 export { AsyncQueue } from "./async-queue";
+export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
@@ -294,7 +305,7 @@ export interface RpcProcedurePerformanceObserver {
  * check that the two agree. Properties, not methods, so an input drift is a
  * type error rather than a bivariant pass.
  */
-export interface SessionRouterHandlers {
+export interface SessionRouterHandlers extends SignInRouterHandlers {
   readonly "sessions.create": HostHandler<SessionCreateInput, SessionCreateResult>;
   readonly "sessions.attach": HostHandler<SessionAttachInput, SessionStartResult>;
   readonly "settings.experiments": HostHandler<void, ExperimentSnapshot>;
@@ -1184,6 +1195,8 @@ export function createSessionRouter() {
       },
     );
   return catalogRouter({
+    // Sign-ins on a host (VC-702): their own module, this router's family.
+    ...signInProcedures(),
     protocol: {
       // The v1 bootstrap read: base, in no feature, so a client can always
       // ask what its handshake negotiated before anything else.
@@ -1785,6 +1798,7 @@ export function sessionProcedureSchemas(
     "session.reconcile": z.null(),
     "labDiagnostics.list": z.array(diagnosticEntrySchema),
     "labDiagnostics.subscribe": diagnosticEntrySchema,
+    ...signInSupplementalOutputs,
     "logs.follow": logsBatchSchema,
   };
   return procedureSchemas(
@@ -1804,7 +1818,7 @@ export function sessionProcedureSchemas(
       }
       return input ?? z.null();
     },
-    ["session.cancelInteraction", "session.reconcile"],
+    ["session.cancelInteraction", "session.reconcile", ...SIGN_IN_VOID_OUTPUTS],
   );
 }
 

@@ -241,6 +241,12 @@ function liftedQuitPath(options: {
     // (VC-699); the lifted path sees the same object under that name.
     quittingApp: app,
     hostCore,
+    // Hosts added over SSH (VC-700): their tunnels and links close with the host.
+    remoteHosts: {
+      close: vi.fn(async () => {
+        calls.push("remote-hosts.close");
+      }),
+    },
     webSealing: {
       stop: vi.fn(() => {
         calls.push("web-sealing.stop");
@@ -368,7 +374,8 @@ describe("index.ts quit wiring", () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(await quit.exited).toBe(0);
     expect(quit.hostCore.stop).toHaveBeenCalledOnce();
-    expect(quit.calls.slice(-2)).toEqual(["web-sealing.stop", "host.stop"]);
+    // The host and the remote hosts' tunnels close together (VC-700).
+    expect(quit.calls.slice(-3)).toEqual(["web-sealing.stop", "host.stop", "remote-hosts.close"]);
   });
 
   it("a refused quit still runs all four gates in order and never stops the host", async () => {
