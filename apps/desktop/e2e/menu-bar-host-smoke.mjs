@@ -17,7 +17,15 @@
  *   3. macOS reopen (`activate`) with no window brings a window back with the
  *      renderer loaded and leaves the mode — the same in-process host.
  *   4. Entering again with no live work drains then exits on its own: today's
- *      quit path, exit 0, socket removed.
+ *      quit path, exit 0, socket removed — and no sooner than the settle.
+ *
+ * Nothing is live, so each entry starts the drain-exit's settle window at
+ * once, and checks 2 and 3 must finish inside it. A release's 5 s is less
+ * than the draft flush alone can take on a contended runner (VC-709: main
+ * stalls for seconds while the app boots, and entry plus flush ran 0.3–6 s),
+ * so the smoke asks for a longer settle through
+ * `VOLLI_SMOKE_MENU_BAR_SETTLE_MS` — behind the same two locks as the seam,
+ * and only ever longer than a release's (`menuBarSmokeSettleMs`).
  *
  * Run after the desktop build:
  *   node apps/desktop/e2e/menu-bar-host-smoke.mjs
@@ -55,8 +63,21 @@ const { userDataDir, dbPath, cleanup } = await makeShortScratch("mbar");
 const { must, attempt, summarize } = createRunner();
 const socketPath = socketPathFor(userDataDir);
 
+/**
+ * Main's own bound on the windows' draft flush (`MENU_BAR_FLUSH_OVERDUE_MS`):
+ * past it main logs the windows as overdue and keeps them hidden, never
+ * destroyed, so a window still alive here is a failure, not a slow runner.
+ */
+const FLUSH_OVERDUE_MS = 10_000;
+/**
+ * The drain-exit's settle window for this run (VC-709): the flush bound plus
+ * room for the socket read and the reopen, so checks 2 and 3 never race the
+ * host's own exit. `menuBarSmokeSettleMs` only honours values above a
+ * release's 5 s.
+ */
+const SETTLE_MS = 20_000;
 /** The settle window plus teardown, with room for a loaded runner. */
-const DRAIN_EXIT_TIMEOUT_MS = 30_000;
+const DRAIN_EXIT_TIMEOUT_MS = SETTLE_MS + 30_000;
 
 async function identifies() {
   try {
@@ -71,7 +92,11 @@ async function main() {
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_EXPERIMENTAL: "cloud", VOLLI_SMOKE_MENU_BAR_HOST: "1" },
+    extraEnv: {
+      VOLLI_EXPERIMENTAL: "cloud",
+      VOLLI_SMOKE_MENU_BAR_HOST: "1",
+      VOLLI_SMOKE_MENU_BAR_SETTLE_MS: String(SETTLE_MS),
+    },
   });
   const child = app.process();
   try {
@@ -80,22 +105,6 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     assertBuiltRendererLoaded(page);
 
-    // DIAGNOSTIC (VC-709): main's event-loop stalls from here on.
-    await app.evaluate(({ app: electronApp, ipcMain }) => {
-      const diag = { acks: [], quitAt: null, stalls: [] };
-      globalThis.volliDiag = diag;
-      ipcMain.on("volli:client-state-flushed", () => diag.acks.push(Date.now()));
-      electronApp.on("before-quit", () => {
-        if (diag.quitAt === null) diag.quitAt = Date.now();
-      });
-      let last = Date.now();
-      setInterval(() => {
-        const now = Date.now();
-        const lag = now - last - 50;
-        if (lag > 150) diag.stalls.push([last, lag]);
-        last = now;
-      }, 50).unref();
-    });
     await must(1, "the cloud flag is on and the menu-bar seam is present", async () => {
       const seam = await app.evaluate(
         () => typeof globalThis.volliMenuBarHost?.enter === "function",
@@ -111,21 +120,16 @@ async function main() {
       "entering menu-bar mode closes every window; process and socket live on",
       async () => {
         // Nothing is running, so this entry starts the drain-exit's settle
-        // window (5s) at once: checks 2 and 3 read fast and reopen inside it.
+        // window (SETTLE_MS) at once: checks 2 and 3 run inside it.
         // Entry hides every window at once, asks each renderer to flush its
-        // pending drafts, and destroys the windows only after the ack
-        // (bounded at 1s; `client-state-flush.ts`), so the count is polled.
-        // DIAGNOSTIC (VC-709): how busy the renderer and main are at entry.
-        const rStart = Date.now();
-        const rendererAge = await page.evaluate(() => Math.round(performance.now()));
-        const rendererRtt = Date.now() - rStart;
-        const homeRail = await page.getByTestId("home-rail").count();
+        // pending drafts, and destroys each window only from its own ack
+        // (`client-state-flush.ts`; overdue after FLUSH_OVERDUE_MS), so the
+        // count is polled up to main's own bound.
         const entered = await app.evaluate(({ BrowserWindow }) => {
           const host = globalThis.volliMenuBarHost;
           const startedAt = Date.now();
           host.enter();
           globalThis.volliMenuBarEnteredAt = startedAt;
-          globalThis.volliDiag.enterSyncMs = Date.now() - startedAt;
           return {
             visible: BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length,
             resident: host.isResident(),
@@ -139,52 +143,45 @@ async function main() {
                 ? Date.now() - globalThis.volliMenuBarEnteredAt
                 : null,
             ),
-          { timeout: 5000 },
+          { timeout: FLUSH_OVERDUE_MS },
         ).catch(() => -1);
         const socket = await identifies();
         const alive = !childHasExited(child);
-        const diag = await app
-          .evaluate(() => {
-            const d = globalThis.volliDiag;
-            const at = globalThis.volliMenuBarEnteredAt;
-            return {
-              ackMs: d.acks.map((t) => t - at),
-              quitMs: d.quitAt === null ? null : d.quitAt - at,
-              enterSyncMs: d.enterSyncMs,
-              stalls: d.stalls.map(([t, lag]) => `${t - at}+${lag}`).join(","),
-              nowMs: Date.now() - at,
-            };
-          })
-          .catch((error) => ({ error: String(error?.message ?? error) }));
-        console.log(
-          `  [DIAG] rendererAge=${rendererAge} rendererRtt=${rendererRtt} homeRail=${homeRail} ` +
-            `main=${JSON.stringify(diag)}`,
-        );
+        // Still in the mode after the reads: the socket answered a resident
+        // host, not one already on its way out.
+        const after = alive
+          ? await app.evaluate(() => ({
+              resident: globalThis.volliMenuBarHost.isResident(),
+              ms: Date.now() - globalThis.volliMenuBarEnteredAt,
+            }))
+          : { resident: false, ms: -1 };
         return {
-          ok: entered.visible === 0 && entered.resident && destroyedAfterMs >= 0 && socket && alive,
+          ok:
+            entered.visible === 0 &&
+            entered.resident &&
+            destroyedAfterMs >= 0 &&
+            socket &&
+            alive &&
+            after.resident,
           detail:
             `visibleAfterEnter=${entered.visible} resident=${entered.resident} ` +
-            `destroyedAfterMs=${destroyedAfterMs} socket=${socket} alive=${alive}`,
+            `destroyedAfterMs=${destroyedAfterMs} socket=${socket} alive=${alive} ` +
+            `residentAfter=${after.resident} readAtMs=${after.ms}`,
         };
       },
     );
 
     await must(3, "macOS reopen with no window recreates it and leaves the mode", async () => {
       const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
-        const d = globalThis.volliDiag;
-        const at = globalThis.volliMenuBarEnteredAt;
-        const diag = {
-          activateMs: Date.now() - at,
-          quitMs: d.quitAt === null ? null : d.quitAt - at,
-        };
+        // Inside the settle: the host has not begun its own exit.
+        const atMs = Date.now() - globalThis.volliMenuBarEnteredAt;
         electronApp.emit("activate");
         return {
-          diag,
+          atMs,
           windows: BrowserWindow.getAllWindows().length,
           resident: globalThis.volliMenuBarHost.isResident(),
         };
       });
-      console.log(`  [DIAG] check3 ${JSON.stringify(state.diag)}`);
       const reopened = await waitUntil(
         "the reopened window's renderer",
         async () => {
@@ -200,23 +197,32 @@ async function main() {
       const socket = await identifies();
       return {
         ok: state.windows === 1 && state.resident === false && socket,
-        detail: `windows=${state.windows} resident=${state.resident} socket=${socket}`,
+        detail:
+          `windows=${state.windows} resident=${state.resident} socket=${socket} ` +
+          `activateAtMs=${state.atMs}`,
       };
     });
 
     await attempt(4, "with no live work, menu-bar mode drains and exits 0 on its own", async () => {
+      // Taken before entry, so the elapsed time can only overstate how long
+      // after entry the host exited: under SETTLE_MS is an exit that did not
+      // wait out the settle.
+      const before = Date.now();
       await app.evaluate(() => globalThis.volliMenuBarHost.enter());
       const exit = await waitForChildExit(child, "drain-then-exit", {
         timeout: DRAIN_EXIT_TIMEOUT_MS,
       });
+      const exitAfterMs = Date.now() - before;
       const socketGone = await waitUntil(
         "socket removal",
         async () => (!(await pathExists(socketPath)) ? true : null),
         { timeout: 10000 },
       ).catch(() => false);
       return {
-        ok: exit.code === 0 && socketGone === true,
-        detail: `exit=${exit.code} signal=${exit.signal ?? "none"} socketGone=${socketGone === true}`,
+        ok: exit.code === 0 && socketGone === true && exitAfterMs >= SETTLE_MS,
+        detail:
+          `exit=${exit.code} signal=${exit.signal ?? "none"} socketGone=${socketGone === true} ` +
+          `exitAfterMs=${exitAfterMs} settleMs=${SETTLE_MS}`,
       };
     });
   } finally {
