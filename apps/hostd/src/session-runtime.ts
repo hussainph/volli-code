@@ -172,8 +172,10 @@ export function createHeadlessSessionRuntime(input: {
     secrets,
     attachmentIdentities: identities,
     shells,
-    // No client can answer person questions or secret cards. Neither belongs at birth.
-    askUser: false,
+    // Remote chat answers questions through session.command → interaction.resolve.
+    // VC-9 still withholds ask_user from children in the shared Role policy.
+    askUser: true,
+    // Secret cards need a secure field on the box's side; unavailable in v1.
     requestSecret: false,
     // systemd/launchd environment is operator-owned; no rc files are executed.
     beforeExecution: async () => {},
