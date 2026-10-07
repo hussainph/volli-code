@@ -321,14 +321,15 @@ describe("the project scripts, in a real shell", () => {
         gitUrl: "https://example.invalid/me/acme.git",
         sudoPassword,
       });
-    const facts = (result: { stdout: string }) => scriptFacts(result.stdout);
 
     // Passwordless: cloned as volli (the system CLI is not on this machine, so the add says nothing).
     const free = run(script("a", false), home, env("nopasswd"));
     expect(free.stdout).toContain("volli-cloned=yes");
-    expect(facts(free).fail).toBeNull();
+    expect(scriptFacts(free.stdout).fail).toBeNull();
     // A password needed, none given: the sheet asks.
-    expect(facts(run(script("b", false), home, env("password"))).fail).toBe("needs-password");
+    expect(scriptFacts(run(script("b", false), home, env("password")).stdout).fail).toBe(
+      "needs-password",
+    );
     // Given, on stdin only.
     const given = spawnSync("/bin/sh", ["-c", script("c", true)], {
       env: { HOME: home, ...env("password") },
@@ -341,15 +342,15 @@ describe("the project scripts, in a real shell", () => {
       input: "nope\n",
       encoding: "utf8",
     });
-    expect(facts({ stdout: wrong.stdout }).fail).toBe("sudo-failed");
+    expect(scriptFacts(wrong.stdout).fail).toBe("sudo-failed");
     expect(
-      createFailure("box", facts({ stdout: wrong.stdout }), null, wrong.stderr, {
+      createFailure("box", scriptFacts(wrong.stdout), null, wrong.stderr, {
         path: "/srv/volli/d",
         gitUrl: "https://example.invalid/me/acme.git",
       }).code,
     ).toBe("wrong-password");
     // No sudo at all: the command to run by hand, whatever was typed.
-    expect(facts(run(script("e", true), home, env("none"))).fail).toBe("needs-sudo");
+    expect(scriptFacts(run(script("e", true), home, env("none")).stdout).fail).toBe("needs-sudo");
     expect(readFileSync(join(home, "sudo-calls"), "utf8")).not.toContain("pw");
   });
 

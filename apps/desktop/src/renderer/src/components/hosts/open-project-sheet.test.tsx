@@ -95,6 +95,16 @@ async function openSheet(start: "list" | "new" = "list"): Promise<void> {
   await settle();
 }
 
+/** A create refused for want of a sudo password, or with a wrong one. */
+const refuse = (code: "needs-password" | "wrong-password"): CreateRemoteProjectResult => ({
+  ok: false,
+  failure: {
+    code,
+    message: code === "needs-password" ? "Enter your password." : "Wrong.",
+    command: null,
+  },
+});
+
 describe("Open a project on <host>…", () => {
   it("lists the host's projects, read when it opens, and opens one on this Mac", async () => {
     api.projectsOf.set(HOST.id, { projects: [ACME], adds: { kind: "ready" } });
@@ -189,14 +199,6 @@ describe("Open a project on <host>…", () => {
   });
 
   it("asks for the sudo password a clone needs: read once, sent once, cleared, and asked once more if wrong", async () => {
-    const refuse = (code: "needs-password" | "wrong-password"): CreateRemoteProjectResult => ({
-      ok: false,
-      failure: {
-        code,
-        message: code === "needs-password" ? "Enter your password." : "Wrong.",
-        command: null,
-      },
-    });
     api.nextCreate = refuse("needs-password");
     await openSheet("new");
     await type("Git URL or folder on hetzner-1", "https://github.com/me/acme");

@@ -23,6 +23,12 @@ const ready = (patch: Partial<RemoteHostProjects> = {}): ProjectListState => ({
   listing: { hostId: "h", projects: [ACME, BETA], adds: { kind: "ready" }, ...patch },
 });
 
+const refusal = (code: Parameters<typeof failureRecovery>[0]["code"]) => ({
+  code,
+  message: "x",
+  command: null,
+});
+
 describe("Open a project on <host>…, as its sheet reads it", () => {
   it("lists the host's projects by name, each marked when this Mac has it open", () => {
     expect(projectRows([BETA, ACME], new Set(["w-beta"]))).toEqual([
@@ -110,26 +116,21 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
   });
 
   it("offers the sudo field (once more after a wrong one), Sign-ins, or a retry", () => {
-    const failure = (code: Parameters<typeof failureRecovery>[0]["code"]) => ({
-      code,
-      message: "x",
-      command: null,
-    });
-    expect(failureRecovery(failure("needs-password"), "box", 0)).toEqual({
+    expect(failureRecovery(refusal("needs-password"), "box", 0)).toEqual({
       kind: "password",
       again: false,
     });
-    expect(failureRecovery(failure("wrong-password"), "box", 1)).toEqual({
+    expect(failureRecovery(refusal("wrong-password"), "box", 1)).toEqual({
       kind: "password",
       again: true,
     });
-    expect(failureRecovery(failure("wrong-password"), "box", SUDO_TRIES)).toEqual({
+    expect(failureRecovery(refusal("wrong-password"), "box", SUDO_TRIES)).toEqual({
       kind: "retry",
     });
-    expect(failureRecovery(failure("needs-credential"), "box", 0)).toEqual({
+    expect(failureRecovery(refusal("needs-credential"), "box", 0)).toEqual({
       kind: "sign-ins",
       label: "Sign-ins on box…",
     });
-    expect(failureRecovery(failure("clone-failed"), "box", 0)).toEqual({ kind: "retry" });
+    expect(failureRecovery(refusal("clone-failed"), "box", 0)).toEqual({ kind: "retry" });
   });
 });
