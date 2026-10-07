@@ -232,6 +232,34 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "What an add flow has found about its host so far: its login, system, version.",
   },
+  // A host's projects (VC-710): host-placed like the rest of `hosts.*`.
+  {
+    // Read over SSH (BatchMode, as the login) when asked, never cached.
+    key: "hosts.projects",
+    placement: "host",
+    idempotency: "read",
+    summary: "The projects a remote host has, read from it over SSH.",
+  },
+  {
+    // The host's own `volli project add` over SSH; a clone first when given a URL.
+    key: "hosts.createProject",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Make a folder on a remote host a project, cloning it first when given a git URL.",
+  },
+  {
+    key: "hosts.openWorkspace",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Open one of a remote host's projects on this desktop, and link it.",
+  },
+  {
+    // This desktop forgets it; the project on the host is untouched.
+    key: "hosts.closeWorkspace",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Close one of a remote host's projects on this desktop; the host keeps it.",
+  },
   // The Workspace link relay (VC-711; wire types in `./host-link-relay`): a
   // remote project's public operations, sent by desktop main over that
   // Workspace's link, which holds the device key. Host-placed: the Workspace

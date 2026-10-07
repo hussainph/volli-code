@@ -251,6 +251,52 @@ describe("questions", () => {
     expect(h.engine.snapshot().hosts[0]?.hostKeys).toEqual(["SHA256:box"]);
   });
 
+  // Review B1 (VC-710): a host's words may echo the password with no label a
+  // pattern could find; only the exact value, scrubbed, keeps it in.
+  it("never lets the operator step's stderr carry the sudo password out", async () => {
+    const echoed = "Zq8-unlabelled-7Kw";
+    const h = harness({
+      overrides: [
+        (script) => (script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined),
+        (_script, options) =>
+          options.label === "install: operator"
+            ? { code: 1, stderr: `remote sudo diagnostic: ${echoed}\n` }
+            : undefined,
+      ],
+    });
+    const { flowId, w } = await startAdd(h);
+    await h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), echoed);
+    expect(w.views().at(-1)?.status).toBe("done");
+    const replay: unknown[] = [];
+    h.engine.subscribeAdd(flowId, (event) => void replay.push(event))();
+    expect(
+      w.lines().some((line) => line.message.includes("could not make the login an operator")),
+    ).toBe(true);
+    const seen = JSON.stringify([h.log.lines, w.events, replay, w.views(), h.snapshots]);
+    expect(seen).toContain("remote sudo diagnostic: [redacted]");
+    expect(seen).not.toContain(echoed);
+    const carried = h.box.scripts.filter(
+      (entry) => entry.script.includes(echoed) || entry.stdin?.includes(echoed),
+    );
+    expect(carried.every((entry) => !entry.script.includes(echoed))).toBe(true);
+    expect(carried.map((entry) => entry.stdin)).toContain(`${echoed}\n`);
+  });
+
+  it("scrubs the held password from a step's failure detail too", async () => {
+    const echoed = "Pq3-detail-9Rt";
+    const h = harness({
+      overrides: [
+        (script) => (script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined),
+        (script) =>
+          script.includes(" start --") ? { code: 1, stderr: `hostd said ${echoed}\n` } : undefined,
+      ],
+    });
+    const { flowId, w } = await startAdd(h);
+    await h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), echoed);
+    expect(w.views().at(-1)?.status).toBe("failed");
+    expect(JSON.stringify([h.log.lines, w.events, w.views()])).not.toContain(echoed);
+  });
+
   it("takes a sudo password into the flow's memory only, and sends it only to sudo", async () => {
     const h = harness({
       overrides: [
@@ -268,7 +314,9 @@ describe("questions", () => {
     await h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD);
     expect(w.views().at(-1)?.status).toBe("done");
     const sudoed = h.box.scripts.filter((entry) => entry.script.startsWith("sudo -S"));
+    // Install, the operator token beside it (VC-710), start, enroll.
     expect(sudoed.map((entry) => entry.stdin)).toEqual([
+      `${PASSWORD}\n`,
       `${PASSWORD}\n`,
       `${PASSWORD}\n`,
       `${PASSWORD}\n`,

@@ -77,7 +77,17 @@ export function HostSignInRows({
       <div
         className={cn("flex items-center gap-2 px-2 py-4 text-ui text-muted-foreground", className)}
       >
-        {snapshot.unreachable ? `${hostName} cannot be reached right now` : <Spinner />}
+        {snapshot.unreachable ? (
+          <>
+            <span className="min-w-0 flex-1">{hostName} cannot be reached right now</span>
+            {/* Its one recovery (AM2): read the host again. */}
+            <Button size="sm" variant="secondary" onClick={() => void controller.refresh()}>
+              Retry
+            </Button>
+          </>
+        ) : (
+          <Spinner />
+        )}
       </div>
     );
   }
@@ -96,6 +106,7 @@ export function HostSignInRows({
           />
         ))}
       </div>
+      <AddGitHost controller={controller} />
       <p className="flex items-center gap-1 px-2 text-ui text-muted-foreground">
         <LockSimpleIcon aria-hidden className="size-3.5 shrink-0" />
         {trustLine(hostName, sendsFromMac)}
@@ -107,6 +118,69 @@ export function HostSignInRows({
         onConfirm={(row) => void controller.confirmSend(row.id)}
       />
     </div>
+  );
+}
+
+/** A host name only: the token is pasted in that host's row, never held here. */
+function AddGitHost({ controller }: { controller: Pick<HostSignInController, "addGitHost"> }) {
+  const [open, setOpen] = React.useState(false);
+  const [value, setValue] = React.useState("");
+  const [invalid, setInvalid] = React.useState(false);
+  const errorId = React.useId();
+  if (!open) {
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        className="self-start text-muted-foreground"
+        onClick={() => setOpen(true)}
+      >
+        Add a git host…
+      </Button>
+    );
+  }
+  return (
+    <form
+      className="flex flex-col gap-1 px-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!controller.addGitHost(value)) {
+          setInvalid(true);
+          return;
+        }
+        setValue("");
+        setInvalid(false);
+        setOpen(false);
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <Input
+          autoFocus
+          autoComplete="off"
+          aria-label="Git host"
+          aria-invalid={invalid}
+          aria-describedby={invalid ? errorId : undefined}
+          placeholder="gitlab.com"
+          className="h-8 flex-1 font-mono"
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setInvalid(false);
+          }}
+        />
+        <Button size="sm" type="submit" variant="secondary">
+          Add
+        </Button>
+        <Button size="sm" type="button" variant="ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+      {invalid ? (
+        <p id={errorId} role="alert" className="text-ui text-attention">
+          Enter a host name with an optional port.
+        </p>
+      ) : null}
+    </form>
   );
 }
 

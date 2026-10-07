@@ -249,7 +249,12 @@ export async function boardVerb(
     : resolved.response;
 }
 
-/** `volli project list` — every registered project, with its ticket counts. */
+/**
+ * `volli project list` — every registered project, with its ticket counts.
+ * Each row carries its `id` (VC-710), which is the project's Workspace id: a
+ * desktop lists a remote host's projects over SSH with this and opens one.
+ * Additive JSON only; the text rendering is unchanged.
+ */
 export async function projectListVerb(
   context: AgentCommandContext,
   _request: AgentRequest,
@@ -260,6 +265,7 @@ export async function projectListVerb(
     ok: true,
     data: {
       projects: projects.map((project) => ({
+        id: project.id,
         name: project.name,
         prefix: project.ticketPrefix,
         path: project.path,

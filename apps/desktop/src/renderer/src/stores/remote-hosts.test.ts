@@ -26,6 +26,10 @@ const bridge = vi.hoisted(() => {
         rename: { mutate: record("hosts.rename") },
         forget: { mutate: record("hosts.forget") },
         devices: { query: record("hosts.devices", { hostId: "h", devices: [] }) },
+        projects: { query: record("hosts.projects", { hostId: "h", projects: [] }) },
+        createProject: { mutate: record("hosts.createProject", { ok: true }) },
+        openWorkspace: { mutate: record("hosts.openWorkspace") },
+        closeWorkspace: { mutate: record("hosts.closeWorkspace") },
       },
       hostAdd: {
         start: { mutate: record("hostAdd.start", { flowId: "flow-1" }) },
@@ -85,6 +89,10 @@ describe("the remote hosts API over the tier", () => {
     await api.forget("h");
     expect(await api.devices("h")).toEqual({ hostId: "h", devices: [] });
     expect(await api.addFacts("flow-1")).toEqual({ user: "deploy" });
+    expect(await api.projects("h")).toEqual({ hostId: "h", projects: [] });
+    expect(await api.createProject({ hostId: "h", gitUrl: "u" })).toEqual({ ok: true });
+    await api.openWorkspace("h", "w");
+    await api.closeWorkspace("h", "w");
     expect(bridge.calls).toEqual([
       ["hostAdd.start", { target: "deploy@box" }],
       [
@@ -99,6 +107,10 @@ describe("the remote hosts API over the tier", () => {
       ["hosts.forget", { hostId: "h" }],
       ["hosts.devices", { hostId: "h" }],
       ["hostAdd.facts", { flowId: "flow-1" }],
+      ["hosts.projects", { hostId: "h" }],
+      ["hosts.createProject", { hostId: "h", gitUrl: "u" }],
+      ["hosts.openWorkspace", { hostId: "h", workspaceId: "w" }],
+      ["hosts.closeWorkspace", { hostId: "h", workspaceId: "w" }],
     ]);
   });
 
@@ -151,6 +163,31 @@ describe("the remote hosts store", () => {
     expect(store.getState().addHost).toEqual({ open: false, target: "deploy@box" });
     store.getState().openAddHost();
     expect(store.getState().addHost).toEqual({ open: true, target: "" });
+    // "Open a project on <host>…" (VC-710): it keeps its host while it fades out.
+    expect(store.getState().openProject).toEqual({
+      open: false,
+      hostId: null,
+      start: "list",
+      opening: 0,
+    });
+    store.getState().openProjectSheet("h");
+    expect(store.getState().openProject).toEqual({
+      open: true,
+      hostId: "h",
+      start: "list",
+      opening: 1,
+    });
+    store.getState().closeProjectSheet();
+    expect(store.getState().openProject).toMatchObject({ open: false, hostId: "h", opening: 1 });
+    // Each opening is a new one, the same host's again or another's while open.
+    store.getState().openProjectSheet("h", "new");
+    store.getState().openProjectSheet("g");
+    expect(store.getState().openProject).toEqual({
+      open: true,
+      hostId: "g",
+      start: "list",
+      opening: 3,
+    });
   });
 
   it("finds one host's record, or none for This Mac", () => {
@@ -162,6 +199,26 @@ describe("the remote hosts store", () => {
 });
 
 describe("the scripted fake", () => {
+  it("answers a host's projects and a create as set, else none and made (VC-710)", async () => {
+    const fake = createFakeRemoteHostsApi();
+    expect(await fake.projects("h")).toEqual({
+      hostId: "h",
+      projects: [],
+      adds: { kind: "ready" },
+    });
+    fake.projectsOf.set("h", new Error("unreachable"));
+    await expect(fake.projects("h")).rejects.toThrow("unreachable");
+    expect(await fake.createProject({ hostId: "h", path: "/a" })).toMatchObject({
+      ok: true,
+      project: { name: "Acme" },
+    });
+    fake.nextCreate = new Error("lost");
+    await expect(fake.createProject({ hostId: "h", path: "/a" })).rejects.toThrow("lost");
+    await fake.openWorkspace("h", "w");
+    fake.refuseNext("closeWorkspace", "no");
+    await expect(fake.closeWorkspace("h", "w")).rejects.toThrow("no");
+  });
+
   it("tolerates events and ends for a flow nobody follows", () => {
     const fake = createFakeRemoteHostsApi();
     expect(fake.following("flow-9")).toBe(false);

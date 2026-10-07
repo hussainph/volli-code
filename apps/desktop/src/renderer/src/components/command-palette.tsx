@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import type { Icon } from "@phosphor-icons/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
@@ -55,7 +57,8 @@ import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useHostsWritable } from "@renderer/stores/remote-hosts";
+import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -243,7 +246,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // at the moment a row runs, and the palette re-renders whenever it opens.
   const editorCommands = buildEditorCommandItems(open && canGoToLine());
   // Adding and managing hosts (VC-700): only with `cloud` on.
-  const hostCommands = buildHostCommandItems(useCloudEnabled() && open, useHostsWritable());
+  // And, per remote host, its projects and its sign-ins (VC-710).
+  const remoteHostList = useRemoteHostsStore((state) => state.hosts);
+  const hostCommands = buildHostCommandItems(
+    useCloudEnabled() && open,
+    useHostsWritable(),
+    remoteHostList,
+  );
 
   // Closed and invisible: every board/session mutation would otherwise
   // re-run this projects×tickets×sessions rebuild for nothing. Gating on
@@ -660,16 +669,36 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         {scope === null && hostCommands.length > 0 ? (
           <Command.Group heading="Hosts" className={MENU_LABEL_CMDK}>
             {hostCommands.map((item) => {
-              const RowIcon = item.id === "add-host" ? PlusIcon : GearSixIcon;
+              const RowIcon =
+                item.id === "add-host"
+                  ? PlusIcon
+                  : item.id === "open-project"
+                    ? FolderSimpleIcon
+                    : item.id === "sign-ins"
+                      ? KeyIcon
+                      : GearSixIcon;
+              const key = "hostId" in item ? `host:${item.id}:${item.hostId}` : `host:${item.id}`;
               return (
                 <Command.Item
-                  key={`host:${item.id}`}
+                  key={key}
                   value={`${item.title} ${item.hint}`}
                   keywords={item.keywords}
                   onSelect={() => {
                     onOpenChange(false);
                     if (item.id === "manage-hosts") {
                       openHostsSettings();
+                      return;
+                    }
+                    if (item.id === "open-project" || item.id === "sign-ins") {
+                      const { hostId, hostName } = item;
+                      // After this dialog lets go of the focus, as below.
+                      requestAnimationFrame(() =>
+                        item.id === "open-project"
+                          ? useRemoteHostsStore.getState().openProjectSheet(hostId)
+                          : useHostSignInSheet
+                              .getState()
+                              .open({ hostId, hostName, providerId: null }),
+                      );
                       return;
                     }
                     // After this dialog lets go of the focus: the sheet is a
