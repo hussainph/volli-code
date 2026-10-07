@@ -103,6 +103,10 @@ function stop(child: ChildProcess, signal: NodeJS.Signals) {
 export function createHostWorkspaces(options: HostWorkspacesOptions) {
   let closed = false;
   let closing: Promise<void> | undefined;
+  let releaseOwnership!: () => void;
+  const ownershipEnded = new Promise<void>((done) => {
+    releaseOwnership = done;
+  });
   const children = new Set<ChildProcess>();
   const active = new Set<Promise<HostWorkspaceCreateResult>>();
   // Never evict a completed outcome: eviction could repeat a previously accepted intent.
@@ -376,7 +380,10 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
       return result;
     });
     active.add(work);
-    options.detachedWork?.track(work);
+    // The host tracker observes our bounded ownership, not an abandoned
+    // filesystem promise that would re-block its drain after close returned.
+    // Late work remains fenced against registration by the closed service.
+    options.detachedWork?.track(Promise.race([work, ownershipEnded]));
     return work;
   }
   function close(): Promise<void> {
@@ -395,6 +402,9 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
         clearTimeout(deadline);
         resolve();
       });
+    });
+    closing = closing.then(() => {
+      releaseOwnership();
     });
     return closing;
   }

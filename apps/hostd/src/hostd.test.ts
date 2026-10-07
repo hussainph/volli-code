@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -36,7 +37,12 @@ import type { HostRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
-import { insertProject, SCHEMA_HEAD, MIN_READER_VERSION_KEY } from "@volli/host-core/db";
+import {
+  insertProject,
+  listProjects,
+  SCHEMA_HEAD,
+  MIN_READER_VERSION_KEY,
+} from "@volli/host-core/db";
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
 import type { DetachedWorkPort } from "@volli/host-core/board";
@@ -1292,6 +1298,79 @@ describe("the host protocol listener (VC-663)", () => {
     expect(JSON.stringify(log.info.mock.calls)).not.toContain("device-token");
     await host.stop("test over");
     expect(readStatus(join(root, "data"))).toMatchObject({ state: "stopped", hostProtocol: null });
+  });
+
+  it("serves projects, sign-in status and logs from the production runtime before any Workspace exists", async () => {
+    const logRing = createLogRing();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK, logRing });
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const db = host.host.database.db;
+    expect(listProjects(db)).toEqual([]);
+    const { privateKey, spki } = deviceKey();
+    const device = enrollDevice(
+      dataDirDeviceStore(join(root, "data")),
+      { publicKey: spki, name: "Host-scope Mac", via: "ssh" },
+      { now: () => new Date(), newId: randomUUID },
+    ).device;
+    const iat = Math.floor(Date.now() / 1000);
+    const text = deviceCredentialSigningInput({
+      scope: "host",
+      hostId: host.status().hostId!,
+      deviceId: device.deviceId,
+      iat,
+      exp: iat + 60,
+      jti: randomUUID().replaceAll("-", ""),
+    });
+    const credential = assembleDeviceCredential(
+      text,
+      sign("sha256", Buffer.from(text), {
+        key: privateKey,
+        dsaEncoding: "ieee-p1363",
+      }),
+    );
+    const socket = createWSClient({
+      url: host.status().hostProtocol!.url,
+      connectionParams: encodeHostHello(
+        buildHostHello({
+          scope: "host",
+          client: { kind: "desktop", version: "production-host-scope" },
+          credential,
+          features: ["host.workspaces", "sign-ins", "host.logs"],
+        }),
+      ),
+    });
+    const remote = createTRPCClient<HostRouter>({ links: [wsLink({ client: socket })] });
+    try {
+      expect(await remote.protocol.hostWelcome.query()).toMatchObject({
+        scope: "host",
+        features: expect.arrayContaining(["host.workspaces", "sign-ins", "host.logs"]),
+      });
+      expect(await remote.workspaces.list.query()).toEqual({ workspaces: [], omitted: 0 });
+      expect(await remote.signIns.status.query()).toMatchObject({ git: [] });
+      expect(await remote.logs.tail.query({})).toMatchObject({ entries: [], gap: false });
+      const path = join(root, "first-project");
+      mkdirSync(path);
+      const input = { commandId: randomUUID(), source: { path }, name: "First" };
+      const result = await remote.workspaces.create.mutate(input);
+      expect(result).toMatchObject({
+        ok: true,
+        workspace: { path: realpathSync(path), name: "First" },
+      });
+      expect(await remote.workspaces.create.mutate(input)).toEqual(result);
+      expect(await remote.workspaces.list.query()).toEqual({
+        workspaces: [result.ok ? result.workspace : null],
+        omitted: 0,
+      });
+      expect(listProjects(db)).toHaveLength(1);
+      expect(
+        await expectHostError(remote.board.snapshot.query({ projectId: WORKSPACE })),
+      ).toMatchObject({
+        code: "FORBIDDEN",
+        reason: "workspace-scope-required",
+      });
+    } finally {
+      await socket.close();
+    }
   });
 
   // VC-700's contract: a device enrolled over SSH (`volli-hostd enroll`) is

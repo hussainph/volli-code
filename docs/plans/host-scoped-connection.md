@@ -83,6 +83,8 @@ remove only their still-owned target, never a replacement directory.
   escalates to SIGKILL after **250 ms**, and waits at most **3 seconds** before
   returning to runtime shutdown. A filesystem operation finishing later cannot
   register a project. The service closes before the database-owning host drains.
+  Its detached-work handle observes that bounded ownership, so a hung filesystem
+  promise cannot re-block the host's subsequent detached-work drain.
 
 Capacity and shutdown values are implementation defaults for owner review, not
 new durable guarantees. No schema migration or persistent outcome map is added.

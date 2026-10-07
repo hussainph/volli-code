@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as processes from "node:child_process";
 import * as files from "node:fs/promises";
 import * as board from "@volli/host-core/board";
+import { createDetachedWorkTracker } from "../../../packages/host-core/src/detached-work";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -177,8 +178,9 @@ describe("host-owned workspace registration", () => {
     });
   });
 
-  it("bounds shutdown even when an accepted filesystem operation has not settled", async () => {
-    const f = fixture();
+  it("releases the production detached-work drain at bounded shutdown, even while filesystem work has not settled", async () => {
+    const tracker = createDetachedWorkTracker();
+    const f = fixture({ detachedWork: tracker });
     const path = f.folder();
     let release!: (path: string) => void;
     const gate = new Promise<string>((done) => {
@@ -186,15 +188,20 @@ describe("host-owned workspace registration", () => {
     });
     vi.spyOn(files, "realpath").mockImplementationOnce(() => gate);
     const work = f.service.create(input(path));
+    expect(tracker.pending).toBe(1);
+    const drained = tracker.drain();
     vi.useFakeTimers();
     try {
       const closing = f.service.close();
       await vi.advanceTimersByTimeAsync(3000);
       await closing;
+      await drained;
+      expect(tracker.pending).toBe(0);
       release(path);
       expect(await work).toMatchObject({ ok: false, failure: { code: "interrupted" } });
       expect(listProjects(f.db)).toEqual([]);
     } finally {
+      release(path);
       vi.useRealTimers();
     }
   });
