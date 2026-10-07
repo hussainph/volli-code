@@ -71,7 +71,7 @@ import {
   type HostSignInStatus,
   type HostSignInUpdate,
   type HostLogsBatch,
-  type HostLogsQuery,
+  type HostLogsRead,
   type HostHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -260,9 +260,9 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     HostAuthCallbackDeliverResult
   >;
   /** The host's recent log, redacted and bounded (VC-699): a page after a cursor. */
-  readonly "logs.tail": HostHandler<HostLogsQuery, HostLogsBatch>;
+  readonly "logs.tail": HostHandler<HostLogsRead, HostLogsBatch>;
   /** The host's log as it is written, after a cursor's backlog. */
-  readonly "logs.follow": HostSubscriptionHandler<HostLogsQuery, HostLogsBatch>;
+  readonly "logs.follow": HostSubscriptionHandler<HostLogsRead, HostLogsBatch>;
   /**
    * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
    * placement-derived policy (both host-placed: device-as-user).

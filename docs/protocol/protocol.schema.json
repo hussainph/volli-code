@@ -3171,6 +3171,15 @@
               "additionalProperties": {
                 "additionalProperties": false,
                 "properties": {
+                  "granted": {
+                    "items": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "readOnly": true,
+                    "type": "array"
+                  },
                   "hostId": {
                     "type": "string"
                   },
@@ -3547,6 +3556,15 @@
               "additionalProperties": {
                 "additionalProperties": false,
                 "properties": {
+                  "granted": {
+                    "items": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "readOnly": true,
+                    "type": "array"
+                  },
                   "hostId": {
                     "type": "string"
                   },

@@ -104,6 +104,13 @@ export interface RemoteHost {
 export interface RemoteProjectLink {
   readonly hostId: string;
   readonly link: RemoteHostLinkState;
+  /**
+   * The features this project's own Workspace link's welcome granted, while
+   * that link is `ready` (VC-712): what a surface may ask of it (`host.logs`
+   * for the log viewer). Absent while it is not, and while only the tunnel
+   * answers for it.
+   */
+  readonly granted?: readonly string[];
 }
 
 /** Every remote host, and each remote project with its own link. */

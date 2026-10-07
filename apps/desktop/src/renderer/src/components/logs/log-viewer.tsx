@@ -142,6 +142,10 @@ function useLogLines(sources: readonly LogSource[], paused: boolean) {
   React.useEffect(
     () => () => {
       if (scheduled.current !== null) clearTimeout(scheduled.current);
+      // A remount (React's StrictMode does one in development) must be able
+      // to schedule again: a cleared timer left here would hold every later
+      // batch back from the screen.
+      scheduled.current = null;
     },
     [],
   );

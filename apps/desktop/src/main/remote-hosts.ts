@@ -190,7 +190,8 @@ export interface DesktopRemoteHostsOptions {
 /**
  * What every Workspace link to a remote host asks for: its sign-ins and the
  * relay this Mac performs for a browser sign-in (VC-702), and (VC-710) its
- * board, its Sessions and its log, which the later relay tickets use. Granted
+ * board and its Sessions, which the relay tickets use; and its log, for the
+ * one log viewer (`host.logs`, VC-712). Granted
  * is asked ∩ offered, so a host from before any of them grants less.
  */
 export const REMOTE_HOST_LINK_FEATURES = [
