@@ -14,7 +14,7 @@ const sessionMayAct = () => true;
 const resourceWorkspace = () => null;
 type Ports = Omit<LegacySessionPorts, "caller" | "diagnostics">;
 
-/** Every handler, with an input its port can take. */
+/** Every legacy handler with an input its port can take. Project ports are absent here. */
 function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
   const sink = { emit: vi.fn(), fail: vi.fn() };
   return [
@@ -86,6 +86,24 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
 }
 
 describe("sessionHandlersFrom", () => {
+  it("answers unavailable for the host project ports absent from legacy fixtures", () => {
+    const handlers = sessionHandlersFrom({ runtime: {} });
+    expect(() => handlers["workspaces.list"](undefined, CALL)).toThrowError(
+      expect.objectContaining({ message: "Projects are unavailable in this fixture" }),
+    );
+    expect(() =>
+      handlers["workspaces.create"](
+        {
+          commandId: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          source: { path: "/fixture" },
+        },
+        CALL,
+      ),
+    ).toThrowError(
+      expect.objectContaining({ message: "Projects are unavailable in this fixture" }),
+    );
+  });
+
   it("answers unavailable for every port a case left out", async () => {
     for (const call of callAll(sessionHandlersFrom({ runtime: {} }))) {
       const error = await Promise.resolve()
@@ -203,7 +221,8 @@ describe("sessionHandlersFrom", () => {
     // devices and an add's facts among them) and ten sign-in operations (VC-702)
     // and eight remote sign-in commands (VC-702), the two Session listing
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
-    // projects' four (VC-710), and the active add flows' one (VC-720).
-    expect(Object.keys(context.handlers)).toHaveLength(77);
+    // projects' four (VC-710), the active add flows' one (VC-720), and
+    // the host-scoped projects' two (VC-722).
+    expect(Object.keys(context.handlers)).toHaveLength(79);
   });
 });
