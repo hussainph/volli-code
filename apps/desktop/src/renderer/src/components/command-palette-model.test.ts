@@ -114,6 +114,21 @@ describe("the palette's host rows", () => {
     ]);
     expect(buildHostCommandItems(true, false).map((item) => item.id)).toEqual(["manage-hosts"]);
   });
+
+  it("offers each remote host's projects and sign-ins (VC-710)", () => {
+    const hosts = [{ id: "h1", name: "hetzner-1" }];
+    expect(buildHostCommandItems(false, true, hosts)).toEqual([]);
+    const items = buildHostCommandItems(true, true, hosts);
+    expect(items.map((item) => item.title)).toEqual([
+      "Open a project on hetzner-1…",
+      "Sign-ins on hetzner-1…",
+      "Add a host…",
+      "Manage hosts…",
+    ]);
+    expect(items[0]).toMatchObject({ id: "open-project", hostId: "h1", hostName: "hetzner-1" });
+    expect(items[1]).toMatchObject({ id: "sign-ins", hostId: "h1" });
+    expect(items[0]!.keywords).toContain("hetzner-1");
+  });
 });
 
 describe("buildCommandPaletteItems", () => {

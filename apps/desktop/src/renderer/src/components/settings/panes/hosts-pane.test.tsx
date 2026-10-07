@@ -10,6 +10,7 @@ import {
 } from "@renderer/components/hosts/hosts.test-support";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
   createFakeRemoteHostsApi,
@@ -132,7 +133,7 @@ describe("Settings → Hosts", () => {
     expect(text).toContain("macOS");
     expect(text).toContain("Your account");
     expect(text).toContain("When you log in to studio");
-    expect(text).toContain("No projects on this host yet");
+    expect(text).toContain("No projects open on this Mac yet");
     // One row per device: this Mac first, a revoked one last.
     const devices = [...root.querySelectorAll<HTMLElement>('[data-testid^="host-device-"]')].map(
       (node) => [node.dataset["testid"], node.textContent ?? ""],
@@ -194,6 +195,31 @@ describe("Settings → Hosts", () => {
     const root = await renderPane();
     await openHost(root, "hetzner-1");
     expect(root.textContent).toContain("Remote");
+  });
+
+  it("opens and makes a project on the host from its page (VC-710)", async () => {
+    const root = await renderPane();
+    await openHost(root, "hetzner-1");
+    await click(root, "Open…");
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
+      open: true,
+      hostId: HETZNER_ID,
+      start: "list",
+    });
+    await click(root, "New project…");
+    expect(useRemoteHostsStore.getState().openProject.start).toBe("new");
+    act(() => useRemoteHostsStore.getState().closeProjectSheet());
+  });
+
+  it("counts the projects open here that the rail does not name yet", async () => {
+    const root = await renderPane();
+    act(() =>
+      useProjectsStore.setState({
+        projects: useProjectsStore.getState().projects.filter((one) => one.id !== "remote"),
+      }),
+    );
+    await openHost(root, "hetzner-1");
+    expect(root.textContent).toContain("1 project open on this Mac");
   });
 
   it("says why it could not list the devices, and tries again", async () => {

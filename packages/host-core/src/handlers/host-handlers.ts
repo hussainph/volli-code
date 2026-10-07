@@ -80,8 +80,12 @@ import {
   type ModelSelection,
   type LatestSessionSignal,
   type RemoteHostDevices,
+  type RemoteHostProjects,
   type RemoteHostsSnapshot,
+  type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
+  type CreateRemoteProjectInput,
+  type CreateRemoteProjectResult,
   type SessionListingPage,
   type SessionReadVerb,
   type Ticket,
@@ -328,6 +332,11 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
   readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
+  /** A host's projects (VC-710): listed and created over SSH, opened and closed on this Mac. */
+  readonly "hosts.projects": HostHandler<{ hostId: string }, RemoteHostProjects>;
+  readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
+  readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   /**
    * The Workspace link relay (VC-711): a remote project's public operations
    * over desktop main's Workspace link, {@link HostHandlerOptions.hostLinkRelay}'s
@@ -799,6 +808,19 @@ function hostHandlerEntries(
     "hosts.rename": ({ hostId, name }) => done(() => remoteHosts().rename(hostId, name)),
     "hosts.devices": ({ hostId }) => remoteHosts().devices(hostId),
     "hostAdd.facts": ({ flowId }) => remoteHosts().addFacts(flowId),
+    "hosts.projects": ({ hostId }) => remoteHosts().projects(hostId),
+    // The sudo password (VC-710) is write-only, as the add flow's: scrubbed from any error.
+    "hosts.createProject": async (input) => {
+      try {
+        return await remoteHosts().createProject(input);
+      } catch (error) {
+        throw withoutSecret(error, input.sudoPassword ?? "");
+      }
+    },
+    "hosts.openWorkspace": ({ hostId, workspaceId }) =>
+      done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
+    "hosts.closeWorkspace": ({ hostId, workspaceId }) =>
+      done(() => remoteHosts().closeWorkspace(hostId, workspaceId)),
     // The Workspace link relay (VC-711): desktop main's, through its port.
     "hostLink.query": ({ workspaceId, path, input }) =>
       hostLinkRelay().query(workspaceId, path, input),

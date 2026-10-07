@@ -330,21 +330,66 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
 
 /* ----------------------------------------------------------------- hosts */
 
-/** "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more machines. */
-export interface CommandPaletteHostItem {
-  kind: "host-command";
-  id: "add-host" | "manage-hosts";
-  title: string;
-  hint: string;
-  keywords: string[];
+/**
+ * "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more
+ * machines; and, per remote host (VC-710), "Open a project on <host>…" and
+ * "Sign-ins on <host>…".
+ */
+export type CommandPaletteHostItem =
+  | {
+      kind: "host-command";
+      id: "add-host" | "manage-hosts";
+      title: string;
+      hint: string;
+      keywords: string[];
+    }
+  | {
+      kind: "host-command";
+      id: "open-project" | "sign-ins";
+      hostId: string;
+      hostName: string;
+      title: string;
+      hint: string;
+      keywords: string[];
+    };
+
+/** A remote host as the palette names it. */
+export interface PaletteRemoteHost {
+  readonly id: string;
+  readonly name: string;
 }
 
 /**
  * The host rows, only with the `cloud` experiment on: off, the palette is
- * unchanged. A read-only hosts file (`writable` false) offers no Add.
+ * unchanged. A read-only hosts file (`writable` false) offers no Add. Each
+ * remote host this Mac added gets its two rows (VC-710).
  */
-export function buildHostCommandItems(cloud: boolean, writable = true): CommandPaletteHostItem[] {
+export function buildHostCommandItems(
+  cloud: boolean,
+  writable = true,
+  remote: readonly PaletteRemoteHost[] = [],
+): CommandPaletteHostItem[] {
   if (!cloud) return [];
+  const perHost = remote.flatMap((host): CommandPaletteHostItem[] => [
+    {
+      kind: "host-command",
+      id: "open-project",
+      hostId: host.id,
+      hostName: host.name,
+      title: `Open a project on ${host.name}…`,
+      hint: "Its projects, or a new one from a git URL or a folder",
+      keywords: ["open project", "remote", "host", "new project", "clone", host.name],
+    },
+    {
+      kind: "host-command",
+      id: "sign-ins",
+      hostId: host.id,
+      hostName: host.name,
+      title: `Sign-ins on ${host.name}…`,
+      hint: "Model providers and git push tokens on the host",
+      keywords: ["sign in", "api key", "token", "git", "remote", host.name],
+    },
+  ]);
   const add: CommandPaletteHostItem = {
     kind: "host-command",
     id: "add-host",
@@ -353,6 +398,7 @@ export function buildHostCommandItems(cloud: boolean, writable = true): CommandP
     keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
   };
   return [
+    ...perHost,
     ...(writable ? [add] : []),
     {
       kind: "host-command",

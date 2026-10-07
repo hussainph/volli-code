@@ -8,6 +8,7 @@ import { ChromeBar } from "@renderer/components/chrome-bar";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import { useUiStore } from "@renderer/stores/ui";
 
 import { HostChip } from "./host-chip";
@@ -143,7 +144,7 @@ describe("host chip", () => {
     expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
   });
 
-  it("cannot open a host that serves no project", async () => {
+  it("offers to open a project on a remote host that serves none here (VC-710)", async () => {
     world = hostWorld();
     act(() =>
       world?.remote.set({
@@ -156,9 +157,19 @@ describe("host chip", () => {
     const mini = [...list.querySelectorAll("button")].find((row) =>
       row.textContent?.includes("mac-mini"),
     );
-    expect(mini?.disabled).toBe(true);
+    expect(mini?.disabled).toBe(false);
     // A host serving no project has no link to judge (links are per project).
     expect(mini?.textContent).toContain("0 projects");
+    const select = vi.spyOn(useProjectsStore.getState(), "select").mockImplementation(() => {});
+    await act(async () => mini!.click());
+    expect(select).not.toHaveBeenCalled();
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
+      open: true,
+      hostId: MINI_ID,
+      start: "list",
+    });
+    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
+    act(() => useRemoteHostsStore.getState().closeProjectSheet());
   });
 
   it("sends Add a host… and Manage hosts… to VC-700's entry points, or says they are not here yet", async () => {
@@ -254,7 +265,7 @@ describe("host chip", () => {
     ]);
   });
 
-  it("opens a remote host's sign-ins from the switcher, and This Mac has none there (VC-702)", async () => {
+  it("opens any reachable remote host's sign-ins from the switcher, This Mac's project current too (VC-702, AM2)", async () => {
     world = hostWorld();
     await world.render(<HostChip />);
     await click(await openSwitcher(), "Sign-ins on hetzner-1…");
@@ -267,7 +278,13 @@ describe("host chip", () => {
     await world.cleanup();
     world = hostWorld({ selected: "local" });
     await world.render(<HostChip />);
-    expect((await openSwitcher()).textContent).not.toContain("Sign-ins on");
+    const list = await openSwitcher();
+    // This Mac has none; an offline host's would only fail.
+    expect(list.textContent).not.toContain("Sign-ins on This Mac");
+    expect(list.textContent).not.toContain("Sign-ins on mac-mini");
+    await click(list, "Sign-ins on hetzner-1…");
+    expect(useHostSignInSheet.getState().target?.hostId).toBe(HETZNER_ID);
+    act(() => useHostSignInSheet.getState().close());
   });
 
   it("offers each incompatibility's one recovery", async () => {

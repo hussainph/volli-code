@@ -18,8 +18,11 @@ import type {
   AddHostFacts,
   AddHostStartInput,
   AddHostStepId,
+  CreateRemoteProjectInput,
+  CreateRemoteProjectResult,
   RemoteHost,
   RemoteHostDevices,
+  RemoteHostProjects,
 } from "@volli/shared";
 import { create } from "zustand";
 
@@ -43,6 +46,13 @@ export interface RemoteHostsApi {
   rename(hostId: string, name: string): Promise<unknown>;
   forget(hostId: string): Promise<unknown>;
   devices(hostId: string): Promise<RemoteHostDevices>;
+  /* ── A host's projects (VC-710) ── */
+  /** Read from the host over SSH each time: its projects, and whether this Mac can add one. */
+  projects(hostId: string): Promise<RemoteHostProjects>;
+  /** The host's own `volli project add`; a refusal answers, it does not throw. */
+  createProject(input: CreateRemoteProjectInput): Promise<CreateRemoteProjectResult>;
+  openWorkspace(hostId: string, workspaceId: string): Promise<unknown>;
+  closeWorkspace(hostId: string, workspaceId: string): Promise<unknown>;
 }
 
 /** The tier client's `hosts.*` and `hostAdd.*`, as tRPC types them (structurally). */
@@ -51,6 +61,16 @@ export interface RemoteHostsApiRpc {
     readonly rename: { mutate(input: { hostId: string; name: string }): Promise<unknown> };
     readonly forget: { mutate(input: { hostId: string }): Promise<unknown> };
     readonly devices: { query(input: { hostId: string }): Promise<RemoteHostDevices> };
+    readonly projects: { query(input: { hostId: string }): Promise<RemoteHostProjects> };
+    readonly createProject: {
+      mutate(input: CreateRemoteProjectInput): Promise<CreateRemoteProjectResult>;
+    };
+    readonly openWorkspace: {
+      mutate(input: { hostId: string; workspaceId: string }): Promise<unknown>;
+    };
+    readonly closeWorkspace: {
+      mutate(input: { hostId: string; workspaceId: string }): Promise<unknown>;
+    };
   };
   readonly hostAdd: {
     readonly start: { mutate(input: AddHostStartInput): Promise<{ flowId: string }> };
@@ -100,6 +120,11 @@ export function remoteHostsApi(rpc: RemoteHostsApiRpc): RemoteHostsApi {
     rename: (hostId, name) => rpc.hosts.rename.mutate({ hostId, name }),
     forget: (hostId) => rpc.hosts.forget.mutate({ hostId }),
     devices: (hostId) => rpc.hosts.devices.query({ hostId }),
+    projects: (hostId) => rpc.hosts.projects.query({ hostId }),
+    createProject: (input) => rpc.hosts.createProject.mutate(input),
+    openWorkspace: (hostId, workspaceId) => rpc.hosts.openWorkspace.mutate({ hostId, workspaceId }),
+    closeWorkspace: (hostId, workspaceId) =>
+      rpc.hosts.closeWorkspace.mutate({ hostId, workspaceId }),
   };
 }
 
@@ -113,9 +138,24 @@ export interface RemoteHostsState {
   readonly readOnly: string | null;
   /** The Add-a-host sheet. `target` prefills its field (Back from a flow keeps what was typed). */
   readonly addHost: { readonly open: boolean; readonly target: string };
+  /** "Open a project on <host>…" (VC-710): the host it is about, kept while it fades out. */
+  readonly openProject: {
+    readonly open: boolean;
+    readonly hostId: string | null;
+    /** Where it opens: the host's list, or straight on "New project…". */
+    readonly start: "list" | "new";
+    /**
+     * Which opening this is: every `openProjectSheet` makes a new one, so a
+     * late answer from an earlier opening (another host's, or this host's
+     * before a close) never touches the sheet on screen now.
+     */
+    readonly opening: number;
+  };
   setHosts(hosts: readonly RemoteHost[], readOnly?: string | null): void;
   openAddHost(target?: string): void;
   closeAddHost(): void;
+  openProjectSheet(hostId: string, start?: "list" | "new"): void;
+  closeProjectSheet(): void;
 }
 
 const NO_HOSTS: readonly RemoteHost[] = Object.freeze([]);
@@ -126,10 +166,17 @@ export function createRemoteHostsStore() {
     hosts: NO_HOSTS,
     readOnly: null,
     addHost: { open: false, target: "" },
+    openProject: { open: false, hostId: null, start: "list", opening: 0 },
     setHosts: (hosts, readOnly = null) =>
       set({ hosts: hosts.length === 0 ? NO_HOSTS : hosts, readOnly }),
     openAddHost: (target = "") => set({ addHost: { open: true, target } }),
     closeAddHost: () => set((state) => ({ addHost: { ...state.addHost, open: false } })),
+    openProjectSheet: (hostId, start = "list") =>
+      set((state) => ({
+        openProject: { open: true, hostId, start, opening: state.openProject.opening + 1 },
+      })),
+    closeProjectSheet: () =>
+      set((state) => ({ openProject: { ...state.openProject, open: false } })),
   }));
 }
 

@@ -710,14 +710,14 @@ describe("the sudo password is forgotten at every stop (security N2)", () => {
     await h.engine.sudoPassword(flowId, "q1", PASSWORD);
     expect(w.views().at(-1)?.failure).toMatchObject({ code: "connection-lost", step: "start" });
     await h.engine.retryAdd(flowId);
-    // Install ran with it; start, after the failure, asks again.
+    // Install (and its operator token, VC-710) ran with it; start, after the failure, asks again.
     expect(w.views().at(-1)?.question).toMatchObject({
       id: "q2",
       kind: "sudo-password",
       step: "start",
     });
     const sudoed = h.box.scripts.filter((entry) => entry.stdin === `${PASSWORD}\n`);
-    expect(sudoed).toHaveLength(2);
+    expect(sudoed).toHaveLength(3);
     await h.engine.sudoPassword(flowId, "q2", PASSWORD);
     expect(w.views().at(-1)?.status).toBe("done");
   });

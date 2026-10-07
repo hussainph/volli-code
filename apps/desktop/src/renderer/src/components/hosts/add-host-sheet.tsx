@@ -654,7 +654,21 @@ function ReadyBody({ view, host }: { view: AddHostFlowView; host: RemoteHost | u
           ))}
         </ul>
       )}
-      <div className="flex items-center justify-end border-t border-border/60 px-4 py-4">
+      <div className="flex items-center justify-end gap-2 border-t border-border/60 px-4 py-4">
+        {host === undefined ? null : (
+          // The next step after adding a box (VC-710): a project on it.
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              const store = useRemoteHostsStore.getState();
+              store.closeAddHost();
+              store.openProjectSheet(host.id);
+            }}
+          >
+            Open a project on {host.name}…
+          </Button>
+        )}
         <Button size="sm" autoFocus onClick={() => useRemoteHostsStore.getState().closeAddHost()}>
           Done
         </Button>
@@ -666,7 +680,7 @@ function ReadyBody({ view, host }: { view: AddHostFlowView; host: RemoteHost | u
 /* ── Parts ─────────────────────────────────────────────────────────────── */
 
 /** A command the person may want to run themselves, with Copy. */
-function CommandLine({ command }: { command: string }) {
+export function CommandLine({ command }: { command: string }) {
   const [copied, setCopied] = React.useState(false);
   React.useEffect(() => {
     if (!copied) return;

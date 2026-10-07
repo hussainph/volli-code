@@ -2483,6 +2483,190 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "hosts.closeWorkspace": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "workspaceId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "workspaceId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.createProject": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "gitUrl": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 120,
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "sudoPassword": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "created": {
+                  "type": "boolean"
+                },
+                "ok": {
+                  "const": true,
+                  "type": "boolean"
+                },
+                "project": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    "path": {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    "tickets": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "prefix",
+                    "path",
+                    "tickets"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "ok",
+                "created",
+                "project"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "failure": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "host-unreachable",
+                        "not-operator",
+                        "user-install",
+                        "hostd-unreachable",
+                        "refused",
+                        "bad-url",
+                        "destination-exists",
+                        "needs-password",
+                        "wrong-password",
+                        "needs-sudo",
+                        "needs-credential",
+                        "clone-failed",
+                        "unavailable"
+                      ],
+                      "type": "string"
+                    },
+                    "command": {
+                      "anyOf": [
+                        {
+                          "maxLength": 8192,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "message": {
+                      "maxLength": 8192,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "command"
+                  ],
+                  "type": "object"
+                },
+                "ok": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok",
+                "failure"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hosts.devices": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2593,6 +2777,161 @@
         "output": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.openWorkspace": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "workspaceId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "workspaceId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hosts.projects": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "adds": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "ready",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "needs-operator",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "command"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "user-install",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "hostId": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "projects": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "path": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "prefix": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "tickets": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "prefix",
+                  "path",
+                  "tickets"
+                ],
+                "type": "object"
+              },
+              "maxItems": 500,
+              "readOnly": true,
+              "type": "array"
+            }
+          },
+          "required": [
+            "hostId",
+            "projects",
+            "adds"
+          ],
+          "type": "object"
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false
