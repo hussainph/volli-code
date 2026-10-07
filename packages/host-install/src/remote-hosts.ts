@@ -419,6 +419,12 @@ function readDeviceList(
   return read;
 }
 
+/** A create refused before anything ran on the host. */
+const refusedHere = (
+  code: RemoteProjectFailure["code"],
+  message: string,
+): CreateRemoteProjectResult => ({ ok: false, failure: { code, message, command: null } });
+
 /** How long a host's project list may take, and a create (a clone included). */
 const PROJECTS_TIMEOUT_MS = 30_000;
 const CREATE_PROJECT_TIMEOUT_MS = 10 * 60_000;
@@ -594,6 +600,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
    * them still owns (a replaced host's, a cancelled link step's).
    */
   const tunnelsMade = new Set<SshTunnel>();
+  /** Each project script's SSH connection while it runs (VC-710): quit SIGKILLs what is left. */
+  const projectSsh = new Set<SshTransport>();
   /** Epoch ms by which quit is done, once it has begun. */
   let quitDeadline: number | null = null;
   let unsubscribeWake: (() => void) | undefined;
@@ -1008,6 +1016,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   ): Promise<SshExecResult | null> {
     const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
     const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
+    projectSsh.add(ssh);
     let result: SshExecResult;
     try {
       result = await ssh.exec(script, { label, timeoutMs });
@@ -1015,6 +1024,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       log.warn(`${label}: ssh failed`, { error: messageOf(error) });
       return null;
     } finally {
+      projectSsh.delete(ssh);
       try {
         await ssh.close();
       } catch (error) {
@@ -1079,12 +1089,6 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
               },
     };
   }
-
-  /** A create refused before anything ran on the host. */
-  const refusedHere = (
-    code: RemoteProjectFailure["code"],
-    message: string,
-  ): CreateRemoteProjectResult => ({ ok: false, failure: { code, message, command: null } });
 
   async function addProject(
     entry: RegistryHost,
@@ -1662,11 +1666,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     },
     async projects(hostId) {
       guard();
-      return listProjects(hostOf(hostId));
+      return track(listProjects(hostOf(hostId)));
     },
     async createProject(input) {
       guard();
-      return addProject(hostOf(input.hostId), input);
+      return track(addProject(hostOf(input.hostId), input));
     },
     closeWorkspace(hostId, workspaceId) {
       guard();
@@ -1832,6 +1836,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         // Every ssh process still owned is SIGKILLed now, and briefly awaited.
         await Promise.allSettled([
           ...[...flows.values()].map((flow) => flow.ssh.kill?.()),
+          ...[...projectSsh].map((ssh) => ssh.kill?.()),
           ...[...tunnelsMade].map((tunnel) => tunnel.kill?.()),
         ]);
         for (const flow of flows.values()) dispose(flow);

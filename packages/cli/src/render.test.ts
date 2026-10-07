@@ -247,9 +247,13 @@ describe("renderCliSuccess", () => {
       ),
     ).toBe("VC  Volli Code  /repo  4 tickets\n");
     expect(
-      renderCliSuccess("project.list", { projects: [{ ...withId, path: "/repo", tickets: 4 }] }, {
-        json: true,
-      }),
+      renderCliSuccess(
+        "project.list",
+        { projects: [{ ...withId, path: "/repo", tickets: 4 }] },
+        {
+          json: true,
+        },
+      ),
     ).toContain('"id":"6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"');
     expect(
       renderCliSuccess(

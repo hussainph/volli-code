@@ -220,14 +220,14 @@ describe("Open a project on <host>…", () => {
   });
 
   it("drops a list that lands after the sheet closed", async () => {
-    let answer: (value: { projects: []; adds: { kind: "ready" } }) => void = () => {};
-    api.projects = (hostId) =>
-      new Promise((resolve) => {
-        answer = (value) => resolve({ hostId, ...value });
-      });
+    const answer = Promise.withResolvers<void>();
+    api.projects = async (hostId) => {
+      await answer.promise;
+      return { hostId, projects: [], adds: { kind: "ready" } };
+    };
     await openSheet();
     await act(async () => useRemoteHostsStore.getState().closeProjectSheet());
-    await act(async () => answer({ projects: [], adds: { kind: "ready" } }));
+    await act(async () => answer.resolve());
     expect(isOpen()).toBe(false);
   });
 

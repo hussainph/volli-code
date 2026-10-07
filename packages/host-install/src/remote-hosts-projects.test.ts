@@ -686,6 +686,31 @@ describe("creating a project on a host", () => {
   });
 });
 
+describe("a project script at quit", () => {
+  it("is waited for within the grace, then its ssh is killed", async () => {
+    const held = Promise.withResolvers<Partial<SshExecResult>>();
+    const h = harness({
+      registry: registry(hostEntry()),
+      quitGraceMs: 20,
+      overrides: [
+        (_script, options) => (options.label === "create-project" ? held.promise : undefined),
+      ],
+    });
+    const killed: string[] = [];
+    const open = h.ports.ssh;
+    (h.ports as { ssh: typeof open }).ssh = (target) => ({
+      ...open(target),
+      kill: async () => void killed.push("create-project"),
+    });
+    const creating = h.engine.createProject({ hostId: HOST_ID, path: "/srv/volli/acme" });
+    await h.engine.close();
+    expect(killed).toEqual(["create-project"]);
+    held.resolve({ code: 255, stderr: "Connection closed by remote host\n" });
+    expect(await creating).toMatchObject({ ok: false, failure: { code: "host-unreachable" } });
+    await expect(h.engine.projects(HOST_ID)).rejects.toThrow("not available");
+  });
+});
+
 describe("closing a Workspace on this Mac", () => {
   it("closes its link and forgets it here; the project on the host is untouched", () => {
     const h = harness({

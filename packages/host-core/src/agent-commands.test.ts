@@ -2174,9 +2174,7 @@ describe("agent command service", () => {
     // A project's id is listed (VC-710: it is its Workspace id, which a desktop
     // opens); a ticket's and a Session's full ids never are.
     expect(JSON.stringify({ labels, sessions })).not.toMatch(/project-one/);
-    expect(JSON.stringify({ projects, labels, sessions })).not.toMatch(
-      /ticket-one|abcdef12-3456/,
-    );
+    expect(JSON.stringify({ projects, labels, sessions })).not.toMatch(/ticket-one|abcdef12-3456/);
   });
 
   // An agent reading this list is deciding where to look. The launch harness of
