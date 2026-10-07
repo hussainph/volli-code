@@ -202,6 +202,7 @@ import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
 import { createHostLinkRelay, engineWorkspaceLinks } from "./host-link-relay";
 import { createHostSignInService, type MacCredentialStore } from "./host-sign-ins/service";
+import { createNativeSendConfirmation } from "./host-sign-ins/send-from-this-mac";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
@@ -855,6 +856,25 @@ const appStartup = app.whenReady().then(async () => {
     mac: {
       list: async () => (await macCredentials?.list()) ?? [],
       read: async (providerId) => macCredentials?.read(providerId),
+    },
+    sendConfirmation: {
+      resolve: (hostId, providerId) => {
+        const provider = liveHost?.runtimeServices.modelAccess.models
+          .getProviders()
+          .find((entry) => entry.id === providerId);
+        const host = remoteHosts.snapshot().hosts.find((entry) => entry.id === hostId);
+        return provider === undefined || host === undefined
+          ? null
+          : {
+              providerLabel: provider.name,
+              hostName: host.name,
+              hostTarget: host.target,
+            };
+      },
+      confirm: createNativeSendConfirmation({
+        getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+        showMessageBox: (window, options) => dialog.showMessageBox(window, options),
+      }),
     },
     // The same http(s)-only gate as the window's own links: a host names the page.
     openExternal: (url) => openExternal(url),

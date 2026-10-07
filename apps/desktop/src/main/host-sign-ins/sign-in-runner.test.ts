@@ -24,6 +24,9 @@ import {
   type HostSignInRunEvent,
 } from "./sign-in-runner";
 
+// The global main-test cleanup imports broadcast; never load a real Electron binary.
+vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
+
 function fakeLink(options: { startFails?: boolean } = {}) {
   let observer: Parameters<HostSignInLink["subscribe"]>[1] | null = null;
   const unsubscribe = vi.fn();
@@ -292,8 +295,77 @@ describe("runHostSignIn", () => {
     });
     expect(await run.ended).toBe("failed");
     expect(events).toEqual([{ kind: "failed", message: REFUSED_SIGN_IN_LINK }]);
-    expect(isOpenableSignInUrl("https://claude.ai/oauth/authorize?code=true")).toBe(true);
-    expect(isOpenableSignInUrl("http://localhost:1455/start")).toBe(true);
+    expect(isOpenableSignInUrl("https://claude.ai/oauth/authorize?code=true", "anthropic")).toBe(
+      true,
+    );
+    expect(isOpenableSignInUrl("http://localhost:1455/start", "anthropic")).toBe(false);
+  });
+
+  it("shows off-domain browser and device links without opening or ending the flow", async () => {
+    const host = fakeLink();
+    const events: HostSignInRunEvent[] = [];
+    const openExternal = vi.fn();
+    const run = runHostSignIn({
+      link: host.link,
+      providerId: "anthropic",
+      openExternal,
+      onEvent: (event) => events.push(event),
+    });
+    await run.flowId;
+    const browser = {
+      kind: "auth-url",
+      url: "https://phishing.example/login",
+      instructions: null,
+    } as const;
+    const device = {
+      kind: "device-code",
+      userCode: "WXYZ",
+      verificationUri: "https://phishing.example/device",
+      intervalSeconds: null,
+      expiresInSeconds: null,
+    } as const;
+    host.emit(browser);
+    host.emit(device);
+    await settle();
+    expect(events).toEqual([browser, device]);
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(host.link.cancel).not.toHaveBeenCalled();
+    await run.cancel();
+  });
+
+  it("auto-opens only the selected provider's exact authorization host", () => {
+    for (const [provider, url] of [
+      ["anthropic", "https://claude.ai/oauth/authorize"],
+      ["openai", "https://auth.openai.com/authorize"],
+      ["openai-codex", "https://auth.openai.com/device"],
+      ["github-copilot", "https://github.com/login/device"],
+      ["openrouter", "https://openrouter.ai/auth"],
+      ["xai", "https://accounts.x.ai/device"],
+      ["xai", "https://auth.x.ai/device"],
+      ["kimi-coding", "https://auth.kimi.com/device"],
+      ["meta", "https://auth.meta.com/device"],
+    ] as const)
+      expect(isOpenableSignInUrl(url, provider)).toBe(true);
+    expect(isOpenableSignInUrl("http://claude.ai/login", "anthropic")).toBe(true);
+    expect(isOpenableSignInUrl("https://CLAUDE.AI:443/login", "anthropic")).toBe(true);
+    for (const url of [
+      "https://claude.ai.attacker.example/login",
+      "https://attacker.example/claude.ai",
+      "https://claude.ai@attacker.example/login",
+      "https://attacker@claude.ai/login",
+      "https://:password@claude.ai/login",
+      "https://sub.claude.ai/login",
+      "https://claude.ai./login",
+      "https://claude.ai:444/login",
+      "https://clаude.ai/login",
+      "not a url",
+      "file:///claude.ai",
+      `https://claude.ai/${"a".repeat(MAX_SIGN_IN_URL_LENGTH)}`,
+    ])
+      expect(isOpenableSignInUrl(url, "anthropic")).toBe(false);
+    for (const provider of ["openai", "unknown", "radius", "toString", "__proto__"]) {
+      expect(isOpenableSignInUrl("https://claude.ai/login", provider)).toBe(false);
+    }
   });
 
   it("falls back to paste when the relay waited long enough", async () => {

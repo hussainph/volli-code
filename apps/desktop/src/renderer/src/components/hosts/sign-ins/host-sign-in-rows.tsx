@@ -9,6 +9,7 @@
  * here decides policy, holds a credential, or talks to a host.
  */
 import * as React from "react";
+import { signInWebUrl } from "@volli/shared";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
@@ -313,6 +314,18 @@ export function SignInRow({
                   disabled={flow.kind === "saving"}
                   onSave={(value) => void controller.submitKey(row, value)}
                 />
+              ) : null}
+              {flow.kind === "signing-in" &&
+              flow.authUrl !== null &&
+              signInWebUrl(flow.authUrl) !== null ? (
+                <Button
+                  size="sm"
+                  className="self-start"
+                  onClick={() => controller.openPage(flow.authUrl!)}
+                >
+                  Open {siteOf(flow.authUrl)}
+                  <ArrowSquareOutIcon />
+                </Button>
               ) : null}
               {flow.kind === "signing-in" && flow.deviceCode !== null ? (
                 <DeviceCode
