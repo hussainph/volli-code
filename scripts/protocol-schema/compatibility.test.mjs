@@ -165,6 +165,134 @@ test("scalar tolerance is local through nullable/array/ref containers", () => {
   );
 });
 
+test("public output enum growth fails; desktop growth is report-only, including nullable refs", () => {
+  for (const [beforeOutput, afterOutput, suffix] of [
+    [{ type: "string", enum: ["a"] }, { type: "string", enum: ["a", "b"] }, "/enum"],
+    [{ type: "string", const: "a" }, { type: "string", enum: ["a", "b"] }, "/enum"],
+    [
+      { type: "array", items: { type: "string", enum: ["a"] } },
+      { type: "array", items: { type: "string", enum: ["a", "b"] } },
+      "/items/enum",
+    ],
+    [
+      {
+        anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }],
+        $defs: { value: { type: "string", enum: ["a"] } },
+      },
+      {
+        anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }],
+        $defs: { value: { type: "string", enum: ["a", "b"] } },
+      },
+      "/enum",
+    ],
+  ]) {
+    const before = protocol(shape, beforeOutput);
+    const after = protocol(shape, afterOutput);
+    before.tiers.desktop.read.output = beforeOutput;
+    after.tiers.desktop.read.output = afterOutput;
+    assert.deepEqual(
+      protocolChanges(before, after).filter(({ severity }) => severity === "warning"),
+      [
+        {
+          path: `/tiers/desktop/read/output${suffix}`,
+          reason: "output enum widened (requires tolerant reader)",
+          severity: "warning",
+        },
+      ],
+    );
+    assert.ok(unapprovedChanges(before, after).length, "public growth still fails");
+    after.tiers.public = before.tiers.public;
+    assert.deepEqual(unapprovedChanges(before, after), [], "desktop-only growth must not fail");
+  }
+});
+
+test("desktop report-only enum checks don't warn for proven tolerance or equivalent anyOf reorderings", () => {
+  for (const [old, next] of [
+    [
+      { type: "string", enum: ["a"], [enumMarker]: true },
+      { type: "string", enum: ["a", "b"], [enumMarker]: true },
+    ],
+    [
+      { anyOf: [{ enum: ["a"] }, { enum: ["a", "b"] }] },
+      { description: "annotation", anyOf: [{ enum: ["a", "b"] }, { enum: ["a"] }] },
+    ],
+    [
+      {
+        "x-volli-open-union": "kind",
+        oneOf: [
+          {
+            type: "object",
+            properties: { kind: { const: "a", type: "string" } },
+            required: ["kind"],
+          },
+        ],
+      },
+      {
+        "x-volli-open-union": "kind",
+        oneOf: [
+          {
+            type: "object",
+            properties: { kind: { enum: ["a", "b"], type: "string" } },
+            required: ["kind"],
+          },
+        ],
+      },
+    ],
+  ]) {
+    const before = protocol();
+    const after = protocol();
+    before.tiers.desktop.read.output = old;
+    after.tiers.desktop.read.output = next;
+    assert.deepEqual(protocolChanges(before, after), []);
+  }
+});
+
+test("desktop warnings don't loosen unions, removals, types or inputs; promotion enforces public enum rules", () => {
+  for (const [old, next] of [
+    [{ enum: ["a", "b"] }, { enum: ["a"] }],
+    [{ const: "a" }, { const: "b" }],
+    [
+      { type: "string", enum: ["a"] },
+      { type: ["string", "null"], enum: ["a", null] },
+    ],
+    [
+      { oneOf: [{ type: "string", enum: ["a"] }] },
+      { oneOf: [{ type: "string", enum: ["a", "b"] }] },
+    ],
+    [{ anyOf: [text] }, { anyOf: [text, { type: "null" }] }],
+  ]) {
+    const before = protocol();
+    const after = protocol();
+    before.tiers.desktop.read.output = old;
+    after.tiers.desktop.read.output = next;
+    assert.ok(unapprovedChanges(before, after).length, "pre-existing desktop checks still gate");
+  }
+  const before = protocol();
+  before.tiers.desktop.read.output = { type: "string", enum: ["a"] };
+  const promoted = protocol();
+  promoted.tiers.public.read = {
+    ...before.tiers.desktop.read,
+    output: { type: "string", enum: ["a", "b"] },
+  };
+  delete promoted.tiers.desktop.read;
+  assert.deepEqual(unapprovedChanges(before, promoted), [
+    {
+      path: "/tiers/desktop/read/output/enum",
+      reason: "output enum widened (requires tolerant reader)",
+    },
+  ]);
+  const inputOnly = structuredClone(before);
+  before.tiers.desktop.read.input = { type: "string", enum: ["a"] };
+  inputOnly.tiers.desktop.read.input = { type: "string", enum: ["a", "b"] };
+  assert.deepEqual(
+    protocolChanges(before, inputOnly),
+    [],
+    "input growth is still additive, not warned",
+  );
+  inputOnly.tiers.desktop.read.input = { type: "string", enum: ["b"] };
+  assert.ok(unapprovedChanges(before, inputOnly).length, "input narrowing still fails");
+});
+
 test("refuses field/entry removals, narrowing and newly required input", () => {
   assert.equal(
     schemaChanges(shape, { ...shape, properties: { id: text } })[0].reason,

@@ -45,11 +45,14 @@ const assertionKeys = (value, kind) =>
 export function schemaChanges(before, after, path = "", direction = "input", context) {
   // Resolve local references against EACH original schema, not a nested branch.
   // Definition labels are generated traversal identities, not wire field names.
-  const state = context ?? {
-    roots: [before, after],
-    ancestors: [],
-    caches: [new WeakMap(), new WeakMap()],
-  };
+  const state = context?.roots
+    ? context
+    : {
+        roots: [before, after],
+        ancestors: [],
+        caches: [new WeakMap(), new WeakMap()],
+        ...context,
+      };
   before = resolveLocalRef(before, state.roots[0], state.caches[0]);
   after = resolveLocalRef(after, state.roots[1], state.caches[1]);
   // Equality must follow $ref into each document's own definitions: two
@@ -62,6 +65,8 @@ export function schemaChanges(before, after, path = "", direction = "input", con
   const compare = (old, next, at) => schemaChanges(old, next, at, direction, nested);
   const changes = [];
   const fail = (at, reason) => changes.push({ path: at, reason });
+  const enumGrowth = (at, reason) =>
+    changes.push({ path: at, reason, ...(state.reportEnumGrowth ? { severity: "warning" } : {}) });
   if (!object(before) || !object(after)) return [{ path, reason: "schema narrowed or replaced" }];
   if (after.type !== undefined) {
     const oldTypes = list(before.type);
@@ -114,7 +119,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     ((newValues === undefined && after.anyOf === undefined) ||
       newValues?.some((next) => !oldValues.some((value) => isDeepStrictEqual(value, next))))
   ) {
-    fail(`${path}/${literalKeyword}`, "output enum widened (requires tolerant reader)");
+    enumGrowth(`${path}/${literalKeyword}`, "output enum widened (requires tolerant reader)");
   }
   // Mixed Zod literals omit `type`. Even a tolerant scalar reader only earns
   // new values of its existing JSON types, not new nullability/value types.
@@ -125,7 +130,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       (newValues === undefined && after.type === undefined && after.anyOf === undefined) ||
       newTypes.some((type) => !oldTypes.has(type === "integer" ? "number" : type))
     ) {
-      fail(`${path}/type`, "output enum value type widened");
+      enumGrowth(`${path}/type`, "output enum value type widened");
     }
   }
   const oldRequired = list(before.required);
@@ -188,9 +193,9 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       Object.fromEntries(Object.entries(after).filter(([key]) => key !== "anyOf")),
     ];
     for (const [index, branch] of oldBranches.entries()) {
-      if (!newBranches.some((next) => compare(branch, next, path).length === 0)) {
-        fail(`${path}/anyOf/${index}`, "union alternative removed or narrowed");
-      }
+      const match = compatibleChanges(newBranches, (next) => compare(branch, next, path));
+      if (!match) fail(`${path}/anyOf/${index}`, "union alternative removed or narrowed");
+      else changes.push(...match);
     }
     if (direction === "output") {
       // Unlike the marked/disjoint oneOf exception, anyOf has no open-union
@@ -200,9 +205,9 @@ export function schemaChanges(before, after, path = "", direction = "input", con
         fail(`${path}/anyOf`, "output union alternative added or widened");
       }
       for (const [index, branch] of newBranches.entries()) {
-        if (!oldBranches.some((old) => compare(old, branch, path).length === 0)) {
-          fail(`${path}/anyOf/${index}`, "output union alternative added or widened");
-        }
+        const match = compatibleChanges(oldBranches, (old) => compare(old, branch, path));
+        if (!match) fail(`${path}/anyOf/${index}`, "output union alternative added or widened");
+        else changes.push(...match);
       }
     }
   }
@@ -244,6 +249,19 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     }
   }
   return changes;
+}
+
+const hasFailures = (changes) => changes.some(({ severity }) => severity !== "warning");
+function compatibleChanges(candidates, compare) {
+  let warningMatch;
+  for (const candidate of candidates) {
+    const changes = compare(candidate);
+    // Prefer an exact match to a warning-only widening match, so reordering
+    // overlapping anyOf alternatives cannot manufacture a growth warning.
+    if (changes.length === 0) return changes;
+    if (!hasFailures(changes) && warningMatch === undefined) warningMatch = changes;
+  }
+  return warningMatch;
 }
 
 function literalType(value) {
@@ -401,7 +419,12 @@ export function protocolChanges(before, after) {
       }
       for (const direction of ["input", "output"])
         changes.push(
-          ...schemaChanges(entry[direction], next[direction], `${path}/${direction}`, direction),
+          ...schemaChanges(entry[direction], next[direction], `${path}/${direction}`, direction, {
+            // Main and renderer ship together. Only this new enum-growth rule
+            // is report-only on desktop, pending O1; promotion earns the public
+            // contract. Existing desktop type/union/narrowing rules still gate.
+            reportEnumGrowth: tier === "desktop" && Object.hasOwn(after.tiers.desktop ?? {}, key),
+          }),
         );
     }
   }
@@ -430,7 +453,15 @@ export function protocolChanges(before, after) {
         reason: "frozen feature membership changed",
       });
   }
-  return changes;
+  // anyOf's two directional checks may reach the same report twice.
+  const warnings = new Set();
+  return changes.filter((change) => {
+    if (change.severity !== "warning") return true;
+    const key = JSON.stringify([change.path, change.reason]);
+    if (warnings.has(key)) return false;
+    warnings.add(key);
+    return true;
+  });
 }
 
 /** An exception is exact-path, explained, and tied to a real breaking version bump. */
@@ -450,6 +481,8 @@ export function unapprovedChanges(before, after, allowlist = []) {
     }
   }
   return protocolChanges(before, after).filter(
-    (change) => !allowlist.some((exception) => exception.path === change.path),
+    (change) =>
+      change.severity !== "warning" &&
+      !allowlist.some((exception) => exception.path === change.path),
   );
 }
