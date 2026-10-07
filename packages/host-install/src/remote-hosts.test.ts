@@ -1220,6 +1220,7 @@ describe("refusals", () => {
       () => h.engine.cancelScheduledUpdate(HOST_ID),
       () => h.engine.signIn(HOST_ID, "claude"),
       () => h.engine.openWorkspace(HOST_ID, WS1),
+      () => h.engine.workspaceLink(WS1),
       () => h.engine.rename(HOST_ID, "Renamed"),
       () => h.engine.subscribeAdd("flow-1", () => {}),
     ];
@@ -1265,6 +1266,29 @@ describe("refusals", () => {
     two.set({ ...granted, welcome: { ...granted.welcome, features: ["sign-ins"] } });
     expect(h.engine.signInLink(HOST_ID)).toBe(two);
     expect(() => h.engine.signInLink(OTHER_ID)).toThrow();
+  });
+
+  it("lends desktop main a Workspace's own link while it is ready, and none otherwise (VC-711)", () => {
+    const h = harness({
+      tunnelMode: "hold",
+      registry: registry(hostEntry({ workspaceIds: [WS1, WS2] })),
+    });
+    const tunnel = h.tunnels.made[0]!;
+    // No link yet: the tunnel is not up.
+    expect(h.engine.workspaceLink(WS1)).toBeNull();
+    tunnel.set({ status: "up", url: tunnel.url, localPort: 1 });
+    const [one, two] = h.links.made as [FakeLink, FakeLink];
+    expect(h.engine.workspaceLink(WS1)).toBeNull();
+    two.set(ready());
+    expect(h.engine.workspaceLink(WS1)).toBeNull();
+    expect(h.engine.workspaceLink(WS2)).toBe(two);
+    one.set(ready());
+    expect(h.engine.workspaceLink(WS1)).toBe(one);
+    // A Workspace no host here serves has none.
+    expect(h.engine.workspaceLink("0f8fad5b-d9cb-469f-a165-70867728950e")).toBeNull();
+    // Dropped: none until it is ready again.
+    one.set({ status: "connecting", attempt: 1 });
+    expect(h.engine.workspaceLink(WS1)).toBeNull();
   });
 
   it("refuses updates and sign-in in v1 with the shared words", () => {

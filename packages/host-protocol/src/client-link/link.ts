@@ -103,8 +103,12 @@ export type HostLinkWakeCause = "power-resume" | "network-online";
 export interface HostLinkSubscriptionHandlers {
   /** The host started the stream; again after every resume. */
   onStarted?(): void;
-  /** One emission; a tracked one is `{ id, data }`, and the link resumes after its id. */
-  onData(data: unknown): void;
+  /**
+   * One emission; a tracked one is `{ id, data }`, and the link resumes after
+   * its id. `tracked` names that id, for an owner that resumes a stream of its
+   * own after it (desktop main's Workspace link relay, VC-711).
+   */
+  onData(data: unknown, tracked?: { readonly id: string }): void;
   /**
    * The host cannot resume this cursor (`subscription-resnapshot-required`):
    * re-read the snapshot and subscribe from its cursor. The subscription has
@@ -197,6 +201,13 @@ export interface HostLink {
   /** Ends the link: calls in flight fail, subscriptions end silently, nothing reconnects. */
   close(): void;
 }
+
+/**
+ * What a typed client and a store send through: a link's calls, without its
+ * state or lifecycle. A {@link HostLink} is one; so is the desktop window's
+ * relay to a Workspace link main holds (VC-711), whose state it reads elsewhere.
+ */
+export type HostLinkCalls = Pick<HostLink, "query" | "mutate" | "subscribe">;
 
 export interface HostLinkOptions {
   /** `ws:` or `wss:`. */
@@ -755,9 +766,13 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         if (result.type === "started") {
           entry.handlers.onStarted?.();
         } else if (result.type === "data") {
-          if (result.id !== undefined) entry.lastEventId = String(result.id);
           entry.delivered = true;
-          entry.handlers.onData(result.data);
+          if (result.id === undefined) {
+            entry.handlers.onData(result.data);
+          } else {
+            entry.lastEventId = String(result.id);
+            entry.handlers.onData(result.data, { id: entry.lastEventId });
+          }
         }
       },
       error: (error) => {

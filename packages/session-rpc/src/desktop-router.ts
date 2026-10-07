@@ -31,6 +31,9 @@
  */
 import {
   DESKTOP_CATALOG_ENTRIES,
+  HOST_LINK_RELAY_EVENT_ID_MAX,
+  HOST_LINK_RELAY_PATH_MAX,
+  hostLinkRelayEventEnds,
   type AddHostAnswer,
   type AddHostEvent,
   type AddHostFacts,
@@ -40,6 +43,9 @@ import {
   type DesktopKey,
   type HandlerCall,
   type HostHandler,
+  type HostLinkRelayCall,
+  type HostLinkRelayEvent,
+  type HostLinkRelaySubscribeCall,
   type HostSetGitCredentialInput,
   type HostSignInRunEvent,
   type HostSignInSendResult,
@@ -49,7 +55,8 @@ import {
   type RenameRemoteHostInput,
   type WorktreeTrimSettings,
 } from "@volli/shared";
-import type { JsonUnsafeProcedures } from "@volli/host-protocol";
+import { readHostError, type JsonUnsafeProcedures } from "@volli/host-protocol";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { AsyncQueue } from "./async-queue";
@@ -160,6 +167,13 @@ export interface DesktopRouterHandlers {
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
   readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
+  /** The Workspace link relay (VC-711): a remote project's public operations, over main's link. */
+  readonly "hostLink.query": HostHandler<HostLinkRelayCall, unknown>;
+  readonly "hostLink.mutate": HostHandler<HostLinkRelayCall, unknown>;
+  readonly "hostLink.subscribe": DesktopSubscriptionHandler<
+    HostLinkRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -223,6 +237,64 @@ function runEnds(event: HostSignInRunEvent): boolean {
     event.kind === "cancelled" ||
     event.kind === "lost"
   );
+}
+
+/**
+ * The Workspace link relay's grammar (VC-711). A path is a public operation's
+ * catalog key (dot-separated identifiers); whether the link may send it is
+ * main's call, against the link's welcome. The input is the operation's own,
+ * judged by the host that receives it.
+ */
+const relayPath = z
+  .string()
+  .max(HOST_LINK_RELAY_PATH_MAX)
+  .regex(/^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+$/u);
+const hostLinkCallSchema = z.strictObject({
+  workspaceId: z.uuid(),
+  path: relayPath,
+  input: z.unknown().optional(),
+});
+const hostLinkSubscribeSchema = z.strictObject({
+  workspaceId: z.uuid(),
+  path: relayPath,
+  input: z.unknown().optional(),
+  lastEventId: z.string().min(1).max(HOST_LINK_RELAY_EVENT_ID_MAX).optional(),
+});
+const hostLinkRelayErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  reason: z.string().optional(),
+});
+
+/** What a relayed subscription says (`HostLinkRelayEvent`): open on `kind`. */
+export const hostLinkRelayEventSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("started") }),
+    z.object({ kind: z.literal("data"), data: z.unknown(), id: z.string().optional() }),
+    z.object({ kind: z.literal("resnapshot"), error: hostLinkRelayErrorSchema }),
+    z.object({ kind: z.literal("lost"), error: hostLinkRelayErrorSchema }),
+    z.object({ kind: z.literal("error"), error: hostLinkRelayErrorSchema }),
+    z.object({ kind: z.literal("complete") }),
+  ])
+  .meta({ "x-volli-open-union": "kind" });
+
+/**
+ * A relayed query's or mutation's failure, with the reason it carried: the
+ * host's own answer, or main's (`host-unreachable` when the Workspace has no
+ * ready link, `verb-refused` when its welcome did not grant the operation).
+ * The map's own refusals (unavailable, refused) are already the router's.
+ */
+async function relayAnswer(run: () => unknown): Promise<unknown> {
+  try {
+    return await hostAnswer(run);
+  } catch (error) {
+    if (error instanceof TRPCError) throw error;
+    const hostError = readHostError(error);
+    if (hostError.reason !== undefined) {
+      throw new HostProcedureError(hostError.reason, hostError.message, error);
+    }
+    throw new TRPCError({ code: hostError.code, message: hostError.message, cause: error });
+  }
 }
 
 const trimSettingsSchema = z.object({
@@ -487,6 +559,38 @@ export function createDesktopRouter() {
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hostSignIns.cancel"](input, ctx.call)),
     },
+    /**
+     * The Workspace link relay (VC-711): a remote project's public operations
+     * over the Workspace link desktop main holds, bounded to what its welcome
+     * granted. A subscription ends after its last event (`lost`,
+     * `resnapshot`, `error`, `complete`), when the window cancels or goes, or
+     * on overflow.
+     */
+    hostLink: {
+      query: hostProcedure("hostLink.query")
+        .input(hostLinkCallSchema)
+        .output(z.unknown())
+        .query(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostLink.query"](input, ctx.call)),
+        ),
+      mutate: hostProcedure("hostLink.mutate")
+        .input(hostLinkCallSchema)
+        .output(z.unknown())
+        .mutation(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostLink.mutate"](input, ctx.call)),
+        ),
+      subscribe: hostProcedure("hostLink.subscribe")
+        .input(hostLinkSubscribeSchema)
+        .subscription(async function* ({ ctx, input, signal }) {
+          yield* desktopStream<HostLinkRelayEvent>(
+            ctx,
+            "hostLink.subscribe",
+            signal,
+            (sink) => ctx.handlers["hostLink.subscribe"](input, ctx.call, sink),
+            hostLinkRelayEventEnds,
+          );
+        }),
+    },
   });
 }
 
@@ -508,5 +612,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hosts.subscribe": remoteHostsSnapshotSchema,
     "hostAdd.subscribe": addHostEventSchema,
     "hostSignIns.run": hostSignInRunEventSchema,
+    "hostLink.subscribe": hostLinkRelayEventSchema,
   });
 }
