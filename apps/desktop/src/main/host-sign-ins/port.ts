@@ -29,7 +29,12 @@ import {
 import type { HostSignInStatus, HostSignInUpdate } from "@volli/shared";
 
 import { HostUnreachableError, type HostSignInHostLink, type HostSignInService } from "./service";
-import { isOpenableSignInUrl, REFUSED_SIGN_IN_LINK, type HostSignInRun } from "./sign-in-runner";
+import {
+  HostFlowLedger,
+  isOpenableSignInUrl,
+  REFUSED_SIGN_IN_LINK,
+  type HostSignInRun,
+} from "./sign-in-runner";
 
 /** The update kinds this build reads; any other is a newer host's, and skipped. */
 const KNOWN_UPDATE_KINDS: ReadonlySet<string> = new Set(
@@ -159,10 +164,15 @@ export function remoteSignInsPort(service: HostSignInService): RemoteSignInsPort
   const runs = new Map<string, Running>();
   /**
    * The latest run each host and provider started, ended or not: the next one
-   * waits for its flow to be over on the host, as a run cancelled here may
-   * still be unwinding there. One per host and provider, so bounded.
+   * cancels it first. One per host and provider, so bounded.
    */
   const latest = new Map<string, HostSignInRun>();
+  /**
+   * The flows each host and provider may still hold, kept apart from any one
+   * run (VC-702 review B3): a replacement that never got a flow, or gave up
+   * waiting, passes on the older flow still unwinding on the host.
+   */
+  const ledgers = new Map<string, HostFlowLedger>();
   /** The running sign-in a window's answer or cancel names: its own, never a newer one. */
   const running = (hostId: string, providerId: string, runId: string | undefined) => {
     const current = runs.get(runKey(hostId, providerId));
@@ -179,12 +189,15 @@ export function remoteSignInsPort(service: HostSignInService): RemoteSignInsPort
       const key = runKey(hostId, providerId);
       // One at a time per host and provider: a new one replaces the old, and
       // starts once the old one's flow is over on the host.
-      const run = service.signInOnHost(
-        hostId,
-        providerId,
-        (event) => void listener(event),
-        latest.get(key),
-      );
+      let ledger = ledgers.get(key);
+      if (ledger === undefined) {
+        ledger = new HostFlowLedger();
+        ledgers.set(key, ledger);
+      }
+      const run = service.signInOnHost(hostId, providerId, (event) => void listener(event), {
+        replaces: latest.get(key),
+        ledger,
+      });
       runs.set(key, { run, runId });
       latest.set(key, run);
       void run.ended.then(() => {

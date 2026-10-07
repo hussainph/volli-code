@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { RelayBinding, RelayOutcome } from "./relay-client";
 import {
   CANCEL_WAIT_MS,
+  HostFlowLedger,
   isOpenableSignInUrl,
   MAX_SIGN_IN_URL_LENGTH,
   REFUSED_SIGN_IN_LINK,
@@ -88,14 +89,21 @@ function fakeBind(result: "bound" | "port-taken") {
   return { bind, outcome, close, order };
 }
 
-/** A run being replaced: its cancel says what it left on the host. */
-function replaced(left: Awaited<ReturnType<ReturnType<typeof runHostSignIn>["cancel"]>>) {
+/** A run being replaced: its cancel says whether the host was asked in time. */
+function replaced(asked: boolean) {
   return {
     flowId: Promise.resolve("flow-1"),
     ended: Promise.resolve("cancelled" as const),
     answer: vi.fn(),
-    cancel: vi.fn(async () => left),
+    cancel: vi.fn(async () => asked),
   };
+}
+
+/** The host and provider's ledger, still holding the replaced run's unwinding flow-1. */
+function holdingFlowOne(): HostFlowLedger {
+  const ledger = new HostFlowLedger();
+  ledger.started("flow-1");
+  return ledger;
 }
 
 afterEach(() => {
@@ -468,7 +476,7 @@ describe("runHostSignIn", () => {
     host.emit({ kind: "progress", message: "Waiting" });
     await settle();
     expect(events.map((event) => event.kind)).toEqual(["auth-url", "progress"]);
-    await expect(run.cancel()).resolves.toEqual({ flowId: "flow-1" });
+    await expect(run.cancel()).resolves.toBe(true);
     host.emit({ kind: "done" });
     expect(await run.ended).toBe("cancelled");
   });
@@ -579,18 +587,23 @@ describe("runHostSignIn", () => {
       const host = fakeLink();
       const relay = fakeBind("bound");
       const events: HostSignInRunEvent[] = [];
+      const ledger = new HostFlowLedger();
       const run = runHostSignIn({
         link: host.link,
         providerId: "anthropic",
         openExternal: vi.fn(),
         onEvent: (event) => events.push(event),
         bind: relay.bind,
+        ledger,
       });
       await run.flowId;
       host.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
       await settle();
+      expect(ledger.holds("flow-1")).toBe(true);
       host.drop();
       expect(await settledYet(run.ended)).toBe("lost");
+      // Its connection gone, the host ended its flow with it.
+      expect(ledger.holds("flow-1")).toBe(false);
       expect(relay.close).toHaveBeenCalledOnce();
       expect(host.unsubscribe).toHaveBeenCalledOnce();
       expect(host.stopWatching).toHaveBeenCalledOnce();
@@ -599,7 +612,7 @@ describe("runHostSignIn", () => {
       await settle();
       expect(events).toEqual([{ kind: "relay", state: "listening" }, { kind: "lost" }]);
       // Nothing is left on the host to cancel from here, and nothing is answered.
-      expect(await run.cancel()).toEqual({ flowId: "flow-1" });
+      expect(await run.cancel()).toBe(true);
       expect(host.link.cancel).not.toHaveBeenCalled();
       await expect(run.answer("p", "x")).rejects.toThrow("no longer running");
     });
@@ -622,7 +635,7 @@ describe("runHostSignIn", () => {
       expect(host.link.start).not.toHaveBeenCalled();
       expect(host.stopWatching).toHaveBeenCalledOnce();
       expect(events).toEqual([{ kind: "lost" }]);
-      expect(await run.cancel()).toEqual({ flowId: null });
+      expect(await run.cancel()).toBe(true);
     });
   });
 
@@ -634,16 +647,21 @@ describe("runHostSignIn", () => {
         .mockResolvedValueOnce({ flowId: "flow-1" })
         .mockResolvedValueOnce({ flowId: "flow-1" })
         .mockResolvedValueOnce({ flowId: "flow-2" });
-      const old = replaced({ flowId: "flow-1" });
+      const old = replaced(true);
+      const ledger = holdingFlowOne();
       const run = runHostSignIn({
         link: host.link,
         providerId: "anthropic",
         openExternal: vi.fn(),
         onEvent: () => {},
         replaces: old,
+        ledger,
       });
       await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * 2);
       expect(await run.flowId).toBe("flow-2");
+      // A fresh flow tells that the host holds no other: flow-1 is over.
+      expect(ledger.holds("flow-1")).toBe(false);
+      expect(ledger.holds("flow-2")).toBe(true);
       expect(old.cancel).toHaveBeenCalledOnce();
       expect(host.link.start).toHaveBeenCalledTimes(3);
       expect(host.link.subscribe).toHaveBeenCalledWith({ flowId: "flow-2" }, expect.anything());
@@ -651,21 +669,25 @@ describe("runHostSignIn", () => {
 
     it("fails, saying so, when the old flow never ends or the host never answered its cancel", async () => {
       vi.useFakeTimers();
-      for (const left of [{ flowId: "flow-1" }, undefined]) {
+      for (const asked of [true, false]) {
         const host = fakeLink();
         const events: HostSignInRunEvent[] = [];
+        const ledger = holdingFlowOne();
         const run = runHostSignIn({
           link: host.link,
           providerId: "anthropic",
           openExternal: vi.fn(),
           onEvent: (event) => events.push(event),
-          replaces: replaced(left),
+          replaces: replaced(asked),
+          ledger,
         });
         await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * REPLACE_ATTEMPTS);
         expect(await run.ended).toBe("failed");
         expect(events).toEqual([{ kind: "failed", message: STILL_ENDING }]);
-        expect(host.link.start).toHaveBeenCalledTimes(left === undefined ? 0 : REPLACE_ATTEMPTS);
+        expect(host.link.start).toHaveBeenCalledTimes(asked ? REPLACE_ATTEMPTS : 0);
         expect(host.link.subscribe).not.toHaveBeenCalled();
+        // Giving up says nothing about the old flow: it is still the host's.
+        expect(ledger.holds("flow-1")).toBe(true);
       }
     });
 
@@ -677,13 +699,14 @@ describe("runHostSignIn", () => {
         providerId: "anthropic",
         openExternal: vi.fn(),
         onEvent: () => {},
-        replaces: replaced({ flowId: "flow-1" }),
+        replaces: replaced(true),
+        ledger: holdingFlowOne(),
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(host.link.start).toHaveBeenCalledOnce();
-      const left = run.cancel();
-      await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * 3);
-      expect(await left).toEqual({ flowId: null });
+      // Mid-wait: the cancel wakes it at once, with no timer left behind.
+      expect(await run.cancel()).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
       expect(host.link.start).toHaveBeenCalledOnce();
       expect(host.link.cancel).not.toHaveBeenCalled();
     });
@@ -718,15 +741,18 @@ describe("runHostSignIn", () => {
     it("clears its deadline on every end", async () => {
       vi.useFakeTimers();
       const host = fakeLink();
+      const ledger = new HostFlowLedger();
       const run = runHostSignIn({
         link: host.link,
         providerId: "xai",
         openExternal: vi.fn(),
         onEvent: () => {},
+        ledger,
       });
       await vi.advanceTimersByTimeAsync(0);
       host.emit({ kind: "done" });
       expect(await run.ended).toBe("done");
+      expect(ledger.holds("flow-1")).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -743,7 +769,7 @@ describe("runHostSignIn", () => {
       const left = run.cancel();
       expect(await settledYet(run.ended)).toBe("cancelled");
       await vi.advanceTimersByTimeAsync(CANCEL_WAIT_MS);
-      expect(await left).toBeUndefined();
+      expect(await left).toBe(false);
     });
   });
 });

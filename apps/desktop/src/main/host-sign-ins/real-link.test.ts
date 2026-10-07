@@ -76,10 +76,11 @@ async function todaysHost(options: { relayPort: number; unwindMs: number }) {
   let ids = 0;
   const logins: string[] = [];
   const flow = async (steps: PiSignInSteps, signal: AbortSignal): Promise<void> => {
+    // Each login's page is its own (its own state), so a test can tell whose page opened.
     steps.say({
       kind: "auth-url",
       url:
-        "https://claude.ai/oauth/authorize?code=true&state=pkce&redirect_uri=" +
+        `https://claude.ai/oauth/authorize?code=true&state=login-${logins.length}&redirect_uri=` +
         encodeURIComponent(`http://localhost:${options.relayPort}/callback`),
       instructions: null,
     });
@@ -311,6 +312,49 @@ describe("a sign-in over a real host link", () => {
     // The replacement is still running, here and on the host.
     await main.port.cancel(HOST_ID, "anthropic", "run-2");
     expect(second.at(-1)).toEqual({ kind: "cancelled" });
+    expect(record.cancels).toEqual(["flow-1", "flow-2"]);
+  });
+
+  it("keeps a still-unwinding flow the host's through a chain of replacements: A, then B, then C before A ends", async () => {
+    const relayPort = await freePort();
+    const host = await todaysHost({ relayPort, unwindMs: 600 });
+    const link = hostLink(host.listener.url, []);
+    await until(() => link.getState().status === "ready", "the link");
+    const record = { starts: [] as string[], cancels: [] as string[] };
+    const main = desktopMain(link, record);
+
+    // A owns flow-1, and its page opens.
+    const first: HostSignInRunEvent[] = [];
+    await main.port.run(HOST_ID, "anthropic", (event) => void first.push(event), "run-a");
+    await until(() => main.openExternal.mock.calls.length === 1, "A's page");
+    // B replaces A: A is cancelled, and B's start answers A's unwinding flow-1.
+    const second: HostSignInRunEvent[] = [];
+    await main.port.run(HOST_ID, "anthropic", (event) => void second.push(event), "run-b");
+    await until(() => record.starts.length >= 2, "B's start");
+    expect(record.starts).toEqual(["flow-1", "flow-1"]);
+    // C replaces B while A still unwinds: B never had a flow of its own.
+    const third: HostSignInRunEvent[] = [];
+    await main.port.run(HOST_ID, "anthropic", (event) => void third.push(event), "run-c");
+
+    await until(() => main.openExternal.mock.calls.length === 2, "C's page");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(record.starts.at(-1)).toBe("flow-2");
+    expect(record.cancels).toEqual(["flow-1"]);
+    expect(
+      main.openExternal.mock.calls.map(([url]) => new URL(url).searchParams.get("state")),
+    ).toEqual(["login-1", "login-2"]);
+    expect(first).toEqual([
+      { kind: "relay", state: "listening" },
+      expect.objectContaining({ kind: "auth-url" }),
+      { kind: "cancelled" },
+    ]);
+    expect(second).toEqual([{ kind: "cancelled" }]);
+    // C runs on: it never heard A's end.
+    expect(third).toEqual([
+      { kind: "relay", state: "listening" },
+      expect.objectContaining({ kind: "auth-url" }),
+    ]);
+    await main.port.cancel(HOST_ID, "anthropic", "run-c");
     expect(record.cancels).toEqual(["flow-1", "flow-2"]);
   });
 });

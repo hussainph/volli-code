@@ -27,7 +27,12 @@ import {
   type MacCredentialReader,
   type SendFromThisMacResult,
 } from "./send-from-this-mac";
-import { runHostSignIn, type HostSignInLink, type HostSignInRun } from "./sign-in-runner";
+import {
+  runHostSignIn,
+  type HostFlowLedger,
+  type HostSignInLink,
+  type HostSignInRun,
+} from "./sign-in-runner";
 
 /** One host's link, as the sign-in rows use it. */
 export interface HostSignInHostLink extends HostSignInLink {
@@ -72,12 +77,16 @@ export interface HostSignInService {
   ): Promise<SendFromThisMacResult<HostSignInStatus>>;
   setApiKey(hostId: string, providerId: string, key: string): Promise<HostSignInStatus>;
   setGitCredential(hostId: string, input: HostSetGitCredentialInput): Promise<HostSignInStatus>;
-  /** A subscription login on the host; `replaces` is the run it follows, for the same host and provider. */
+  /**
+   * A subscription login on the host. `follows` is what came before it for
+   * the same host and provider: the run it replaces, and the flows the host
+   * may still hold.
+   */
   signInOnHost(
     hostId: string,
     providerId: string,
     onEvent: (event: HostSignInRunEvent) => void,
-    replaces?: HostSignInRun,
+    follows?: { readonly replaces?: HostSignInRun; readonly ledger?: HostFlowLedger },
   ): HostSignInRun;
 }
 
@@ -119,13 +128,14 @@ export function createHostSignInService(options: {
     },
     setApiKey: async (hostId, providerId, key) => link(hostId).setApiKey({ providerId, key }),
     setGitCredential: async (hostId, input) => link(hostId).setGitCredential(input),
-    signInOnHost: (hostId, providerId, onEvent, replaces) =>
+    signInOnHost: (hostId, providerId, onEvent, follows) =>
       runHostSignIn({
         link: link(hostId),
         providerId,
         openExternal: options.openExternal,
         onEvent,
-        replaces,
+        replaces: follows?.replaces,
+        ledger: follows?.ledger,
         bind: options.bind,
       }),
   };

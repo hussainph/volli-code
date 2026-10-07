@@ -62,11 +62,39 @@ export type { HostSignInRunEvent };
 export type HostSignInEnd = "done" | "failed" | "cancelled" | "lost";
 
 /**
- * What a cancel left on the host: the flow it ended, or `null` for none (the
- * run never started one). `undefined` when the host did not answer in time,
- * so whether it still holds a flow is not known.
+ * The flows one host and provider may still hold for this Mac: started by a
+ * run here, and not yet known to be over. A run that ends here (cancelled,
+ * refused, timed out) leaves its flow in it, still unwinding on the host.
+ *
+ * The host answers a repeat start from the same connection with the flow it
+ * still holds, so a start that answers one of these is never a new run's
+ * own. A flow leaves when its end is known: its own `done`, `failed` or
+ * `cancelled`, its connection gone, or a start answering a fresh flow, which
+ * the host gives only once it holds no other for that provider.
+ *
+ * One per host and provider, kept across every replacement (VC-702 review
+ * B3): a run that never got a flow of its own, or gave up waiting, does not
+ * make an older flow any less the host's.
  */
-export type HostSignInLeft = { readonly flowId: string | null } | undefined;
+export class HostFlowLedger {
+  readonly #flows = new Set<string>();
+
+  /** Whether `flowId` may still be an older run's flow on the host. */
+  holds(flowId: string): boolean {
+    return this.#flows.has(flowId);
+  }
+
+  /** The host started a fresh flow: every other it held for this provider is over. */
+  started(flowId: string): void {
+    this.#flows.clear();
+    this.#flows.add(flowId);
+  }
+
+  /** `flowId`'s end is known. */
+  ended(flowId: string): void {
+    this.#flows.delete(flowId);
+  }
+}
 
 export interface HostSignInRun {
   /** The flow's id once the host started it. */
@@ -77,10 +105,11 @@ export interface HostSignInRun {
   answer(promptId: string, value: string): Promise<unknown>;
   /**
    * Ends the run here at once: nothing more is heard, opened or relayed.
-   * Then asks the host to cancel its flow, once the flow is known; settles
-   * with what that left, within {@link CANCEL_WAIT_MS}. Never rejects.
+   * Then asks the host to cancel its flow, once the flow is known. Settles
+   * true once the host was asked, or there was nothing to ask; false when the
+   * host did not answer within {@link CANCEL_WAIT_MS}. Never rejects.
    */
-  cancel(): Promise<HostSignInLeft>;
+  cancel(): Promise<boolean>;
 }
 
 export interface RunHostSignInOptions {
@@ -95,6 +124,8 @@ export interface RunHostSignInOptions {
    * host answers a repeat start with the flow it still holds.
    */
   readonly replaces?: HostSignInRun | undefined;
+  /** The host and provider's flows not yet known to be over; this run's own when absent. */
+  readonly ledger?: HostFlowLedger | undefined;
   /** Test seam: the relay's bind. */
   readonly bind?: typeof bindOneCallback | undefined;
 }
@@ -164,7 +195,12 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   let chain: Promise<void> = Promise.resolve();
   let subscription: { unsubscribe(): void } | null = null;
   let stopWatching: (() => void) | null = null;
-  let cancelled: Promise<HostSignInLeft> | null = null;
+  let cancelled: Promise<boolean> | null = null;
+  const ledger = options.ledger ?? new HostFlowLedger();
+  /** This run's own flow, once the host started a fresh one. */
+  let own: string | null = null;
+  /** Wakes a replacement's wait between starts, so a cancel ends it at once. */
+  let wake: (() => void) | null = null;
 
   /**
    * The run's one end, wherever it comes from: everything it held goes, and
@@ -174,6 +210,7 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
     if (finished) return false;
     finished = true;
     clearTimeout(deadline);
+    wake?.();
     stopWatching?.();
     stopWatching = null;
     binding?.close();
@@ -186,17 +223,17 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   };
 
   /** Ends the run here, then on the host once its flow is known; bounded. */
-  const endOnHost = (): Promise<HostSignInLeft> =>
+  const endOnHost = (): Promise<boolean> =>
     within(
       flowId.then(
         async (id) => {
           await link.cancel({ flowId: id }).catch(() => undefined);
-          return { flowId: id };
+          return true;
         },
-        () => ({ flowId: null }),
+        () => true,
       ),
       CANCEL_WAIT_MS,
-      undefined,
+      false,
     );
 
   // A link this Mac will not open ends the sign-in, here and on the host.
@@ -263,6 +300,8 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
       case "done":
       case "failed":
       case "cancelled":
+        // The host's own end: its flow is over.
+        ledger.ended(flowId);
         finish(update.kind, update);
         return;
       default:
@@ -271,6 +310,8 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   };
 
   const lose = (): void => {
+    // The connection that owned the flow is gone, and the host ended its flows with it.
+    if (own !== null) ledger.ended(own);
     finish("lost", { kind: "lost" });
   };
   // The flow is this connection's: when it goes, the run ends here, and its
@@ -282,17 +323,14 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   }
 
   /**
-   * Starts the flow, once the run this replaces is over on the host. A
-   * repeat start answers a flow the host still holds for this connection
-   * (cancelled, still unwinding): that is the old run's, never this one's,
-   * so this asks again, a bounded number of times.
+   * Starts the flow, once the run this replaces was cancelled on the host. A
+   * start that answers a flow in the {@link HostFlowLedger} (cancelled, still
+   * unwinding) answers an older run's flow, never this one's, so this asks
+   * again, a bounded number of times, and a cancel here stops it at once.
    */
   const begin = async (): Promise<string> => {
-    let stale: string | null = null;
-    if (options.replaces !== undefined) {
-      const left = await options.replaces.cancel();
-      if (left === undefined) throw new NotStarted("still-ending");
-      stale = left.flowId;
+    if (options.replaces !== undefined && !(await options.replaces.cancel())) {
+      throw new NotStarted("still-ending");
     }
     for (let attempt = 1; ; attempt++) {
       if (finished) throw new NotStarted("cancelled");
@@ -300,9 +338,20 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
         providerId: options.providerId,
         ...(options.type === undefined ? {} : { type: options.type }),
       });
-      if (id !== stale) return id;
+      if (!ledger.holds(id)) {
+        ledger.started(id);
+        own = id;
+        return id;
+      }
       if (attempt >= REPLACE_ATTEMPTS) throw new NotStarted("still-ending");
-      await new Promise((resolve) => setTimeout(resolve, REPLACE_RETRY_MS));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, REPLACE_RETRY_MS);
+        wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      wake = null;
     }
   };
 
@@ -348,11 +397,11 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
         ? endOnHost()
         : within(
             flowId.then(
-              (id) => ({ flowId: id }),
-              () => ({ flowId: null }),
+              () => true,
+              () => true,
             ),
             CANCEL_WAIT_MS,
-            undefined,
+            false,
           );
       return cancelled;
     },

@@ -11,11 +11,22 @@ import type {
   HostLinkSubscriptionHandlers,
 } from "@volli/host-protocol/client-link";
 import type { HostSignInRunEvent } from "@volli/shared";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { engineSignInLinks, hostLinkSignIns, remoteSignInsPort, signInPreflight } from "./port";
-import type { HostSignInService } from "./service";
-import { REFUSED_SIGN_IN_LINK, type HostSignInRun } from "./sign-in-runner";
+import {
+  createHostSignInService,
+  type HostSignInHostLink,
+  type HostSignInService,
+} from "./service";
+import {
+  HostFlowLedger,
+  REFUSED_SIGN_IN_LINK,
+  REPLACE_ATTEMPTS,
+  REPLACE_RETRY_MS,
+  STILL_ENDING,
+  type HostSignInRun,
+} from "./sign-in-runner";
 
 const STATUS = { providers: [], git: [{ host: "github.com", state: "signed-in", kind: "git" }] };
 
@@ -233,7 +244,7 @@ function fakeService() {
         answer: vi.fn(async () => null),
         cancel: vi.fn(async () => {
           ended.resolve("cancelled");
-          return { flowId: "flow" };
+          return true;
         }),
       };
       runs.push({ onEvent, run });
@@ -263,12 +274,11 @@ describe("remoteSignInsPort", () => {
     const port = remoteSignInsPort(service);
     const heard: unknown[] = [];
     const stop = await port.run("h", "xai", (event) => void heard.push(event), "run-1");
-    expect(service.signInOnHost).toHaveBeenLastCalledWith(
-      "h",
-      "xai",
-      expect.any(Function),
-      undefined,
-    );
+    expect(service.signInOnHost).toHaveBeenLastCalledWith("h", "xai", expect.any(Function), {
+      replaces: undefined,
+      ledger: expect.any(HostFlowLedger),
+    });
+    const ledger = vi.mocked(service.signInOnHost).mock.calls[0]![3]!.ledger;
     runs[0]!.onEvent({ kind: "progress", message: "Waiting" });
     expect(heard).toEqual([{ kind: "progress", message: "Waiting" }]);
     await port.answer("h", "xai", "p", "", "run-1");
@@ -278,12 +288,10 @@ describe("remoteSignInsPort", () => {
     // A second for the same provider replaces the first: the run itself waits
     // for the first's flow to be over on the host.
     const stopSecond = await port.run("h", "xai", () => {}, "run-2");
-    expect(service.signInOnHost).toHaveBeenLastCalledWith(
-      "h",
-      "xai",
-      expect.any(Function),
-      runs[0]!.run,
-    );
+    expect(service.signInOnHost).toHaveBeenLastCalledWith("h", "xai", expect.any(Function), {
+      replaces: runs[0]!.run,
+      ledger,
+    });
     // The first's stream ending, its answer and its cancel reach nothing now.
     stop();
     await expect(port.answer("h", "xai", "p", "x", "run-1")).rejects.toThrow("no longer running");
@@ -299,14 +307,70 @@ describe("remoteSignInsPort", () => {
     await port.cancel("h", "none");
     // The next for that provider follows the last one, ended or not.
     const stopThird = await port.run("h", "xai", () => {});
-    expect(service.signInOnHost).toHaveBeenLastCalledWith(
-      "h",
-      "xai",
-      expect.any(Function),
-      runs[1]!.run,
-    );
+    expect(service.signInOnHost).toHaveBeenLastCalledWith("h", "xai", expect.any(Function), {
+      replaces: runs[1]!.run,
+      ledger,
+    });
     // A stream that ends while its sign-in runs cancels it.
     stopThird();
     expect(runs[2]!.run.cancel).toHaveBeenCalledOnce();
+  });
+});
+
+/** A listener that keeps what it hears in `into`. */
+const heard = (into: HostSignInRunEvent[]) => (event: HostSignInRunEvent) => void into.push(event);
+
+describe("remoteSignInsPort's replacements over the real runner (VC-702 review B3)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("still treats an unwinding flow as the old run's after a replacement ran out of retries", async () => {
+    vi.useFakeTimers();
+    // The host answers flow-1 (cancelled, unwinding) until it lets it go.
+    let unwound = false;
+    const starts: string[] = [];
+    const host: HostSignInHostLink = {
+      status: vi.fn(),
+      setApiKey: vi.fn(),
+      setGitCredential: vi.fn(),
+      start: vi.fn(async () => {
+        const flowId = starts.length === 0 || !unwound ? "flow-1" : "flow-2";
+        starts.push(flowId);
+        return { flowId };
+      }),
+      subscribe: vi.fn(() => ({ unsubscribe: () => {} })),
+      deliver: vi.fn(),
+      answer: vi.fn(async () => null),
+      cancel: vi.fn(async () => null),
+      watchLoss: () => () => {},
+    };
+    const port = remoteSignInsPort(
+      createHostSignInService({
+        links: { linkFor: () => host },
+        mac: { list: async () => [], read: async () => undefined },
+        openExternal: vi.fn(),
+      }),
+    );
+    const a: HostSignInRunEvent[] = [];
+    await port.run("h", "anthropic", heard(a), "run-a");
+    await vi.advanceTimersByTimeAsync(0);
+    // B replaces A and runs out of retries while flow-1 unwinds.
+    const b: HostSignInRunEvent[] = [];
+    await port.run("h", "anthropic", heard(b), "run-b");
+    await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * REPLACE_ATTEMPTS);
+    expect(b).toEqual([{ kind: "failed", message: STILL_ENDING }]);
+    // The person tries again: flow-1 is still not this run's.
+    const c: HostSignInRunEvent[] = [];
+    await port.run("h", "anthropic", heard(c), "run-c");
+    await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * 3);
+    expect(c).toEqual([]);
+    expect(host.subscribe).toHaveBeenCalledTimes(1);
+    unwound = true;
+    await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS);
+    expect(starts.at(-1)).toBe("flow-2");
+    expect(host.subscribe).toHaveBeenLastCalledWith({ flowId: "flow-2" }, expect.anything());
+    expect(host.cancel).toHaveBeenCalledTimes(1);
+    expect(host.cancel).toHaveBeenCalledWith({ flowId: "flow-1" });
   });
 });
