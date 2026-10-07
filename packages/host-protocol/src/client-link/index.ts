@@ -6,5 +6,4 @@
 export * from "./link";
 export * from "./handshake-failure";
 export * from "./policy";
-export * from "./registry";
 export * from "./trpc-link";
