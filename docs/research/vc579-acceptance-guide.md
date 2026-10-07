@@ -14,22 +14,26 @@ For a canary, check **that exact tag commit**, **CI gate**, **CodeQL**, and:
 
 - `complete: true`;
 - all eight result rows are `PASS`;
-- zero keychain violations and no cleanup error.
+- `cleanupVerified: true` and `cleanupError: null`;
+- guard manifest: `scratchRemoved: true`, `electron.close.kind: "graceful"`,
+  `electron.close.exit: { code: 0, signal: null }`, empty `closeFailures`,
+  zero keychain violations, no leftovers and `remoteCleanupError: null`.
 
-VC-710/711/712/713 and VC-721 (#837, `c0299af39`) are on main. Questions
-have no independent expected failure. Per owner ruling, while **VC-722** is
-pending, step 2 may XFAIL only on the named user-install project refusal;
-steps 3–8 are BLOCKED by VC-722, never passes. If the project opens, that is
-XPASS and fails CI until the marker is removed. This scaffolding-green check
-lands the harness/lane, not canary acceptance: **all eight must PASS** before
-a canary is claimed.
+VC-722's host-scoped connection (#834) is merged, including project creation on
+user installs. The VC-722 expected-failure marker and early exit are removed:
+step 2 must open the folder project, then steps 3–8 must really run. There are
+no expected failures, including for VC-721's question capability (#837,
+`c0299af39`). A genuine failure records that exact step as FAIL and the unrun
+steps as BLOCKED, exits nonzero and leaves `complete: false`. Eight PASS rows
+still cannot claim acceptance if disposal fails or is unverified. **All eight
+must PASS with graceful disposal on the exact SHA** before a canary is claimed.
 
 ## What the smoke asserts from the person's view
 
 | Step | Person's action and visible assertion | Exit criterion |
 | --- | --- | --- |
-| 1 | Add the SSH host; `<host> is ready`, `Volli host …`, startup fact; Settings → Hosts → host shows an enrolled row marked `This Mac` and its `Paired …` date | 1 |
-| 2 | `New project…` → Git folder path on the box → `Create and open`; project label and `Host: <host>` (VC-722 XFAIL on named user-install refusal until its host-scoped connection lands) | 1, prerequisite for 2–4, 6 |
+| 1 | Add the SSH host; `<host> is ready`, `Volli host …`, startup fact; Settings → Hosts → host shows an enrolled row marked `This Mac` and its `Paired …` date; scroll the host pane so the pairing heading and row are in the screenshot | 1 |
+| 2 | `New project…` → Git folder path on the user-install box → `Create and open`; opened-project confirmation, project label and selected `Host: <host>` | 1, prerequisite for 2–4, 6 |
 | 3 | Create a ticket in Backlog, move to Todo, reopen it; title, `Status: Todo`, `Running on <host>` | 3 (board) |
 | 4 | Paste only the fake API key; `Signed in on <host> · API key` | 2 |
 | 5 | Start a real remote Session; `Stop turn`, scripted streamed reply, remote host pill | 3 (Session) |
@@ -48,21 +52,28 @@ The doubles are the loopback sshd target and loopback Responses model provider.
 Question tool calls traverse the real runtime, interaction ledger and Session
 transport.
 
-## Pending capability and honest refusals
+## Real capability and honest failures
 
-VC-710's current SSH/CLI path deliberately refuses creating projects on user
-installs. The attempted box-CLI arrangement was also rejected with
-`FORBIDDEN_ACTOR`, as designed, and has been removed. VC-722 supplies a new
-host-scoped connection so the Mac creates projects as the person on every
-install mode without an operator token. Until it lands, only the actual visible
-named refusal qualifies as step-2 XFAIL. SSH/install/pair, Git arrange, arbitrary
-errors/timeouts and cleanup still fail normally. Its dependent steps are
-explicitly BLOCKED by VC-722.
+The Mac creates projects as the person through VC-722's host-scoped connection
+on every install mode, without an operator token. Step 2 uses the production
+`New project…` UI with the fixture's folder path; no box CLI registration is a
+substitute. The old named user-install refusal is now a failure, as are
+SSH/install/pair, Git arrange, arbitrary errors/timeouts and cleanup errors.
 
-VC-721's root question capability is merged. Steps 6–7 are real assertions once
-a project can open; no VC-721 marker or undeclared fake tool call remains.
-No `complete:true` or canary claim is made until the VC-722 marker is removed
-and all eight steps pass on the exact head.
+Steps 6–7 require the host's real question capability and answered continuation.
+The scripted provider only calls `ask_user` when production offers that tool;
+it never manufactures availability or a successful answer. A VC-721 regression
+must remain a failure at the actual failing question/reopen step, not a skip.
+This guide describes the required journey, not evidence that the updated smoke
+has already passed. The disposable-runner CI result must establish that.
+
+Pairing snapshots can include offscreen Settings content. The drive screenshot
+is viewport-only and has no crop/resize/frame option. Before saving
+`step-1-paired-device`, the runner hovers the `Forget…` footer (which scrolls it
+into view) and wheels down in that pane, placing `Paired devices` and the
+`This Mac` row above it in the viewport. It never clicks Forget. Review that
+image alongside the saved pairing snapshot; text in a snapshot alone is not
+visual framing proof.
 
 ## Deployment preconditions and limits
 
@@ -76,6 +87,11 @@ therefore refuses anywhere except a **disposable macOS GitHub Actions runner**,
 and refuses existing hostd/Pi profiles. It does not overwrite a person's install.
 The runner is discarded after the job; the supervisor closes its daemon by
 recorded process identity, sshd, fake provider and Electron and retains evidence.
+Completion additionally validates the supervisor's stop manifest: scratch must
+be removed and Electron must have a verified graceful, zero-code, unsignalled
+close, not SIGTERM/SIGKILL escalation, an already-exited child or missing close
+evidence. `volli-drive stop` returning zero is not sufficient. Remote cleanup
+errors, missing guard fields or leftover processes keep acceptance incomplete.
 No direct `security`, keychain or `launchctl` command is part of this smoke.
 
 The host default model is a deployment precondition: v1 intentionally hides the

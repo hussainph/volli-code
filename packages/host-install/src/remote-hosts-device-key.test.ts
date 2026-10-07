@@ -40,6 +40,32 @@ describe("a device key", () => {
 });
 
 describe("a minted credential", () => {
+  it("signs a fresh host-scoped statement without Workspace fields", () => {
+    const key = generateDeviceKey("host device");
+    const parsed = parseDeviceCredential(
+      mintDeviceCredential({
+        privateKeyPem: key.privateKeyPem,
+        hostId: HOST_ID,
+        deviceId: DEVICE_ID,
+        scope: "host",
+        now: Date.now(),
+      }),
+    )!;
+    expect(parsed.claims).toMatchObject({ scope: "host", hostId: HOST_ID, deviceId: DEVICE_ID });
+    expect(parsed.claims).not.toHaveProperty("workspaceId");
+    expect(
+      verify(
+        "sha256",
+        Buffer.from(parsed.signingInput),
+        {
+          key: createPublicKey(key.privateKeyPem),
+          dsaEncoding: "ieee-p1363",
+        },
+        parsed.signature,
+      ),
+    ).toBe(true);
+  });
+
   it("is a vdc1 the host verifies: its claims, a short life, a fresh jti, a P1363 signature", () => {
     const key = generateDeviceKey("Mac");
     const now = Date.UTC(2026, 0, 1, 12, 0, 0, 750);

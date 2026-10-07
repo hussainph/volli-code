@@ -1,5 +1,6 @@
 import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
 export type { ProcedureSchema } from "./procedure-schema";
+export { workspacesProcedureSchemas } from "./workspaces-router";
 import { TRPCError, tracked } from "@trpc/server";
 import {
   HOST_SCOPE_PROOF_LIMITS,

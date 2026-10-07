@@ -46,6 +46,8 @@ import {
   type DesktopKey,
   type HandlerCall,
   type HostHandler,
+  type HostScopeRelayCall,
+  type HostScopeRelaySubscribeCall,
   type HostLinkRelayCall,
   type HostLinkRelayEvent,
   type HostLinkRelaySubscribeCall,
@@ -184,6 +186,13 @@ export interface DesktopRouterHandlers {
   readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
   readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  /** HOST-scoped operations over main's host link (VC-722), before any project. */
+  readonly "hostScope.query": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.mutate": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.subscribe": DesktopSubscriptionHandler<
+    HostScopeRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
   /** The Workspace link relay (VC-711): a remote project's public operations, over main's link. */
   readonly "hostLink.query": HostHandler<HostLinkRelayCall, unknown>;
   readonly "hostLink.mutate": HostHandler<HostLinkRelayCall, unknown>;
@@ -275,6 +284,14 @@ const hostLinkSubscribeSchema = z.strictObject({
   workspaceId: z.uuid(),
   path: relayPath,
   input: z.unknown().optional(),
+  lastEventId: z.string().min(1).max(HOST_LINK_RELAY_EVENT_ID_MAX).optional(),
+});
+const hostScopeCallSchema = z.strictObject({
+  hostId,
+  path: relayPath,
+  input: z.unknown().optional(),
+});
+const hostScopeSubscribeSchema = hostScopeCallSchema.extend({
   lastEventId: z.string().min(1).max(HOST_LINK_RELAY_EVENT_ID_MAX).optional(),
 });
 const hostLinkRelayErrorSchema = z.object({
@@ -638,6 +655,32 @@ export function createDesktopRouter() {
           );
         }),
     },
+    /** HOST-scoped relay (VC-722), sharing the Workspace relay's bounded stream and errors. */
+    hostScope: {
+      query: hostProcedure("hostScope.query")
+        .input(hostScopeCallSchema)
+        .output(z.unknown())
+        .query(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostScope.query"](input, ctx.call)),
+        ),
+      mutate: hostProcedure("hostScope.mutate")
+        .input(hostScopeCallSchema)
+        .output(z.unknown())
+        .mutation(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostScope.mutate"](input, ctx.call)),
+        ),
+      subscribe: hostProcedure("hostScope.subscribe")
+        .input(hostScopeSubscribeSchema)
+        .subscription(async function* ({ ctx, input, signal }) {
+          yield* desktopStream<HostLinkRelayEvent>(
+            ctx,
+            "hostScope.subscribe",
+            signal,
+            (sink) => ctx.handlers["hostScope.subscribe"](input, ctx.call, sink),
+            hostLinkRelayEventEnds,
+          );
+        }),
+    },
   });
 }
 
@@ -660,5 +703,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostAdd.subscribe": addHostEventSchema,
     "hostSignIns.run": hostSignInRunEventSchema,
     "hostLink.subscribe": hostLinkRelayEventSchema,
+    "hostScope.subscribe": hostLinkRelayEventSchema,
   });
 }

@@ -200,7 +200,12 @@ import {
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
-import { createHostLinkRelay, engineWorkspaceLinks } from "./host-link-relay";
+import {
+  createHostLinkRelay,
+  createHostScopeRelay,
+  engineWorkspaceLinks,
+  engineHostScopeLinks,
+} from "./host-link-relay";
 import { createHostSignInService, type MacCredentialStore } from "./host-sign-ins/service";
 import { createNativeSendConfirmation } from "./host-sign-ins/send-from-this-mac";
 import { keychainSecretCodec } from "./secrets/codec";
@@ -1536,6 +1541,14 @@ const appStartup = app.whenReady().then(async () => {
       remoteSignIns: remoteSignInsPort(hostSignIns),
       // A remote project's public operations over its Workspace link (VC-711):
       // the window's board, logs and Sessions for a project on a box.
+      // Host identity relay: projects and logs need no Workspace. Sign-in
+      // flows remain main-owned and use the engine's preferred HOST link.
+      hostScopeRelay: createHostScopeRelay(engineHostScopeLinks(remoteHosts), {
+        onListenerError: (error) =>
+          hostLogger("host-scope-relay").warn("relayed listener threw", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      }),
       hostLinkRelay: createHostLinkRelay(engineWorkspaceLinks(remoteHosts), {
         onListenerError: (error) =>
           hostLogger("host-link-relay").warn("relayed listener threw", {
@@ -2465,10 +2478,18 @@ const appStartup = app.whenReady().then(async () => {
           window.hide();
         }
         void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
-          // A reveal that reused this window took it back: keep it.
-          if (!retiringWindows.has(window) || window.isDestroyed()) return;
-          retiringWindows.delete(window);
-          window.destroy();
+          hostLogger("menu-bar").info("window draft flush acknowledged", { windowId: window.id });
+          // Native destruction must not run inside the acknowledgement IPC
+          // checkpoint (the same compositor-teardown hazard as VC-536 exit).
+          // Keep this Immediate referenced; a reveal before it runs owns the
+          // retained renderer again, so both guards belong inside the callback.
+          setImmediate(() => {
+            if (!retiringWindows.has(window) || window.isDestroyed()) return;
+            retiringWindows.delete(window);
+            hostLogger("menu-bar").info("destroying acknowledged window", { windowId: window.id });
+            window.destroy();
+            hostLogger("menu-bar").info("acknowledged window destroyed", { windowId: window.id });
+          });
         }).then(({ unanswered }) => {
           if (unanswered > 0) {
             hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {

@@ -79,6 +79,9 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hosts.devices"]({ hostId: HOST }, CALL),
     () => handlers["hostAdd.facts"]({ flowId: "f" }, CALL),
     () => handlers["hostAdd.active"](undefined, CALL),
+    () => handlers["hostScope.query"]({ hostId: HOST, path: "workspaces.list" }, CALL),
+    () => handlers["hostScope.mutate"]({ hostId: HOST, path: "workspaces.create" }, CALL),
+    () => handlers["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, CALL, sink),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -174,10 +177,13 @@ describe("sessionHandlersFrom", () => {
         "hostLink.query": port as never,
         "hostLink.mutate": port as never,
         "hostLink.subscribe": port as never,
+        "hostScope.query": port as never,
+        "hostScope.mutate": port as never,
+        "hostScope.subscribe": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(37);
+    expect(port).toHaveBeenCalledTimes(40);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -222,7 +228,7 @@ describe("sessionHandlersFrom", () => {
     // and eight remote sign-in commands (VC-702), the two Session listing
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
-    // the host-scoped projects' two (VC-722).
-    expect(Object.keys(context.handlers)).toHaveLength(79);
+    // the host-scoped projects' two and HOST relay's three (VC-722).
+    expect(Object.keys(context.handlers)).toHaveLength(82);
   });
 });

@@ -7,7 +7,12 @@
  */
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { CreateRemoteProjectResult } from "@volli/shared";
+import type {
+  CreateRemoteProjectResult,
+  HostWorkspaceCreateInput,
+  HostWorkspaceCreateResult,
+  RemoteHost,
+} from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
@@ -16,6 +21,9 @@ import {
   registryHost,
   type FakeRemoteHostsApi,
 } from "@renderer/stores/remote-hosts.test-support";
+
+import { hostWorkspacesApi } from "@renderer/lib/host-workspaces-api";
+vi.mock("@renderer/lib/host-workspaces-api", () => ({ hostWorkspacesApi: vi.fn() }));
 
 import { HostsChrome } from "./hosts-chrome";
 import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
@@ -48,6 +56,7 @@ afterEach(async () => {
   await world?.cleanup();
   world = null;
   setRemoteHostsApi(null);
+  vi.mocked(hostWorkspacesApi).mockReset();
   useRemoteHostsStore.setState({
     hosts: [],
     readOnly: null,
@@ -89,9 +98,9 @@ function button(name: string): HTMLButtonElement | undefined {
   );
 }
 
-async function openSheet(start: "list" | "new" = "list"): Promise<void> {
+async function openSheet(start: "list" | "new" = "list", host: RemoteHost = HOST): Promise<void> {
   world = hostWorld();
-  useRemoteHostsStore.getState().setHosts([HOST]);
+  useRemoteHostsStore.getState().setHosts([host]);
   await world.render(<HostsChrome />);
   await act(async () => useRemoteHostsStore.getState().openProjectSheet(HOST.id, start));
   await settle();
@@ -296,10 +305,11 @@ describe("Open a project on <host>…", () => {
   it("offers no New project… on a host where agents share the login", async () => {
     api.projectsOf.set(HOST.id, { projects: [], adds: { kind: "user-install" } });
     await openSheet();
-    expect(sheet().textContent).toContain("runs Volli as your login");
+    expect(sheet().textContent).toContain("Update hetzner-1 to create projects from here");
     expect(button("New project…")).toBeUndefined();
-    await click(sheet(), "Refresh");
-    expect(api.calls.filter(([method]) => method === "projects")).toHaveLength(2);
+    await click(sheet(), "Re-add");
+    expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: HOST.target });
+    expect(api.calls.filter(([method]) => method === "projects")).toHaveLength(1);
   });
 
   it("drops a list that lands after the sheet closed", async () => {
@@ -345,7 +355,7 @@ describe("Open a project on <host>…", () => {
       return created.promise;
     };
     await openSheet("new");
-    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await act(async () => useRemoteHostsStore.getState().setHosts([HOST, OTHER]));
     await type("Git URL or folder on hetzner-1", "/srv/volli/acme");
     await click(sheet(), "Create and open");
     await act(change);
@@ -363,7 +373,7 @@ describe("Open a project on <host>…", () => {
     const opened = Promise.withResolvers<null>();
     api.openWorkspace = async () => opened.promise;
     await openSheet();
-    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await act(async () => useRemoteHostsStore.getState().setHosts([HOST, OTHER]));
     await click(sheet(), "Open Acme");
     await act(async () => useRemoteHostsStore.getState().openProjectSheet(OTHER.id));
     await settle();
@@ -386,5 +396,140 @@ describe("Open a project on <host>…", () => {
     expect(isOpen()).toBe(true);
     await act(async () => useRemoteHostsStore.getState().setHosts([]));
     expect(isOpen()).toBe(false);
+  });
+});
+
+const MODERN = {
+  ...HOST,
+  mode: "user" as const,
+  hostScope: { status: "ready" as const, granted: ["host.workspaces"] },
+};
+const MODERN_ROW = { id: ACME.id, name: ACME.name, path: ACME.path, gitRemoteUrl: null };
+
+describe("projects before a Workspace on a modern HOST connection", () => {
+  it("lists modern rows honestly and creates on a user install, with no SSH or sudo", async () => {
+    const list = vi.fn(async () => ({ workspaces: [MODERN_ROW], omitted: 0 }));
+    const create = vi.fn(async () => ({ ok: true as const, workspace: MODERN_ROW }));
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
+    await openSheet("list", MODERN);
+    expect(list).toHaveBeenCalledOnce();
+    expect(sheet().textContent).toContain(ACME.path);
+    expect(sheet().textContent).not.toContain("tickets");
+    expect(sheet().textContent).not.toContain("AC ·");
+    expect(api.calls).toEqual([]);
+    await click(sheet(), "New project…");
+    await settle();
+    await type("Git URL or folder on hetzner-1", "/srv/volli/acme");
+    await type("Name (optional)", " A ");
+    await click(sheet(), "Create and open");
+    await settle();
+    expect(create).toHaveBeenCalledWith({
+      commandId: expect.stringMatching(/^[a-f0-9-]{36}$/u),
+      source: { path: ACME.path },
+      name: "A",
+    });
+    expect(api.calls).toEqual([["openWorkspace", HOST.id, ACME.id]]);
+  });
+
+  it.each([
+    "https://fixture_token@github.com/me/acme.git",
+    "https://user:fixture_password@github.com/me/acme.git",
+    "https://github.com/me/acme.git?token=fixture",
+    "https://github.com/me/acme.git#fixture",
+    "https://github.com/me/acme.git%3Ftoken=fixture",
+    "file:///srv/acme",
+    "http://github.com/me/acme.git",
+  ])("blocks prohibited modern clone URL before transport: %s", async (url) => {
+    const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
+    const create = vi.fn();
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
+    await openSheet("new", MODERN);
+    await type("Git URL or folder on hetzner-1", url);
+    expect(sheet().textContent).toContain(
+      url.startsWith("file:") || url.startsWith("http:")
+        ? "That isn't a git URL this Mac can clone"
+        : "Use the repository's plain URL",
+    );
+    expect(button("Create and open")?.disabled).toBe(true);
+    await act(async () => sheet().querySelector("form")!.requestSubmit());
+    expect(create).not.toHaveBeenCalled();
+    expect(api.calls).toEqual([]);
+  });
+
+  it("requires an absolute folder path on modern hosts without SSH shell expansion", async () => {
+    const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
+    const create = vi.fn();
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
+    await openSheet("new", MODERN);
+    await type("Git URL or folder on hetzner-1", "~/acme");
+    expect(sheet().textContent).toContain("A folder on hetzner-1 is a full path");
+    expect(button("Create and open")?.disabled).toBe(true);
+    await act(async () => sheet().querySelector("form")!.requestSubmit());
+    expect(create).not.toHaveBeenCalled();
+    expect(api.calls).toEqual([]);
+  });
+
+  it("reuses a commandId on ambiguity/still-running, re-lists target-exists and creates a new id on edit", async () => {
+    const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
+    const create = vi
+      .fn<(input: HostWorkspaceCreateInput) => Promise<HostWorkspaceCreateResult>>()
+      .mockRejectedValueOnce(new Error("outcome unknown"))
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: { code: "still-running", message: "Still running." },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: { code: "target-exists", message: "Target exists; check the project list." },
+      })
+      .mockResolvedValueOnce({ ok: true, workspace: MODERN_ROW });
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
+    await openSheet("new", MODERN);
+    await type("Git URL or folder on hetzner-1", "https://example.test/acme.git");
+    expect(sheet().textContent).toContain("Cloned on the host, then added.");
+    await click(sheet(), "Create and open");
+    await settle();
+    expect(sheet().textContent).toContain("outcome unknown");
+    await click(sheet(), "Try again");
+    await settle();
+    expect(sheet().textContent).toContain("Still running.");
+    await click(sheet(), "Try again");
+    await settle();
+    expect(sheet().textContent).toContain("Target exists; check the project list.");
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(3); // No silent retry or reclone.
+    expect(create.mock.calls[1]![0].commandId).toBe(create.mock.calls[0]![0].commandId);
+    expect(create.mock.calls[2]![0].commandId).toBe(create.mock.calls[0]![0].commandId);
+    expect(sheet().querySelector('input[type="password"]')).toBeNull();
+    await type("Name (optional)", "Different");
+    await click(sheet(), "Create and open");
+    await settle();
+    expect(create.mock.calls[3]![0].commandId).not.toBe(create.mock.calls[0]![0].commandId);
+    expect(create.mock.calls[3]![0].source).toEqual({ gitUrl: "https://example.test/acme.git" });
+    expect(api.calls).toEqual([["openWorkspace", HOST.id, ACME.id]]);
+  });
+
+  it.each(["connecting", "unavailable", "ready"] as const)(
+    "says a modern %s failure and never falls back to SSH",
+    async (status) => {
+      const list = vi.fn();
+      vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create: vi.fn() }));
+      await openSheet("list", { ...MODERN, hostScope: { status, granted: [] } });
+      expect(sheet().textContent).toContain(
+        status === "ready" ? "did not grant project access" : "Try again when it reconnects",
+      );
+      expect(api.calls).toEqual([]);
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
+
+  it("blocks New-project entry on an older user host and offers exactly Re-add", async () => {
+    await openSheet("new", { ...HOST, mode: "user", hostScope: { status: "older", granted: [] } });
+    expect(sheet().textContent).toContain("Update hetzner-1 to create projects from here");
+    expect(button("Create and open")).toBeUndefined();
+    expect(button("Re-add")).toBeDefined();
+    await click(sheet(), "Re-add");
+    expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: HOST.target });
+    expect(api.calls.some(([method]) => method === "createProject")).toBe(false);
   });
 });

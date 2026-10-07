@@ -83,9 +83,14 @@ export interface RemoteHost {
   readonly addedAt: string;
   /** Sessions running there now, `null` while nothing reports it. */
   readonly liveSessions: number | null;
+  /** Additive host-scope capability state; only a validated welcome grants features. */
+  readonly hostScope?: {
+    readonly status: "connecting" | "ready" | "older" | "unavailable";
+    readonly granted: readonly string[];
+  };
   /** Engine-owned health; a TCP route alone is not ready. */
   readonly reachability?: RemoteHostLink;
-  /** Last validated Workspace welcome, retained across link loss. */
+  /** Last validated host or legacy Workspace welcome, retained across link loss. */
   readonly lastWelcome?: {
     readonly at: number;
     readonly hostId: string;
@@ -303,7 +308,7 @@ export interface ActiveAddHost {
 /** The most flows `hostAdd.active` answers: bounds the list, not the installs. */
 export const MAX_ACTIVE_ADD_HOSTS = 20;
 
-/** Every link to one host this Mac opens at most: other Macs and reconnects keep the rest of hostd's 32. */
+/** Process-wide client socket budget: host + Workspace + add-flow links together. */
 export const REMOTE_HOST_LINK_CAP = 24;
 
 /** The reason a project past {@link REMOTE_HOST_LINK_CAP} reads, refused by this Mac (never by the host). */

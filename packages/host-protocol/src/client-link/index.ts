@@ -4,6 +4,7 @@
  * no Node, no Electron, no `ws`.
  */
 export * from "./link";
+export * from "./host-scope-link";
 export * from "./handshake-failure";
 export * from "./policy";
 export * from "./trpc-link";

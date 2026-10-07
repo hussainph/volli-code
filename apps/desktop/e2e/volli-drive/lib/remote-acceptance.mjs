@@ -38,6 +38,33 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** An exiting dialog can leave background text visible before its names/refs return. */
+export function hasActionableControl(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  return hits.length === 1 && hits[0].includes("[ref=") && !hits[0].includes("[disabled]");
+}
+/** A durable answer quotes this exact question and selected label in one row.
+ * The trailer span has a title, so its snapshot uses an accessible name rather
+ * than a text suffix. Pending radios and receipts for other questions cannot
+ * supply the proof.
+ */
+export function visibleAnswerReceipt(tree, question, answer) {
+  const lines = tree.split("\n");
+  return lines.some((line, index) => {
+    const subject = lines[index + 1] ?? "";
+    const trailer = lines[index + 2] ?? "";
+    const indent = line.search(/\S/u);
+    return (
+      line.endsWith(": You answered") &&
+      /^\s*- code(?: \[ref=[^\]]+\])?: /u.test(subject) &&
+      subject.endsWith(`: ${question}`) &&
+      visibleControls(trailer, "generic", answer).length === 1 &&
+      subject.search(/\S/u) === indent &&
+      trailer.search(/\S/u) === indent
+    );
+  });
+}
+
 /** The visible subtree of one named surface, not matching background controls. */
 export function snapshotSubtree(tree, role, name) {
   const hits = visibleControls(tree, role, name);
@@ -130,19 +157,38 @@ export function acceptanceScript(turn) {
   return undefined;
 }
 
-/** Classify only visible creation outcomes; arbitrary errors never qualify as XFAIL. */
-export function projectCreationOutcome(tree, { hostName, projectName, expectedTicket }) {
-  if (tree.includes(`Opened ${projectName} on ${hostName}`)) {
-    if (expectedTicket)
-      throw new Error(
-        `XPASS ${expectedTicket}: remove project expected-failure marker and run the full journey`,
-      );
-    return { status: "PASS" };
-  }
+/** Creation must really open the project; even the old user-install refusal fails. */
+export function projectCreationOutcome(tree, { hostName, projectName }) {
+  if (tree.includes(`Opened ${projectName} on ${hostName}`)) return { status: "PASS" };
   const refusal = `${hostName} runs Volli as your login, so this Mac can't add projects to it.`;
-  if (!tree.includes(refusal)) return null;
-  if (!expectedTicket) throw new Error(`Unexpected project refusal: ${refusal}`);
-  return { status: "XFAIL", detail: `${expectedTicket}: ${refusal}` };
+  if (tree.includes(refusal)) throw new Error(`Unexpected project refusal: ${refusal}`);
+  return null;
+}
+
+/** Validate the supervisor's actual stop manifest, not merely CLI exit zero. */
+export function assertAcceptanceCleanup(manifest) {
+  if (!manifest || typeof manifest !== "object")
+    throw new Error("Stop returned without a guard/cleanup manifest");
+  if (manifest.scratchRemoved !== true)
+    throw new Error("Cleanup manifest must confirm scratchRemoved:true");
+  const close = manifest.electron?.close;
+  if (
+    close?.kind !== "graceful" ||
+    close.exit?.code !== 0 ||
+    close.exit?.signal !== null ||
+    !Array.isArray(close.closeFailures) ||
+    close.closeFailures.length
+  )
+    throw new Error(`Electron did not close gracefully: ${JSON.stringify(close ?? null)}`);
+  if (
+    !Array.isArray(manifest.keychainViolations) ||
+    manifest.keychainViolations.length ||
+    manifest.keychainViolationExit !== false ||
+    !Array.isArray(manifest.leftovers) ||
+    manifest.leftovers.length ||
+    manifest.remoteCleanupError !== null
+  )
+    throw new Error(`Guard/cleanup manifest failed: ${JSON.stringify(manifest)}`);
 }
 
 /** Stopped status files retain the old pid; never adopt that possibly reused pid. */

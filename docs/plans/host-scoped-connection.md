@@ -113,12 +113,14 @@ new durable guarantees. No schema migration or persistent outcome map is added.
 
 ## Stack and verification
 
-PR A is draft [#838](https://github.com/hussainph/volli-code/pull/838). The owner
-approved the additive contract at `bb272ad5b` while GitHub refused pushes
-repository-wide. Hostd execution and signed-device real-link acceptance are now
-implemented; final coverage, CI/CodeQL and security review remain merge gates.
-VC-719 (#836) and VC-720 (#835) have merged. PR B stays paused/unpushed until
-PR A merges and the owner permits resumption.
+PR A [#838](https://github.com/hussainph/volli-code/pull/838) merged as
+`d0bd481e3` after protected coverage, security re-check, CI gate and CodeQL.
+VC-719 (#836), VC-720 (#835), VC-724 recovery UI and VC-718 (#834) have merged.
+PR B adds client lifetime, desktop routing and renderer changes, plus the
+VC-718 all-PASS smoke flip: UI folder registration on the macOS user fixture,
+real steps2–8, a framed pairing screenshot and strict scratch/graceful-close
+cleanup evidence. The required cloud CI lane reports real step results; local
+unit/loopback checks are not a claim that the full macOS journey passed.
 
 The actual pre-VC-722 main listener at `2323b19dac96eea3a9d77e512c1fadbccdc8f34c`
 returned `BAD_REQUEST / hello-invalid`, then closed 4400 / `hello-invalid`.
@@ -126,12 +128,65 @@ Its unmodified recordings and actual old Workspace-client/new-host evidence
 are documented in `packages/host-protocol/fixtures/pre-vc722-provenance.md`.
 The grammar-only fixture is not an independent peer exchange. New exchange
 recordings at the canary tag are T6's separate ceremony, not PR A evidence.
-The client classifies the frozen named refusal only
-while attempting host scope and keeps the SSH catalog/create path and
-Workspace-borrowed sign-ins/logs. An older user install says
-“Update <host> to create projects from here”, recovered through Re-add.
+The client classifies the frozen named refusal only while attempting host
+scope. If an old peer does not know `protocol.hostWelcome`, one
+`protocol.welcome` probe obtains that named refusal; a generic missing operation,
+credential failure or network failure is never older-peer evidence. Only this
+classification permits SSH catalog/create and Workspace-borrowed sign-ins/logs.
+An older user install says “Update <host> to create projects from here”, recovered
+through VC-724 Re-add; system installs retain their SSH project path.
 
-One host link consumes the same budgets as a Workspace link: for H connected
-hosts and W Workspace links the desktop uses H + W ≤ 24 sockets. On a box,
-every Mac's host link and Workspace links together use ≤ 32 listener sockets.
-The listener's worst-case 32 × 17 MiB = 544 MiB queue envelope is unchanged.
+One shared client socket pool covers HOST, Workspace and Add links: the desktop
+uses H + W + Add ≤ 24 physical sockets, including retired sockets still closing.
+A permit releases only on physical close, retries cannot overlap their own
+retiring socket, and canceled waiters never ask for credentials. Hostd's 32
+listener-socket cap and worst-case 32 × 17 MiB = 544 MiB queue envelope remain
+unchanged.
+
+## Desktop routing (PR B)
+
+The enrolled host owns a dedicated HOST link while Cloud is enabled, independent
+of open projects. A validated host welcome makes modern health and Add handoff
+ready. Closing the last Workspace cannot close this host link. Forget, disable
+and shutdown retire it; stale identity/key/tunnel continuations cannot reattach
+it. Modern unavailable or ungranted operations fail closed, not through SSH.
+
+Desktop-only `hostScope.query/mutate/subscribe` IPC calls address `hostId`; no
+Workspace identity or fence is fabricated. They are **client-local** compatibility
+entries, not frozen public features. Main and renderer share the Workspace relay's
+bounded stream/resume machinery, including logs cursors, trace forwarding, owner
+cancellation and stale callbacks. Sign-ins remain main-owned: generic relays refuse
+`sign-ins`/`auth.callback`, while the sign-in service prefers the HOST link and binds
+each flow's lifetime to its physical connection.
+
+`RemoteHost.hostScope` is an optional client projection with a closed status
+vocabulary (`connecting`, `ready`, `older`, `unavailable`) and an open `granted`
+string vocabulary bounded at the IPC schema. Existing consumers may ignore it.
+Modern catalog/create uses `host.workspaces`; absolute remote folder paths and
+repository URLs retain the shared registration/admission rules. The pure shared
+`gitUrlProblem` is used both for renderer feedback and main's pre-forward create
+guard: HTTPS usernames, passwords, query/fragment/percent encodings and invalid
+transports never leave this Mac; SSH/scp usernames remain valid. The renderer
+uses HOST readiness for logs and projects, never a ready Workspace as a proxy.
+
+Main checks every generic HOST route against the public procedure kind before
+transport (`verb-refused` for query/mutation/subscription mismatches). Create-source
+admission also runs for every `workspaces.create` request, including attempted
+subscriptions. Main validates every HOST answer/yield against the actual public
+output schema before IPC. Invalid answers fail whole with client-side `response-invalid`
+/ `BAD_GATEWAY`; this adds to the closed recognized reason vocabulary, not the
+frozen Workspace wire schemas. Diagnostics and nested logs scrub signed `vdc1`
+statements and the held connection credential by exact value through an opaque
+redactor (no credential getter), plus URL secrets (including literal quotes in
+userinfo) and control characters. Unsafe
+catalog names/paths fail whole rather than being clipped into different identities;
+unsafe remote URLs become null. Main-owned sign-in/callback routing is unchanged.
+The renderer catalog adapter has no runtime test/lab setter; lab fixtures go
+through its production IPC route.
+
+Project/ticket chat creation is opened only by that project's ready Workspace
+`sessions` grant, not HOST readiness. Draft promotion and immediate chat creation
+reuse VC-713's remote transport: the box owns Session creation, attachment and
+commands, with its own default model and `host-link` recovery. A missing/unknown
+grant keeps the named “Not available on <host> yet” state. Terminal, automation,
+browser and worktree-removal limits remain unchanged.

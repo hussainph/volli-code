@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { toast } from "sonner";
 
 import { useBoardStore } from "@renderer/stores/board";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -26,7 +29,7 @@ import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { runKickoff } from "@renderer/components/board/new-ticket/submit";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 // The engine registry pulls in xterm.js and its stylesheet on import and no
 // chat boot touches it; the terminal arm is exercised in the live smokes.
 vi.mock("@renderer/terminal/registry", () => ({
@@ -74,6 +77,8 @@ function stubChatStore(createChatSession: () => Promise<string | null>) {
 const originalChatState = useChatSessionsStore.getState();
 const originalBoardState = useBoardStore.getState();
 const originalProjectsState = useProjectsStore.getState();
+const originalHostsState = useHostConnectionStore.getState();
+const originalExperimentsState = useExperimentsStore.getState();
 
 function HistoryRecorder() {
   useNavHistory();
@@ -103,6 +108,8 @@ afterEach(() => {
   useChatSessionsStore.setState(originalChatState, true);
   useBoardStore.setState(originalBoardState, true);
   useProjectsStore.setState(originalProjectsState, true);
+  useHostConnectionStore.setState(originalHostsState, true);
+  useExperimentsStore.setState(originalExperimentsState, true);
   vi.unstubAllGlobals();
 });
 
@@ -116,7 +123,74 @@ afterEach(() => {
  */
 const UUID_V4 = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/;
 
+function remoteProject(granted: readonly string[] | undefined, cloud = true) {
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled: cloud, source: "storage" } } });
+  useHostConnectionStore.setState({
+    hosts: [
+      remoteHost("box", "box", { hostScope: { status: "ready", granted: ["host.workspaces"] } }),
+    ],
+    projects: {
+      p1: {
+        hostId: "box",
+        link: { status: "open" },
+        ...(granted === undefined ? {} : { granted }),
+      },
+    },
+  });
+}
+
 describe("bootChatSession", () => {
+  it.each([ticketScope("p1", "t1"), projectScope("p1")])(
+    "opens a remote chat Draft only with this project's sessions grant (%j)",
+    async (scope) => {
+      remoteProject(["sessions"]);
+      const create = vi.fn(async () => "durable-remote");
+      stubChatStore(create);
+      const id = await bootChatSession(scope, { land: () => true });
+      expect(id).toMatch(UUID_V4);
+      expect(useChatDraftsStore.getState().drafts[id!]?.provisional).toMatchObject({
+        projectId: "p1",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+      });
+      expect(create).not.toHaveBeenCalled();
+      expect(toast).not.toHaveBeenCalled();
+      await expect(
+        bootChatSession(scope, { createsSessionNow: true, land: () => true }),
+      ).resolves.toBe("durable-remote");
+      expect(create).toHaveBeenCalledWith({
+        projectId: "p1",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+        title: null,
+      });
+    },
+  );
+
+  it.each([undefined, [], ["board", "host.logs"]])(
+    "keeps older/unknown remote Sessions named and unavailable (%j)",
+    async (granted) => {
+      remoteProject(granted);
+      const create = vi.fn(async () => "must-not-create");
+      stubChatStore(create);
+      const land = vi.fn(() => true);
+      for (const scope of [SCOPE, projectScope("p1")]) {
+        await expect(bootChatSession(scope, { land })).resolves.toBeNull();
+        await expect(bootChatSession(scope, { createsSessionNow: true, land })).resolves.toBeNull();
+      }
+      expect(create).not.toHaveBeenCalled();
+      expect(land).not.toHaveBeenCalled();
+      expect(useChatDraftsStore.getState().drafts).toEqual({});
+      expect(toast).toHaveBeenCalledWith("Not available on box yet", { id: "host-local-only" });
+    },
+  );
+
+  it("leaves cloud-off chat doors unchanged despite a remote-looking source", async () => {
+    remoteProject([], false);
+    stubChatStore(vi.fn(async () => "local-session"));
+    await expect(
+      bootChatSession(SCOPE, { createsSessionNow: true, land: () => true }),
+    ).resolves.toBe("local-session");
+    expect(toast).not.toHaveBeenCalled();
+  });
   it("opens a ticket Draft immediately without creating a Session", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);

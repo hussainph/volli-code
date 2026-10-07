@@ -19,12 +19,15 @@ import {
   REOPEN_REPLY,
   snapshotSubtree,
   visibleControls as controls,
+  hasActionableControl,
   stableWaitingLabel,
   visibleServingRow,
+  visibleAnswerReceipt,
   REMOTE_HOST,
   REMOTE_PROJECT,
   STREAM_REPLY,
   assertAcceptanceRunner,
+  assertAcceptanceCleanup,
   projectCreationOutcome,
   acceptanceHostAddState,
 } from "./lib/remote-acceptance.mjs";
@@ -32,10 +35,10 @@ import {
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const TITLE = "Cloud acceptance ticket";
-// VC-722's host-scoped connection will enable UI creation on user installs.
-// Remove on landing; the named refusal is the only accepted expected failure.
-const EXPECTED_PROJECT_FAILURE = { ticket: "VC-722", steps: [2] };
+const LOCAL_KEEPALIVE = "[slow:120000] local-menu-bar-keepalive";
 const results = [];
+let localKeepaliveStarted = false;
+let nativeQuitAttempted = false;
 let instance;
 let socket;
 const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
@@ -62,6 +65,22 @@ async function action(kind, role, name, extra = {}, options = {}) {
 }
 const click = (role, name, options) => action("click", role, name, {}, options);
 const type = (name, text) => action("type", "textbox", name, { text });
+async function selectProceed() {
+  // Native radios are visually hidden beneath their label's custom disc.
+  // Space selects the real focused input without bypassing pointer checks.
+  const selected = await action("press", "radio", "Proceed", { key: "Space" });
+  assert.match(controls(selected.text, "radio", "Proceed")[0] ?? "", /\[checked\]/u);
+}
+async function submitProceed(question) {
+  await click("button", "Submit", { scope: { role: "form", name: question } });
+  // This fixture's declared Stop draws a verdict card. Its receipt is the
+  // durable transcript row, not the ask-user card's transient Sent line.
+  await waitUntil(
+    `durable Proceed receipt for ${question}`,
+    async () => visibleAnswerReceipt((await snap()).text, question, "Proceed"),
+    { timeout: 10_000, interval: 100 },
+  );
+}
 async function press(key) {
   const current = await snap();
   return (await call("act", { gen: current.generation, kind: "press", key })).snapshot;
@@ -102,6 +121,21 @@ async function card() {
     kind: "press",
     key: "Enter",
   });
+}
+async function stopLocalKeepalive() {
+  if (!localKeepaliveStarted) return;
+  if (nativeQuitAttempted) {
+    await call("native-reopen");
+    nativeQuitAttempted = false;
+  }
+  await selectHost("This Mac");
+  // The sidebar's No ticket row names this synthetic Session. A title-only
+  // match also hits its Close tab button, which does not interrupt the turn.
+  await click("button", "local-menu-bar-keepalive No ticket", { contains: true });
+  await wait(LOCAL_KEEPALIVE);
+  await click("button", "Stop turn");
+  await call("wait", { text: "Stop turn", gone: true });
+  localKeepaliveStarted = false;
 }
 async function step(number, assertion, body) {
   try {
@@ -170,11 +204,16 @@ async function journey() {
       },
       { timeout: 30_000, interval: 200 },
     );
+    // drive screenshots capture the viewport, not the full Settings scroller.
+    // Hovering the footer scrolls it into view; wheel down there reaches the
+    // pane's bottom, framing Paired devices + This Mac immediately above it.
+    // Never click Forget: this is only a real UI scroll for the evidence frame.
+    await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
     await click("button", "Home");
   });
 
-  const projectResult = await step(
+  await step(
     2,
     "New project on host: folder path, Create and open, selected remote Host chip",
     async () => {
@@ -194,37 +233,46 @@ async function journey() {
       const opened = `Opened ${REMOTE_PROJECT} on ${REMOTE_HOST}`;
       let current;
       await waitUntil(
-        "project opens or shows its named user-install refusal",
+        "project opens (the old user-install refusal is a failure)",
         async () => {
           current = await snap();
           return current.text.includes(opened) || current.text.includes(refusal);
         },
         { timeout: 90_000, interval: 200 },
       );
-      const outcome = projectCreationOutcome(current.text, {
-        hostName: REMOTE_HOST,
-        projectName: REMOTE_PROJECT,
-        expectedTicket: EXPECTED_PROJECT_FAILURE?.ticket,
-      });
-      if (outcome.status === "XFAIL") return outcome;
+      assert.equal(
+        projectCreationOutcome(current.text, {
+          hostName: REMOTE_HOST,
+          projectName: REMOTE_PROJECT,
+        })?.status,
+        "PASS",
+        "The folder project must open through production UI registration",
+      );
+      // The success toast arrives before the project's dialog has finished
+      // exiting. Wait for navigation's real accessibility name/ref to return;
+      // text behind a still-modal dialog is not an actionable Home button.
+      await waitUntil(
+        "project dialog exits and Home is actionable",
+        async () => hasActionableControl((await snap()).text, "button", "Home"),
+        { timeout: 10_000, interval: 100 },
+      );
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
       const selected = await wait(REMOTE_PROJECT);
       assert.match(selected.text, new RegExp(`Host: ${REMOTE_HOST}`));
     },
   );
-  if (projectResult?.status === "XFAIL") {
-    for (let n = 3; n <= 8; n++) {
-      record(n, "BLOCKED", "Requires remote project", EXPECTED_PROJECT_FAILURE.ticket);
-    }
-    const doctor = await call("doctor");
-    assert.ok(doctor.ok, JSON.stringify(doctor));
-    return;
-  }
   await call("acceptance-model");
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
     await click("button", "Home");
+    // Operator configuration restarts hostd. The host chip keeps its name
+    // throughout that outage; only the enabled write control proves rejoin.
+    await waitUntil(
+      "Workspace rejoins after model deployment and New ticket is actionable",
+      async () => hasActionableControl((await snap()).text, "button", "New ticket"),
+      { timeout: 10_000, interval: 100 },
+    );
     await click("button", "New ticket");
     await type("Ticket title", TITLE);
     await click("button", "Create ticket");
@@ -275,9 +323,8 @@ async function journey() {
   await step(6, "Answer question: real options, sent receipt, host continuation", async () => {
     await send("remote-answer-question");
     await wait(ANSWER_QUESTION);
-    await click("radio", "Proceed", { contains: true });
-    await click("button", "Send answer");
-    await wait("Sent: Proceed");
+    await selectProceed();
+    await submitProceed(ANSWER_QUESTION);
     await wait(ANSWER_REPLY);
   });
   await step(
@@ -291,7 +338,8 @@ async function journey() {
       await selectHost("This Mac");
       await click("button", "Home");
       await click("button", "New chat", { first: true });
-      await send("[slow:120000] local-menu-bar-keepalive");
+      localKeepaliveStarted = true;
+      await send(LOCAL_KEEPALIVE);
       await wait("Stop turn");
       await selectHost(REMOTE_HOST);
       await click("button", "Home");
@@ -299,9 +347,12 @@ async function journey() {
       const row = controls(before.text, "button", "Waiting for you", { contains: true })[0];
       assert.ok(row, "Waiting remote Session row missing before quit");
       const rowLabel = stableWaitingLabel(row);
+      nativeQuitAttempted = true;
       const quit = await call("native-quit");
       assert.match(quit.label, /Quit/);
+      assert.equal(quit.nativeWindows.visible, 0);
       await call("native-reopen");
+      nativeQuitAttempted = false;
       await wait(`Host: ${REMOTE_HOST}`);
       const reopened = await wait("Waiting for you");
       const recovered = controls(reopened.text, "button", "Waiting for you", {
@@ -314,10 +365,11 @@ async function journey() {
         kind: "click",
       });
       await wait(REOPEN_QUESTION);
-      await click("radio", "Proceed", { contains: true });
-      await click("button", "Send answer");
-      await wait("Sent: Proceed");
+      await selectProceed();
+      await submitProceed(REOPEN_QUESTION);
       await wait(REOPEN_REPLY);
+      await stopLocalKeepalive();
+      await selectHost(REMOTE_HOST);
     },
   );
   await step(
@@ -347,6 +399,8 @@ assertAcceptanceRunner();
 const reportDir = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "cloud-acceptance");
 await fs.mkdir(reportDir, { recursive: true });
 let failed = false;
+let cleanupVerified = false;
+let cleanupError = null;
 try {
   await journey();
 } catch (error) {
@@ -358,12 +412,20 @@ try {
   }
 } finally {
   if (instance) {
+    // Retire only this journey's local live-work holder through the UI even
+    // on failure; an ordinary quit must not be forced over its running turn.
+    await stopLocalKeepalive().catch((error) => {
+      failed = true;
+      cleanupError = `Local keepalive retirement failed: ${error.message}`;
+      console.error(cleanupError);
+    });
     const stopped = await exec(process.execPath, [cli, "stop", instance.id], {
       cwd: REPO,
       timeout: 120_000,
     }).catch((error) => {
       failed = true;
-      console.error(error.message);
+      cleanupError = error.message;
+      console.error(cleanupError);
       return null;
     });
     if (stopped) {
@@ -371,16 +433,14 @@ try {
         .readFile(join(instance.evidence, "manifest.json"), "utf8")
         .then(JSON.parse)
         .catch(() => null);
-      if (!manifest) {
+      try {
+        assertAcceptanceCleanup(manifest);
+        cleanupVerified = true;
+      } catch (error) {
         failed = true;
-        console.error("Stop returned without a guard/cleanup manifest");
-      } else if (
-        manifest.keychainViolations.length ||
-        manifest.keychainViolationExit ||
-        manifest.leftovers.length ||
-        manifest.remoteCleanupError
-      )
-        failed = true;
+        cleanupError = error.message;
+        console.error(cleanupError);
+      }
     }
   }
   await fs.writeFile(
@@ -388,9 +448,14 @@ try {
     JSON.stringify(
       {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
-        complete: !failed && results.length === 8 && results.every((row) => row.status === "PASS"),
+        complete:
+          !failed &&
+          cleanupVerified &&
+          results.length === 8 &&
+          results.every((row) => row.status === "PASS"),
         failed,
-        expectedFailure: EXPECTED_PROJECT_FAILURE,
+        cleanupVerified,
+        cleanupError,
         instance: instance?.id,
         results,
       },
@@ -401,7 +466,7 @@ try {
   if (process.env.GITHUB_STEP_SUMMARY)
     await fs.appendFile(
       process.env.GITHUB_STEP_SUMMARY,
-      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nThe canary SHA requires all eight PASS rows and complete:true in acceptance.json.\n`,
+      `## Remote acceptance\n\n${results.map((row) => `- **${row.status} ${row.step}** ${row.assertion}${row.detail ? ` — ${row.detail.split("\n")[0]}` : ""}`).join("\n")}\n\nCleanup: ${cleanupVerified ? "PASS" : "FAIL"}${cleanupError ? ` — ${cleanupError.split("\n")[0]}` : ""}. The canary SHA requires all eight PASS rows, verified graceful disposal and complete:true in acceptance.json.\n`,
     );
 }
 process.exitCode = failed ? 1 : 0;

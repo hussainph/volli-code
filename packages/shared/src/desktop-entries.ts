@@ -339,6 +339,29 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The add flows main still owns, newest first, without their views.",
   },
+  // HOST relay (VC-722): client-local like the Workspace relay, but addressed
+  // by host id so the window can act before opening any project.
+  {
+    key: "hostScope.query",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Send one HOST query over desktop main's host link.",
+  },
+  {
+    key: "hostScope.mutate",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Send one HOST mutation over desktop main's host link; never resent.",
+  },
+  {
+    key: "hostScope.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Follow one HOST subscription over desktop main's host link.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

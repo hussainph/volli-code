@@ -14,7 +14,7 @@ import {
   assembleDeviceCredential,
   bytesToBase64Url,
   deviceCredentialSigningInput,
-  type DeviceCredentialClaims,
+  type DeviceConnectionCredentialClaims,
 } from "@volli/host-protocol";
 
 import type { DeviceIdentity } from "./provision";
@@ -48,14 +48,13 @@ export function generateDeviceKey(name: string): GeneratedDeviceKey {
   };
 }
 
-export interface MintCredentialInput {
+export type MintCredentialInput = {
   readonly privateKeyPem: string;
   readonly hostId: string;
   readonly deviceId: string;
-  readonly workspaceId: string;
   /** Epoch ms. */
   readonly now: number;
-}
+} & ({ readonly scope: "host" } | { readonly scope?: never; readonly workspaceId: string });
 
 /**
  * A `vdc1` credential for one handshake: issued now, expiring
@@ -64,10 +63,10 @@ export interface MintCredentialInput {
  */
 export function mintDeviceCredential(input: MintCredentialInput): string {
   const iat = Math.floor(input.now / 1000);
-  const claims: DeviceCredentialClaims = {
+  const claims: DeviceConnectionCredentialClaims = {
+    ...(input.scope === "host" ? { scope: "host" as const } : { workspaceId: input.workspaceId }),
     hostId: input.hostId,
     deviceId: input.deviceId,
-    workspaceId: input.workspaceId,
     iat,
     exp: iat + DEVICE_CREDENTIAL_LIFETIME_S,
     jti: bytesToBase64Url(randomBytes(16)),

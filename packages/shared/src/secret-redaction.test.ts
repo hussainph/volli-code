@@ -140,6 +140,29 @@ describe("credential text", () => {
     );
   });
 
+  it.each(["'", '"', "?", "#", "\\", "<", ">", "@"])(
+    "scrubs userinfo containing %s while preserving quoted prose and source spans",
+    (punctuation) => {
+      for (const surroundingQuote of ["", "'", '"']) {
+        for (const suffix of ["", "?x=1#frag", "#frag"]) {
+          const protectedText = `://user:ab${punctuation}cd@`;
+          const prefix = `🔐 before ${surroundingQuote}https`;
+          const tail = `host/path${suffix}${surroundingQuote} after; echo tail`;
+          const raw = `${prefix}${protectedText}${tail}`;
+          const safe = `${prefix}://[redacted]@${tail}`;
+          expect(redactPayloadSecrets(raw)).toBe(safe);
+          expect(redactPayloadSecrets(safe)).toBe(safe);
+          const spans = payloadSecretSpans(raw);
+          expect(spans).toContainEqual({
+            start: prefix.length,
+            end: prefix.length + protectedText.length,
+          });
+          expect(maskSpans(raw, spans)).toBe(`${prefix}${" ".repeat(protectedText.length)}${tail}`);
+        }
+      }
+    },
+  );
+
   it("retains authorization schemes and shell separators", () => {
     expect(
       redactPayloadSecrets(
@@ -290,6 +313,12 @@ describe("preservation and repeatability", () => {
     expect(redactPayloadSecrets(`TOKEN=dummy${tail}`)).toBe(`TOKEN= [redacted]${tail}`);
     const clean = `https://${"a".repeat(40_000)} /path/private@example.com curl -u ${"b".repeat(40_000)} && echo end`;
     expect(redactPayloadSecrets(clean)).toBe(clean);
+    const quotedNearMiss = `https://${"ab'cd\"".repeat(10_000)}/path/person@host`;
+    expect(redactPayloadSecrets(quotedNearMiss)).toBe(quotedNearMiss);
+    expect(payloadSecretSpans(quotedNearMiss)).toEqual([]);
+    const candidates = `${"https://ab'cd\"/".repeat(10_000)} end`;
+    expect(redactPayloadSecrets(candidates)).toBe(candidates);
+    expect(payloadSecretSpans(candidates)).toEqual([]);
     const hyphenatedNearMiss = `key-${"word-".repeat(10_000)}word`;
     expect(redactPayloadSecrets(hyphenatedNearMiss)).toBe(hyphenatedNearMiss);
   });
@@ -376,6 +405,8 @@ describe("original-source payload spans", () => {
     const forms = [
       pem,
       "https://user:dummy@host/path",
+      "'https://user:ab'cd@host/path?x=1#frag'",
+      '"https://user:ab"cd@host/path?x=1#frag"',
       "curl -u alice:dummy",
       "Cookie: session=dummy",
       "ghp_dummy",
@@ -391,6 +422,8 @@ describe("original-source payload spans", () => {
     for (const secret of [
       "body",
       "user:dummy",
+      "user:ab'cd",
+      'user:ab"cd',
       "alice:dummy",
       "session=dummy",
       "ghp_dummy",

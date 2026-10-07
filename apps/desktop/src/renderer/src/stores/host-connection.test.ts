@@ -552,3 +552,34 @@ describe("createHostLinkTracker", () => {
     expect(tracker.view(ready, 2).link).toEqual({ status: "open" });
   });
 });
+
+it("preserves HOST scope facts and source identity, independently of project write grants", () => {
+  const store = createHostConnectionStore();
+  const hostScope = { status: "ready" as const, granted: ["host.workspaces", "host.logs"] };
+  const host = { ...HETZNER, hostScope };
+  const snapshot = { hosts: [host], projects: { p1: { hostId: host.id, link: OFFLINE } } };
+  const source = createFakeHostSource(snapshot);
+  const detach = store.getState().attach(source);
+  expect(store.getState().hosts[0]).toBe(host);
+  expect(store.getState().hosts[0]!.hostScope).toBe(hostScope);
+  expect(canWriteProject(store.getState(), "p1")).toBe(false);
+  source.set(snapshot);
+  expect(store.getState().hosts[0]).toBe(host);
+  const reconnectingHost = { ...host, hostScope: { ...hostScope, status: "connecting" as const } };
+  source.set({ hosts: [reconnectingHost], projects: {} });
+  expect(store.getState().hosts[0]).toBe(reconnectingHost);
+  expect(store.getState().hosts[0]!.hostScope?.status).toBe("connecting");
+  detach();
+});
+
+it("retries subscriptions only for sources that supply a subscription recovery", () => {
+  const store = createHostConnectionStore();
+  const source = createFakeHostSource({ hosts: [], projects: {} });
+  const retrySubscription = vi.fn();
+  const detach = store.getState().attach({ ...source, retrySubscription });
+  const detachPlain = store.getState().attach(createFakeHostSource({ hosts: [], projects: {} }));
+  store.getState().retrySources();
+  expect(retrySubscription).toHaveBeenCalledOnce();
+  detachPlain();
+  detach();
+});

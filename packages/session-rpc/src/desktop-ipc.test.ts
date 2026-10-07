@@ -110,6 +110,9 @@ describe("the desktop's IPC exposure", () => {
       "hostLink.query",
       "hostLink.mutate",
       "hostLink.subscribe",
+      "hostScope.query",
+      "hostScope.mutate",
+      "hostScope.subscribe",
     ]);
   });
 

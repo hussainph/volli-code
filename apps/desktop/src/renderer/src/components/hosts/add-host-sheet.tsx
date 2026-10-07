@@ -290,7 +290,7 @@ function FlowScreen({
             <ol aria-label="Steps" className="flex flex-col px-6 pb-4">
               {view === null
                 ? null
-                : stepRows(view).map((row) => (
+                : stepRows(view, host).map((row) => (
                     <li key={row.id} className="flex h-8 items-center gap-2" data-step={row.id}>
                       <StepMark status={row.mark} />
                       <SwapText

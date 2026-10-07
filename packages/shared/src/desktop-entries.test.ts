@@ -49,7 +49,7 @@ describe("the desktop-only tier", () => {
       "worktree.trimSettings",
     ]);
     for (const entry of DESKTOP_ENTRIES) {
-      const clientLocal = /^(hosts|hostAdd|hostSignIns|hostLink)\./u.test(entry.key);
+      const clientLocal = /^(hosts|hostAdd|hostSignIns|hostLink|hostScope)\./u.test(entry.key);
       expect(entry.compatibility, entry.key).toBe(clientLocal ? "client-local" : "host-command");
     }
   });
@@ -119,6 +119,22 @@ describe("the desktop-only tier", () => {
       ["hostLink.query", "host", "read"],
       ["hostLink.mutate", "host", "natural"],
       ["hostLink.subscribe", "host", "read"],
+    ]);
+  });
+
+  it("declares HOST relay entries client-local, person-only and host-placed", () => {
+    const relay = DESKTOP_ENTRIES.filter(({ key }) => key.startsWith("hostScope."));
+    expect(
+      relay.map(({ key, compatibility, placement, idempotency }) => [
+        key,
+        compatibility,
+        placement,
+        idempotency,
+      ]),
+    ).toEqual([
+      ["hostScope.query", "client-local", "host", "read"],
+      ["hostScope.mutate", "client-local", "host", "natural"],
+      ["hostScope.subscribe", "client-local", "host", "read"],
     ]);
   });
 

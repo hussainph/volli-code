@@ -53,7 +53,7 @@
  * A relayed call carries the trace of the window's request (VC-699), so the
  * remote host's log lines for it carry the window's trace.
  */
-import type { HostLinkRelayPort } from "@volli/host-core/handlers";
+import type { HostLinkRelayPort, HostScopeRelayPort } from "@volli/host-core/handlers";
 import { currentTrace } from "@volli/host-core/log";
 import {
   HOST_FEATURE_OPERATIONS,
@@ -67,13 +67,26 @@ import {
   type HostLink,
   type HostLinkCallOptions,
   type HostLinkState,
+  type HostScopeLink,
+  type HostScopeLinkState,
 } from "@volli/host-protocol/client-link";
+import { sessionProcedureSchemas, workspacesProcedureSchemas } from "@volli/session-rpc";
 import {
+  gitUrlProblem,
+  remoteHostDiagnostic,
+  redactLogFields,
+  type LogValue,
+  type HostWorkspace,
+  type HostWorkspaceList,
+  type HostWorkspaceCreateResult,
+  type HostLogsBatch,
   HOST_LINK_RELAY_STREAMS_PER_LINK,
   HOST_LINK_RELAY_SUBSCRIPTION_CAP,
   type HostLinkRelayError,
   type HostLinkRelayEvent,
 } from "@volli/shared";
+
+import { admitHostCreateSource } from "./host-scope-create-policy";
 
 /** What the relay reads of the engine: its Workspace links and which Workspaces it serves. */
 export interface WorkspaceLinkSource {
@@ -91,6 +104,22 @@ export function engineWorkspaceLinks(engine: {
   return {
     workspaceLink: (workspaceId) => engine.workspaceLink(workspaceId),
     serves: (workspaceId) => Object.hasOwn(engine.snapshot().projects, workspaceId),
+  };
+}
+
+export interface HostScopeLinkSource {
+  hostScopeLink(hostId: string): HostScopeLink | null;
+  serves(hostId: string): boolean;
+}
+
+/** The engine's dedicated HOST link and enrolled host identities, not its projects. */
+export function engineHostScopeLinks(engine: {
+  hostScopeLink(hostId: string): HostScopeLink | null;
+  snapshot(): { readonly hosts: readonly { readonly id: string }[] };
+}): HostScopeLinkSource {
+  return {
+    hostScopeLink: (hostId) => engine.hostScopeLink(hostId),
+    serves: (hostId) => engine.snapshot().hosts.some((host) => host.id === hostId),
   };
 }
 
@@ -148,8 +177,8 @@ function wire(error: HostError): HostLinkRelayError {
 }
 
 /** Why a link that left `ready` has no connection now: its own words, where it has some. */
-function lossOf(state: HostLinkState): HostError {
-  const said = "error" in state ? state.error.message : RELAY_UNREACHABLE;
+function lossOf(state: HostLinkState | HostScopeLinkState, unreachable: string): HostError {
+  const said = "error" in state ? state.error.message : unreachable;
   return hostError("host-unreachable", said);
 }
 
@@ -162,13 +191,142 @@ export function createHostLinkRelay(
   source: WorkspaceLinkSource,
   options: HostLinkRelayOptions = {},
 ): HostLinkRelay {
+  return createRelay(
+    { serves: (id) => source.serves(id), link: (id) => source.workspaceLink(id) },
+    "workspace",
+    options,
+  );
+}
+
+export interface HostScopeRelay extends HostScopeRelayPort {
+  subscribe(...args: Parameters<HostScopeRelayPort["subscribe"]>): () => void;
+  open(hostId?: string): number;
+}
+
+/** The same bounded, traced stream mechanics on a host-identity link. */
+export function createHostScopeRelay(
+  source: HostScopeLinkSource,
+  options: HostLinkRelayOptions = {},
+): HostScopeRelay {
+  const relay = createRelay(
+    { serves: (id) => source.serves(id), link: (id) => source.hostScopeLink(id) },
+    "host",
+    options,
+  );
+  return {
+    query: relay.query,
+    mutate: relay.mutate,
+    open: relay.open,
+    subscribe: (hostId, path, input, lastEventId, listener) =>
+      relay.subscribe(
+        hostId,
+        path,
+        input,
+        listener,
+        lastEventId === undefined ? {} : { lastEventId },
+      ),
+  };
+}
+
+type RelayLink = HostLink | HostScopeLink;
+
+const hostOutputs = { ...sessionProcedureSchemas(), ...workspacesProcedureSchemas() };
+const INVALID_HOST_OUTPUT = "The host returned an invalid response.";
+function invalidHostOutput(): HostLinkError {
+  return refusal(hostError("response-invalid", INVALID_HOST_OUTPUT));
+}
+
+/** Only HOST answers cross this new boundary; the frozen Workspace relay is unchanged. */
+function hostOutput(link: HostScopeLink, path: string, answer: unknown): unknown {
+  const parsed = hostOutputs[path]!.output.safeParse(answer);
+  if (!parsed.success) throw invalidHostOutput();
+  const diagnostic = (text: string): string => remoteHostDiagnostic(link.redactDiagnostic(text));
+  const workspace = (row: HostWorkspace): HostWorkspace => {
+    // Locators are identities, not diagnostics. Refuse whole rather than shorten or rewrite them.
+    if (
+      [row.name, row.path].some(
+        (text) =>
+          /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(text) ||
+          remoteHostDiagnostic(link.redactDiagnostic(text), Number.MAX_SAFE_INTEGER) !== text,
+      )
+    )
+      throw invalidHostOutput();
+    return {
+      ...row,
+      gitRemoteUrl:
+        row.gitRemoteUrl === null ||
+        link.redactDiagnostic(row.gitRemoteUrl) !== row.gitRemoteUrl ||
+        gitUrlProblem(row.gitRemoteUrl) !== null ||
+        row.gitRemoteUrl
+          .split(/[/:@]/u)
+          .some((part) => remoteHostDiagnostic(part, Number.MAX_SAFE_INTEGER) !== part)
+          ? null
+          : row.gitRemoteUrl,
+    };
+  };
+  if (path === "workspaces.list") {
+    const catalog = parsed.data as HostWorkspaceList;
+    return { ...catalog, workspaces: catalog.workspaces.map(workspace) };
+  }
+  if (path === "workspaces.create") {
+    const result = parsed.data as HostWorkspaceCreateResult;
+    return result.ok
+      ? { ...result, workspace: workspace(result.workspace) }
+      : { ...result, failure: { ...result.failure, message: diagnostic(result.failure.message) } };
+  }
+  if (path === "logs.tail" || path === "logs.follow") {
+    const batch = parsed.data as HostLogsBatch;
+    if (
+      [batch.cursor, ...batch.entries.map((entry) => entry.cursor)].some(
+        (cursor) => diagnostic(cursor) !== cursor,
+      )
+    )
+      throw invalidHostOutput();
+    const scrub = (value: LogValue): LogValue => {
+      if (typeof value === "string") return diagnostic(value);
+      if (Array.isArray(value)) return value.map(scrub);
+      if (value !== null && typeof value === "object")
+        return Object.fromEntries(
+          Object.entries(value).map(([key, field]) => [diagnostic(key), scrub(field)]),
+        );
+      return value;
+    };
+    return {
+      ...batch,
+      entries: batch.entries.map((entry) => ({
+        cursor: entry.cursor,
+        record: redactLogFields(scrub(entry.record) as Record<string, LogValue>),
+      })),
+    };
+  }
+  // Bootstrap fields (including reserved proofs) are identities, not diagnostic
+  // prose. Keep valid long proofs intact; refuse secret-bearing strings whole.
+  const safeBootstrap = (value: unknown): boolean => {
+    if (typeof value === "string")
+      return remoteHostDiagnostic(link.redactDiagnostic(value), Number.MAX_SAFE_INTEGER) === value;
+    if (Array.isArray(value)) return value.every(safeBootstrap);
+    if (value !== null && typeof value === "object")
+      return Object.values(value).every(safeBootstrap);
+    return true;
+  };
+  if (!safeBootstrap(parsed.data)) throw invalidHostOutput();
+  return parsed.data;
+}
+
+function createRelay(
+  source: { serves(id: string): boolean; link(id: string): RelayLink | null },
+  scope: "host" | "workspace",
+  options: HostLinkRelayOptions,
+): HostLinkRelay {
+  const unreachable = scope === "host" ? "The host can’t be reached right now." : RELAY_UNREACHABLE;
+  const description = scope === "host" ? "this host’s connection" : "this project’s link";
   const trace = options.trace ?? (() => currentTrace());
   const cap = options.subscriptionCap ?? HOST_LINK_RELAY_SUBSCRIPTION_CAP;
   const perLink = options.streamsPerLink ?? HOST_LINK_RELAY_STREAMS_PER_LINK;
   /** Every relayed subscription not yet ended: each one's stop. */
   const open = new Set<() => void>();
   /** The streams on each link, in the order they opened. */
-  const onLink = new Map<HostLink, Stream[]>();
+  const onLink = new Map<RelayLink, Stream[]>();
 
   interface Stream {
     readonly workspaceId: string;
@@ -178,7 +336,7 @@ export function createHostLinkRelay(
   }
 
   /** Takes a slot on the link for a stream, or answers why it cannot have one. */
-  function admit(link: HostLink, stream: Stream): HostError | null {
+  function admit(link: RelayLink, stream: Stream): HostError | null {
     const held = onLink.get(link) ?? [];
     if (held.length >= perLink) {
       const newest = stream.background ? undefined : held.findLast((other) => other.background);
@@ -189,7 +347,7 @@ export function createHostLinkRelay(
     return null;
   }
 
-  function release(link: HostLink, stream: Stream): void {
+  function release(link: RelayLink, stream: Stream): void {
     const held = onLink.get(link)!.filter((other) => other !== stream);
     if (held.length === 0) onLink.delete(link);
     else onLink.set(link, held);
@@ -201,24 +359,71 @@ export function createHostLinkRelay(
   }
 
   /** The Workspace's ready link, if it may send `path`; otherwise the typed refusal, thrown. */
-  function linkFor(workspaceId: string, path: string): HostLink {
+  function linkFor(workspaceId: string, path: string): RelayLink {
     if (!source.serves(workspaceId)) {
-      throw refusal(hostError("workspace-unknown", RELAY_UNKNOWN_WORKSPACE));
-    }
-    const link = source.workspaceLink(workspaceId);
-    const state = link?.getState();
-    if (link === null || state?.status !== "ready") {
-      throw refusal(hostError("host-unreachable", RELAY_UNREACHABLE));
-    }
-    if (MAIN_OWNED_OPERATIONS.has(path) || !operationsGrantedBy(state.welcome.features).has(path)) {
       throw refusal(
         hostError(
-          "verb-refused",
-          `${path} is not among the operations this project’s link may send.`,
+          scope === "host" ? "host-unreachable" : "workspace-unknown",
+          scope === "host"
+            ? "No enrolled host on this Mac has that identity."
+            : RELAY_UNKNOWN_WORKSPACE,
         ),
       );
     }
+    const link = source.link(workspaceId);
+    const state = link?.getState();
+    if (link === null || state?.status !== "ready") {
+      throw refusal(hostError("host-unreachable", unreachable));
+    }
+    if (
+      MAIN_OWNED_OPERATIONS.has(path) ||
+      !operationsGrantedBy(state.welcome.features, scope).has(path)
+    ) {
+      throw refusal(
+        hostError("verb-refused", `${path} is not among the operations ${description} may send.`),
+      );
+    }
     return link;
+  }
+
+  function safeError(link: RelayLink, error: HostError): HostError {
+    return scope === "host"
+      ? {
+          ...error,
+          message: remoteHostDiagnostic((link as HostScopeLink).redactDiagnostic(error.message)),
+        }
+      : error;
+  }
+
+  /** Transport envelopes never choose a public HOST procedure's kind. */
+  function admitProcedure(
+    path: string,
+    input: unknown,
+    kind: "query" | "mutate" | "subscribe",
+  ): void {
+    if (scope !== "host") return;
+    // Check every route, even an attempted subscription to this mutation.
+    if (path === "workspaces.create") admitHostCreateSource(input);
+    const expected = { query: "query", mutate: "mutation", subscribe: "subscription" } as const;
+    if (hostOutputs[path]?.type !== expected[kind])
+      throw refusal(hostError("verb-refused", "That HOST procedure cannot use this request kind."));
+  }
+
+  async function call(
+    id: string,
+    path: string,
+    input: unknown,
+    kind: "query" | "mutate",
+  ): Promise<unknown> {
+    const link = linkFor(id, path);
+    try {
+      admitProcedure(path, input, kind);
+      const value = await link[kind](path, input, callOptions());
+      return scope === "host" ? hostOutput(link as HostScopeLink, path, value) : value;
+    } catch (error) {
+      if (scope === "workspace") throw error;
+      throw refusal(safeError(link, readHostError(error)));
+    }
   }
 
   return {
@@ -226,13 +431,11 @@ export function createHostLinkRelay(
       workspaceId === undefined
         ? open.size
         : [...onLink.values()].flat().filter((stream) => stream.workspaceId === workspaceId).length,
-    query: async (workspaceId, path, input) =>
-      linkFor(workspaceId, path).query(path, input, callOptions()),
-    mutate: async (workspaceId, path, input) =>
-      linkFor(workspaceId, path).mutate(path, input, callOptions()),
+    query: (workspaceId, path, input) => call(workspaceId, path, input, "query"),
+    mutate: (workspaceId, path, input) => call(workspaceId, path, input, "mutate"),
     subscribe(workspaceId, path, input, listener, subscribeOptions = {}) {
       let ended = false;
-      let slot: { link: HostLink; stream: Stream } | null = null;
+      let slot: { link: RelayLink; stream: Stream } | null = null;
       let stopWatching: (() => void) | null = null;
       let subscription: { unsubscribe(): void } | null = null;
       const say = (event: HostLinkRelayEvent): void => {
@@ -264,9 +467,10 @@ export function createHostLinkRelay(
         });
         return () => {};
       }
-      let link: HostLink;
+      let link: RelayLink;
       try {
         link = linkFor(workspaceId, path);
+        admitProcedure(path, input, "subscribe");
       } catch (error) {
         // Main's own typed refusals end the stream as events; anything else
         // (the engine off: unavailable) is the router's to say.
@@ -295,7 +499,8 @@ export function createHostLinkRelay(
       // The link keeps a stream across an outage, and ends it silently on
       // close: its state is the only word that the connection went.
       stopWatching = link.subscribeState((state) => {
-        if (state.status !== "ready") end({ kind: "lost", error: wire(lossOf(state)) });
+        if (state.status !== "ready")
+          end({ kind: "lost", error: wire(safeError(link, lossOf(state, unreachable))) });
       });
       subscription = link.subscribe(
         path,
@@ -306,15 +511,36 @@ export function createHostLinkRelay(
           },
           onData: (data, tracked) => {
             if (ended) return;
+            if (scope === "host") {
+              try {
+                if (tracked === undefined) data = hostOutput(link as HostScopeLink, path, data);
+                else {
+                  const envelope = data as { id: unknown; data: unknown };
+                  if (
+                    envelope?.id !== tracked.id ||
+                    remoteHostDiagnostic((link as HostScopeLink).redactDiagnostic(tracked.id)) !==
+                      tracked.id
+                  )
+                    throw invalidHostOutput();
+                  data = {
+                    id: tracked.id,
+                    data: hostOutput(link as HostScopeLink, path, envelope.data),
+                  };
+                }
+              } catch {
+                end({ kind: "error", error: wire(invalidHostOutput().hostError) });
+                return;
+              }
+            }
             say(
               tracked === undefined
                 ? { kind: "data", data }
                 : { kind: "data", data, id: tracked.id },
             );
           },
-          onResnapshot: (error) => end({ kind: "resnapshot", error: wire(error) }),
+          onResnapshot: (error) => end({ kind: "resnapshot", error: wire(safeError(link, error)) }),
           onError: (error) => {
-            const failure = readHostError(error);
+            const failure = safeError(link, readHostError(error));
             end(
               failure.reason === "host-unreachable"
                 ? { kind: "lost", error: wire(failure) }

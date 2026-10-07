@@ -129,6 +129,11 @@ export interface HostRecord {
   readonly liveSessions: number | null;
   readonly update: HostUpdate | null;
   readonly expiredSignIns: readonly HostSignIn[];
+  /** Engine-owned HOST welcome, never inferred from Workspace grants. */
+  readonly hostScope?: {
+    readonly status: "connecting" | "ready" | "older" | "unavailable";
+    readonly granted: readonly string[];
+  };
 }
 
 /**

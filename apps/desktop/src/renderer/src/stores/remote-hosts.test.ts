@@ -4,6 +4,8 @@
  * registry's hosts and the sheet's state, and the bridge's API is made once
  * and swappable. The bridge is a stand-in: no IPC.
  */
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import type { AddHostEvent } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -58,9 +60,10 @@ vi.mock("../lib/session-rpc-ipc-link", () => ({ sessionRpcClient: () => bridge.c
 
 import {
   createRemoteHostsStore,
+  useHostsWritable,
+  useRemoteHostsStore,
   remoteHostOf,
   readdHostToUpdate,
-  useRemoteHostsStore,
   remoteHosts,
   setRemoteHostsApi,
 } from "./remote-hosts";
@@ -257,4 +260,11 @@ describe("the scripted fake", () => {
     fake.factsOf.set("flow-1", new Error("let go"));
     await expect(fake.addFacts("flow-1")).rejects.toThrow("let go");
   });
+});
+
+it("exposes writable status to the host controls", () => {
+  useRemoteHostsStore.getState().setHosts([], null);
+  expect(renderToString(createElement(() => String(useHostsWritable())))).toBe("true");
+  // Server rendering reads Zustand's initial snapshot; live read-only changes
+  // are exercised by the host controls' jsdom tests.
 });

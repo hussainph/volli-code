@@ -112,7 +112,44 @@ export function relayHostLink(
   options: RelayHostLinkOptions = {},
 ): RelayedHostLink {
   const rpc = (): RelayHostLinkRpc => options.rpc ?? sessionRpcClient();
-  const state = options.state ?? hostConnectionLinkState(workspaceId);
+  return {
+    workspaceId,
+    ...relayConnection(
+      { ...options, state: options.state ?? hostConnectionLinkState(workspaceId) },
+      {
+        query: (path, input, callOptions) =>
+          rpc().hostLink.query.query({ workspaceId, path, input }, contextOf(callOptions)),
+        mutate: (path, input, callOptions) =>
+          rpc().hostLink.mutate.mutate({ workspaceId, path, input }, contextOf(callOptions)),
+        subscribe: (path, input, lastEventId, handlers, callOptions) =>
+          rpc().hostLink.subscribe.subscribe(
+            { workspaceId, path, input, ...(lastEventId === undefined ? {} : { lastEventId }) },
+            { ...contextOf(callOptions), ...handlers },
+          ),
+      },
+    ),
+  };
+}
+
+/** Scope-specific IPC calls; the resume/ownership machinery has no identity field. */
+export interface RelayConnectionDoor {
+  query(path: string, input: unknown, options?: HostLinkCallOptions): Promise<unknown>;
+  mutate(path: string, input: unknown, options?: HostLinkCallOptions): Promise<unknown>;
+  subscribe(
+    path: string,
+    input: unknown,
+    lastEventId: string | undefined,
+    handlers: { onData(event: HostLinkRelayEvent): void; onError(error: unknown): void },
+    options?: HostLinkCallOptions,
+  ): { unsubscribe(): void };
+}
+
+/** Shared bounded resume mechanics, used by Workspace and HOST relays alike. */
+export function relayConnection(
+  options: Omit<RelayHostLinkOptions, "rpc"> & { readonly state: RelayLinkStateSource },
+  door: RelayConnectionDoor,
+): Omit<RelayedHostLink, "workspaceId"> {
+  const state = options.state;
   const delays = options.resumeDelaysMs ?? RESUME_DELAYS_MS;
   const setTimer = options.setTimer ?? ((run, ms) => setTimeout(run, ms));
   const clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as number));
@@ -179,15 +216,11 @@ export function relayHostLink(
       delivered = false;
       let self: { unsubscribe(): void } | null = null;
       const mine = (): boolean => !ended && current !== null && current === self;
-      self = rpc().hostLink.subscribe.subscribe(
+      self = door.subscribe(
+        path,
+        input,
+        lastEventId,
         {
-          workspaceId,
-          path,
-          input,
-          ...(lastEventId === undefined ? {} : { lastEventId }),
-        },
-        {
-          ...contextOf(subscribeOptions),
           onData: (event: HostLinkRelayEvent) => {
             if (!mine()) return;
             switch (event.kind) {
@@ -249,6 +282,7 @@ export function relayHostLink(
             handlers.onError(error);
           },
         },
+        subscribeOptions,
       );
       // The bridge answers a subscription later, never inside this call.
       current = self;
@@ -259,7 +293,6 @@ export function relayHostLink(
   }
 
   return {
-    workspaceId,
     getState: () => state.getState(),
     subscribeState(listener) {
       let last = state.getState();
@@ -270,10 +303,8 @@ export function relayHostLink(
         listener(next);
       });
     },
-    query: (path, input, callOptions) =>
-      rpc().hostLink.query.query({ workspaceId, path, input }, contextOf(callOptions)),
-    mutate: (path, input, callOptions) =>
-      rpc().hostLink.mutate.mutate({ workspaceId, path, input }, contextOf(callOptions)),
+    query: (path, input, callOptions) => door.query(path, input, callOptions),
+    mutate: (path, input, callOptions) => door.mutate(path, input, callOptions),
     subscribe,
   };
 }

@@ -167,3 +167,4 @@ export * from "./sign-in-catalog";
 export * from "./remote-hosts";
 export * from "./host-workspaces";
 export * from "./remote-host-health";
+export * from "./git-url";

@@ -37,3 +37,23 @@ export interface HostLinkRelayPort {
     options?: { readonly lastEventId?: string },
   ): Answer<() => void>;
 }
+
+/**
+ * Desktop main's HOST link relay (VC-722). Addressed by host id, never a
+ * Workspace id, and bounded to the HOST welcome's grants. Query/mutation
+ * failures and subscription events have the same contract as the Workspace
+ * relay above. Hostd supplies no port.
+ */
+export interface HostScopeRelayPort {
+  query(hostId: string, path: string, input: unknown): Promise<unknown>;
+  /** Sent once over the ready host link; never queued or resent. */
+  mutate(hostId: string, path: string, input: unknown): Promise<unknown>;
+  /** The returned stop is safe after the last event; a cursor is optional. */
+  subscribe(
+    hostId: string,
+    path: string,
+    input: unknown,
+    lastEventId: string | undefined,
+    listener: (event: HostLinkRelayEvent) => void | Promise<void>,
+  ): Answer<() => void>;
+}

@@ -701,15 +701,31 @@ async function handle(cmd, args) {
         const quit = walk(Menu.getApplicationMenu()).find((item) => item.role === "quit");
         if (!quit) throw new Error("Native Quit menu item missing");
         const label = quit.label;
-        quit.click();
+        // Electron 44's role.execute declines native macOS roles: calling
+        // MenuItem.click() in JS is a no-op for Quit. Dispatch the same Cocoa
+        // action as the real menu, through the production before-quit gates.
+        Menu.sendActionToFirstResponder("terminate:");
         return { label };
       });
-      await waitUntil("all app windows closed", () => app.windows().length === 0, {
-        timeout: 10_000,
-      });
+      // Production may retain an unacknowledged renderer hidden to protect
+      // drafts. Observe native visibility, not Playwright's retained Pages.
+      const nativeWindows = await waitUntil(
+        "no visible native app windows",
+        async () => {
+          const measured = await app.evaluate(({ BrowserWindow }) => {
+            const windows = BrowserWindow.getAllWindows();
+            return {
+              visible: windows.filter((window) => window.isVisible()).length,
+              retained: windows.length,
+            };
+          });
+          return measured.visible === 0 ? measured : false;
+        },
+        { timeout: 10_000 },
+      );
       current = { generation: ++generation, window: null, refs: new Set() };
-      transcript({ cmd: "native-quit", label: result.label });
-      return result;
+      transcript({ cmd: "native-quit", label: result.label, nativeWindows });
+      return { ...result, nativeWindows };
     }
     case "native-reopen":
       // macOS activation is the production reopen path (also used by the

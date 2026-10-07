@@ -50,7 +50,7 @@ export function HostSignInSheet({ source }: { source?: HostSignInSource }) {
   return (
     <Dialog open={target !== null} onOpenChange={(open) => !open && close()}>
       {target !== null && (
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-xl">
           <HostSignInSheetBody
             key={`${target.hostId}:${target.providerId ?? ""}`}
             target={target}

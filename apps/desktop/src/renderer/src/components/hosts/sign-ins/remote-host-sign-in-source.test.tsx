@@ -174,6 +174,38 @@ describe("the host sign-in sheet", () => {
     act(() => useHostSignInSheet.getState().close());
   });
 
+  it("bounds a full provider catalog to a scrollable viewport, without losing rows", async () => {
+    const source = fakeHostSignInSource({
+      status: {
+        ...STATUS,
+        providers: Array.from({ length: 40 }, (_, index) => ({
+          ...STATUS.providers[0]!,
+          providerId: `provider-${index}`,
+          label: `Provider ${index}`,
+        })),
+      },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<HostSignInSheet source={source} />));
+      await act(async () =>
+        useHostSignInSheet.getState().open({ hostId: "h", hostName: "Hetzner", providerId: null }),
+      );
+      const dialog = document.querySelector('[role="dialog"]')!;
+      expect(dialog.classList.contains("max-h-[80vh]")).toBe(true);
+      expect(dialog.classList.contains("overflow-y-auto")).toBe(true);
+      expect(dialog.textContent).toContain("Sign-ins on Hetzner");
+      expect(dialog.textContent).toContain("Provider 0");
+      expect(dialog.textContent).toContain("Provider 39");
+      expect(dialog.querySelectorAll("button").length).toBeGreaterThanOrEqual(40);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
   it("shows one host's rows, starts a recovery's sign-in, and cancels it on close", async () => {
     const source = fakeHostSignInSource({ status: STATUS });
     const container = document.createElement("div");

@@ -30,7 +30,8 @@ import {
 } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
-import { refuseRemote } from "@renderer/stores/remote-project";
+import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
 
 /** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
@@ -540,9 +541,16 @@ export async function bootChatSession(
   // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
   // here. A project whose host cannot serve (VC-576) starts none, and says why.
   if (!guardWrite(scope.projectId)) return null;
-  // A remote project's Sessions run on its host: VC-713 routes them there.
-  // Until then this Mac starts none for it, and says so.
-  if (refuseRemote(scope.projectId)) return null;
+  // VC-713 owns create/attach/send on the box, including draft promotion.
+  // Only this project's validated Workspace grant opens these chat doors:
+  // HOST health, another project's welcome, and unknown old DTOs grant nothing.
+  if (
+    remoteHostNow(scope.projectId) !== null &&
+    !useHostConnectionStore.getState().projects[scope.projectId]?.granted?.includes("sessions")
+  ) {
+    refuseRemote(scope.projectId);
+    return null;
+  }
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       if (!createsSessionNow) {

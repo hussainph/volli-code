@@ -871,3 +871,50 @@ describe("the tier client and the flag", () => {
     expect(listeners.size).toBe(0);
   });
 });
+
+describe("HOST welcome facts", () => {
+  it("ignores HOST facts from a replaced subscription and after close", () => {
+    const fake = fakeClient();
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const source = createRemoteHostSource(fake.client, { setTimer: timer.setTimer });
+    const ready = snapshot([
+      remote({ hostScope: { status: "ready", granted: ["host.logs", "host.workspaces"] } }),
+    ]);
+    fake.push(ready);
+    const old = fake.handlers[0]!;
+    source.retrySubscription!();
+    fake.push(snapshot([remote({ hostScope: { status: "connecting", granted: [] } })]));
+    const next = source.getSnapshot();
+    old.onData(ready);
+    old.onError(new Error("stale"));
+    expect(source.getSnapshot()).toBe(next);
+    expect(next.hosts[0]!.hostScope).toEqual({ status: "connecting", granted: [] });
+    source.close();
+    fake.handlers[1]!.onData(ready);
+    expect(source.getSnapshot()).toBe(next);
+    expect(timer.armed).toEqual([]);
+  });
+
+  it("carries hostScope without projects, retaining record identity for equal facts", () => {
+    const fake = fakeClient();
+    const source = createRemoteHostSource(fake.client);
+    const store = createHostConnectionStore();
+    const detach = store.getState().attach(source);
+    const scope = { status: "ready" as const, granted: ["host.logs", "host.workspaces"] };
+    fake.push(snapshot([remote({ hostScope: scope })]));
+    const before = store.getState().hosts[0]!;
+    expect(before.hostScope).toBe(scope);
+    fake.push(snapshot([remote({ hostScope: { ...scope, granted: [...scope.granted] } })]));
+    expect(store.getState().hosts[0]).toBe(before);
+    fake.push(snapshot([remote({ hostScope: { ...scope, granted: ["host.logs"] } })]));
+    expect(store.getState().hosts[0]).not.toBe(before);
+    const changed = store.getState().hosts[0]!;
+    fake.push(snapshot([remote({ hostScope: { status: "unavailable", granted: [] } })]));
+    expect(store.getState().hosts[0]).not.toBe(changed);
+    expect(store.getState().hosts[0]!.hostScope?.status).toBe("unavailable");
+    expect(store.getState().projects).toEqual({});
+    detach();
+    source.close();
+  });
+});

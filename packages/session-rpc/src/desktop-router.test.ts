@@ -12,6 +12,7 @@ import {
 } from "@volli/host-protocol/testing";
 import {
   HOST_LINK_RELAY_PATH_MAX,
+  HOST_LINK_RELAY_EVENT_ID_MAX,
   OperationUnavailableError,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
@@ -289,6 +290,9 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostLink.query": record("hostLink.query", { answered: "query" }),
     "hostLink.mutate": record("hostLink.mutate", { answered: "mutate" }),
     "hostLink.subscribe": stream("hostLink.subscribe", { kind: "started" }),
+    "hostScope.query": record("hostScope.query", { answered: "query" }),
+    "hostScope.mutate": record("hostScope.mutate", { answered: "mutate" }),
+    "hostScope.subscribe": stream("hostScope.subscribe", { kind: "started" }),
     ...fixture.overrides,
   };
 }
@@ -666,6 +670,151 @@ describeContract<Host, DesktopRouter>(
         expect(await expectHostError(call()), what).toMatchObject({ code: "BAD_REQUEST" });
       }
       expect(fixture.calls.map(({ key }) => key)).toEqual(["hostLink.query"]);
+    });
+
+    // The HOST relay (VC-722): the window's alone, through the map.
+    it("relays the window's calls to a remote host, and ends a stream at its last event", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const call = { hostId: HOST, path: "workspaces.list", input: { projectId: "p" } };
+      expect(await client.hostScope.query.query(call)).toEqual({ answered: "query" });
+      expect(
+        await client.hostScope.mutate.mutate({ hostId: HOST, path: "workspaces.create" }),
+      ).toEqual({ answered: "mutate" });
+      const ended = Promise.withResolvers<void>();
+      const events: unknown[] = [];
+      const subscription = client.hostScope.subscribe.subscribe(
+        { hostId: HOST, path: "logs.follow", input: {}, lastEventId: "41" },
+        {
+          onData: (event) => void events.push(event),
+          onError: (error) => ended.reject(error),
+          onComplete: () => ended.resolve(),
+        },
+      );
+      await vi.waitFor(() => expect(fixture.sinks.has("hostScope.subscribe")).toBe(true));
+      const sink = fixture.sinks.get("hostScope.subscribe")!;
+      await sink.emit({ kind: "data", data: { cursor: "42" }, id: "42" });
+      const lost = {
+        kind: "lost",
+        error: { code: "SERVICE_UNAVAILABLE", message: "gone", reason: "host-unreachable" },
+      };
+      await sink.emit(lost);
+      await sink.emit({ kind: "data", data: "after the end" });
+      await ended.promise;
+      subscription.unsubscribe();
+      expect(events).toEqual([
+        { kind: "started" },
+        { kind: "data", data: { cursor: "42" }, id: "42" },
+        lost,
+      ]);
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["hostScope.subscribe"]));
+      expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
+        ["hostScope.query", call],
+        ["hostScope.mutate", { hostId: HOST, path: "workspaces.create" }],
+        [
+          "hostScope.subscribe",
+          { hostId: HOST, path: "logs.follow", input: {}, lastEventId: "41" },
+        ],
+      ]);
+      for (const { call: made } of fixture.calls) expect(made).toEqual(WINDOW_CALL);
+    });
+
+    // What main answers travels typed: the link's own reasons, the host's, and
+    // a code with no reason; the map's unavailable stays the router's.
+    it("passes a relayed failure's reason on, and a host's bare code", async () => {
+      const thrown: unknown[] = [
+        // A link's own failure: the host error is the error's `data.hostError`.
+        {
+          message: "x",
+          data: {
+            code: "SERVICE_UNAVAILABLE",
+            hostError: {
+              code: "SERVICE_UNAVAILABLE",
+              message: "The project's host can't be reached",
+              reason: "host-unreachable",
+            },
+          },
+        },
+        Object.assign(new Error("workspaces.create is not granted"), {
+          code: "FORBIDDEN",
+          reason: "verb-refused",
+        }),
+        { message: "Not found", data: { code: "NOT_FOUND" } },
+        new OperationUnavailableError("Remote host operations are unavailable on this host"),
+      ];
+      let index = 0;
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "hostScope.query": () => {
+          throw thrown[index++];
+        },
+      });
+      const client = await connect(fixture);
+      const call = () => client.hostScope.query.query({ hostId: HOST, path: "board.x" });
+      expect(await expectHostError(call())).toEqual({
+        code: "SERVICE_UNAVAILABLE",
+        message: "The project's host can't be reached",
+        reason: "host-unreachable",
+      });
+      expect(await expectHostError(call())).toEqual({
+        code: "FORBIDDEN",
+        message: "workspaces.create is not granted",
+        reason: "verb-refused",
+      });
+      expect(await expectHostError(call())).toEqual({ code: "NOT_FOUND", message: "Not found" });
+      expect(await expectHostError(call())).toEqual({
+        code: "NOT_IMPLEMENTED",
+        message: "Remote host operations are unavailable on this host",
+        reason: "operation-unavailable",
+      });
+    });
+
+    it("refuses a network caller the relay, and a malformed relay call before the handler", async () => {
+      for (const caller of [device, session]) {
+        const fixture = host(caller);
+        const client = await connect(fixture);
+        expect(
+          await expectHostError(
+            client.hostScope.mutate.mutate({ hostId: HOST, path: "workspaces.create" }),
+          ),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(fixture.calls).toEqual([]);
+      }
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const longest = `a.${"b".repeat(HOST_LINK_RELAY_PATH_MAX - 2)}`;
+      expect(await client.hostScope.query.query({ hostId: HOST, path: longest })).toEqual({
+        answered: "query",
+      });
+      const malformed: [string, () => Promise<unknown>][] = [
+        ["not a Host id", () => client.hostScope.query.query({ hostId: "w", path: "a.b" })],
+        ["no dot", () => client.hostScope.query.query({ hostId: HOST, path: "board" })],
+        [
+          "path too long",
+          () => client.hostScope.query.query({ hostId: HOST, path: `${longest}c` }),
+        ],
+        [
+          "a path that is not a name",
+          () => client.hostScope.mutate.mutate({ hostId: HOST, path: "../board.x" }),
+        ],
+        [
+          "an unknown key",
+          () => client.hostScope.query.query({ hostId: HOST, path: "a.b", extra: 1 } as never),
+        ],
+        [
+          "an empty resume id",
+          () =>
+            collect((handlers) =>
+              client.hostScope.subscribe.subscribe(
+                { hostId: HOST, path: "a.b", lastEventId: "" },
+                handlers,
+              ),
+            ).failed,
+        ],
+      ];
+      for (const [what, call] of malformed) {
+        expect(await expectHostError(call()), what).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls.map(({ key }) => key)).toEqual(["hostScope.query"]);
     });
 
     // Remote hosts (VC-700 PR 2): desktop main's registry, the window's alone.
@@ -1089,6 +1238,79 @@ describe("a desktop-only stream's edges", () => {
   });
 });
 
+describe("the HOST relay's stream lifecycle", () => {
+  const input = { hostId: HOST, path: "logs.follow" };
+
+  it.each(["complete", "lost", "resnapshot", "error"])(
+    "ends after %s and releases once",
+    async (kind) => {
+      const stop = vi.fn();
+      const terminal =
+        kind === "complete"
+          ? { kind }
+          : {
+              kind,
+              error: { code: "SERVICE_UNAVAILABLE", message: "ended", reason: "host-unreachable" },
+            };
+      const { caller } = directCaller({
+        "hostScope.subscribe": async (_input, _call, sink) => {
+          await sink.emit({ kind: "data", data: null, id: "42" });
+          await sink.emit(terminal as never);
+          await sink.emit({ kind: "data", data: "too late" });
+          return stop;
+        },
+      });
+      expect(await drain(await caller.hostScope.subscribe(input))).toEqual({
+        values: [{ kind: "data", data: null, id: "42" }, terminal],
+        error: null,
+      });
+      expect(stop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("bounds the queue and records overflow on the HOST relay path", async () => {
+    const stop = vi.fn();
+    const { caller, fixture } = directCaller({
+      "hostScope.subscribe": async (_input, _call, sink) => {
+        for (let i = 0; i <= DESKTOP_STREAM_CAPACITY; i++)
+          await sink.emit({ kind: "data", data: i });
+        return stop;
+      },
+    });
+    const { values, error } = await drain(await caller.hostScope.subscribe(input));
+    expect(values).toHaveLength(DESKTOP_STREAM_CAPACITY);
+    expect(error).toMatchObject({ reason: "subscription-overflow" });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(fixture.diagnostics.list().at(-1)).toMatchObject({
+      procedure: "hostScope.subscribe",
+      phase: "error",
+      code: "SUBSCRIPTION_OVERFLOW",
+    });
+  });
+
+  it("maps an unavailable stream and stops a live stream on cancellation", async () => {
+    const unavailableSource = directCaller({
+      "hostScope.subscribe": async () => {
+        throw new OperationUnavailableError("Remote host operations are unavailable on this host");
+      },
+    });
+    expect(
+      (await drain(await unavailableSource.caller.hostScope.subscribe(input))).error,
+    ).toMatchObject({
+      reason: "operation-unavailable",
+      code: "NOT_IMPLEMENTED",
+    });
+    const controller = new AbortController();
+    const { caller, fixture } = directCaller({}, controller.signal);
+    const iterator = (await caller.hostScope.subscribe(input))[Symbol.asyncIterator]();
+    expect(await iterator.next()).toEqual({ done: false, value: { kind: "started" } });
+    const pending = iterator.next();
+    controller.abort();
+    expect(await pending).toEqual({ done: true, value: undefined });
+    expect(fixture.unsubscribed).toEqual(["hostScope.subscribe"]);
+  });
+});
+
 describe("the desktop router's grammar", () => {
   it("publishes both validators of every desktop-only procedure", () => {
     const schemas = desktopProcedureSchemas();
@@ -1128,6 +1350,9 @@ describe("the desktop router's grammar", () => {
         "hostLink.query",
         "hostLink.mutate",
         "hostLink.subscribe",
+        "hostScope.query",
+        "hostScope.mutate",
+        "hostScope.subscribe",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
@@ -1165,11 +1390,36 @@ describe("the desktop router's grammar", () => {
     expect(schemas["hostAdd.subscribe"]!.output).toBe(addHostEventSchema);
     expect(schemas["hostLink.subscribe"]).toMatchObject({ type: "subscription" });
     expect(schemas["hostLink.subscribe"]!.output).toBe(hostLinkRelayEventSchema);
+    expect(schemas["hostScope.query"]).toMatchObject({ type: "query" });
+    expect(schemas["hostScope.mutate"]).toMatchObject({ type: "mutation" });
+    expect(schemas["hostScope.subscribe"]!.output).toBe(hostLinkRelayEventSchema);
     // Every schema publishes as JSON Schema: no transform, no custom parser.
     for (const [key, { input, output }] of Object.entries(schemas)) {
       expect(() => z.toJSONSchema(input, { io: "input" }), key).not.toThrow();
       expect(() => z.toJSONSchema(output, { io: "output" }), key).not.toThrow();
     }
+  });
+
+  it("bounds HOST input exactly like Workspace relay input but requires hostId", () => {
+    const schemas = desktopProcedureSchemas();
+    const call = { hostId: HOST, path: "workspaces.list", input: { arbitrary: true } };
+    expect(schemas["hostScope.query"]!.input.parse(call)).toEqual(call);
+    expect(
+      schemas["hostScope.subscribe"]!.input.parse({
+        ...call,
+        lastEventId: "x".repeat(HOST_LINK_RELAY_EVENT_ID_MAX),
+      }),
+    ).toMatchObject(call);
+    for (const bad of [
+      { workspaceId: WORKSPACE, path: "workspaces.list" },
+      { ...call, workspaceId: WORKSPACE },
+      { ...call, hostId: "not-a-uuid" },
+      { ...call, path: "workspaces" },
+      { ...call, path: `a.${"b".repeat(HOST_LINK_RELAY_PATH_MAX)}` },
+      { ...call, lastEventId: "" },
+      { ...call, lastEventId: "x".repeat(HOST_LINK_RELAY_EVENT_ID_MAX + 1) },
+    ])
+      expect(() => schemas["hostScope.subscribe"]!.input.parse(bad)).toThrow();
   });
 
   it("bounds a project's granted features as a welcome bounds its own (VC-712)", () => {

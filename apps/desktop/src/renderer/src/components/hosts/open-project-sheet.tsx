@@ -1,6 +1,7 @@
 /**
  * "Open a project on <host>…" (VC-710): the host's projects, read from it
- * over SSH each time the sheet opens, each with Open (or Close, once this Mac
+ * over the HOST connection each time the sheet opens (SSH only for older hosts),
+ * each with Open (or Close, once this Mac
  * has it open), and "New project…", which makes one there from a git URL or
  * a folder on the host, then opens it.
  *
@@ -20,7 +21,7 @@ import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import type { RemoteHost, RemoteProjectFailure } from "@volli/shared";
+import type { RemoteHost } from "@volli/shared";
 import { toast } from "sonner";
 
 import { Button } from "@renderer/components/ui/button";
@@ -35,7 +36,15 @@ import { Spinner } from "@renderer/components/ui/spinner";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
-import { remoteHostOf, remoteHosts, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import {
+  createProjectOnHost,
+  projectsOnHost,
+  usesLegacyProjects,
+  readdHostToUpdate,
+  remoteHostOf,
+  remoteHosts,
+  useRemoteHostsStore,
+} from "@renderer/stores/remote-hosts";
 
 import { CommandLine } from "./add-host-sheet";
 import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
@@ -43,6 +52,7 @@ import { EASE_OUT, HostGlyph, useMotionTiming } from "./host-parts";
 import {
   canCreate,
   creatingLine,
+  createProjectIntent,
   failedLine,
   failureRecovery,
   listNotice,
@@ -51,6 +61,7 @@ import {
   sourceHint,
   sourceProblem,
   type ProjectListState,
+  type ProjectFailure,
   type ProjectNotice,
 } from "./open-project-model";
 
@@ -136,24 +147,22 @@ function OpenProjectBody({
   const read = React.useCallback(() => {
     const mine = (reads.current += 1);
     setState({ kind: "loading" });
-    remoteHosts()
-      .projects(host.id)
-      .then(
-        (listing) => {
-          if (alive() && reads.current === mine) setState({ kind: "ready", listing });
-        },
-        (error: unknown) => {
-          if (!alive() || reads.current !== mine) return;
-          setState({
-            kind: "error",
-            message:
-              error instanceof Error && error.message !== ""
-                ? error.message
-                : `Couldn’t reach ${host.name}.`,
-          });
-        },
-      );
-  }, [alive, host.id, host.name]);
+    projectsOnHost(host).then(
+      (listing) => {
+        if (alive() && reads.current === mine) setState({ kind: "ready", listing });
+      },
+      (error: unknown) => {
+        if (!alive() || reads.current !== mine) return;
+        setState({
+          kind: "error",
+          message:
+            error instanceof Error && error.message !== ""
+              ? error.message
+              : `Couldn’t reach ${host.name}.`,
+        });
+      },
+    );
+  }, [alive, host]);
   React.useEffect(read, [read]);
 
   /** Opens one of the host's projects here, then the sheet is done. */
@@ -219,6 +228,7 @@ function OpenProjectBody({
             host={host}
             alive={alive}
             onDismiss={close}
+            onRefresh={read}
             onBack={() => setScreen("list")}
             onOpen={open}
           />
@@ -288,7 +298,15 @@ function ListScreen({
     [claims, host.id],
   );
   const rows = state.kind === "ready" ? projectRows(state.listing.projects, opened) : [];
-  const notice = listNotice(state, host.name);
+  const notice = listNotice(
+    usesLegacyProjects(host) && host.mode === "user"
+      ? {
+          kind: "ready",
+          listing: { hostId: host.id, projects: [], adds: { kind: "user-install" } },
+        }
+      : state,
+    host.name,
+  );
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4" data-slot="open-project-body">
@@ -339,7 +357,17 @@ function ListScreen({
             ))}
           </ul>
         ) : null}
-        {notice === null ? null : <Notice notice={notice} onRetry={onRetry} onNew={onNew} />}
+        {notice === null ? null : (
+          <Notice
+            notice={notice}
+            onRetry={onRetry}
+            onNew={onNew}
+            onReAdd={() => {
+              useRemoteHostsStore.getState().closeProjectSheet();
+              readdHostToUpdate(host.id);
+            }}
+          />
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-4 py-4">
         {canCreate(state) && notice?.recovery.kind !== "new" ? (
@@ -362,8 +390,10 @@ function Notice({
   notice,
   onRetry,
   onNew,
+  onReAdd,
 }: {
   notice: ProjectNotice;
+  onReAdd: () => void;
   onRetry: () => void;
   onNew: () => void;
 }) {
@@ -378,7 +408,9 @@ function Notice({
           <Button
             size="sm"
             variant={recovery.kind === "new" ? "default" : "secondary"}
-            onClick={recovery.kind === "new" ? onNew : onRetry}
+            onClick={
+              recovery.kind === "new" ? onNew : recovery.kind === "re-add" ? onReAdd : onRetry
+            }
           >
             {recovery.kind === "new" ? <PlusIcon /> : <ArrowClockwiseIcon />}
             {recovery.label}
@@ -395,29 +427,35 @@ function NewProjectScreen({
   host,
   alive,
   onDismiss,
+  onRefresh,
   onBack,
   onOpen,
 }: {
   host: RemoteHost;
   alive: () => boolean;
   onDismiss: () => void;
+  onRefresh: () => void;
   onBack: () => void;
   onOpen: (id: string, name: string) => Promise<boolean>;
 }) {
   const [text, setText] = React.useState("");
   const [name, setName] = React.useState("");
   const [running, setRunning] = React.useState<string | null>(null);
-  const [failure, setFailure] = React.useState<RemoteProjectFailure | null>(null);
+  const [failure, setFailure] = React.useState<ProjectFailure | null>(null);
   // The sudo password field is uncontrolled: its text is read once, on
   // submit, and cleared at once. Only whether it has any lives in state.
   const password = React.useRef<HTMLInputElement>(null);
   const [hasPassword, setHasPassword] = React.useState(false);
   const [tries, setTries] = React.useState(0);
+  const intent = React.useRef(createProjectIntent());
+  const modern = !usesLegacyProjects(host);
+  const blocked = !modern && host.mode === "user";
   const source = projectSource(text);
-  const problem = sourceProblem(source, host.name);
+  const problem = sourceProblem(source, host.name, modern);
   const recovery = failure === null ? null : failureRecovery(failure, host.name, tries);
   const asking = recovery?.kind === "password";
-  const ready = source !== null && problem === null && running === null && (!asking || hasPassword);
+  const ready =
+    !blocked && source !== null && problem === null && running === null && (!asking || hasPassword);
 
   const create = (): void => {
     if (source === null || problem !== null) return;
@@ -433,13 +471,15 @@ function NewProjectScreen({
     setFailure(null);
     setRunning(creatingLine(source, host.name));
     const label = name.trim();
-    remoteHosts()
-      .createProject({
-        hostId: host.id,
-        ...(source.kind === "git" ? { gitUrl: source.gitUrl } : { path: source.path }),
+    createProjectOnHost(
+      host,
+      {
+        commandId: intent.current.accept(source, label),
+        source: source.kind === "git" ? { gitUrl: source.gitUrl } : { path: source.path },
         ...(label === "" ? {} : { name: label }),
-        ...(sudoPassword === null || sudoPassword === "" ? {} : { sudoPassword }),
-      })
+      },
+      sudoPassword === null || sudoPassword === "" ? undefined : sudoPassword,
+    )
       .then(
         async (result) => {
           // A view gone (closed, another host's, cloud off) starts nothing more:
@@ -447,6 +487,7 @@ function NewProjectScreen({
           if (!alive()) return;
           if (!result.ok) {
             setFailure(result.failure);
+            if (result.failure.code === "target-exists") onRefresh();
             return;
           }
           await onOpen(result.project.id, result.project.name);
@@ -464,6 +505,24 @@ function NewProjectScreen({
         if (alive()) setRunning(null);
       });
   };
+
+  if (blocked)
+    return (
+      <div className="px-6 pb-4">
+        <Notice
+          notice={{
+            line: `Update ${host.name} to create projects from here`,
+            recovery: { kind: "re-add", label: "Re-add" },
+          }}
+          onRetry={onBack}
+          onNew={onBack}
+          onReAdd={() => {
+            onDismiss();
+            readdHostToUpdate(host.id);
+          }}
+        />
+      </div>
+    );
 
   return (
     <form
@@ -485,7 +544,11 @@ function NewProjectScreen({
           autoCorrect="off"
           disabled={running !== null}
           className="h-9 font-mono text-sm"
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            intent.current.edited();
+            setFailure(null);
+            setText(event.target.value);
+          }}
         />
         <p
           className={cn(
@@ -493,7 +556,7 @@ function NewProjectScreen({
             problem === null ? "text-muted-foreground" : "text-destructive",
           )}
         >
-          {problem ?? sourceHint(source)}
+          {problem ?? sourceHint(source, modern)}
         </p>
         <Input
           aria-label="Name (optional)"
@@ -501,7 +564,11 @@ function NewProjectScreen({
           placeholder="Name (optional: the folder’s)"
           disabled={running !== null}
           className="h-9 text-sm"
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            intent.current.edited();
+            setFailure(null);
+            setName(event.target.value);
+          }}
         />
         {running === null ? null : (
           <p role="status" className="flex items-center gap-2 px-1 text-ui text-muted-foreground">

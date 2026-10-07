@@ -418,6 +418,105 @@ describe("the Workspace link relay (VC-711)", () => {
   });
 });
 
+describe("the HOST relay (VC-722)", () => {
+  const HOST = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+
+  it("answers unavailable without the port, a stream included", async () => {
+    for (const hostScopeRelay of [undefined, null]) {
+      const empty = handlers({ hostScopeRelay });
+      const quiet = { emit() {}, fail() {} };
+      for (const call of [
+        () => empty["hostScope.query"]({ hostId: HOST, path: "workspaces.list" }, USER),
+        () => empty["hostScope.mutate"]({ hostId: HOST, path: "workspaces.create" }, USER),
+        () => empty["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, USER, quiet),
+      ]) {
+        expect(await unavailable(call)).toBe("Remote host operations are unavailable on this host");
+      }
+    }
+  });
+
+  it("passes each call through the port once, a stream's events into its sink", async () => {
+    const stop = vi.fn();
+    const port = {
+      query: vi.fn(async () => ({ answered: "query" })),
+      mutate: vi.fn(async () => ({ answered: "mutate" })),
+      subscribe: vi.fn(
+        async (
+          _hostId: string,
+          _path: string,
+          _input: unknown,
+          _lastEventId: string | undefined,
+          listener: (event: unknown) => void | Promise<void>,
+        ) => {
+          listener({ kind: "data", data: 1, id: "1" });
+          listener({ kind: "complete" });
+          return stop;
+        },
+      ),
+    };
+    const map = handlers({ hostScopeRelay: port });
+    expect(
+      await map["hostScope.query"](
+        { hostId: HOST, path: "workspaces.list", input: { projectId: "p" } },
+        USER,
+      ),
+    ).toEqual({ answered: "query" });
+    expect(
+      await map["hostScope.mutate"]({ hostId: HOST, path: "workspaces.create" }, USER),
+    ).toEqual({ answered: "mutate" });
+    const emitted: unknown[] = [];
+    const into = { emit: (event: unknown) => void emitted.push(event), fail() {} };
+    expect(
+      await map["hostScope.subscribe"](
+        { hostId: HOST, path: "logs.follow", input: {}, lastEventId: "9" },
+        USER,
+        into,
+      ),
+    ).toBe(stop);
+    await map["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, USER, into);
+    expect(emitted).toEqual([
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+    ]);
+    expect(port.query).toHaveBeenCalledOnce();
+    expect(port.mutate).toHaveBeenCalledOnce();
+    expect(port.query).toHaveBeenCalledWith(HOST, "workspaces.list", { projectId: "p" });
+    expect(port.mutate).toHaveBeenCalledWith(HOST, "workspaces.create", undefined);
+    expect(port.subscribe.mock.calls.map((call) => [call[1], call[2], call[3]])).toEqual([
+      ["logs.follow", {}, "9"],
+      ["logs.follow", undefined, undefined],
+    ]);
+  });
+
+  it("accepts a synchronous stop and preserves sink backpressure", async () => {
+    const stop = vi.fn();
+    const pending = Promise.withResolvers<void>();
+    const emit = vi.fn(() => pending.promise);
+    let delivery: void | Promise<void>;
+    const map = handlers({
+      hostScopeRelay: {
+        query: async () => null,
+        mutate: async () => null,
+        subscribe: (_hostId, _path, _input, _lastEventId, listener) => {
+          delivery = listener({ kind: "started" });
+          return stop;
+        },
+      },
+    });
+    expect(
+      await map["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, USER, {
+        emit,
+        fail() {},
+      }),
+    ).toBe(stop);
+    expect(delivery!).toBe(pending.promise);
+    pending.resolve();
+    await delivery!;
+  });
+});
+
 describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {
