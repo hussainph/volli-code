@@ -96,6 +96,9 @@ export function useRestartSessionCount(questionId: string | null, target: string
           setAnswer({ questionId, target, count: live.size });
         },
         () => {
+          // Promise.all rejects before pending siblings settle. End every
+          // read before finally disarms their shared two-second bound.
+          controller.abort();
           // Optional warning context: the restart warning remains, without a guessed number.
         },
       )

@@ -422,6 +422,30 @@ describe("restart warning's bounded live Session count", () => {
     },
   );
 
+  it("aborts a pending sibling when another real project listing rejects", async () => {
+    const delayed = heldPage();
+    const box = await host((projectId) => {
+      if (projectId === PROJECT) throw new Error("Fixture listing refused");
+      return delayed.promise;
+    });
+    await box.open();
+    await box.open(OTHER_PROJECT);
+    const probe = await view();
+    await act(async () => {
+      await vi.waitFor(() => expect(box.calls).toHaveLength(2), WAIT);
+      await pause(2_100);
+    });
+    expect(reads).toHaveLength(2);
+    expect(reads.every((read) => read.settled || read.signal?.aborted)).toBe(true);
+    expect(reads.every((read) => read.signal?.aborted)).toBe(true);
+    expect(probe.count()).toBe("unknown");
+    delayed.release(page(chat("late-sibling", true, OTHER_PROJECT)));
+    await flush();
+    expect(probe.count()).toBe("unknown");
+    expect(probe.rendered).not.toContain(1);
+    expect(box.calls).toHaveLength(2);
+  });
+
   it("aborts a delayed read at two seconds and ignores the host's later answer", async () => {
     const delayed = heldPage();
     const box = await host(() => delayed.promise);
