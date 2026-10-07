@@ -61,6 +61,8 @@ const app = await launch({
     VOLLI_DIAG_PROFILE: profile,
     ...(variant === "late-dock" ? { VOLLI_QUIET_WINDOWS: "0" } : {}),
     ...(crashFirst ? { VOLLI_DIAG_DESTROY_MODE: "crash-first" } : {}),
+    ...(variant.endsWith("-nohide") ? { VOLLI_DIAG_SKIP_HIDE: "1" } : {}),
+    ...(variant.endsWith("-loud") ? { VOLLI_QUIET_WINDOWS: "0" } : {}),
   },
 });
 const child = app.process();
@@ -99,6 +101,16 @@ try {
       { timeout: 30000, interval: 50 },
     );
     await sleep(Math.max(0, Number(dflDelay) - sinceDfl));
+    if (variant.endsWith("-waitpaint")) {
+      const t = Date.now();
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))),
+          ),
+      );
+      smoke.waitPaintMs = Date.now() - t;
+    }
   }
   if (enters) {
     const rendererAge = await page.evaluate(() => Math.round(performance.now()));

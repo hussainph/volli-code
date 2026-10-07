@@ -2437,7 +2437,9 @@ const appStartup = app.whenReady().then(async () => {
         const closing = diagSpan("closeAll.liveWindows", () => liveWindows());
         for (const window of closing) {
           retiringWindows.add(window);
-          diagSpan("closeAll.window.hide", () => window.hide());
+          if (process.env["VOLLI_DIAG_SKIP_HIDE"] !== "1") {
+            diagSpan("closeAll.window.hide", () => window.hide());
+          }
         }
         void diagSpan("closeAll.flushSend", () =>
           flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {

@@ -42,14 +42,9 @@ jobs:
           mkdir -p "$VOLLI_DIAG_OUT"
           export VOLLI_DIAG_PROFILE=0
           for rep in 1 2 3; do
-            for v in dfl+300 dfl+1500 dfl+3000 dfl+6000 dfl+12000 dfl+300-crash; do
+            for v in dfl+300 dfl+300-loud dfl+300-nohide dfl+300-waitpaint dfl+3000-loud; do
               echo "=== rep $rep $v"
-              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso2-r$rep-$v" || echo "FAILED $v $rep"
-            done
-          done
-          for rep in 1 2; do
-            for v in noenter-on noenter-off; do
-              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso2-r$rep-$v-noprof" || echo "FAILED $v $rep"
+              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso3-r$rep-$v" || echo "FAILED $v $rep"
             done
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
