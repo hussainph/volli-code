@@ -36,20 +36,19 @@ describe("a host's health in Settings", () => {
     expect(hostHealth(remote({}), 1)).toEqual({ state: "ready", label: "Online" });
     expect(hostHealth(remote({ link: { status: "connecting" } }), 1)?.label).toBe("Connecting");
     expect(hostHealth(remote({ link: { status: "reconnecting" } }), 1)?.label).toBe("Connecting");
-    expect(
-      hostHealth(remote({ link: { status: "offline", since: 0, retryAt: null } }), 1),
-    ).toEqual({ state: "exited", label: "Offline" });
+    expect(hostHealth(remote({ link: { status: "offline", since: 0, retryAt: null } }), 1)).toEqual(
+      { state: "exited", label: "Offline" },
+    );
     expect(
       hostHealth(remote({ link: { status: "version-skewed", availableVersion: "2" } }), 1)?.label,
     ).toBe("Update available");
+    expect(hostHealth(remote({ link: { status: "incompatible", reason: "refused" } }), 2)).toEqual({
+      state: "error",
+      label: "Can’t serve",
+    });
     expect(
-      hostHealth(remote({ link: { status: "incompatible", reason: "refused" } }), 2),
-    ).toEqual({ state: "error", label: "Can’t serve" });
-    expect(
-      hostHealth(
-        remote({ update: { status: "running", progress: 0.5, targetVersion: "2" } }),
-        1,
-      )?.label,
+      hostHealth(remote({ update: { status: "running", progress: 0.5, targetVersion: "2" } }), 1)
+        ?.label,
     ).toBe("Updating");
   });
 });

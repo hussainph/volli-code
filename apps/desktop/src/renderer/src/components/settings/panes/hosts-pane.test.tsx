@@ -2,7 +2,12 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { click, HETZNER_ID, hostWorld, type HostWorld } from "@renderer/components/hosts/hosts.test-support";
+import {
+  click,
+  HETZNER_ID,
+  hostWorld,
+  type HostWorld,
+} from "@renderer/components/hosts/hosts.test-support";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
@@ -56,7 +61,7 @@ async function renderPane(hosts = [HETZNER, IDLE]): Promise<HTMLElement> {
 }
 
 function rowNames(root: HTMLElement): string[] {
-  return [...root.querySelectorAll('[data-host-row]')].map((row) => row.textContent ?? "");
+  return [...root.querySelectorAll("[data-host-row]")].map((row) => row.textContent ?? "");
 }
 
 async function settle(): Promise<void> {
@@ -66,7 +71,7 @@ async function settle(): Promise<void> {
 }
 
 async function openHost(root: HTMLElement, name: string): Promise<void> {
-  const row = [...root.querySelectorAll<HTMLElement>('[data-host-row]')].find((candidate) =>
+  const row = [...root.querySelectorAll<HTMLElement>("[data-host-row]")].find((candidate) =>
     candidate.textContent?.includes(name),
   );
   if (row === undefined) throw new Error(`No row ${name}`);
@@ -93,15 +98,31 @@ describe("Settings → Hosts", () => {
     const rows = rowNames(root);
     expect(rows).toHaveLength(2);
     expect(rows[1]).toContain("Add a host…");
-    const add = root.querySelectorAll<HTMLElement>('[data-host-row]')[1]!;
+    const add = root.querySelectorAll<HTMLElement>("[data-host-row]")[1]!;
     await act(async () => add.click());
     expect(useRemoteHostsStore.getState().addHost.open).toBe(true);
   });
 
   it("opens a host's page: its facts, its projects, and the devices it has paired", async () => {
     api.devicesOf.set(IDLE.id, [
-      { deviceId: "dev-old", name: "Old laptop", fingerprint: "f", enrolledAt: "2026-01-01T00:00:00Z", via: "ssh", revokedAt: "2026-02-01T00:00:00Z", thisMac: false },
-      { deviceId: "dev-me", name: "Hussain’s MacBook Pro", fingerprint: "f", enrolledAt: "2026-10-03T00:00:00Z", via: "ssh", revokedAt: null, thisMac: true },
+      {
+        deviceId: "dev-old",
+        name: "Old laptop",
+        fingerprint: "f",
+        enrolledAt: "2026-01-01T00:00:00Z",
+        via: "ssh",
+        revokedAt: "2026-02-01T00:00:00Z",
+        thisMac: false,
+      },
+      {
+        deviceId: "dev-me",
+        name: "Hussain’s MacBook Pro",
+        fingerprint: "f",
+        enrolledAt: "2026-10-03T00:00:00Z",
+        via: "ssh",
+        revokedAt: null,
+        thisMac: true,
+      },
     ]);
     const root = await renderPane();
     await openHost(root, "studio");
@@ -153,7 +174,9 @@ describe("Settings → Hosts", () => {
       setter.call(field, "Studio Mac");
       field.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () =>
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
     expect(api.calls).toContainEqual(["rename", IDLE.id, "Studio Mac"]);
   });
 
@@ -168,7 +191,9 @@ describe("Settings → Hosts", () => {
       setter.call(field, "x");
       field.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () =>
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
     await settle();
     expect(toast.error).toHaveBeenCalled();
   });

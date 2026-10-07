@@ -59,7 +59,8 @@ function input(label: string): HTMLInputElement {
 
 function button(name: string): HTMLButtonElement | undefined {
   return [...sheet().querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === name || candidate.getAttribute("aria-label") === name,
+    (candidate) =>
+      candidate.textContent?.trim() === name || candidate.getAttribute("aria-label") === name,
   );
 }
 
@@ -81,7 +82,8 @@ async function emit(event: Parameters<FakeRemoteHostsApi["emit"]>[1]): Promise<v
 
 function rows(): string[] {
   return [...sheet().querySelectorAll("li[data-step]")].map(
-    (row) => `${row.getAttribute("data-step")}:${row.querySelector('[data-slot="step-mark"]')?.getAttribute("data-status")}:${row.textContent}`,
+    (row) =>
+      `${row.getAttribute("data-step")}:${row.querySelector('[data-slot="step-mark"]')?.getAttribute("data-status")}:${row.textContent}`,
   );
 }
 
@@ -92,7 +94,10 @@ describe("Add a host, flag off", () => {
     expect(root.innerHTML).toBe("");
     await act(async () => useRemoteHostsStore.getState().openAddHost());
     expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull();
-    expect(useHostConnectionStore.getState().entryPoints).toEqual({ addHost: null, manageHosts: null });
+    expect(useHostConnectionStore.getState().entryPoints).toEqual({
+      addHost: null,
+      manageHosts: null,
+    });
   });
 });
 
@@ -108,9 +113,14 @@ describe("Add a host", () => {
     expect(useUiStore.getState().settingsOpen).toBe(true);
     expect(useUiStore.getState().settingsCategory).toBe("hosts");
     await act(async () =>
-      (await import("@renderer/stores/experiments")).useExperimentsStore.setState({ snapshot: null }),
+      (await import("@renderer/stores/experiments")).useExperimentsStore.setState({
+        snapshot: null,
+      }),
     );
-    expect(useHostConnectionStore.getState().entryPoints).toEqual({ addHost: null, manageHosts: null });
+    expect(useHostConnectionStore.getState().entryPoints).toEqual({
+      addHost: null,
+      manageHosts: null,
+    });
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
   });
 
@@ -152,7 +162,12 @@ describe("Add a host", () => {
     await emit({
       kind: "log",
       flowId: "flow-1",
-      line: { at: "t", level: "info", message: "step started", fields: { step: "deliver", flowId: "flow-1", component: "host-install" } },
+      line: {
+        at: "t",
+        level: "info",
+        message: "step started",
+        fields: { step: "deliver", flowId: "flow-1", component: "host-install" },
+      },
     });
     expect(sheet().querySelector('[role="log"]')).toBeNull();
     await click(sheet(), "Details");
@@ -175,13 +190,18 @@ describe("Add a host", () => {
         question: {
           kind: "host-key",
           step: "connect",
-          offer: { entries: ["box ssh-ed25519 AAAA"], fingerprints: [{ type: "ED25519", fingerprint: "SHA256:abc" }] },
+          offer: {
+            entries: ["box ssh-ed25519 AAAA"],
+            fingerprints: [{ type: "ED25519", fingerprint: "SHA256:abc" }],
+          },
         },
       }),
     });
     expect(rows()[0]).toBe("connect:attention:Connect");
     expect(sheet().textContent).toContain("This Mac hasn’t seen deploy@box’s key before");
-    expect(sheet().querySelector('[aria-label="Host key fingerprints"]')?.textContent).toBe("ED25519SHA256:abc");
+    expect(sheet().querySelector('[aria-label="Host key fingerprints"]')?.textContent).toBe(
+      "ED25519SHA256:abc",
+    );
     await click(sheet(), "Trust and continue");
     expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "accept-host-key"]);
   });
@@ -194,7 +214,13 @@ describe("Add a host", () => {
         status: "question",
         done: 3,
         at: "install",
-        question: { kind: "sudo-password", step: "install", reason: "install", command: "sudo volli-hostd install --system", retry: false },
+        question: {
+          kind: "sudo-password",
+          step: "install",
+          reason: "install",
+          command: "sudo volli-hostd install --system",
+          retry: false,
+        },
       }),
     });
     expect(sheet().textContent).toContain("Installing for every account needs sudo");
@@ -214,7 +240,12 @@ describe("Add a host", () => {
     await startFlow();
     await emit({
       kind: "view",
-      view: flowView({ status: "question", at: "probe", done: 1, question: { kind: "already-paired", step: "probe", hostId: "h" } }),
+      view: flowView({
+        status: "question",
+        at: "probe",
+        done: 1,
+        question: { kind: "already-paired", step: "probe", hostId: "h" },
+      }),
     });
     api.refuseNext("answerAdd", "The flow is not waiting");
     await click(sheet(), "Open deploy@box");
@@ -230,7 +261,13 @@ describe("Add a host", () => {
         status: "question",
         at: "probe",
         done: 1,
-        question: { kind: "existing-hostd", step: "probe", version: "0.2.4", mode: "system", adoptable: true },
+        question: {
+          kind: "existing-hostd",
+          step: "probe",
+          version: "0.2.4",
+          mode: "system",
+          adoptable: true,
+        },
       }),
     });
     await click(sheet(), "Use 0.2.4");
@@ -241,7 +278,13 @@ describe("Add a host", () => {
         status: "question",
         at: "probe",
         done: 1,
-        question: { kind: "existing-hostd", step: "probe", version: "0.2.4", mode: "system", adoptable: false },
+        question: {
+          kind: "existing-hostd",
+          step: "probe",
+          version: "0.2.4",
+          mode: "system",
+          adoptable: false,
+        },
       }),
     });
     expect(button("Use 0.2.4")).toBeUndefined();
@@ -263,14 +306,25 @@ describe("Add a host", () => {
         status: "question",
         at: "start",
         done: 4,
-        question: { kind: "sudo-password", step: "start", reason: "linger", command: "sudo loginctl enable-linger deploy", retry: true },
+        question: {
+          kind: "sudo-password",
+          step: "start",
+          reason: "linger",
+          command: "sudo loginctl enable-linger deploy",
+          retry: true,
+        },
       }),
     });
     expect(sheet().textContent).toContain("That password didn’t work");
     expect(button("Install for my account only")).toBeUndefined();
     await emit({
       kind: "view",
-      view: flowView({ status: "question", at: "link", done: 6, question: { kind: "brand-new", step: "link" } }),
+      view: flowView({
+        status: "question",
+        at: "link",
+        done: 6,
+        question: { kind: "brand-new", step: "link" },
+      }),
     });
     expect(sheet().textContent).toContain("asked something this build can’t answer");
     expect(api.calls.slice(1)).toEqual([
@@ -286,7 +340,9 @@ describe("Add a host", () => {
       kind: "view",
       view: {
         ...flowView({ status: "failed", done: 0 }),
-        steps: flowView({ done: 0 }).steps.map((step) => (step.id === "connect" ? { ...step, status: "failed" } : step)),
+        steps: flowView({ done: 0 }).steps.map((step) =>
+          step.id === "connect" ? { ...step, status: "failed" } : step,
+        ),
         failure: {
           code: "unreachable",
           step: "connect",
@@ -335,7 +391,12 @@ describe("Add a host", () => {
   });
 
   it("ends on the host's facts: when it starts and whose account its agents share", async () => {
-    const host = registryHost({ name: "studio", os: "macos", mode: "user", agentsShareAccount: true });
+    const host = registryHost({
+      name: "studio",
+      os: "macos",
+      mode: "user",
+      agentsShareAccount: true,
+    });
     useRemoteHostsStore.getState().setHosts([host]);
     await startFlow("me@studio");
     await emit({
