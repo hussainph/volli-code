@@ -328,6 +328,81 @@ describe("a relayed subscription", () => {
     expect(opened).toHaveLength(0);
   });
 
+  // VC-711 review B1: a view told its stream is waiting may close itself from
+  // inside the callback. Nothing may then wait for a slot, or open on the host.
+  it("opens nothing again when the view cancels inside onStreamLimited", () => {
+    const { rpc, opened } = fakeRpc();
+    const timers = manualTimers();
+    let subscription!: { unsubscribe(): void };
+    const limited = vi.fn(() => {
+      subscription.unsubscribe();
+      // Re-entrant twice over: cancelling is idempotent.
+      subscription.unsubscribe();
+    });
+    const link = relayHostLink(WORKSPACE, {
+      rpc,
+      state: fakeState().source,
+      resumeDelaysMs: [10],
+      onStreamLimited: limited,
+      ...timers,
+    });
+    subscription = link.subscribe("session.subscribe", { sessionId: "s" }, recorder().handlers);
+    opened[0]!.onData({ kind: "error", error: full });
+    expect(limited).toHaveBeenCalledOnce();
+    expect(opened[0]!.unsubscribe).toHaveBeenCalledOnce();
+    expect(timers.pending.size).toBe(0);
+    expect(timers.fire()).toEqual([]);
+    expect(opened).toHaveLength(1);
+  });
+
+  it("opens nothing for a subscription cancelled while it waited, whatever wakes it", () => {
+    const { rpc, opened } = fakeRpc();
+    const timers = manualTimers();
+    const state = fakeState();
+    const link = relayHostLink(WORKSPACE, {
+      rpc,
+      state: state.source,
+      resumeDelaysMs: [10],
+      ...timers,
+    });
+    // A lost stream whose handler cancels it: the pause it was given never opens.
+    let subscription!: { unsubscribe(): void };
+    subscription = link.subscribe(
+      "board.changes",
+      {},
+      {
+        onData() {},
+        onResnapshot() {},
+        onError() {},
+        onStarted: () => subscription.unsubscribe(),
+      },
+    );
+    opened[0]!.onData({ kind: "data", data: 1, id: "1" });
+    opened[0]!.onData({ kind: "lost", error: unreachable });
+    const [pending] = [...timers.pending.values()];
+    subscription.unsubscribe();
+    // A timer a platform had already queued still runs: it must open nothing.
+    pending!.run();
+    expect(opened).toHaveLength(1);
+    // An overflow from a stream that ended inside its own handler reopens nothing.
+    const second = link.subscribe(
+      "board.changes",
+      {},
+      {
+        onData: () => second.unsubscribe(),
+        onResnapshot() {},
+        onError() {},
+      },
+    );
+    opened[1]!.onData({ kind: "data", data: 1, id: "1" });
+    opened[1]!.onError({
+      data: {
+        hostError: { code: "TOO_MANY_REQUESTS", message: "x", reason: "subscription-overflow" },
+      },
+    });
+    expect(opened).toHaveLength(2);
+  });
+
   it("waits out a full link (AM1), says so, and resumes when a slot frees", () => {
     const { rpc, opened } = fakeRpc();
     const timers = manualTimers();

@@ -51,6 +51,7 @@ import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
+  HOST_LINK_RELAY_STREAMS_PER_LINK,
   type DataChangeScope,
   type HostLinkRelayEvent,
   type Project,
@@ -104,6 +105,8 @@ interface Box {
   readonly url: string;
   /** Each open Session stream on the box, by Session and operation. */
   readonly sessionStreams: Set<string>;
+  /** Streams the box's listener holds open now, across every connection. */
+  streams(): number;
 }
 
 /** What the box offers; an older box offers less. */
@@ -187,6 +190,9 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 0 },
     host: { id: HOST, version: "relay-real-link" },
+    // hostd's own stream budget per connection (`HOSTD_LISTENER_LIMITS`),
+    // which the relay's per-link budget is pinned to by hostd's test.
+    limits: { maxSubscriptions: HOST_LINK_RELAY_STREAMS_PER_LINK },
     features,
     workspace: (id) => (id === PROJECT ? { id, epoch: 1 } : null),
     verifier: {
@@ -206,7 +212,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
     }),
   });
   cleanups.push(() => listener.close());
-  return { map, db: ctx.db, url: listener.url, sessionStreams };
+  return { map, db: ctx.db, url: listener.url, sessionStreams, streams: () => listener.streams };
 }
 
 /** A loopback TCP route in front of the box that this test can cut and block (the tunnel). */
@@ -538,14 +544,18 @@ describe("a remote project's board through the relay, over a real link", () => {
     expect(record.failures).toEqual([]);
   });
 
-  it("ends every relayed stream in main when the window goes", async () => {
-    const { main, win, board } = await remoteProject();
+  it("ends every relayed stream in main and on the box when the window goes", async () => {
+    const { host, link, main, win, board } = await remoteProject();
     const { sync } = boardOver(board);
     await sync.open(PROJECT);
     rawStream(win, { path: "board.changes", input: { projectId: PROJECT } });
     await vi.waitFor(() => expect(main.relay.open()).toBe(2));
+    await vi.waitFor(() => expect(host.streams()).toBe(2));
     win.close();
     await vi.waitFor(() => expect(main.relay.open()).toBe(0));
+    // And on the box: its streams are let go, its connection kept for the next window.
+    await vi.waitFor(() => expect(host.streams()).toBe(0));
+    expect(link.getState().status).toBe("ready");
   });
 
   it("refuses typed what the welcome did not grant, before it leaves this Mac", async () => {
@@ -642,5 +652,43 @@ describe("a remote project's board through the relay, over a real link", () => {
     follow.unsubscribe();
     await vi.waitFor(() => expect(main.relay.open(PROJECT)).toBe(1));
     expect(record.failures).toEqual([]);
+  });
+
+  // VC-711 review B1: a view told its stream waits for a slot may close
+  // itself (and free another) from inside the callback. Nothing it closed may
+  // open on the box again, nor wait for a slot.
+  it("opens nothing on the box for a stream its view cancelled inside onStreamLimited", async () => {
+    const { host, link, win } = await remoteProject();
+    const quiet = { onData() {}, onResnapshot() {}, onError() {} };
+    const plain = relayHostLink(PROJECT, { rpc: win.client, state: storeState(link) });
+    const first = ["one", "two", "three", "four"].map((id) =>
+      plain.subscribe("session.subscribe", { sessionId: id }, quiet),
+    );
+    await vi.waitFor(() => expect(host.sessionStreams.size).toBe(4));
+    expect(host.streams()).toBe(HOST_LINK_RELAY_STREAMS_PER_LINK);
+    let fifth!: { unsubscribe(): void };
+    const limited = vi.fn(() => {
+      fifth.unsubscribe();
+      first[0]!.unsubscribe();
+    });
+    const custom = relayHostLink(PROJECT, {
+      rpc: win.client,
+      state: storeState(link),
+      resumeDelaysMs: [10],
+      onStreamLimited: limited,
+    });
+    fifth = custom.subscribe("session.subscribe", { sessionId: "cancel-in-callback" }, quiet);
+    await vi.waitFor(() => expect(limited).toHaveBeenCalledOnce());
+    // Past the retry it would have made, and then some.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(limited).toHaveBeenCalledOnce();
+    expect(host.sessionStreams.has("session.subscribe:cancel-in-callback")).toBe(false);
+    expect([...host.sessionStreams].toSorted()).toEqual([
+      "session.subscribe:four",
+      "session.subscribe:three",
+      "session.subscribe:two",
+    ]);
+    expect(host.streams()).toBe(3);
+    for (const subscription of first) subscription.unsubscribe();
   });
 });

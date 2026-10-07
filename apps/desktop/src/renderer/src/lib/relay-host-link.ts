@@ -143,10 +143,14 @@ export function relayHostLink(
       stopWatching = null;
     };
 
-    /** Opens once the project's link reads ready; until then, waits for it to. */
+    /**
+     * Opens once the project's link reads ready; until then, waits for it to.
+     * An ended subscription opens nothing, however it got here: `settle` may
+     * run inside a handler this subscription called (VC-711 review B1).
+     */
     const attempt = (): void => {
-      // Never after `settle`: it clears the timer that calls this.
       timer = undefined;
+      if (ended) return;
       if (isLinkReady(state.getState())) {
         open();
         return;
@@ -163,12 +167,15 @@ export function relayHostLink(
     const resumeLater = (): void => {
       current?.unsubscribe();
       current = null;
+      if (ended) return;
       const delay = delays[Math.min(losses, delays.length - 1)]!;
       losses += 1;
       timer = setTimer(attempt, delay);
     };
 
     function open(): void {
+      /* v8 ignore if -- every caller checks `ended` first; kept so no future caller can open an ended subscription on the host (VC-711 review B1). */
+      if (ended) return;
       delivered = false;
       let self: { unsubscribe(): void } | null = null;
       const mine = (): boolean => !ended && current !== null && current === self;
@@ -207,6 +214,11 @@ export function relayHostLink(
                 return;
               case "error":
                 if (event.error.reason === "subscription-limit") {
+                  // Let go of the refused stream first: the view told of it may
+                  // cancel this subscription from inside the callback, and then
+                  // nothing waits for a slot (VC-711 review B1).
+                  current?.unsubscribe();
+                  current = null;
                   options.onStreamLimited?.({ path, error: hostErrorOf(event.error) });
                   resumeLater();
                   return;
