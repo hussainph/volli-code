@@ -369,6 +369,14 @@ export function createHeadlessSessionRuntime(input: {
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
           signIns,
           logs: input.logs ?? null,
+          // The listing rows (VC-713): the same rows the desktop's own
+          // listing builds, live-ness from this process's executor bindings.
+          sessionListing: {
+            db,
+            listSessions: (query) => sessionEngine.listSessions(query),
+            liveAttachmentIds: () =>
+              new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
+          },
           ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
           ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
         }),

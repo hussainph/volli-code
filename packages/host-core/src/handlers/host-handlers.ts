@@ -82,6 +82,7 @@ import {
   type RemoteHostDevices,
   type RemoteHostsSnapshot,
   type RenameRemoteHostInput,
+  type SessionListingPage,
   type SessionReadVerb,
   type Ticket,
   type WorktreeTrimSettings,
@@ -97,6 +98,12 @@ import type { RemoteSignInsPort } from "./remote-sign-ins-port";
 import type { HostLinkRelayPort } from "./host-link-relay-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
+import {
+  boundedSessionListing,
+  projectSessionListing,
+  ticketSessionListing,
+  type SessionListingSources,
+} from "../session-control/listing-roster";
 import {
   assertDefaultModelAvailable,
   readCodeModePolicy,
@@ -229,6 +236,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  /**
+   * A Workspace's Session listing rows (VC-713): the rows the desktop's own
+   * listing serves, bounded for one frame ({@link boundedSessionListing}).
+   */
+  readonly "session.listing": HostHandler<{ projectId: string }, SessionListingPage>;
+  readonly "session.listingForTicket": HostHandler<{ ticketId: string }, SessionListingPage>;
   readonly "signIns.status": HostHandler<void, HostSignInStatus>;
   readonly "signIns.setApiKey": HostHandler<HostSetApiKeyInput, HostSignInStatus>;
   readonly "signIns.signOut": HostHandler<{ providerId: string }, HostSignInStatus>;
@@ -404,6 +417,12 @@ export interface HostHandlerOptions {
   /** The host's in-memory recent log (VC-699), or null where this host keeps none. */
   readonly logs?: LogRing | null;
   /**
+   * What the Session listing reads (VC-713): the database, the Session
+   * Engine's roster and the live attachments. Absent or null (a launch with no
+   * Session Engine): `session.listing` answers unavailable.
+   */
+  readonly sessionListing?: SessionListingSources | null;
+  /**
    * Sign-ins on a host (VC-702), or null where no network door serves them
    * (the desktop, whose window signs in over its own IPC): they answer
    * unavailable.
@@ -452,6 +471,7 @@ const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
+const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 
 /**
@@ -528,6 +548,7 @@ function hostHandlerEntries(
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
+  const listing = () => present(options.sessionListing ?? null, SESSION_LISTING_UNAVAILABLE);
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
@@ -692,6 +713,10 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    "session.listing": async ({ projectId }) =>
+      boundedSessionListing(await projectSessionListing(listing(), projectId)),
+    "session.listingForTicket": async ({ ticketId }) =>
+      boundedSessionListing(await ticketSessionListing(listing(), ticketId)),
     "signIns.status": () => signIns().status(),
     "signIns.setApiKey": (input) => signIns().setApiKey(input),
     "signIns.signOut": (input) => signIns().signOut(input),

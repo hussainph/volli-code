@@ -15,7 +15,13 @@ import {
   type ChatSessionTransport,
   type ChatStreamCursor,
 } from "@volli/session-presentation";
+import type { ChatSessionRecord, SessionListingRow } from "@volli/shared";
 import { useChatDraftsStore } from "./chat-drafts";
+import { useExperimentsStore } from "./experiments";
+import { useHostConnectionStore } from "./host-connection";
+import { createFakeHostSource, hostSnapshot, remoteHost } from "./host-sources";
+import { useProjectSessionsStore } from "./project-sessions";
+import { useTicketSessionRecordsStore } from "./ticket-session-records";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -2451,5 +2457,125 @@ describe("dropChatTabs", () => {
     store.getState().dropChatTabs(["p1", "t1"]);
 
     expect(store.getState().openTabs).toBe(before);
+  });
+});
+
+describe("a Session's transport follows its project (VC-713)", () => {
+  const experimentsBefore = useExperimentsStore.getState().snapshot;
+
+  function routed() {
+    const local = fakeTransport();
+    const remote = fakeTransport();
+    const asked: (string | null)[] = [];
+    const store = createChatSessionsStore((projectId) => {
+      asked.push(projectId);
+      return projectId === "remote" ? remote.transport : local.transport;
+    });
+    opened.push(store);
+    return { asked, local, remote, store };
+  }
+
+  afterEach(() => {
+    useProjectSessionsStore.setState({ byProject: {} });
+    useTicketSessionRecordsStore.setState({ byTicket: {} });
+    useExperimentsStore.setState({ snapshot: experimentsBefore });
+  });
+
+  it("creates and attaches a remote project's Session over its host's transport", async () => {
+    const { asked, local, remote, store } = routed();
+    const sessionId = await store
+      .getState()
+      .createChatSession({ projectId: "remote", ticketId: null, title: null });
+    expect(sessionId).toBe(SESSION.id);
+    expect(remote.projectStarts).toHaveLength(1);
+    expect(remote.attaches).toMatchObject([{ sessionId: SESSION.id }]);
+    expect(local.projectStarts).toEqual([]);
+    expect(local.attaches).toEqual([]);
+    expect(asked.every((projectId) => projectId === "remote")).toBe(true);
+  });
+
+  it("adopts over the transport of the project the caller names", async () => {
+    const { remote, store } = routed();
+    store.getState().adoptChatSession("durable-9", "remote");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(remote.subscriptions).toEqual([{ sessionId: "durable-9", afterSequence: 0 }]);
+  });
+
+  it("finds an adopted Session's project in the listings this window holds", async () => {
+    const { asked, store } = routed();
+    useProjectSessionsStore.setState({
+      byProject: {
+        local: { terminal: [], chat: [], provenance: {}, read: {} },
+        remote: {
+          terminal: [],
+          chat: [{ sessionId: "from-rail" } as ChatSessionRecord],
+          provenance: {},
+          read: {},
+        },
+      },
+    });
+    useTicketSessionRecordsStore.setState({
+      byTicket: {
+        t1: [
+          { kind: "terminal", record: { id: "pty" } } as SessionListingRow,
+          {
+            kind: "chat",
+            record: { sessionId: "from-ticket", projectId: "remote" },
+          } as SessionListingRow,
+        ],
+      },
+    });
+    store.getState().adoptChatSession("from-rail");
+    store.getState().adoptChatSession("from-ticket");
+    store.getState().adoptChatSession("nowhere");
+    expect(asked).toEqual(["remote", "remote", null]);
+  });
+
+  it("promotes a remote Draft over its host's transport, and attaches it there", async () => {
+    const DRAFT = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
+    const { asked, local, remote, store } = routed();
+    useChatDraftsStore.getState().openProvisional(DRAFT, {
+      projectId: "remote",
+      ticketId: null,
+      operationId: "draft-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft(DRAFT, "first message");
+    await expect(store.getState().promoteChatSession(DRAFT)).resolves.toBe(true);
+    expect(remote.projectStarts).toHaveLength(1);
+    expect(remote.attaches).toMatchObject([{ sessionId: DRAFT }]);
+    expect(local.attaches).toEqual([]);
+    expect(asked.every((projectId) => projectId === "remote")).toBe(true);
+  });
+
+  it("says whose default is missing when a remote host has none, and opens no settings", async () => {
+    const { remote, store } = routed();
+    useExperimentsStore.setState({
+      snapshot: { cloud: { enabled: true, source: "storage" } } as never,
+    });
+    const detach = useHostConnectionStore
+      .getState()
+      .attach(
+        createFakeHostSource(
+          hostSnapshot([remoteHost("host-hetzner", "hetzner-1")], { remote: "host-hetzner" }),
+        ),
+      );
+    try {
+      remote.state.createAnswer = () => {
+        throw new Error("Choose a default model in Settings before starting a Session.");
+      };
+      useUiStore.getState().setSettingsOpen(false);
+      await expect(
+        store.getState().createChatSession({ projectId: "remote", ticketId: null, title: null }),
+      ).resolves.toBeNull();
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Could not start Session: hetzner-1 has no default model yet",
+        expect.anything(),
+      );
+      expect(useUiStore.getState().settingsOpen).toBe(false);
+    } finally {
+      detach();
+    }
   });
 });

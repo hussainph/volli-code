@@ -31,6 +31,9 @@ import { useBoardStore } from "@renderer/stores/board";
 import { isRemoteProject, useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
 import { followRemoteClaims, type FollowedHostStore } from "@renderer/lib/follow-remote-projects";
+import { relayHostLink } from "@renderer/lib/relay-host-link";
+import { relaySessionListing } from "@renderer/lib/remote-session-listing";
+import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
@@ -281,6 +284,15 @@ export async function startBoardProtocolIfEnabled(
       unconfirmed: (message) => toast.warning(message),
     },
   });
+  // A remote project's Session listing (VC-713) over its Workspace link, for
+  // the window's life: its rail, Home and ticket panel never ask `window.api`.
+  setRemoteSessionListing(
+    relaySessionListing({
+      isRemote: (projectId) => isRemoteProject(useHostConnectionStore.getState(), projectId),
+      projectOfTicket: (ticketId) => sync.workspaceOf(ticketId),
+      link: (projectId) => relayHostLink(projectId),
+    }),
+  );
   // Remote projects (VC-711): each one's board over its Workspace link, for
   // the window's life.
   followRemoteProjects(sync, useHostConnectionStore, () => boardProtocol()?.sync === sync);

@@ -5,7 +5,9 @@
  */
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { browserChatTransport } from "./transport";
+import type { ChatSessionTransport } from "@volli/session-presentation";
+
+import { browserChatTransport, chatTransportFor, setRemoteChatTransports } from "./transport";
 
 describe("browserChatTransport", () => {
   it("routes product starts and retries without renderer runtime identity", async () => {
@@ -137,6 +139,36 @@ describe("browserChatTransport", () => {
     expect(inputs[5]).toMatchObject({
       requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
     });
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("chatTransportFor (VC-713)", () => {
+  it("answers a remote project's registered transport, and IPC for every other", () => {
+    vi.stubGlobal("window", {
+      api: { sessionRpc: { request: vi.fn(), onEvent: () => () => undefined, cancel: vi.fn() } },
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: () => undefined,
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    const remote = { streamRecovery: "host-link" } as ChatSessionTransport;
+    const unregister = setRemoteChatTransports({
+      forProject: (projectId) => (projectId === "remote" ? remote : null),
+    });
+    const stale = setRemoteChatTransports({ forProject: () => null });
+    stale();
+    // Removing a registration that was replaced leaves the newer one alone.
+    expect(chatTransportFor("remote")).not.toBe(remote);
+    const again = setRemoteChatTransports({
+      forProject: (projectId) => (projectId === "remote" ? remote : null),
+    });
+    unregister();
+    expect(chatTransportFor("remote")).toBe(remote);
+    expect(chatTransportFor("local").streamRecovery).toBeUndefined();
+    expect(chatTransportFor(null).streamRecovery).toBeUndefined();
+    again();
+    expect(chatTransportFor("remote")).not.toBe(remote);
     vi.unstubAllGlobals();
   });
 });

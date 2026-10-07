@@ -23,6 +23,7 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  BOARD_RESOURCE_KINDS,
   CODE_MODE_MODES,
   CODE_MODE_POLICY_MODELS_MAX,
   EXPERIMENTS,
@@ -52,6 +53,7 @@ import {
   type ModelPurpose,
   type ReasoningLevel,
   type RendererSessionEvent,
+  type SessionListingPage,
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { z } from "zod";
@@ -66,6 +68,7 @@ import {
   type ProcedurePaths,
   type RouterTransport,
   type RouterContextPorts,
+  type WorkspaceResource as CatalogWorkspaceResource,
 } from "./catalog";
 import { AsyncQueue } from "./async-queue";
 import { sanitizeDiagnosticText } from "./diagnostic-text";
@@ -94,6 +97,17 @@ import {
   sessionReadOutput,
   type SessionReadInput,
 } from "./session-reads";
+import {
+  listingWire,
+  sessionListingForTicketInput,
+  sessionListingInput,
+  sessionListingPageSchema,
+} from "./session-listing-schema";
+export {
+  sessionListingPageSchema,
+  sessionListingRowSchema,
+  type SessionListingWireTypes,
+} from "./session-listing-schema";
 import {
   diagnosticEntrySchema,
   sessionAttachOutputSchema,
@@ -392,6 +406,9 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
   readonly "session.show": HostHandler<SessionReadInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadInput, AgentResponse>;
+  /** A Workspace's Session listing rows (VC-713), bounded for one frame. */
+  readonly "session.listing": HostHandler<{ projectId: string }, SessionListingPage>;
+  readonly "session.listingForTicket": HostHandler<{ ticketId: string }, SessionListingPage>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -1410,6 +1427,27 @@ export function createSessionRouter() {
             { id: input.session },
             sessionReadOutput,
           ),
+        ),
+      // The listing rows the desktop's own rail reads (VC-713): full ids, so a
+      // remote Client subscribes from a row. Forced to the named Workspace.
+      listing: workspaceProcedure("session.listing", sessionListingInput, readWorkspace)
+        .output(sessionListingPageSchema)
+        .query(async ({ ctx, input }) =>
+          listingWire(await ctx.handlers["session.listing"](input, ctx.call)),
+        ),
+      // One ticket's: the ticket is the resource, so a ticket in another
+      // Workspace (or none) is refused before anything is read.
+      listingForTicket: workspaceProcedure(
+        "session.listingForTicket",
+        sessionListingForTicketInput,
+        (input): CatalogWorkspaceResource => ({
+          kind: BOARD_RESOURCE_KINDS.ticket,
+          id: input.ticketId,
+        }),
+      )
+        .output(sessionListingPageSchema)
+        .query(async ({ ctx, input }) =>
+          listingWire(await ctx.handlers["session.listingForTicket"](input, ctx.call)),
         ),
       snapshot: workspaceProcedure(
         "session.snapshot",

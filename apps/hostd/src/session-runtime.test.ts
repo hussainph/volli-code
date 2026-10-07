@@ -365,6 +365,28 @@ describe("headless runtime ownership", () => {
     expect(seam.handlers.mock.lastCall![1]).toMatchObject({ signIns: null });
   });
 
+  it("lists Sessions from the engine, live by this process's executor bindings (VC-713)", async () => {
+    const f = fixture();
+    const listSessions = vi.fn(async () => []);
+    (f.host.sessionEngine as unknown as { listSessions: typeof listSessions }).listSessions =
+      listSessions;
+    await f.launch().ready();
+    const { sessionListing } = seam.handlers.mock.lastCall![1] as {
+      sessionListing: {
+        db: unknown;
+        listSessions(query: unknown): Promise<unknown>;
+        liveAttachmentIds(): ReadonlySet<string>;
+      };
+    };
+    expect(sessionListing.db).toBe(f.host.database.db);
+    await sessionListing.listSessions({ projectId: "p", scope: "all" });
+    expect(listSessions).toHaveBeenCalledWith({ projectId: "p", scope: "all" });
+    f.runtime.openNativeBindings.mockReturnValue([
+      { attachmentId: "a-1", sessionId: "s-1" },
+    ] as never);
+    expect([...sessionListing.liveAttachmentIds()]).toEqual(["a-1"]);
+  });
+
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {
     const f = fixture();
     const owner = f.launch();
