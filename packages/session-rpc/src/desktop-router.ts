@@ -139,14 +139,23 @@ export interface DesktopRouterHandlers {
     HostSignInStatus
   >;
   readonly "hostSignIns.run": DesktopSubscriptionHandler<
-    { hostId: string; providerId: string },
+    { hostId: string; providerId: string; runId?: string | undefined },
     HostSignInRunEvent
   >;
   readonly "hostSignIns.answer": HostHandler<
-    { hostId: string; providerId: string; promptId: string; value: string },
+    {
+      hostId: string;
+      providerId: string;
+      promptId: string;
+      value: string;
+      runId?: string | undefined;
+    },
     null
   >;
-  readonly "hostSignIns.cancel": HostHandler<{ hostId: string; providerId: string }, null>;
+  readonly "hostSignIns.cancel": HostHandler<
+    { hostId: string; providerId: string; runId?: string | undefined },
+    null
+  >;
   /** Managing a host (VC-700 PR 3): this Mac's label, and the host's devices read over SSH. */
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
@@ -174,7 +183,13 @@ const { hostProcedure, catalogRouter } = createCatalogBuilders<
 
 const hostId = z.uuid();
 const providerId = z.string().min(1).max(256);
-const hostSignInInputSchema = z.strictObject({ hostId, providerId });
+/**
+ * The window's name for one sign-in run, minted per run: an answer or cancel
+ * naming an older run reaches nothing (VC-702 review B3). Optional, so a
+ * caller without one reaches the host and provider's current run.
+ */
+const runId = identifier.optional();
+const hostSignInInputSchema = z.strictObject({ hostId, providerId, runId });
 
 /**
  * What a remote host's sign-in says on this desktop: the host's own updates,
@@ -462,7 +477,9 @@ export function createDesktopRouter() {
           );
         }),
       answer: hostProcedure("hostSignIns.answer")
-        .input(z.strictObject({ hostId, providerId, promptId: identifier, value: promptAnswer }))
+        .input(
+          z.strictObject({ hostId, providerId, promptId: identifier, value: promptAnswer, runId }),
+        )
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hostSignIns.answer"](input, ctx.call)),
       cancel: hostProcedure("hostSignIns.cancel")

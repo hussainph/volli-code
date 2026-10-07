@@ -76,6 +76,9 @@ import {
   type SignInRouterHandlers,
 } from "./sign-ins";
 export {
+  hostAuthCallbackDeliverResultSchema,
+  hostSignInAckSchema,
+  hostSignInFlowSchema,
   hostSignInStatusSchema,
   hostSignInUpdateSchema,
   type SignInRouterHandlers,

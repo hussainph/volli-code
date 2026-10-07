@@ -47,20 +47,40 @@ export interface HostSignInLink {
   deliver(input: HostAuthCallbackDeliverInput): Promise<HostAuthCallbackDeliverResult>;
   answer(input: HostSignInAnswerInput): Promise<unknown>;
   cancel(flow: HostSignInFlow): Promise<unknown>;
+  /**
+   * Calls `lost` once the connection this link holds now is gone: dropped,
+   * retired, refused or closed. A flow is its connection's and never resumes
+   * on another, so its run ends there. Answers the stop.
+   */
+  watchLoss(lost: () => void): () => void;
 }
 
-/** What the relay is doing, and what a row hears (`@volli/shared`, so the IPC wire can carry them). */
+/** What a row hears (`@volli/shared`, so the IPC wire can carry them). */
 export type RelayState = HostSignInRelayState;
 export type { HostSignInRunEvent };
+
+export type HostSignInEnd = "done" | "failed" | "cancelled" | "lost";
+
+/**
+ * What a cancel left on the host: the flow it ended, or `null` for none (the
+ * run never started one). `undefined` when the host did not answer in time,
+ * so whether it still holds a flow is not known.
+ */
+export type HostSignInLeft = { readonly flowId: string | null } | undefined;
 
 export interface HostSignInRun {
   /** The flow's id once the host started it. */
   readonly flowId: Promise<string>;
-  /** Settles with the flow's end. */
-  readonly ended: Promise<"done" | "failed" | "cancelled" | "lost">;
+  /** Settles with the run's end here: the flow's, a loss, or this Mac's cancel. */
+  readonly ended: Promise<HostSignInEnd>;
   /** Answers a step: the pasted redirect, a choice, a value. */
   answer(promptId: string, value: string): Promise<unknown>;
-  cancel(): Promise<void>;
+  /**
+   * Ends the run here at once: nothing more is heard, opened or relayed.
+   * Then asks the host to cancel its flow, once the flow is known; settles
+   * with what that left, within {@link CANCEL_WAIT_MS}. Never rejects.
+   */
+  cancel(): Promise<HostSignInLeft>;
 }
 
 export interface RunHostSignInOptions {
@@ -69,9 +89,31 @@ export interface RunHostSignInOptions {
   readonly type?: HostSignInStartInput["type"];
   readonly openExternal: (url: string) => void | Promise<void>;
   readonly onEvent: (event: HostSignInRunEvent) => void;
+  /**
+   * The run this one replaces, for the same host and provider. It is
+   * cancelled first, and this one starts only once its flow is over: the
+   * host answers a repeat start with the flow it still holds.
+   */
+  readonly replaces?: HostSignInRun | undefined;
   /** Test seam: the relay's bind. */
   readonly bind?: typeof bindOneCallback | undefined;
 }
+
+/** How long a cancel waits for the host to start, then take the cancel. */
+export const CANCEL_WAIT_MS = 10_000;
+
+/** The longest one sign-in runs here; then it ends, here and on the host. */
+export const RUN_DEADLINE_MS = 30 * 60_000;
+
+/** How often, and how many times, a replacement asks again while the host's old flow unwinds. */
+export const REPLACE_RETRY_MS = 100;
+export const REPLACE_ATTEMPTS = 50;
+
+/** What a row says when the run's own deadline passed. */
+export const RUN_TIMED_OUT = "The sign-in took too long. Start it again.";
+
+/** What a row says when the run it replaced is still ending on the host. */
+export const STILL_ENDING = "The last sign-in on this host is still ending. Try again.";
 
 /** What a row says when the host's sign-in link is not one Volli opens. */
 export const REFUSED_SIGN_IN_LINK = "The host sent a sign-in link Volli won’t open";
@@ -94,46 +136,97 @@ export function isOpenableSignInUrl(url: string): boolean {
   }
 }
 
+/** Settles with `promise`'s value, or `fallback` after `ms`. */
+function within<T, F>(promise: Promise<T>, ms: number, fallback: F): Promise<T | F> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<F>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+    timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** A start this run gave up on: it was cancelled first, or its predecessor never ended. */
+class NotStarted extends Error {
+  constructor(readonly why: "cancelled" | "still-ending") {
+    super(why);
+  }
+}
+
 export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   const { link, onEvent } = options;
   const bind = options.bind ?? bindOneCallback;
   let binding: Extract<RelayBinding, { kind: "bound" }> | null = null;
   let finished = false;
-  let endWith!: (end: "done" | "failed" | "cancelled" | "lost") => void;
-  const ended = new Promise<"done" | "failed" | "cancelled" | "lost">(
-    (resolve) => (endWith = resolve),
-  );
+  let endWith!: (end: HostSignInEnd) => void;
+  const ended = new Promise<HostSignInEnd>((resolve) => (endWith = resolve));
   // Strictly in order: a bind must settle before the URL after it is opened.
   let chain: Promise<void> = Promise.resolve();
   let subscription: { unsubscribe(): void } | null = null;
+  let stopWatching: (() => void) | null = null;
+  let cancelled: Promise<HostSignInLeft> | null = null;
 
-  // Called once: every end but a failed start is an update in the chain,
-  // which checks `finished` first, and a failed start has no chain.
-  const finish = (end: "done" | "failed" | "cancelled" | "lost"): void => {
+  /**
+   * The run's one end, wherever it comes from: everything it held goes, and
+   * nothing after it is heard. Answers whether this call ended it.
+   */
+  const finish = (end: HostSignInEnd, event?: HostSignInRunEvent): boolean => {
+    if (finished) return false;
     finished = true;
+    clearTimeout(deadline);
+    stopWatching?.();
+    stopWatching = null;
     binding?.close();
     binding = null;
     subscription?.unsubscribe();
+    subscription = null;
+    if (event !== undefined) onEvent(event);
     endWith(end);
+    return true;
   };
 
+  /** Ends the run here, then on the host once its flow is known; bounded. */
+  const endOnHost = (): Promise<HostSignInLeft> =>
+    within(
+      flowId.then(
+        async (id) => {
+          await link.cancel({ flowId: id }).catch(() => undefined);
+          return { flowId: id };
+        },
+        () => ({ flowId: null }),
+      ),
+      CANCEL_WAIT_MS,
+      undefined,
+    );
+
   // A link this Mac will not open ends the sign-in, here and on the host.
-  const refuseLink = (flowId: string): void => {
-    onEvent({ kind: "failed", message: REFUSED_SIGN_IN_LINK });
-    finish("failed");
-    void link.cancel({ flowId }).catch(() => undefined);
+  const refuseLink = (id: string): void => {
+    finish("failed", { kind: "failed", message: REFUSED_SIGN_IN_LINK });
+    void link.cancel({ flowId: id }).catch(() => undefined);
   };
+
+  // Every end clears it, so when it fires the run is still going.
+  const deadline = setTimeout(() => {
+    finish("failed", { kind: "failed", message: RUN_TIMED_OUT });
+    void endOnHost();
+  }, RUN_DEADLINE_MS);
+  deadline.unref();
 
   const handle = async (flowId: string, update: HostSignInUpdate): Promise<void> => {
     if (finished) return;
     switch (update.kind) {
       case "auth-callback": {
         binding?.close();
+        binding = null;
         const bound = await bind(update.redirectUri, (pathAndQuery) =>
           link.deliver({ flowId, pathAndQuery }),
         );
-        // Nothing can finish the flow meanwhile: its end is a later update in
-        // this same chain, so the binding is always closed by `finish`.
+        // Ended while it bound (cancelled here, the link lost): the late
+        // listener closes, and nothing after it is heard.
+        if (finished) {
+          if (bound.kind === "bound") bound.close();
+          return;
+        }
         if (bound.kind === "unavailable") {
           onEvent({ kind: "relay", state: "paste" });
           return;
@@ -168,62 +261,100 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
         onEvent(update);
         return;
       case "done":
-        onEvent(update);
-        finish("done");
-        return;
       case "failed":
-        onEvent(update);
-        finish("failed");
-        return;
       case "cancelled":
-        onEvent(update);
-        finish("cancelled");
+        finish(update.kind, update);
         return;
       default:
         onEvent(update);
     }
   };
 
-  const flowId = link
-    .start({
-      providerId: options.providerId,
-      ...(options.type === undefined ? {} : { type: options.type }),
-    })
-    .then(({ flowId: id }) => {
-      const lose = (): void => {
-        chain = chain.then(() => {
-          if (finished) return;
-          onEvent({ kind: "lost" });
-          finish("lost");
-        });
-      };
-      subscription = link.subscribe(
-        { flowId: id },
-        {
-          onData: (update) => {
-            chain = chain.then(() => handle(id, update)).catch(() => {});
-          },
-          onError: lose,
-          onComplete: lose,
+  const lose = (): void => {
+    finish("lost", { kind: "lost" });
+  };
+  // The flow is this connection's: when it goes, the run ends here, and its
+  // stream is withdrawn before the link could open it on another.
+  stopWatching = link.watchLoss(lose);
+  if (finished) {
+    stopWatching();
+    stopWatching = null;
+  }
+
+  /**
+   * Starts the flow, once the run this replaces is over on the host. A
+   * repeat start answers a flow the host still holds for this connection
+   * (cancelled, still unwinding): that is the old run's, never this one's,
+   * so this asks again, a bounded number of times.
+   */
+  const begin = async (): Promise<string> => {
+    let stale: string | null = null;
+    if (options.replaces !== undefined) {
+      const left = await options.replaces.cancel();
+      if (left === undefined) throw new NotStarted("still-ending");
+      stale = left.flowId;
+    }
+    for (let attempt = 1; ; attempt++) {
+      if (finished) throw new NotStarted("cancelled");
+      const { flowId: id } = await link.start({
+        providerId: options.providerId,
+        ...(options.type === undefined ? {} : { type: options.type }),
+      });
+      if (id !== stale) return id;
+      if (attempt >= REPLACE_ATTEMPTS) throw new NotStarted("still-ending");
+      await new Promise((resolve) => setTimeout(resolve, REPLACE_RETRY_MS));
+    }
+  };
+
+  const flowId = begin().then((id) => {
+    // Cancelled or lost while the host started it: never followed.
+    if (finished) return id;
+    subscription = link.subscribe(
+      { flowId: id },
+      {
+        onData: (update) => {
+          chain = chain.then(() => handle(id, update)).catch(() => {});
         },
-      );
-      return id;
-    });
-  flowId.catch(() => {
+        // The stream's own end, after what it said before it.
+        onError: () => void (chain = chain.then(lose)),
+        onComplete: () => void (chain = chain.then(lose)),
+      },
+    );
+    return id;
+  });
+  flowId.catch((error: unknown) => {
     // The host's refusal is not repeated (it is the host's wording, not this
     // row's); the row says the one thing that is true.
-    onEvent({ kind: "failed", message: "This host could not start the sign-in." });
-    finish("failed");
+    const message =
+      error instanceof NotStarted && error.why === "still-ending"
+        ? STILL_ENDING
+        : "This host could not start the sign-in.";
+    finish("failed", { kind: "failed", message });
   });
 
   return {
     flowId,
     ended,
-    answer: async (promptId, value) => link.answer({ flowId: await flowId, promptId, value }),
-    cancel: async () => {
-      const id = await flowId.catch(() => null);
-      if (finished || id === null) return;
-      await link.cancel({ flowId: id }).catch(() => undefined);
+    answer: async (promptId, value) => {
+      const id = await flowId;
+      if (finished) throw new Error("That sign-in is no longer running.");
+      return link.answer({ flowId: id, promptId, value });
+    },
+    cancel: () => {
+      if (cancelled !== null) return cancelled;
+      // Ended by this cancel: the host is told. Ended before by the flow
+      // itself, a loss or a refusal: nothing is left to ask.
+      cancelled = finish("cancelled", { kind: "cancelled" })
+        ? endOnHost()
+        : within(
+            flowId.then(
+              (id) => ({ flowId: id }),
+              () => ({ flowId: null }),
+            ),
+            CANCEL_WAIT_MS,
+            undefined,
+          );
+      return cancelled;
     },
   };
 }

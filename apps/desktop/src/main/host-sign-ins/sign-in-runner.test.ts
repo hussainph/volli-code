@@ -5,32 +5,45 @@
  * fallback, and that the relay ends with the flow.
  */
 import type { HostSignInUpdate } from "@volli/shared";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { RelayBinding, RelayOutcome } from "./relay-client";
 import {
+  CANCEL_WAIT_MS,
   isOpenableSignInUrl,
   MAX_SIGN_IN_URL_LENGTH,
   REFUSED_SIGN_IN_LINK,
+  REPLACE_ATTEMPTS,
+  REPLACE_RETRY_MS,
+  RUN_DEADLINE_MS,
+  RUN_TIMED_OUT,
   runHostSignIn,
+  STILL_ENDING,
   type HostSignInLink,
   type HostSignInRunEvent,
 } from "./sign-in-runner";
 
 function fakeLink(options: { startFails?: boolean } = {}) {
   let observer: Parameters<HostSignInLink["subscribe"]>[1] | null = null;
+  const unsubscribe = vi.fn();
+  let lost: (() => void) | null = null;
+  const stopWatching = vi.fn();
   const link = {
-    start: vi.fn(async () => {
+    start: vi.fn(async (_input: { providerId: string; type?: string }) => {
       if (options.startFails === true) throw new Error("sign-in-conflict");
       return { flowId: "flow-1" };
     }),
     subscribe: vi.fn((_flow: { flowId: string }, next: NonNullable<typeof observer>) => {
       observer = next;
-      return { unsubscribe: vi.fn() };
+      return { unsubscribe };
     }),
     deliver: vi.fn(async () => ({ status: 200 })),
     answer: vi.fn(async () => null),
-    cancel: vi.fn(async () => null),
+    cancel: vi.fn(async (_flow: { flowId: string }): Promise<unknown> => null),
+    watchLoss: vi.fn((listener: () => void) => {
+      lost = listener;
+      return stopWatching;
+    }),
   } satisfies HostSignInLink;
   return {
     link,
@@ -38,7 +51,16 @@ function fakeLink(options: { startFails?: boolean } = {}) {
     error: () => observer!.onError(new Error("host-unreachable")),
     complete: () => observer!.onComplete(),
     subscribed: () => observer !== null,
+    unsubscribe,
+    /** The link's connection went: dropped, retired or closed. */
+    drop: () => lost!(),
+    stopWatching,
   };
+}
+
+/** Whether `promise` has settled yet, after the microtasks queued so far ran. */
+async function settledYet<T>(promise: Promise<T>): Promise<T | "pending"> {
+  return Promise.race([promise, settle().then(() => "pending" as const)]);
 }
 
 async function settle(): Promise<void> {
@@ -65,6 +87,20 @@ function fakeBind(result: "bound" | "port-taken") {
   );
   return { bind, outcome, close, order };
 }
+
+/** A run being replaced: its cancel says what it left on the host. */
+function replaced(left: Awaited<ReturnType<ReturnType<typeof runHostSignIn>["cancel"]>>) {
+  return {
+    flowId: Promise.resolve("flow-1"),
+    ended: Promise.resolve("cancelled" as const),
+    answer: vi.fn(),
+    cancel: vi.fn(async () => left),
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("runHostSignIn", () => {
   it("binds the relay before opening the browser, and closes it when the flow ends", async () => {
@@ -322,8 +358,8 @@ describe("runHostSignIn", () => {
     await run.flowId;
     host.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
     await settle();
-    await run.cancel();
     host.error();
+    host.drop();
     late.resolve({ kind: "bound", outcome: new Promise(() => {}), close });
     await settle();
     expect(await run.ended).toBe("lost");
@@ -432,8 +468,282 @@ describe("runHostSignIn", () => {
     host.emit({ kind: "progress", message: "Waiting" });
     await settle();
     expect(events.map((event) => event.kind)).toEqual(["auth-url", "progress"]);
-    await expect(run.cancel()).resolves.toBeUndefined();
+    await expect(run.cancel()).resolves.toEqual({ flowId: "flow-1" });
     host.emit({ kind: "done" });
-    expect(await run.ended).toBe("done");
+    expect(await run.ended).toBe("cancelled");
+  });
+  describe("cancelling here (VC-702 review B1)", () => {
+    it("ends the run at once, with no word from the host, and lets go of everything it held", async () => {
+      for (const host of ["silent", "refuses"] as const) {
+        const link = fakeLink();
+        if (host === "silent") link.link.cancel.mockReturnValue(new Promise(() => {}));
+        else link.link.cancel.mockRejectedValue(new Error("host-unreachable"));
+        const relay = fakeBind("bound");
+        const events: HostSignInRunEvent[] = [];
+        const run = runHostSignIn({
+          link: link.link,
+          providerId: "anthropic",
+          openExternal: vi.fn(),
+          onEvent: (event) => events.push(event),
+          bind: relay.bind,
+        });
+        await run.flowId;
+        link.emit({
+          kind: "auth-callback",
+          flowId: "flow-1",
+          redirectUri: "http://localhost:1/cb",
+        });
+        await settle();
+        void run.cancel();
+        expect(await settledYet(run.ended)).toBe("cancelled");
+        expect(relay.close).toHaveBeenCalledOnce();
+        expect(link.unsubscribe).toHaveBeenCalledOnce();
+        expect(link.link.cancel).toHaveBeenCalledWith({ flowId: "flow-1" });
+        expect(events.at(-1)).toEqual({ kind: "cancelled" });
+        // What the host says after is not heard, and a second cancel asks nothing more.
+        link.emit({ kind: "progress", message: "late" });
+        void run.cancel();
+        await settle();
+        expect(events.at(-1)).toEqual({ kind: "cancelled" });
+        expect(link.link.cancel).toHaveBeenCalledOnce();
+      }
+    });
+
+    it("cancelled while the host starts it: never subscribes, and cancels the flow once it is known", async () => {
+      const link = fakeLink();
+      const started = Promise.withResolvers<{ flowId: string }>();
+      link.link.start.mockReturnValueOnce(started.promise);
+      const events: HostSignInRunEvent[] = [];
+      const run = runHostSignIn({
+        link: link.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: (event) => events.push(event),
+        bind: fakeBind("bound").bind,
+      });
+      const cancelled = run.cancel();
+      expect(await settledYet(run.ended)).toBe("cancelled");
+      started.resolve({ flowId: "flow-1" });
+      await cancelled;
+      expect(link.link.subscribe).not.toHaveBeenCalled();
+      expect(link.link.cancel).toHaveBeenCalledWith({ flowId: "flow-1" });
+      expect(events).toEqual([{ kind: "cancelled" }]);
+    });
+
+    it("cancelled while the relay binds: the late listener closes, and the page after it never opens", async () => {
+      const link = fakeLink();
+      const late = Promise.withResolvers<RelayBinding>();
+      const close = vi.fn();
+      const openExternal = vi.fn();
+      const run = runHostSignIn({
+        link: link.link,
+        providerId: "anthropic",
+        openExternal,
+        onEvent: () => {},
+        bind: vi.fn(() => late.promise),
+      });
+      await run.flowId;
+      link.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
+      link.emit({ kind: "auth-url", url: "https://claude.ai/oauth/authorize", instructions: null });
+      await settle();
+      void run.cancel();
+      expect(await settledYet(run.ended)).toBe("cancelled");
+      late.resolve({ kind: "bound", outcome: new Promise(() => {}), close });
+      await settle();
+      expect(close).toHaveBeenCalledOnce();
+      expect(openExternal).not.toHaveBeenCalled();
+    });
+
+    it("cancelled while the relay fails to bind: says nothing more", async () => {
+      const link = fakeLink();
+      const late = Promise.withResolvers<RelayBinding>();
+      const events: HostSignInRunEvent[] = [];
+      const run = runHostSignIn({
+        link: link.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: (event) => events.push(event),
+        bind: vi.fn(() => late.promise),
+      });
+      await run.flowId;
+      link.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
+      await settle();
+      void run.cancel();
+      late.resolve({ kind: "unavailable", reason: "port-taken" });
+      await settle();
+      expect(events).toEqual([{ kind: "cancelled" }]);
+    });
+  });
+  describe("the link's connection going (VC-702 review B2)", () => {
+    it("ends lost at once, closes the relay and withdraws the stream, whatever the stream says after", async () => {
+      const host = fakeLink();
+      const relay = fakeBind("bound");
+      const events: HostSignInRunEvent[] = [];
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: (event) => events.push(event),
+        bind: relay.bind,
+      });
+      await run.flowId;
+      host.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
+      await settle();
+      host.drop();
+      expect(await settledYet(run.ended)).toBe("lost");
+      expect(relay.close).toHaveBeenCalledOnce();
+      expect(host.unsubscribe).toHaveBeenCalledOnce();
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      host.error();
+      host.drop();
+      await settle();
+      expect(events).toEqual([{ kind: "relay", state: "listening" }, { kind: "lost" }]);
+      // Nothing is left on the host to cancel from here, and nothing is answered.
+      expect(await run.cancel()).toEqual({ flowId: "flow-1" });
+      expect(host.link.cancel).not.toHaveBeenCalled();
+      await expect(run.answer("p", "x")).rejects.toThrow("no longer running");
+    });
+
+    it("never starts on a link that was already gone", async () => {
+      const host = fakeLink();
+      host.link.watchLoss.mockImplementationOnce((lost: () => void) => {
+        lost();
+        return host.stopWatching;
+      });
+      const events: HostSignInRunEvent[] = [];
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: (event) => events.push(event),
+      });
+      expect(await run.ended).toBe("lost");
+      await expect(run.flowId).rejects.toThrow("cancelled");
+      expect(host.link.start).not.toHaveBeenCalled();
+      expect(host.stopWatching).toHaveBeenCalledOnce();
+      expect(events).toEqual([{ kind: "lost" }]);
+      expect(await run.cancel()).toEqual({ flowId: null });
+    });
+  });
+
+  describe("replacing a run (VC-702 review B3)", () => {
+    it("starts once the old run's flow is over, asking again while the host still holds it", async () => {
+      vi.useFakeTimers();
+      const host = fakeLink();
+      host.link.start
+        .mockResolvedValueOnce({ flowId: "flow-1" })
+        .mockResolvedValueOnce({ flowId: "flow-1" })
+        .mockResolvedValueOnce({ flowId: "flow-2" });
+      const old = replaced({ flowId: "flow-1" });
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: () => {},
+        replaces: old,
+      });
+      await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * 2);
+      expect(await run.flowId).toBe("flow-2");
+      expect(old.cancel).toHaveBeenCalledOnce();
+      expect(host.link.start).toHaveBeenCalledTimes(3);
+      expect(host.link.subscribe).toHaveBeenCalledWith({ flowId: "flow-2" }, expect.anything());
+    });
+
+    it("fails, saying so, when the old flow never ends or the host never answered its cancel", async () => {
+      vi.useFakeTimers();
+      for (const left of [{ flowId: "flow-1" }, undefined]) {
+        const host = fakeLink();
+        const events: HostSignInRunEvent[] = [];
+        const run = runHostSignIn({
+          link: host.link,
+          providerId: "anthropic",
+          openExternal: vi.fn(),
+          onEvent: (event) => events.push(event),
+          replaces: replaced(left),
+        });
+        await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * REPLACE_ATTEMPTS);
+        expect(await run.ended).toBe("failed");
+        expect(events).toEqual([{ kind: "failed", message: STILL_ENDING }]);
+        expect(host.link.start).toHaveBeenCalledTimes(left === undefined ? 0 : REPLACE_ATTEMPTS);
+        expect(host.link.subscribe).not.toHaveBeenCalled();
+      }
+    });
+
+    it("stops asking once it is cancelled itself, and never cancels the old run's flow", async () => {
+      vi.useFakeTimers();
+      const host = fakeLink();
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: () => {},
+        replaces: replaced({ flowId: "flow-1" }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.link.start).toHaveBeenCalledOnce();
+      const left = run.cancel();
+      await vi.advanceTimersByTimeAsync(REPLACE_RETRY_MS * 3);
+      expect(await left).toEqual({ flowId: null });
+      expect(host.link.start).toHaveBeenCalledOnce();
+      expect(host.link.cancel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bounded in time (VC-702 review B4)", () => {
+    it("ends the run, here and on the host, at its deadline, and lets go of the relay", async () => {
+      vi.useFakeTimers();
+      const host = fakeLink();
+      const relay = fakeBind("bound");
+      const events: HostSignInRunEvent[] = [];
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal: vi.fn(),
+        onEvent: (event) => events.push(event),
+        bind: relay.bind,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      host.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS - 1);
+      expect(await settledYet(run.ended)).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await run.ended).toBe("failed");
+      expect(relay.close).toHaveBeenCalledOnce();
+      expect(host.unsubscribe).toHaveBeenCalledOnce();
+      expect(host.link.cancel).toHaveBeenCalledWith({ flowId: "flow-1" });
+      expect(events.at(-1)).toEqual({ kind: "failed", message: RUN_TIMED_OUT });
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("clears its deadline on every end", async () => {
+      vi.useFakeTimers();
+      const host = fakeLink();
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "xai",
+        openExternal: vi.fn(),
+        onEvent: () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      host.emit({ kind: "done" });
+      expect(await run.ended).toBe("done");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stops waiting on a host that never answers the start or the cancel", async () => {
+      vi.useFakeTimers();
+      const host = fakeLink();
+      host.link.start.mockReturnValueOnce(new Promise(() => {}));
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "xai",
+        openExternal: vi.fn(),
+        onEvent: () => {},
+      });
+      const left = run.cancel();
+      expect(await settledYet(run.ended)).toBe("cancelled");
+      await vi.advanceTimersByTimeAsync(CANCEL_WAIT_MS);
+      expect(await left).toBeUndefined();
+    });
   });
 });

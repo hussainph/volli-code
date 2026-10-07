@@ -4,12 +4,31 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { bindOneCallback, relayAddressOf } from "./relay-client";
+import { bindOneCallback, RELAY_IDLE_MS, relayAddressOf } from "./relay-client";
 
 const open: { close(): void }[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const item of open.splice(0)) item.close();
 });
+
+/** A server that listens at once and records its closing: no socket, so time can be mocked. */
+function fakeServer() {
+  const closed = vi.fn();
+  const createServer = (() => {
+    const server = {
+      once: () => server,
+      listen: (_options: unknown, listening: () => void) => {
+        listening();
+        return server;
+      },
+      close: closed,
+      closeAllConnections: vi.fn(),
+    };
+    return server;
+  }) as unknown as typeof import("node:http").createServer;
+  return { createServer, closed };
+}
 
 /** A free loopback port: bound, read, released. */
 async function freePort(): Promise<number> {
@@ -149,5 +168,36 @@ describe("bindOneCallback", () => {
     expect(await binding.outcome).toEqual({ kind: "timed-out" });
     await expect(fetch(`http://127.0.0.1:${port}/cb?code=late`)).rejects.toThrow();
     binding.close();
+  });
+
+  it("keeps listening no longer than its declared wait, under mocked time", async () => {
+    vi.useFakeTimers();
+    const server = fakeServer();
+    const binding = await bindOneCallback("http://localhost:1/cb", async () => ({ status: 200 }), {
+      createServer: server.createServer,
+    });
+    if (binding.kind !== "bound") throw new Error("expected to bind");
+    let outcome: unknown = "pending";
+    void binding.outcome.then((settled) => (outcome = settled));
+    await vi.advanceTimersByTimeAsync(RELAY_IDLE_MS - 1);
+    expect(outcome).toBe("pending");
+    expect(server.closed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toEqual({ kind: "timed-out" });
+    expect(server.closed).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears its wait when the flow closes it first", async () => {
+    vi.useFakeTimers();
+    const server = fakeServer();
+    const binding = await bindOneCallback("http://localhost:1/cb", async () => ({ status: 200 }), {
+      createServer: server.createServer,
+    });
+    if (binding.kind !== "bound") throw new Error("expected to bind");
+    expect(vi.getTimerCount()).toBe(1);
+    binding.close();
+    expect(await binding.outcome).toEqual({ kind: "closed" });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

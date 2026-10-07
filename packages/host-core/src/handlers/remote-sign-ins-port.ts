@@ -37,14 +37,23 @@ export interface RemoteSignInsPort {
   /**
    * Signs the host in to a provider, and calls `listener` with everything the
    * sign-in says until it ends. The answer ends the stream and cancels the
-   * sign-in if it is still running.
+   * sign-in if it is still running. `runId` is the window's name for this
+   * run: an `answer` or `cancel` naming another reaches nothing.
    */
   run(
     hostId: string,
     providerId: string,
     listener: (event: HostSignInRunEvent) => void | Promise<void>,
+    runId?: string,
   ): Answer<() => void>;
   /** Answers the step the running sign-in waits on (the pasted redirect included). */
-  answer(hostId: string, providerId: string, promptId: string, value: string): Answer<void>;
-  cancel(hostId: string, providerId: string): Answer<void>;
+  answer(
+    hostId: string,
+    providerId: string,
+    promptId: string,
+    value: string,
+    runId?: string,
+  ): Answer<void>;
+  /** Cancels the running sign-in, if it is still the one `runId` names. */
+  cancel(hostId: string, providerId: string, runId?: string): Answer<void>;
 }

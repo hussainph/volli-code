@@ -712,6 +712,14 @@ await client.auth.callback.deliver.mutate({ flowId, pathAndQuery: "/callback?cod
 
 **Skew.** An older host offers neither feature, so its welcome lacks `sign-ins` and a Client hides sign-ins for it (`hostOffersSignIns(welcome)`); a call anyway is `verb-refused` before its input is read. An older Client never requests them.
 
+**A Client's run (desktop, VC-702 PR 2).** Desktop main drives a flow over the host's borrowed link (`apps/desktop/src/main/host-sign-ins/`):
+
+- **Cancel ends the run here at once.** The relay closes, the stream is withdrawn and nothing more is opened; `signIns.cancel` follows, best effort, once the `flowId` is known.
+- **A flow is its connection's, so it never resumes.** VC-670 keeps a Workspace stream across an outage and ends it silently on `close()`. A sign-in run instead watches the link's state: any state other than `ready` ends it with one `lost`, and its stream is withdrawn before a reconnect could reopen it. Generic resumable streams are unchanged.
+- **Replacement waits for the old flow.** Because a repeat `start` answers the flow the connection still holds, a new run for the same host and provider starts only after the old one's cancel. It asks again (bounded) while `start` still answers the old `flowId`, and otherwise fails, saying so.
+- **The window names each run.** `runId` is optional on the desktop-only `hostSignIns.run`, `answer` and `cancel`, so a stale sheet's answer or cancel reaches nothing.
+- **Everything is bounded in time.** The relay listener lasts at most 10 minutes; then the row offers paste. A run lasts at most 30 minutes; then it ends here and on the host.
+
 ## Contract harness
 
 Entry point: `@volli/host-protocol/testing` → `describeContract(title, links, cases)`. Each case runs unchanged against every `ContractLink<Host,Router>`; `connect(host)` returns a typed client and teardown closes all its connections/subscriptions. `webSocketContractLink` serves a router with stock tRPC adapters on an ephemeral loopback socket, JSON on the wire, from a context the link builds. `servedWebSocketContractLink({ serve, connectionParams })` instead connects the stock client to a server the host's own code starts, with per-connection params (a fresh hello): use it to run cases through the production listener's real handshake. The package root has no Node/Electron transport imports; `/testing` is dev/test-only and has no Electron dependency either.

@@ -36,7 +36,7 @@ export interface HostSignInsRpc {
     };
     readonly run: {
       subscribe(
-        input: { hostId: string; providerId: string },
+        input: { hostId: string; providerId: string; runId: string },
         handlers: {
           onData(event: HostSignInRunEvent): void;
           onError(error: unknown): void;
@@ -50,15 +50,20 @@ export interface HostSignInsRpc {
         providerId: string;
         promptId: string;
         value: string;
+        runId: string;
       }): Promise<unknown>;
     };
-    readonly cancel: { mutate(input: { hostId: string; providerId: string }): Promise<unknown> };
+    readonly cancel: {
+      mutate(input: { hostId: string; providerId: string; runId: string }): Promise<unknown>;
+    };
   };
 }
 
 export function remoteHostSignInSource(
   rpc: HostSignInsRpc,
   openExternal: (url: string) => void,
+  /** Test seam: names each run, so main reaches only that run with its answer or cancel. */
+  newRunId: () => string = () => crypto.randomUUID(),
 ): HostSignInSource {
   const tier = rpc.hostSignIns;
   return {
@@ -69,6 +74,8 @@ export function remoteHostSignInSource(
     setApiKey: (hostId, providerId, key) => tier.setApiKey.mutate({ hostId, providerId, key }),
     setGitCredential: (hostId, input) => tier.setGitCredential.mutate({ hostId, ...input }),
     signInOnHost(hostId, providerId, onEvent): HostSignInRunHandle {
+      // This run's own name: a stale sheet's answer or cancel never reaches a newer run.
+      const runId = newRunId();
       let ended = false;
       const end = (event: HostSignInRunEvent): void => {
         if (ended) return;
@@ -76,7 +83,7 @@ export function remoteHostSignInSource(
         onEvent(event);
       };
       const subscription = tier.run.subscribe(
-        { hostId, providerId },
+        { hostId, providerId, runId },
         {
           onData: (event) => {
             if (ended) return;
@@ -89,13 +96,14 @@ export function remoteHostSignInSource(
         },
       );
       return {
-        answer: (promptId, value) => tier.answer.mutate({ hostId, providerId, promptId, value }),
+        answer: (promptId, value) =>
+          tier.answer.mutate({ hostId, providerId, promptId, value, runId }),
         // Cancelled here, it says nothing more: the surface that cancelled it
         // has already moved on. Ending the stream cancels it on the host too.
         cancel: async () => {
           ended = true;
           subscription.unsubscribe();
-          await tier.cancel.mutate({ hostId, providerId }).catch(() => undefined);
+          await tier.cancel.mutate({ hostId, providerId, runId }).catch(() => undefined);
         },
       };
     },

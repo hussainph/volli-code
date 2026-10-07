@@ -5,7 +5,11 @@
  * published schemas, the engine's link lookup, and one running sign-in per
  * host and provider, cancelled when its stream ends.
  */
-import type { HostLink, HostLinkSubscriptionHandlers } from "@volli/host-protocol/client-link";
+import type {
+  HostLink,
+  HostLinkState,
+  HostLinkSubscriptionHandlers,
+} from "@volli/host-protocol/client-link";
 import type { HostSignInRunEvent } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -18,7 +22,14 @@ const STATUS = { providers: [], git: [{ host: "github.com", state: "signed-in", 
 function fakeLink(answers: Record<string, unknown>) {
   const calls: [string, string, unknown][] = [];
   let handlers: HostLinkSubscriptionHandlers | null = null;
+  let state: HostLinkState = { status: "ready", welcome: {} as never };
+  const watchers = new Set<(state: HostLinkState) => void>();
   const link = {
+    getState: () => state,
+    subscribeState: (listener: (state: HostLinkState) => void) => {
+      watchers.add(listener);
+      return () => watchers.delete(listener);
+    },
     query: vi.fn(async (path: string, input?: unknown) => {
       calls.push(["query", path, input]);
       return answers[path];
@@ -34,7 +45,16 @@ function fakeLink(answers: Record<string, unknown>) {
       return { unsubscribe: vi.fn() };
     }),
   } as unknown as HostLink;
-  return { link, calls, handlers: () => handlers! };
+  return {
+    link,
+    calls,
+    handlers: () => handlers!,
+    watchers,
+    set(next: HostLinkState) {
+      state = next;
+      for (const watcher of watchers) watcher(next);
+    },
+  };
 }
 
 describe("hostLinkSignIns", () => {
@@ -72,16 +92,27 @@ describe("hostLinkSignIns", () => {
   });
 
   it("refuses a host that answers badly, and skips an update this build does not know", async () => {
-    const bad = hostLinkSignIns(
-      fakeLink({
-        "signIns.status": { providers: "nope" },
-        "signIns.start": {},
-        "auth.callback.deliver": {},
-      }).link,
-    );
-    await expect(bad.status()).rejects.toThrow();
-    await expect(bad.start({ providerId: "xai" })).rejects.toThrow("started no sign-in");
-    await expect(bad.deliver({ flowId: "f", pathAndQuery: "/cb" })).rejects.toThrow("did not say");
+    for (const answers of [
+      { "signIns.start": {}, "auth.callback.deliver": {} },
+      { "signIns.start": { flowId: "" }, "auth.callback.deliver": { status: Number.NaN } },
+      { "signIns.start": { flowId: "x".repeat(257) }, "auth.callback.deliver": { status: 200.5 } },
+    ]) {
+      const bad = hostLinkSignIns(
+        fakeLink({
+          "signIns.status": { providers: "nope" },
+          "signIns.answer": { ok: true },
+          "signIns.cancel": "done",
+          ...answers,
+        }).link,
+      );
+      await expect(bad.status()).rejects.toThrow();
+      await expect(bad.start({ providerId: "xai" })).rejects.toThrow("started no sign-in");
+      await expect(bad.deliver({ flowId: "f", pathAndQuery: "/cb" })).rejects.toThrow(
+        "did not say",
+      );
+      await expect(bad.answer({ flowId: "f", promptId: "p", value: "" })).rejects.toThrow();
+      await expect(bad.cancel({ flowId: "f" })).rejects.toThrow();
+    }
     const host = fakeLink({ "signIns.cancel": new Error("gone") });
     const seen: unknown[] = [];
     const errors: unknown[] = [];
@@ -138,6 +169,44 @@ describe("hostLinkSignIns", () => {
   });
 });
 
+describe("hostLinkSignIns' watch on the link (VC-702 review B2)", () => {
+  it("says the connection is gone once, on the first state that is not ready, and stops watching", () => {
+    for (const next of [
+      { status: "unreachable", attempt: 1, error: {} as never, closeCode: 1006, retryAt: 0 },
+      { status: "connecting", attempt: 1 },
+      { status: "fenced", error: {} as never },
+      { status: "closed" },
+    ] satisfies HostLinkState[]) {
+      const host = fakeLink({});
+      const lost = vi.fn();
+      hostLinkSignIns(host.link).watchLoss(lost);
+      host.set({ status: "ready", welcome: {} as never });
+      expect(lost).not.toHaveBeenCalled();
+      host.set(next);
+      host.set({ status: "closed" });
+      expect(lost).toHaveBeenCalledOnce();
+      expect(host.watchers.size).toBe(0);
+    }
+  });
+
+  it("says so at once for a link already gone, and stops when the run asks", () => {
+    const gone = fakeLink({});
+    gone.set({ status: "closed" });
+    const lost = vi.fn();
+    hostLinkSignIns(gone.link).watchLoss(lost);
+    expect(lost).toHaveBeenCalledOnce();
+    expect(gone.watchers.size).toBe(0);
+
+    const host = fakeLink({});
+    const quiet = vi.fn();
+    const stop = hostLinkSignIns(host.link).watchLoss(quiet);
+    stop();
+    expect(host.watchers.size).toBe(0);
+    host.set({ status: "closed" });
+    expect(quiet).not.toHaveBeenCalled();
+  });
+});
+
 describe("engineSignInLinks", () => {
   it("answers a link only while the engine lends one", () => {
     let lent: HostLink | null = null;
@@ -162,7 +231,10 @@ function fakeService() {
         flowId: Promise.resolve("flow"),
         ended: ended.promise,
         answer: vi.fn(async () => null),
-        cancel: vi.fn(async () => ended.resolve("cancelled")),
+        cancel: vi.fn(async () => {
+          ended.resolve("cancelled");
+          return { flowId: "flow" };
+        }),
       };
       runs.push({ onEvent, run });
       return run;
@@ -190,25 +262,50 @@ describe("remoteSignInsPort", () => {
     const { service, runs } = fakeService();
     const port = remoteSignInsPort(service);
     const heard: unknown[] = [];
-    const stop = await port.run("h", "xai", (event) => void heard.push(event));
+    const stop = await port.run("h", "xai", (event) => void heard.push(event), "run-1");
+    expect(service.signInOnHost).toHaveBeenLastCalledWith(
+      "h",
+      "xai",
+      expect.any(Function),
+      undefined,
+    );
     runs[0]!.onEvent({ kind: "progress", message: "Waiting" });
     expect(heard).toEqual([{ kind: "progress", message: "Waiting" }]);
+    await port.answer("h", "xai", "p", "", "run-1");
     await port.answer("h", "xai", "p", "");
+    expect(runs[0]!.run.answer).toHaveBeenCalledTimes(2);
     expect(runs[0]!.run.answer).toHaveBeenCalledWith("p", "");
-    // A second for the same provider replaces the first.
-    const stopSecond = await port.run("h", "xai", () => {});
-    expect(runs[0]!.run.cancel).toHaveBeenCalled();
+    // A second for the same provider replaces the first: the run itself waits
+    // for the first's flow to be over on the host.
+    const stopSecond = await port.run("h", "xai", () => {}, "run-2");
+    expect(service.signInOnHost).toHaveBeenLastCalledWith(
+      "h",
+      "xai",
+      expect.any(Function),
+      runs[0]!.run,
+    );
+    // The first's stream ending, its answer and its cancel reach nothing now.
     stop();
+    await expect(port.answer("h", "xai", "p", "x", "run-1")).rejects.toThrow("no longer running");
+    await port.cancel("h", "xai", "run-1");
     expect(runs[1]!.run.cancel).not.toHaveBeenCalled();
-    await port.cancel("h", "xai");
+    expect(runs[1]!.run.answer).not.toHaveBeenCalled();
+    await port.cancel("h", "xai", "run-2");
     expect(runs[1]!.run.cancel).toHaveBeenCalledOnce();
     await runs[1]!.run.ended;
     await Promise.resolve();
     await expect(port.answer("h", "xai", "p", "x")).rejects.toThrow("no longer running");
     stopSecond();
     await port.cancel("h", "none");
+    // The next for that provider follows the last one, ended or not.
+    const stopThird = await port.run("h", "xai", () => {});
+    expect(service.signInOnHost).toHaveBeenLastCalledWith(
+      "h",
+      "xai",
+      expect.any(Function),
+      runs[1]!.run,
+    );
     // A stream that ends while its sign-in runs cancels it.
-    const stopThird = await port.run("h", "anthropic", () => {});
     stopThird();
     expect(runs[2]!.run.cancel).toHaveBeenCalledOnce();
   });

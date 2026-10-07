@@ -90,6 +90,11 @@ export class HostSignInController {
   #macKeys: ReadonlySet<string> = new Set();
   #flows: Record<string, RowFlow> = {};
   #unreachable = false;
+  /**
+   * Bumped by {@link dispose}: work begun before answers into nothing. Not a
+   * one-way flag, as StrictMode disposes a controller and then uses it again.
+   */
+  #epoch = 0;
   #snapshot: HostSignInSnapshot = { rows: null, flows: {}, unreachable: false };
 
   constructor(source: HostSignInSource, hostId: string) {
@@ -106,15 +111,18 @@ export class HostSignInController {
 
   /** Reads the host's status and this Mac's keys again. */
   async refresh(): Promise<void> {
+    const epoch = this.#epoch;
     try {
       const [status, macKeys] = await Promise.all([
         this.#source.status(this.#hostId),
         this.#source.macKeys(),
       ]);
+      if (epoch !== this.#epoch) return;
       this.#status = status;
       this.#macKeys = new Set(macKeys);
       this.#unreachable = false;
     } catch {
+      if (epoch !== this.#epoch) return;
       this.#unreachable = true;
     }
     this.#publish();
@@ -129,11 +137,12 @@ export class HostSignInController {
   async confirmSend(providerId: string): Promise<void> {
     const key = providerRowKey(providerId);
     if (this.#flows[key]?.kind !== "confirm-send") return;
-    this.#setFlow(key, { kind: "sending" });
+    const shown = this.#show(key, { kind: "sending" });
     const sent = await this.#source.sendFromThisMac(this.#hostId, providerId).catch(() => ({
       ok: false as const,
       reason: "send-failed" as const,
     }));
+    if (!shown()) return;
     if (sent.ok) {
       this.#status = sent.status;
       this.#setFlow(key, IDLE);
@@ -150,18 +159,20 @@ export class HostSignInController {
   /** A pasted key for a provider, or a pasted token for a git host. */
   async submitKey(row: SignInRowView, value: string, username = "x-access-token"): Promise<void> {
     if (value.length === 0) return;
-    this.#setFlow(row.key, { kind: "saving" });
+    const shown = this.#show(row.key, { kind: "saving" });
     try {
-      this.#status =
-        row.kind === "git"
-          ? await this.#source.setGitCredential(this.#hostId, {
-              host: row.id,
-              username,
-              password: value,
-            })
-          : await this.#source.setApiKey(this.#hostId, row.id, value);
+      const status = await (row.kind === "git"
+        ? this.#source.setGitCredential(this.#hostId, {
+            host: row.id,
+            username,
+            password: value,
+          })
+        : this.#source.setApiKey(this.#hostId, row.id, value));
+      if (!shown()) return;
+      this.#status = status;
       this.#setFlow(row.key, IDLE);
     } catch {
+      if (!shown()) return;
       this.#setFlow(row.key, { kind: "failed", message: `${row.label} was not saved on the host` });
     }
   }
@@ -195,6 +206,9 @@ export class HostSignInController {
     const promptId = flow.prompt.promptId;
     this.#setFlow(key, { ...flow, prompt: null });
     await run.answer(promptId, value).catch(() => {
+      // Only while this run is still the row's: a cancelled or replaced one,
+      // or one the surface let go of, has no say over it.
+      if (this.#runs.get(key) !== run) return;
       this.#setFlow(key, { kind: "failed", message: "The host did not take that answer" });
     });
   }
@@ -214,9 +228,21 @@ export class HostSignInController {
 
   /** Cancels every running sign-in: the surface went away. */
   dispose(): void {
+    this.#epoch += 1;
     for (const run of this.#runs.values()) void run.cancel();
     this.#runs.clear();
     this.#listeners.clear();
+  }
+
+  /**
+   * Shows `flow` on a row while asking the host, and answers whether the row
+   * still shows it: an answer that arrives after the person moved on, or the
+   * surface went, changes nothing.
+   */
+  #show(key: string, flow: RowFlow): () => boolean {
+    const epoch = this.#epoch;
+    this.#setFlow(key, flow);
+    return () => this.#epoch === epoch && this.#flows[key] === flow;
   }
 
   #setFlow(key: string, flow: RowFlow): void {

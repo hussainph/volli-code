@@ -5,19 +5,27 @@
  *   as the sign-in service's {@link HostSignInHostLink}. It calls the host's
  *   `sign-ins` and `auth.callback` operations and checks every answer against
  *   the published schemas, so a host that answers badly is a failure, never a
- *   row.
+ *   row. It also tells a run when the link's connection is gone: VC-670
+ *   keeps a stream across an outage, but a sign-in is its connection's.
  * - {@link remoteSignInsPort}: the handler map's `hostSignIns.*` port over
  *   {@link HostSignInService}. A sign-in is keyed by host and provider, one at
  *   a time each, and lives as long as its `hostSignIns.run` stream: ending
- *   the stream cancels it on the host.
+ *   the stream cancels it on the host. A window names its run, so a stale
+ *   sheet's answer or cancel never reaches a newer one.
  * - {@link signInPreflight}: what `hosts.signIn` (the host chip's "Sign in
  *   again") does now. It answers once the host can take a sign-in; the window
  *   then opens that host's sign-in rows and starts the provider's sign-in
  *   through `hostSignIns.run`.
  */
 import type { RemoteSignInsPort } from "@volli/host-core/handlers";
-import type { HostLink } from "@volli/host-protocol/client-link";
-import { hostSignInStatusSchema, hostSignInUpdateSchema } from "@volli/session-rpc";
+import type { HostLink, HostLinkState } from "@volli/host-protocol/client-link";
+import {
+  hostAuthCallbackDeliverResultSchema,
+  hostSignInAckSchema,
+  hostSignInFlowSchema,
+  hostSignInStatusSchema,
+  hostSignInUpdateSchema,
+} from "@volli/session-rpc";
 import type { HostSignInStatus, HostSignInUpdate } from "@volli/shared";
 
 import { HostUnreachableError, type HostSignInHostLink, type HostSignInService } from "./service";
@@ -44,6 +52,27 @@ function status(value: unknown): HostSignInStatus {
   return hostSignInStatusSchema.parse(value);
 }
 
+/**
+ * Calls `lost` once the link's connection now is gone. Only `ready` holds
+ * one: any other state means it dropped, was retired, refused, fenced or
+ * closed, and a reconnect is a new connection that owns none of its flows.
+ */
+function watchLoss(link: HostLink, lost: () => void): () => void {
+  let gone = false;
+  const check = (state: HostLinkState): void => {
+    if (gone || state.status === "ready") return;
+    gone = true;
+    stop();
+    lost();
+  };
+  const stop = link.subscribeState(check);
+  check(link.getState());
+  return () => {
+    gone = true;
+    stop();
+  };
+}
+
 /** One host's link as the sign-in service calls it. */
 export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
   return {
@@ -51,9 +80,9 @@ export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
     setApiKey: async (input) => status(await link.mutate("signIns.setApiKey", input)),
     setGitCredential: async (input) => status(await link.mutate("signIns.setGitCredential", input)),
     start: async (input) => {
-      const answer = (await link.mutate("signIns.start", input)) as { flowId?: unknown };
-      if (typeof answer?.flowId !== "string") throw new Error("The host started no sign-in.");
-      return { flowId: answer.flowId };
+      const answer = hostSignInFlowSchema.safeParse(await link.mutate("signIns.start", input));
+      if (!answer.success) throw new Error("The host started no sign-in.");
+      return { flowId: answer.data.flowId };
     },
     subscribe: (flow, observer) =>
       link.subscribe("signIns.subscribe", flow, {
@@ -82,12 +111,15 @@ export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
         onComplete: () => observer.onComplete(),
       }),
     deliver: async (input) => {
-      const answer = (await link.mutate("auth.callback.deliver", input)) as { status?: unknown };
-      if (typeof answer?.status !== "number") throw new Error("The host did not say how it went.");
-      return { status: answer.status };
+      const answer = hostAuthCallbackDeliverResultSchema.safeParse(
+        await link.mutate("auth.callback.deliver", input),
+      );
+      if (!answer.success) throw new Error("The host did not say how it went.");
+      return { status: answer.data.status };
     },
-    answer: (input) => link.mutate("signIns.answer", input),
-    cancel: (flow) => link.mutate("signIns.cancel", flow),
+    answer: async (input) => hostSignInAckSchema.parse(await link.mutate("signIns.answer", input)),
+    cancel: async (flow) => hostSignInAckSchema.parse(await link.mutate("signIns.cancel", flow)),
+    watchLoss: (lost) => watchLoss(link, lost),
   };
 }
 
@@ -115,13 +147,27 @@ export async function signInPreflight(service: HostSignInService, hostId: string
 
 const runKey = (hostId: string, providerId: string): string => `${hostId}\u0000${providerId}`;
 
+/** A running sign-in, and the identity its window gave it (VC-702 review B3). */
+interface Running {
+  readonly run: HostSignInRun;
+  readonly runId: string | undefined;
+}
+
 /** The handler map's `hostSignIns.*` port. */
 export function remoteSignInsPort(service: HostSignInService): RemoteSignInsPort {
-  const runs = new Map<string, HostSignInRun>();
-  const running = (hostId: string, providerId: string): HostSignInRun => {
-    const run = runs.get(runKey(hostId, providerId));
-    if (run === undefined) throw new Error("That sign-in is no longer running.");
-    return run;
+  /** The run each host and provider's answers and cancels reach. */
+  const runs = new Map<string, Running>();
+  /**
+   * The latest run each host and provider started, ended or not: the next one
+   * waits for its flow to be over on the host, as a run cancelled here may
+   * still be unwinding there. One per host and provider, so bounded.
+   */
+  const latest = new Map<string, HostSignInRun>();
+  /** The running sign-in a window's answer or cancel names: its own, never a newer one. */
+  const running = (hostId: string, providerId: string, runId: string | undefined) => {
+    const current = runs.get(runKey(hostId, providerId));
+    if (current === undefined) return undefined;
+    return runId === undefined || current.runId === runId ? current.run : undefined;
   };
   return {
     status: (hostId) => service.status(hostId),
@@ -129,26 +175,34 @@ export function remoteSignInsPort(service: HostSignInService): RemoteSignInsPort
     sendFromThisMac: (hostId, providerId) => service.sendFromThisMac(hostId, providerId, true),
     setApiKey: (hostId, providerId, key) => service.setApiKey(hostId, providerId, key),
     setGitCredential: (hostId, input) => service.setGitCredential(hostId, input),
-    run(hostId, providerId, listener) {
+    run(hostId, providerId, listener, runId) {
       const key = runKey(hostId, providerId);
-      // One at a time per host and provider: a new one replaces the old.
-      void runs.get(key)?.cancel();
-      const run = service.signInOnHost(hostId, providerId, (event) => void listener(event));
-      runs.set(key, run);
+      // One at a time per host and provider: a new one replaces the old, and
+      // starts once the old one's flow is over on the host.
+      const run = service.signInOnHost(
+        hostId,
+        providerId,
+        (event) => void listener(event),
+        latest.get(key),
+      );
+      runs.set(key, { run, runId });
+      latest.set(key, run);
       void run.ended.then(() => {
-        if (runs.get(key) === run) runs.delete(key);
+        if (runs.get(key)?.run === run) runs.delete(key);
       });
       return () => {
-        if (runs.get(key) !== run) return;
+        if (runs.get(key)?.run !== run) return;
         runs.delete(key);
         void run.cancel();
       };
     },
-    answer: async (hostId, providerId, promptId, value) => {
-      await running(hostId, providerId).answer(promptId, value);
+    answer: async (hostId, providerId, promptId, value, runId) => {
+      const run = running(hostId, providerId, runId);
+      if (run === undefined) throw new Error("That sign-in is no longer running.");
+      await run.answer(promptId, value);
     },
-    cancel: async (hostId, providerId) => {
-      await runs.get(runKey(hostId, providerId))?.cancel();
+    cancel: async (hostId, providerId, runId) => {
+      await running(hostId, providerId, runId)?.cancel();
     },
   };
 }

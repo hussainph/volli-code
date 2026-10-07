@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createHostSignInService,
   HostUnreachableError,
+  MAX_MAC_KEYS,
+  MAX_PROVIDER_ID_LENGTH,
   UNCONNECTED_HOST_SIGN_IN_LINKS,
   type HostSignInHostLink,
   type MacCredentialStore,
@@ -43,6 +45,7 @@ function fakeHost(): HostSignInHostLink {
     deliver: vi.fn(async () => ({ status: 200 })),
     answer: vi.fn(async () => null),
     cancel: vi.fn(async () => null),
+    watchLoss: vi.fn(() => () => {}),
   };
 }
 
@@ -80,5 +83,26 @@ describe("createHostSignInService", () => {
       "no connection",
     );
     expect(() => service.signInOnHost("host-1", "xai", () => {})).toThrow(HostUnreachableError);
+  });
+
+  it("offers a bounded list of this Mac's keys, each a provider id a row can name", async () => {
+    const many = Array.from({ length: MAX_MAC_KEYS + 5 }, (_, index) => ({
+      providerId: `p${index}`,
+      type: "api_key" as const,
+    }));
+    const service = createHostSignInService({
+      links: UNCONNECTED_HOST_SIGN_IN_LINKS,
+      mac: {
+        list: async () => [
+          { providerId: "x".repeat(MAX_PROVIDER_ID_LENGTH + 1), type: "api_key" as const },
+          ...many,
+        ],
+        read: async () => ({ type: "api_key", key: KEY }),
+      },
+      openExternal: vi.fn(),
+    });
+    const keys = await service.macKeys();
+    expect(keys).toHaveLength(MAX_MAC_KEYS);
+    expect(keys[0]).toBe("p0");
   });
 });

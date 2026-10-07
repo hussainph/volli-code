@@ -31,6 +31,18 @@ const STATUS = {
   git: [],
 };
 
+/** A pasted-code step, as the host asks it. */
+const prompt = (promptId: string) => ({
+  kind: "prompt" as const,
+  prompt: {
+    promptId,
+    kind: "manual-code" as const,
+    message: "Paste",
+    placeholder: null,
+    options: [],
+  },
+});
+
 function fakeTier() {
   const calls: [string, unknown][] = [];
   let handlers: {
@@ -99,9 +111,15 @@ describe("remoteHostSignInSource", () => {
 
   it("follows a run to its end once, and reads a broken stream as lost", async () => {
     const tier = fakeTier();
-    const source = remoteHostSignInSource(tier.rpc, () => {});
+    let runs = 0;
+    const source = remoteHostSignInSource(
+      tier.rpc,
+      () => {},
+      () => `run-${++runs}`,
+    );
     const heard: HostSignInRunEvent[] = [];
     const run = source.signInOnHost("h", "xai", (event) => heard.push(event));
+    expect(tier.calls).toContainEqual(["run", { hostId: "h", providerId: "xai", runId: "run-1" }]);
     tier.handlers().onData({ kind: "progress", message: "Waiting" });
     await run.answer("prompt-1", "https://localhost/cb?code=c");
     tier.handlers().onData({ kind: "done" });
@@ -115,6 +133,7 @@ describe("remoteHostSignInSource", () => {
         providerId: "xai",
         promptId: "prompt-1",
         value: "https://localhost/cb?code=c",
+        runId: "run-1",
       },
     ]);
 
@@ -139,7 +158,13 @@ describe("remoteHostSignInSource", () => {
     await run.cancel();
     tier.handlers().onData({ kind: "cancelled" });
     expect(tier.unsubscribed).toHaveBeenCalledOnce();
-    expect(tier.calls).toContainEqual(["cancel", { hostId: "h", providerId: "xai" }]);
+    // The cancel names this run: main lets it reach no newer one.
+    const [, input] = tier.calls.find(([name]) => name === "run")! as [string, { runId: string }];
+    expect(input.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(tier.calls).toContainEqual([
+      "cancel",
+      { hostId: "h", providerId: "xai", runId: input.runId },
+    ]);
     expect(heard).toEqual([]);
   });
 });
@@ -187,5 +212,93 @@ describe("a replaced or cancelled run", () => {
     controller.beginSignIn("xai");
     first({ kind: "failed", message: "old news" });
     expect(controller.getSnapshot().flows["provider:xai"]?.kind).toBe("signing-in");
+  });
+
+  it("an old answer failing late leaves the newer run's row alone (VC-702 review B5)", async () => {
+    const source = fakeHostSignInSource({ status: STATUS });
+    const held = Promise.withResolvers<unknown>();
+    const signInOnHost = source.signInOnHost;
+    let started = 0;
+    source.signInOnHost = (hostId, providerId, onEvent) => {
+      const handle = signInOnHost(hostId, providerId, onEvent);
+      started += 1;
+      return started === 1 ? { ...handle, answer: () => held.promise } : handle;
+    };
+    const controller = new HostSignInController(source, "h");
+    await controller.refresh();
+    controller.beginSignIn("xai");
+    source.running.get("xai")!(prompt("old"));
+    const answering = controller.answer("xai", "http://localhost:1/cb?code=old");
+    controller.cancel("provider:xai");
+    controller.beginSignIn("xai");
+    source.running.get("xai")!(prompt("new"));
+    source.running.get("xai")!({ kind: "progress", message: "new run" });
+    const before = controller.getSnapshot().flows["provider:xai"];
+    held.reject(new Error("sign-in-conflict"));
+    await answering;
+    expect(controller.getSnapshot().flows["provider:xai"]).toBe(before);
+    expect(before).toMatchObject({ kind: "signing-in", progress: "new run" });
+  });
+
+  it("a send or a save that answers after the row moved on, or the surface went, changes nothing", async () => {
+    const source = fakeHostSignInSource({ status: STATUS });
+    const sent = Promise.withResolvers<{ ok: false; reason: "send-failed" }>();
+    const saved = Promise.withResolvers<typeof STATUS>();
+    const controller = new HostSignInController(
+      {
+        ...source,
+        sendFromThisMac: () => sent.promise,
+        setApiKey: () => saved.promise,
+      },
+      "h",
+    );
+    await controller.refresh();
+    controller.requestSend("openrouter");
+    const sending = controller.confirmSend("openrouter");
+    controller.cancel("provider:openrouter");
+    controller.beginKeyEntry("provider:anthropic");
+    const saving = controller.submitKey(
+      { key: "provider:anthropic", kind: "provider", id: "anthropic", label: "Claude" } as never,
+      "sk-pasted",
+    );
+    controller.cancel("provider:anthropic");
+    sent.resolve({ ok: false, reason: "send-failed" });
+    saved.reject(new Error("refused"));
+    await Promise.all([sending, saving]);
+    expect(controller.getSnapshot().flows).toEqual({
+      "provider:openrouter": { kind: "idle" },
+      "provider:anthropic": { kind: "idle" },
+    });
+
+    // A save the host took, after the person moved on: the row stays as they left it.
+    const git = Promise.withResolvers<typeof STATUS>();
+    const pushing = new HostSignInController(
+      { ...source, setGitCredential: () => git.promise },
+      "h",
+    );
+    const saving2 = pushing.submitKey(
+      { key: "git:github.com", kind: "git", id: "github.com", label: "GitHub" } as never,
+      "ghp_token",
+    );
+    pushing.cancel("git:github.com");
+    git.resolve(STATUS);
+    await saving2;
+    expect(pushing.getSnapshot().flows).toEqual({ "git:github.com": { kind: "idle" } });
+
+    // Gone: a read that answers after the surface was disposed is not published.
+    for (const answer of ["resolve", "reject"] as const) {
+      const read = Promise.withResolvers<typeof STATUS>();
+      const reading = new HostSignInController({ ...source, status: () => read.promise }, "h");
+      const heard = vi.fn();
+      reading.subscribe(heard);
+      const refreshing = reading.refresh();
+      reading.dispose();
+      reading.subscribe(heard);
+      if (answer === "resolve") read.resolve(STATUS);
+      else read.reject(new Error("host-unreachable"));
+      await refreshing;
+      expect(heard).not.toHaveBeenCalled();
+      expect(reading.getSnapshot()).toEqual({ rows: null, flows: {}, unreachable: false });
+    }
   });
 });

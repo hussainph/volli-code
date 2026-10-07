@@ -131,7 +131,15 @@ export const hostSignInUpdateSchema = z
   ])
   .meta({ "x-volli-open-union": "kind" });
 
-const flowSchema = z.object({ flowId: identifier });
+/** What `signIns.start` answers, and what names a flow. */
+export const hostSignInFlowSchema = z.object({ flowId: identifier });
+const flowSchema = hostSignInFlowSchema;
+
+/** What `signIns.answer` and `signIns.cancel` answer: nothing. */
+export const hostSignInAckSchema = z.null();
+
+/** What `auth.callback.deliver` answers: the status the host's own listener gave the redirect. */
+export const hostAuthCallbackDeliverResultSchema = z.object({ status: z.number().int() });
 
 /** Room for a subscription's buffered updates; a flow says a handful. */
 const SIGN_IN_STREAM_CAPACITY = 256;
@@ -205,14 +213,14 @@ export function signInProcedures() {
         }),
       answer: hostProcedure("signIns.answer")
         .input(z.object({ flowId: identifier, promptId: identifier, value: promptAnswer }))
-        .output(z.null())
+        .output(hostSignInAckSchema)
         .mutation(async ({ ctx, input }) => {
           await ctx.handlers["signIns.answer"](input, ctx.call);
           return null;
         }),
       cancel: hostProcedure("signIns.cancel")
         .input(flowSchema)
-        .output(z.null())
+        .output(hostSignInAckSchema)
         .mutation(async ({ ctx, input }) => {
           await ctx.handlers["signIns.cancel"](input, ctx.call);
           return null;
@@ -251,7 +259,7 @@ export function signInProcedures() {
               pathAndQuery: z.string().min(1).max(8192).startsWith("/"),
             }),
           )
-          .output(z.object({ status: z.number().int() }))
+          .output(hostAuthCallbackDeliverResultSchema)
           .mutation(async ({ ctx, input }) => ({
             status: (await ctx.handlers["auth.callback.deliver"](input, ctx.call)).status,
           })),

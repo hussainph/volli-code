@@ -290,14 +290,23 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     HostSignInStatus
   >;
   readonly "hostSignIns.run": HostSubscriptionHandler<
-    { hostId: string; providerId: string },
+    { hostId: string; providerId: string; runId?: string | undefined },
     HostSignInRunEvent
   >;
   readonly "hostSignIns.answer": HostHandler<
-    { hostId: string; providerId: string; promptId: string; value: string },
+    {
+      hostId: string;
+      providerId: string;
+      promptId: string;
+      value: string;
+      runId?: string | undefined;
+    },
     null
   >;
-  readonly "hostSignIns.cancel": HostHandler<{ hostId: string; providerId: string }, null>;
+  readonly "hostSignIns.cancel": HostHandler<
+    { hostId: string; providerId: string; runId?: string | undefined },
+    null
+  >;
   /** Managing a host (VC-700 PR 3): this Mac's label, and the host's devices over SSH. */
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
@@ -729,17 +738,17 @@ function hostHandlerEntries(
         throw withoutSecret(error, credential.password);
       }
     },
-    "hostSignIns.run": async ({ hostId, providerId }, _call, sink) =>
-      remoteSignIns().run(hostId, providerId, (event) => sink.emit(event)),
-    "hostSignIns.answer": async ({ hostId, providerId, promptId, value }) => {
+    "hostSignIns.run": async ({ hostId, providerId, runId }, _call, sink) =>
+      remoteSignIns().run(hostId, providerId, (event) => sink.emit(event), runId),
+    "hostSignIns.answer": async ({ hostId, providerId, promptId, value, runId }) => {
       try {
-        return await done(() => remoteSignIns().answer(hostId, providerId, promptId, value));
+        return await done(() => remoteSignIns().answer(hostId, providerId, promptId, value, runId));
       } catch (error) {
         throw withoutSecret(error, value);
       }
     },
-    "hostSignIns.cancel": ({ hostId, providerId }) =>
-      done(() => remoteSignIns().cancel(hostId, providerId)),
+    "hostSignIns.cancel": ({ hostId, providerId, runId }) =>
+      done(() => remoteSignIns().cancel(hostId, providerId, runId)),
     "hosts.rename": ({ hostId, name }) => done(() => remoteHosts().rename(hostId, name)),
     "hosts.devices": ({ hostId }) => remoteHosts().devices(hostId),
     "hostAdd.facts": ({ flowId }) => remoteHosts().addFacts(flowId),

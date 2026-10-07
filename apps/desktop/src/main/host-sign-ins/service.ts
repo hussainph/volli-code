@@ -51,6 +51,10 @@ export interface MacCredentialStore extends MacCredentialReader {
   list(): Promise<readonly { providerId: string; type: "api_key" | "oauth" }[]>;
 }
 
+/** The most provider ids "Send from this Mac" offers, and the longest one. */
+export const MAX_MAC_KEYS = 256;
+export const MAX_PROVIDER_ID_LENGTH = 256;
+
 export class HostUnreachableError extends Error {
   constructor() {
     super("This Mac has no connection to that host.");
@@ -68,10 +72,12 @@ export interface HostSignInService {
   ): Promise<SendFromThisMacResult<HostSignInStatus>>;
   setApiKey(hostId: string, providerId: string, key: string): Promise<HostSignInStatus>;
   setGitCredential(hostId: string, input: HostSetGitCredentialInput): Promise<HostSignInStatus>;
+  /** A subscription login on the host; `replaces` is the run it follows, for the same host and provider. */
   signInOnHost(
     hostId: string,
     providerId: string,
     onEvent: (event: HostSignInRunEvent) => void,
+    replaces?: HostSignInRun,
   ): HostSignInRun;
 }
 
@@ -93,7 +99,9 @@ export function createHostSignInService(options: {
       const listed = await options.mac.list();
       const keys: string[] = [];
       for (const { providerId, type } of listed) {
-        if (type !== "api_key") continue;
+        // Bounded: a provider id a row could name, and no more than a sheet shows.
+        if (keys.length === MAX_MAC_KEYS) break;
+        if (type !== "api_key" || providerId.length > MAX_PROVIDER_ID_LENGTH) continue;
         if ((await macKeyAvailability(options.mac, providerId)).kind === "key") {
           keys.push(providerId);
         }
@@ -111,12 +119,13 @@ export function createHostSignInService(options: {
     },
     setApiKey: async (hostId, providerId, key) => link(hostId).setApiKey({ providerId, key }),
     setGitCredential: async (hostId, input) => link(hostId).setGitCredential(input),
-    signInOnHost: (hostId, providerId, onEvent) =>
+    signInOnHost: (hostId, providerId, onEvent, replaces) =>
       runHostSignIn({
         link: link(hostId),
         providerId,
         openExternal: options.openExternal,
         onEvent,
+        replaces,
         bind: options.bind,
       }),
   };

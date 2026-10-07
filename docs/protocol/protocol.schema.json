@@ -1173,6 +1173,11 @@
               "minLength": 1,
               "type": "string"
             },
+            "runId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
             "value": {
               "maxLength": 16384,
               "type": "string"
@@ -1206,6 +1211,11 @@
               "type": "string"
             },
             "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "runId": {
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
@@ -1254,6 +1264,11 @@
               "type": "string"
             },
             "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "runId": {
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
