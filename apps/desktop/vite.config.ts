@@ -581,6 +581,9 @@ export default defineConfig(({ mode }) => ({
         // Which door a project's Session listing is read through (VC-713): a
         // wrong branch calls `window.api` with a remote project's id.
         "src/lib/session-listing-reader.ts",
+        // A remote Workspace's Session streams within the link's budget
+        // (VC-713, AM1): a missed branch is a blank chat or a leaked stream.
+        "src/lib/remote-session-streams.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
