@@ -40,6 +40,7 @@ import {
   supervisorEnv,
 } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { assertAcceptanceRunner, acceptanceTarballs } from "./lib/remote-acceptance.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -155,6 +156,12 @@ async function launch(flags) {
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
   const build = flags.build ?? "dev";
+  let remoteAcceptance = null;
+  if (flags.remoteAcceptance) {
+    assertAcceptanceRunner();
+    if (model !== "fake") fail("--remote-acceptance requires --model fake");
+    remoteAcceptance = { tarballs: acceptanceTarballs(process.env.VOLLI_HOSTD_DEV_TARBALLS) };
+  }
   if (!["fake", "env"].includes(model)) fail("--model is fake or env");
   // Packed mode is disabled: a packaged app's bundle cannot be validated
   // before it runs, so it could start without the guard (VC-705).
@@ -184,6 +191,7 @@ async function launch(flags) {
     model,
     build,
     appBinary: null,
+    remoteAcceptance,
     bundle: BUILT_MAIN,
     idleMs,
     ...(await gitFacts()),
