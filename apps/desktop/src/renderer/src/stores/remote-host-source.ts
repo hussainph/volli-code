@@ -138,10 +138,14 @@ export function createRemoteHostSource(
         trackers.set(projectId, tracker);
       }
       const host = factsOf.get(hostId);
-      const worded = tracker.view(asLinkState(link), at, {
-        availableUpdate: host?.availableUpdate ?? null,
-        hostIsNewer: host?.hostIsNewer ?? false,
-      });
+      // A project whose host main has not named (yet): no version facts to add.
+      const worded = tracker.view(
+        asLinkState(link),
+        at,
+        host === undefined
+          ? {}
+          : { availableUpdate: host.availableUpdate, hostIsNewer: host.hostIsNewer },
+      );
       if (worded.recheckAt !== null && (soonest === null || worded.recheckAt < soonest)) {
         soonest = worded.recheckAt;
       }

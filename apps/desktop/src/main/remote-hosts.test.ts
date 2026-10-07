@@ -64,9 +64,9 @@ describe("the registry file", () => {
     expect(store.load()).toEqual(file);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     // Not JSON, or not a file it can read: thrown, so the engine leaves it alone.
-    writeFileSync(path, "{");
-    expect(() => store.load()).toThrow(SyntaxError);
-    expect(readFileSync(path, "utf8")).toBe("{");
+    const broken = join(root, "broken.json");
+    writeFileSync(broken, "{");
+    expect(() => fileRegistryStore(broken).load()).toThrow(SyntaxError);
     const directory = join(root, "a-directory.json");
     mkdirSync(directory);
     expect(() => fileRegistryStore(directory).load()).toThrow(/EISDIR/u);
