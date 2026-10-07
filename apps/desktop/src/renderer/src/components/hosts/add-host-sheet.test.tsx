@@ -175,6 +175,10 @@ describe("Add a host", () => {
       },
     });
     expect(sheet().querySelector('[role="log"]')).toBeNull();
+    // Its caret turns, except under reduced motion.
+    expect(button("Details")?.querySelector("svg")?.getAttribute("class")).toContain(
+      "motion-reduce:transition-none",
+    );
     await click(sheet(), "Details");
     const log = sheet().querySelector('[role="log"]');
     expect(log?.textContent).toBe("step started step=deliver");
