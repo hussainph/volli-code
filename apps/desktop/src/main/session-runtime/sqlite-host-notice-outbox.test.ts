@@ -51,11 +51,12 @@ function setup() {
   mkdirSync(directory);
   return { directory, dbPath: db.dbPath };
 }
-function launch(
-  handle: Database.Database,
-  directory: string,
-  outboxOverride?: (outbox: HostNoticeOutbox) => HostNoticeOutbox,
-) {
+interface LaunchOptions {
+  outboxOverride?: (outbox: HostNoticeOutbox) => HostNoticeOutbox;
+  beforeAttach?: () => Promise<void>;
+}
+function launch(handle: Database.Database, directory: string, options: LaunchOptions = {}) {
+  const { beforeAttach } = options;
   const writer = createSqliteSessionLedger(handle);
   const wakeBus = createSessionWakeBus(
     createSessionEngine({
@@ -92,7 +93,16 @@ function launch(
   const venue = { id: "local", kind: "local" as const };
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executor:
+      beforeAttach === undefined
+        ? executor
+        : {
+            ...executor,
+            attach: async (...args) => {
+              await beforeAttach();
+              return executor.attach(...args);
+            },
+          },
     artifacts: createFileTranscriptArtifactStore(join(dirname(directory), "transcripts")),
     locations: {
       resolve: async () => ({ directory, venue }),
@@ -104,52 +114,15 @@ function launch(
   });
   runtimes.push(runtime);
   const reports: string[] = [];
-  const started = performance.now();
-  const trace: { event: string; ms: number }[] = [];
-  const mark = (event: string) => trace.push({ event, ms: performance.now() - started });
   const outbox = createSqliteHostNoticeOutbox(handle, writer);
   const delivery = createHostNoticeDelivery({
-    runtime: {
-      projection: async (input) => {
-        mark("projection:start");
-        const result = await runtime.projection(input);
-        mark(`projection:end:live=${result.projection.liveExecutor?.id}`);
-        return result;
-      },
-      subscribe: async (...args) => {
-        mark("subscribe:start");
-        const result = await runtime.subscribe(...args);
-        mark("subscribe:end");
-        return result;
-      },
-      command: async (input) => {
-        mark("command:start");
-        try {
-          const result = await runtime.command(input);
-          mark(`command:end:${result.receipt?.status}`);
-          return result;
-        } catch (error) {
-          mark(`command:error:${String(error)}`);
-          throw error;
-        }
-      },
-    },
-    outbox: outboxOverride?.(outbox) ?? {
-      ...outbox,
-      settle: async (...args) => {
-        mark("settle:start");
-        await outbox.settle(...args);
-        mark("settle:end");
-      },
-    },
+    runtime,
+    outbox: options.outboxOverride?.(outbox) ?? outbox,
     subscribeEvents: (listener) => wakeBus.subscribe(({ event }) => listener(event)),
-    report: (message) => {
-      mark(`report:${message}`);
-      reports.push(message);
-    },
+    report: (message) => reports.push(message),
   });
   deliveries.push(delivery);
-  return { writer, engine, runtime, delivery, outbox, reports, script, trace, mark };
+  return { writer, engine, runtime, delivery, outbox, reports, script };
 }
 async function create(f: ReturnType<typeof launch>) {
   return (
@@ -193,14 +166,18 @@ function notice(sessionId: string): HostNotice {
     }),
   };
 }
-async function reconstruct(f: ReturnType<typeof launch>, paths: ReturnType<typeof setup>) {
+async function reconstruct(
+  f: ReturnType<typeof launch>,
+  paths: ReturnType<typeof setup>,
+  options: LaunchOptions = {},
+) {
   f.delivery.close();
   await f.runtime.close();
   db!.db.close();
   const handle = openRawDb(paths.dbPath);
   reopened.push(handle);
   handle.pragma("foreign_keys = ON");
-  return launch(handle, paths.directory);
+  return launch(handle, paths.directory, options);
 }
 
 describe("SQLite host notice outbox", () => {
@@ -311,9 +288,9 @@ describe("SQLite host notice outbox", () => {
     expect(second.script.requests).toHaveLength(1);
   });
 
-  it.each(Array.from({ length: Number(process.env.VC723_MEASURE ?? 1) }, (_, i) => i))(
-    "recovers the same payload after failed live delivery with a genuinely rebuilt runtime (%i)",
-    async () => {
+  it.each(["immediate", "held"] as const)(
+    "recovers the same payload after failed live delivery with a genuinely rebuilt runtime (%s attachment)",
+    async (attachment) => {
       const paths = setup();
       const first = launch(db!.db, paths.directory);
       const sessionId = await create(first);
@@ -337,16 +314,42 @@ describe("SQLite host notice outbox", () => {
       );
       broken.close();
       expect(await first.outbox.pending()).toEqual([value]);
-      const second = await reconstruct(first, paths);
-      second.mark("recover:start");
+      const attaching = Promise.withResolvers<void>();
+      const releaseAttach = Promise.withResolvers<void>();
+      const settled = Promise.withResolvers<Parameters<HostNoticeOutbox["settle"]>>();
+      const second = await reconstruct(first, paths, {
+        beforeAttach:
+          attachment === "held"
+            ? async () => {
+                attaching.resolve();
+                await releaseAttach.promise;
+              }
+            : undefined,
+        outboxOverride: (outbox) => ({
+          ...outbox,
+          settle: async (...args) => {
+            await outbox.settle(...args);
+            settled.resolve(args);
+          },
+        }),
+      });
       await second.delivery.recover();
-      second.mark("recover:return");
-      try {
-        await vi.waitFor(async () => expect(await second.outbox.pending()).toEqual([]));
-        second.mark("assertion:passed");
-      } finally {
-        if (process.env.VC723_MEASURE) console.log("VC723", JSON.stringify(second.trace));
+      if (attachment === "held") {
+        await attaching.promise;
+        // recover() restores subscriptions; it does not await cold Pi binding
+        // reconstruction or the delivery's commit. Keep that ordering explicit.
+        try {
+          expect(await second.outbox.pending()).toEqual([value]);
+          expect(second.script.requests).toEqual([]);
+        } finally {
+          releaseAttach.resolve();
+        }
       }
+      // Observe the real SQLite commit, not a one-second real-clock polling
+      // window. Delivery still uses the rebuilt Engine, Runtime and Pi adapter.
+      expect(await settled.promise).toEqual([value.commandId, { status: "accepted" }]);
+      expect(await second.outbox.pending()).toEqual([]);
+      expect(second.reports).toEqual([]);
       const snapshot = await second.runtime.snapshot({ sessionId });
       const submitted = snapshot.transcript.filter(
         ({ message }) => readHostNotice(message) !== null,
@@ -359,12 +362,14 @@ describe("SQLite host notice outbox", () => {
 
   it("recovery cleans up a previously accepted command without issuing a second provider request", async () => {
     const paths = setup();
-    const first = launch(db!.db, paths.directory, (outbox) => ({
-      ...outbox,
-      settle: async () => {
-        throw new Error("cleanup interrupted");
-      },
-    }));
+    const first = launch(db!.db, paths.directory, {
+      outboxOverride: (outbox) => ({
+        ...outbox,
+        settle: async () => {
+          throw new Error("cleanup interrupted");
+        },
+      }),
+    });
     const sessionId = await create(first);
     await attach(first, sessionId);
     const value = notice(sessionId);

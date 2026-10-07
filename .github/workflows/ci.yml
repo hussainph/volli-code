@@ -425,22 +425,6 @@ jobs:
       # `blob` for the merge. The blob path is absolute because the reporter
       # resolves a relative one against the config's `root` (src/renderer),
       # not against this directory.
-      - name: Measure VC-723 recovery under load (temporary)
-        if: matrix.shard == 3
-        working-directory: apps/desktop
-        env:
-          VC723_MEASURE: "50"
-        run: |
-          export VOLLI_CONCURRENCY_HINT=$(nproc)
-          pids=()
-          trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
-          for ((i=1; i<VOLLI_CONCURRENCY_HINT; i++)); do
-            node -e 'const end = Date.now() + 120000; while (Date.now() < end) Math.sqrt(Math.random());' &
-            pids+=("$!")
-          done
-          vp test run src/main/session-runtime/sqlite-host-notice-outbox.test.ts \
-            -t 'recovers the same payload' --maxWorkers="$VOLLI_CONCURRENCY_HINT"
-
       - name: Run shard ${{ matrix.shard }} of ${{ strategy.job-total }}
         working-directory: apps/desktop
         run: >-
