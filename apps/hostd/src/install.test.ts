@@ -627,3 +627,122 @@ describe("install converges and never orphans a key", () => {
     expect(result.actions).toContain(`made the data directory ${layout.dataDir}`);
   });
 });
+
+// VC-700 PR 1c: a Mac's host is the person's launchd agent.
+describe("install --user on a Mac", () => {
+  const macLayout = (): InstallLayout =>
+    installLayout("user", { home: join(root, "Users/alice"), env: {}, platform: "darwin" });
+
+  it("writes the launchd agent and touches nothing in launchd itself", () => {
+    const layout = macLayout();
+    const fake = box();
+    const result = runInstall(USER, ports(layout, { uid: () => 501, run: fake.run }));
+    expect(result).toMatchObject({
+      mode: "user",
+      serviceUser: null,
+      dataDir: join(root, "Users/alice/Library/Application Support/volli-hostd"),
+    });
+    expect(result.actions).toEqual([
+      `made the data directory ${layout.dataDir}`,
+      "installed release 1.0.0-abc",
+      "current is 1.0.0",
+      `linked ${join(layout.binLinkDir, "volli-hostd")}`,
+      `linked ${join(layout.binLinkDir, "volli")}`,
+      `made the secret key ${layout.keyFile}`,
+      "wrote com.volli.hostd.plist",
+      "recorded 1.0.0 on port 7420",
+    ]);
+    // No systemd, and launchd is start's: install runs no tool at all.
+    expect(fake.calls).toEqual([]);
+    expect(statSync(layout.dataDir).mode & 0o777).toBe(0o700);
+    const plist = readFileSync(layout.agentPlist!, "utf8");
+    expect(plist).toContain("<key>Label</key>\n  <string>com.volli.hostd</string>");
+    expect(plist).toContain(
+      [
+        "  <array>",
+        `    <string>${layout.currentLink}/bin/volli-hostd</string>`,
+        "    <string>--data-dir</string>",
+        `    <string>${layout.dataDir}</string>`,
+        "    <string>--listen</string>",
+        "    <string>127.0.0.1:7420</string>",
+        "  </array>",
+      ].join("\n"),
+    );
+    expect(plist).toContain(
+      `<key>VOLLI_SECRET_KEY_FILE</key>\n    <string>${layout.keyFile}</string>`,
+    );
+    expect(plist).toContain("<key>VOLLI_EXPERIMENTAL</key>\n    <string>cloud</string>");
+    expect(plist).toContain("<key>LimitLoadToSessionType</key>\n  <string>Background</string>");
+    expect(plist).toContain(`<string>${layout.logFile}</string>`);
+    expect(existsSync(join(layout.root, ".reload-pending"))).toBe(false);
+    expect(statSync(join(root, "Users/alice/Library/Logs")).isDirectory()).toBe(true);
+    expect(runInstall(USER, ports(layout, { uid: () => 501, run: fake.run })).changed).toBe(false);
+  });
+
+  it("leaves the key hostd made in a Mac's data directory to hostd", () => {
+    const layout = macLayout();
+    mkdirSync(layout.dataDir, { recursive: true });
+    writeFileSync(join(layout.dataDir, "session-secrets.key"), "theirs");
+    runInstall(USER, ports(layout, { uid: () => 501 }));
+    expect(readFileSync(layout.agentPlist!, "utf8")).not.toContain("VOLLI_SECRET_KEY_FILE");
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+
+  it("refuses a system install: a Mac's host is the person's agent", () => {
+    const layout = installLayout("system", {
+      prefix: root,
+      home: join(root, "Users/alice"),
+      env: {},
+      platform: "darwin",
+    });
+    expect(refusal(() => runInstall(SYSTEM, ports(layout)))).toMatchObject({
+      code: "system-unsupported",
+    });
+  });
+
+  it("escapes what XML would misread, and keeps a key the plist already names", () => {
+    const layout = installLayout("user", {
+      home: join(root, "Users/a&b <c>"),
+      env: {},
+      platform: "darwin",
+    });
+    mkdirSync(layout.unitDir, { recursive: true });
+    writeFileSync(
+      layout.agentPlist!,
+      "<dict><key>VOLLI_SECRET_KEY_FILE</key><string>/Volumes/keys/a&amp;b.key</string></dict>",
+    );
+    const result = runInstall(USER, ports(layout, { uid: () => 501 }));
+    expect(result.actions).not.toContain(`made the secret key ${layout.keyFile}`);
+    const plist = readFileSync(layout.agentPlist!, "utf8");
+    expect(plist).toContain("<string>/Volumes/keys/a&amp;b.key</string>");
+    expect(plist).toContain("Users/a&amp;b &lt;c&gt;/Library/Application Support/volli-hostd");
+    expect(plist).not.toContain("a&b <c>");
+  });
+
+  it("owes start a restart when the agent's plist changed under a started release", () => {
+    const layout = macLayout();
+    runInstall(USER, ports(layout, { uid: () => 501 }));
+    writeManaged(layout, { ...readManaged(layout)!, started: "1.0.0-abc" });
+    expect(runInstall(USER, ports(layout, { uid: () => 501 })).changed).toBe(false);
+    expect(readManaged(layout)).toMatchObject({ started: "1.0.0-abc" });
+    const moved = runInstall({ ...USER, port: 7500 }, ports(layout, { uid: () => 501 }));
+    expect(moved.actions).toEqual(["wrote com.volli.hostd.plist", "recorded 1.0.0 on port 7500"]);
+    expect(readManaged(layout)).not.toHaveProperty("started");
+  });
+});
+
+describe("install --user keeps a key its own unit names", () => {
+  it("rewrites the user unit with the key someone pointed it at", () => {
+    const layout = installLayout("user", { home: join(root, "home"), env: {} });
+    mkdirSync(layout.unitDir, { recursive: true });
+    writeFileSync(
+      join(layout.unitDir, "volli-hostd.service"),
+      "[Service]\nEnvironment=VOLLI_SECRET_KEY_FILE=/srv/keys/mine.key\n",
+    );
+    runInstall(USER, ports(layout, { uid: () => 1000 }));
+    expect(readFileSync(join(layout.unitDir, "volli-hostd.service"), "utf8")).toContain(
+      "Environment=VOLLI_SECRET_KEY_FILE=/srv/keys/mine.key\n",
+    );
+    expect(existsSync(layout.keyFile)).toBe(false);
+  });
+});

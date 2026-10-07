@@ -506,6 +506,7 @@ export function TicketTabStrip({
                 `align="end"` because the control sits at the strip's right edge
                 — the menu hangs back into the window rather than off it. */}
             <NewSessionControl
+              projectId={list.projectId}
               disabled={creating}
               placement="strip"
               align="end"

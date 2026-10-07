@@ -376,6 +376,14 @@ const STAGE_PREFIX = "stage.";
  */
 export const STALE_STAGING_MINUTES = 60;
 
+/**
+ * A remote file's SHA-256, hex, alone: `sha256sum` (GNU, Linux) or `shasum -a
+ * 256` (a Mac, which has no `sha256sum`). Nothing when it cannot be read.
+ */
+function digestOf(quotedPath: string): string {
+  return `{ sha256sum ${quotedPath} 2>/dev/null || shasum -a 256 ${quotedPath} 2>/dev/null; } | cut -d' ' -f1`;
+}
+
 const deliver: Step = async ({ state, ports, logger }) => {
   if (!installing(state)) return { result: { skipped: true } };
   const probeFacts = need(state.results.probe, "probe facts");
@@ -391,7 +399,7 @@ const deliver: Step = async ({ state, ports, logger }) => {
   const exec = (script: string, options: SshExecOptions) => ports.ssh.exec(script, options);
 
   // The tarball already there is sent again unless it is exactly the pinned one.
-  const have = await exec(`sha256sum ${q(tarball)} 2>/dev/null | cut -d' ' -f1`, {
+  const have = await exec(digestOf(q(tarball)), {
     label: "upload: check",
   });
   const connection = lost("deliver", have);
@@ -412,7 +420,7 @@ const deliver: Step = async ({ state, ports, logger }) => {
     if (dropped !== null) return dropped;
     if (sent.code !== 0)
       return failed({ code: "upload-failed", step: "deliver", detail: sent.stderr.trim() });
-    const verified = await exec(`sha256sum ${q(part)} | cut -d' ' -f1`, {
+    const verified = await exec(digestOf(q(part)), {
       label: "upload: verify",
     });
     const verifyLost = lost("deliver", verified);
@@ -440,7 +448,7 @@ const deliver: Step = async ({ state, ports, logger }) => {
       `s=$(mktemp -d "$d/${STAGE_PREFIX}XXXXXX") || exit 1`,
       // mktemp's 0700 would follow the copy into the install, shutting the service account out.
       'chmod 755 "$s" || exit 1',
-      `sum=$(sha256sum ${q(tarball)} | cut -d' ' -f1)`,
+      `sum=$(${digestOf(q(tarball))})`,
       `if [ "$sum" != ${q(artifact.sha256)} ]; then rm -rf "$s" ${q(tarball)}; echo "checksum=$sum"; exit 3; fi`,
       `tar -xzf ${q(tarball)} -C "$s" --strip-components=1 --no-same-owner || { rm -rf "$s"; exit 1; }`,
       // Its age is this delivery's, whatever times the archive carried.
