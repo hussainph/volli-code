@@ -16,6 +16,11 @@ export {
   type PiSignInOptions,
   type PiSignInSteps,
 } from "./pi/sign-in";
+export {
+  piHostCredentials,
+  type PiHostCredentials,
+  type PiStoredCredential,
+} from "./pi/host-credentials";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
 export { codeModeSandboxAssetsFrom } from "./codemode/assets";
 export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";

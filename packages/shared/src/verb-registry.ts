@@ -786,6 +786,137 @@ export const BOARD_ENTRIES = [
 export type BoardEntry = (typeof BOARD_ENTRIES)[number];
 
 /**
+ * Sign-ins on a host (VC-702; HP § Sign-ins on a host): the person sends an
+ * API key or a git push credential from a Client, or signs a subscription in
+ * on the host itself. Person-only and host-scoped, like `logs.*`: no Session
+ * may read or write the host's sign-ins, so every row's router actor is
+ * `user` and none is on an agent surface (`hostApi` only, `listed: false`).
+ *
+ * Served by the Session router's family until VC-565 composes area routers
+ * into one served router; the rows are typed here so they can move with it.
+ */
+export const SIGN_IN_ENTRIES = [
+  {
+    key: "signIns.status",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.status" },
+    listed: false,
+    group: "App",
+    summary: "Read which providers and git hosts this host is signed in to, never a value.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "signIns.setApiKey",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.setApiKey" },
+    listed: false,
+    group: "App",
+    summary: "Store a provider API key on this host, write-only.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "signIns.signOut",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.signOut" },
+    listed: false,
+    group: "App",
+    summary: "Remove the credential this host stores for one provider.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    // Natural, not command-id: a repeat from the same connection answers the
+    // flow it already has, and nothing about a flow outlives its connection.
+    key: "signIns.start",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.start" },
+    listed: false,
+    group: "App",
+    summary: "Start signing this host in to a provider, owned by the asking connection.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "signIns.subscribe",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.subscribe" },
+    listed: false,
+    group: "App",
+    summary: "Follow one of this connection's sign-in flows to its end.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "signIns.answer",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.answer" },
+    listed: false,
+    group: "App",
+    summary: "Answer the step a sign-in flow is waiting on: the pasted-redirect fallback.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "signIns.cancel",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.cancel" },
+    listed: false,
+    group: "App",
+    summary: "Cancel one of this connection's sign-in flows.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "signIns.setGitCredential",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.setGitCredential" },
+    listed: false,
+    group: "App",
+    summary: "Store a git push credential for one remote host, write-only.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "signIns.clearGitCredential",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "signIns.clearGitCredential" },
+    listed: false,
+    group: "App",
+    summary: "Remove the git push credential this host stores for one remote host.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    // The auth-callback relay (HP § Auth-callback relay): a single-use grant,
+    // bound to its flow and connection. Its own feature, so a Client says it
+    // can relay by asking for it, and MCP's relay (VC-570) reuses it.
+    key: "auth.callback.deliver",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "auth.callback.deliver" },
+    listed: false,
+    group: "App",
+    summary: "Deliver the browser's redirect to the host's own sign-in listener, once.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+] as const satisfies readonly VerbEntry[];
+
+/** One sign-in row. */
+export type SignInEntry = (typeof SIGN_IN_ENTRIES)[number];
+
+/**
  * Every agent-facing verb, in the order the socket projection has always had.
  *
  * Declaration order is the socket order, so {@link AGENT_COMMANDS} is a plain
@@ -3639,6 +3770,7 @@ export const VERB_REGISTRY = [
     options: [],
     catalog: { scope: "host", idempotency: "read" },
   },
+  ...SIGN_IN_ENTRIES,
 ] as const satisfies readonly VerbEntry[];
 
 type RegistryEntry = (typeof VERB_REGISTRY)[number];

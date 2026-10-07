@@ -121,6 +121,16 @@ const SAMPLE_INPUTS: {
   "session.show": { projectId: PROJECT, session: "s-1" },
   "session.peek": { projectId: PROJECT, session: "s-1", lines: 5 },
   "session.answer": { projectId: PROJECT, session: "s-1" },
+  "signIns.status": undefined,
+  "signIns.setApiKey": { providerId: "anthropic", key: "sk-test-sample" },
+  "signIns.signOut": { providerId: "anthropic" },
+  "signIns.start": { providerId: "anthropic" },
+  "signIns.subscribe": { flowId: "flow-1" },
+  "signIns.answer": { flowId: "flow-1", promptId: "prompt-1", value: "pasted" },
+  "signIns.cancel": { flowId: "flow-1" },
+  "signIns.setGitCredential": { host: "github.com", username: "x", password: "token" },
+  "signIns.clearGitCredential": { host: "github.com" },
+  "auth.callback.deliver": { flowId: "flow-1", pathAndQuery: "/callback?code=c&state=s" },
   "board.snapshot": { projectId: PROJECT },
   "board.roster": { projectId: PROJECT },
   "board.changes": { projectId: PROJECT },
@@ -176,8 +186,9 @@ function recordingHandlers(): { handlers: never; reached: string[] } {
 type Procedure = (input?: unknown) => Promise<unknown>;
 
 function procedureAt(caller: object, path: string): Procedure {
-  const [namespace, name] = path.split(".") as [string, string];
-  return (caller as Record<string, Record<string, Procedure>>)[namespace]![name]!;
+  let at: unknown = caller;
+  for (const part of path.split(".")) at = (at as Record<string, unknown>)[part];
+  return at as Procedure;
 }
 
 async function drive(procedure: Procedure, input: unknown): Promise<void> {

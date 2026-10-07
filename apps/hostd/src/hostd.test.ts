@@ -1364,6 +1364,8 @@ describe("the host protocol listener (VC-663)", () => {
           "session.read",
           "board.read",
           "board.write",
+          "sign-ins",
+          "auth.callback",
         ],
       });
       // The socket's own handler, scoped to this Workspace.
@@ -1432,6 +1434,59 @@ describe("the host protocol listener (VC-663)", () => {
     } finally {
       await close();
     }
+  });
+
+  it("keeps the sign-ins a device sends in the host's own stores, and never logs one (VC-702)", async () => {
+    const API_KEY = "sk-ant-api03-SENT-OVER-THE-HOST-LINK-0123456789";
+    const GIT_TOKEN = "ghp_SENTOVERTHEHOSTLINK0123456789ab";
+    const lever = device();
+    const log = logger();
+    const host = await boot(
+      { env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier },
+      log,
+    );
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    const { trpc, close } = client(host.status().hostProtocol!.url);
+    try {
+      const keyed = await trpc.signIns.setApiKey.mutate({ providerId: "anthropic", key: API_KEY });
+      expect(keyed.providers.find((row) => row.providerId === "anthropic")).toMatchObject({
+        state: "signed-in",
+        kind: "api-key",
+      });
+      const pushed = await trpc.signIns.setGitCredential.mutate({
+        host: "github.com",
+        username: "x-access-token",
+        password: GIT_TOKEN,
+      });
+      expect(pushed.git).toEqual([{ host: "github.com", state: "signed-in", kind: "git" }]);
+      // Into Pi's own auth storage for the service account, and the push
+      // store under the data directory: each the service user's alone.
+      const auth = join(root, "pi", "auth.json");
+      expect(JSON.parse(readFileSync(auth, "utf8"))).toMatchObject({
+        anthropic: { type: "api_key", key: API_KEY },
+      });
+      const pushStore = join(root, "data", "credentials", "git-push.json");
+      expect(statSync(pushStore).mode & 0o777).toBe(0o600);
+      expect(statSync(auth).mode & 0o077).toBe(0);
+      // No flow on another connection is this one's to see.
+      expect(
+        await expectHostError(trpc.signIns.cancel.mutate({ flowId: "not-mine" })),
+      ).toMatchObject({ code: "NOT_FOUND", reason: "sign-in-unknown" });
+      const wire = JSON.stringify([keyed, pushed, await trpc.signIns.status.query()]);
+      expect(wire).not.toContain(API_KEY);
+      expect(wire).not.toContain(GIT_TOKEN);
+    } finally {
+      await close();
+    }
+    const logged = JSON.stringify([
+      log.debug.mock.calls,
+      log.info.mock.calls,
+      log.warn.mock.calls,
+      log.error.mock.calls,
+    ]);
+    expect(logged).not.toContain(API_KEY);
+    expect(logged).not.toContain(GIT_TOKEN);
   });
 
   it("writes the Client's trace on every line it logs for a request, joined to the Session and command (VC-699)", async () => {

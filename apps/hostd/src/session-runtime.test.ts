@@ -27,13 +27,19 @@ const seam = vi.hoisted(() => ({
   sites: vi.fn(() => [] as { sessionId: string; directory: string }[]),
   release: vi.fn(),
   modelAccess: vi.fn(),
+  piSignIn: vi.fn(),
+  piHostCredentials: vi.fn(),
   observability: { start: vi.fn(), shutdown: vi.fn() },
   handlers: vi.fn(),
 }));
 vi.mock("../../../packages/host-core/src/handlers/host-handlers", () => ({
   createHostHandlers: seam.handlers,
 }));
-vi.mock("@volli/agent-runtime", () => ({ piOwnedModelAccess: seam.modelAccess }));
+vi.mock("@volli/agent-runtime", () => ({
+  piOwnedModelAccess: seam.modelAccess,
+  piSignIn: seam.piSignIn,
+  piHostCredentials: seam.piHostCredentials,
+}));
 vi.mock("../../../packages/host-core/src/db/projects-repo", () => ({
   getProjectById: seam.project,
 }));
@@ -152,7 +158,10 @@ function fixture() {
   seam.sites.mockReturnValue([]);
   seam.concurrency.mockReturnValue(vi.fn(async () => ({ PATH: "/service/bin" })));
   const runtimeServices = {
-    modelAccess: { models: "host-model-access" },
+    modelAccess: {
+      models: "host-model-access-models",
+      credentials: "host-model-access-credentials",
+    },
     decisions: { decide: "host-decisions" },
     mcp: { selectedTools: "host-mcp" },
     webAccess: { web: "host-web-access" },
@@ -272,8 +281,14 @@ describe("headless runtime ownership", () => {
         automations: f.automations,
         busyWorktreeSites: expect.any(Function),
         detachedWork: f.input.host.detachedWork,
+        // Sign-ins on this host (VC-702), over the host's own Pi collection
+        // and its own stores; the ChatGPT flow names the host by its id.
+        signIns: expect.any(Object),
       }),
     );
+    expect(seam.piSignIn).toHaveBeenCalledWith("host-model-access-models", expect.any(Object));
+    expect(seam.piSignIn.mock.lastCall![1].deviceId()).toBe("hostd");
+    expect(seam.piHostCredentials).toHaveBeenCalledWith("host-model-access-credentials");
     expect(ready.handlers).toBe(seam.handlers.mock.results[0]!.value);
     const caller = {} as never;
     const request = {} as never;
@@ -311,6 +326,45 @@ describe("headless runtime ownership", () => {
     expect(f.lifecycle.close).toHaveBeenCalledOnce();
     expect(f.automations.settled).toHaveBeenCalledOnce();
   });
+  it("installs Volli's git credential helper in every Session command only when given one", async () => {
+    const f = fixture();
+    f.launch();
+    const without = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
+    // The cloud flag off: Sessions push exactly as before.
+    expect(await without.concurrencyEnvFor("s")).not.toHaveProperty("GIT_CONFIG_COUNT");
+    createHeadlessSessionRuntime({
+      ...f.input,
+      options: { ...f.input.options, gitCredentialHelper: "!'/opt/hostd' git-credential" },
+    });
+    const withHelper = seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions;
+    expect(await withHelper.concurrencyEnvFor("s")).toEqual({
+      PATH: "/service/bin",
+      VOLLI_SOCKET: "/run/hostd.sock",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "!'/opt/hostd' git-credential",
+    });
+  });
+  it("composes sign-ins over the recovered model access, and none without it (VC-702)", async () => {
+    const f = fixture();
+    const inspectModelAccess = vi.fn(async () => ({ observedAt: 0, providers: [], models: [] }));
+    seam.recovered.mockReturnValue({
+      sessions: {},
+      runtime: f.runtime,
+      piRuntimeHost: { inspectModelAccess },
+    });
+    seam.piHostCredentials.mockReturnValue({ stored: async () => [], setApiKey: vi.fn() });
+    await f.launch().ready();
+    const composed = seam.handlers.mock.lastCall![1] as { signIns: { status(): Promise<unknown> } };
+    // The status reads the runtime's own snapshot, and the push store under
+    // the data directory (absent here: no git host).
+    expect(await composed.signIns.status()).toEqual({ providers: [], git: [] });
+    expect(inspectModelAccess).toHaveBeenCalledWith({});
+    seam.recovered.mockReturnValue({ sessions: {}, runtime: f.runtime, piRuntimeHost: null });
+    await f.launch().ready();
+    expect(seam.handlers.mock.lastCall![1]).toMatchObject({ signIns: null });
+  });
+
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {
     const f = fixture();
     const owner = f.launch();

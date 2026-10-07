@@ -186,6 +186,68 @@ describe("the map", () => {
   });
 });
 
+describe("sign-ins on a host (VC-702)", () => {
+  it("answers unavailable where no network door serves them, and delegates each key once", async () => {
+    const empty = handlers();
+    expect(await unavailable(() => empty["signIns.status"](undefined, USER))).toBe(
+      "Sign-ins are unavailable on this host",
+    );
+    expect(
+      await unavailable(() =>
+        empty["signIns.subscribe"]({ flowId: "f" }, USER, { emit() {}, fail() {} }),
+      ),
+    ).toBe("Sign-ins are unavailable on this host");
+    const reached: [string, unknown, unknown][] = [];
+    const service = (method: string) =>
+      vi.fn((input: unknown, call?: unknown) => {
+        reached.push([method, input, call]);
+        return method === "subscribe" ? Promise.resolve(() => {}) : `${method}-answer`;
+      });
+    const signIns = {
+      status: service("status"),
+      setApiKey: service("setApiKey"),
+      signOut: service("signOut"),
+      start: service("start"),
+      subscribe: service("subscribe"),
+      answer: service("answer"),
+      cancel: service("cancel"),
+      setGitCredential: service("setGitCredential"),
+      clearGitCredential: service("clearGitCredential"),
+      deliverCallback: service("deliverCallback"),
+    };
+    const map = handlers({ signIns: signIns as never });
+    const flow = { flowId: "f" };
+    expect(await map["signIns.status"](undefined, USER)).toBe("status-answer");
+    await map["signIns.setApiKey"]({ providerId: "p", key: "k" }, USER);
+    await map["signIns.signOut"]({ providerId: "p" }, USER);
+    await map["signIns.start"]({ providerId: "p" }, USER);
+    await map["signIns.subscribe"](flow, USER, { emit() {}, fail() {} });
+    await map["signIns.answer"]({ ...flow, promptId: "q", value: "v" }, USER);
+    await map["signIns.cancel"](flow, USER);
+    await map["signIns.setGitCredential"]({ host: "h", username: "u", password: "p" }, USER);
+    await map["signIns.clearGitCredential"]({ host: "h" }, USER);
+    await map["auth.callback.deliver"]({ ...flow, pathAndQuery: "/cb" }, USER);
+    expect(reached.map(([method]) => method)).toEqual([
+      "status",
+      "setApiKey",
+      "signOut",
+      "start",
+      "subscribe",
+      "answer",
+      "cancel",
+      "setGitCredential",
+      "clearGitCredential",
+      "deliverCallback",
+    ]);
+    // The flow operations are handed the call: its connection owns the flow.
+    for (const [method, , call] of reached) {
+      if (["start", "subscribe", "answer", "cancel", "deliverCallback"].includes(method)) {
+        expect(call).toBe(USER);
+      }
+    }
+  });
+});
+
 describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {

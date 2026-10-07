@@ -24,6 +24,9 @@
     }
   },
   "features": {
+    "auth.callback": [
+      "auth.callback.deliver"
+    ],
     "board.read": [
       "board.snapshot",
       "board.roster",
@@ -96,6 +99,17 @@
     ],
     "sessions.subscribe": [
       "session.subscribe"
+    ],
+    "sign-ins": [
+      "signIns.status",
+      "signIns.setApiKey",
+      "signIns.signOut",
+      "signIns.start",
+      "signIns.subscribe",
+      "signIns.answer",
+      "signIns.cancel",
+      "signIns.setGitCredential",
+      "signIns.clearGitCredential"
     ]
   },
   "protocolVersion": 1,
@@ -2031,6 +2045,48 @@
       }
     },
     "public": {
+      "auth.callback.deliver": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "pathAndQuery": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "pattern": "^\\/.*",
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "pathAndQuery"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "board.archiveTicket": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -31248,6 +31304,1091 @@
           "type": "object"
         },
         "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.answer": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "promptId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "maxLength": 16384,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId",
+            "promptId",
+            "value"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": true
+      },
+      "signIns.cancel": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": true
+      },
+      "signIns.clearGitCredential": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "host": {
+              "maxLength": 260,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.setApiKey": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "key": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId",
+            "key"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.setGitCredential": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "host": {
+              "maxLength": 260,
+              "minLength": 1,
+              "type": "string"
+            },
+            "password": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            "username": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "username",
+            "password"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.signOut": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.start": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "providerId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "api-key",
+                "oauth"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "providerId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.status": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "git": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "git",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host",
+                  "state",
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "providers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "api-key",
+                          "subscription"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "isSubscription": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "api-key",
+                            "oauth"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "label",
+                        "isSubscription"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "signed-in",
+                      "expired",
+                      "missing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "label",
+                  "state",
+                  "kind",
+                  "methods"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "providers",
+            "git"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "signIns.subscribe": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "flowId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "instructions": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "kind": {
+                  "const": "auth-url",
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "url",
+                "instructions"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expiresInSeconds": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "intervalSeconds": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "kind": {
+                  "const": "device-code",
+                  "type": "string"
+                },
+                "userCode": {
+                  "type": "string"
+                },
+                "verificationUri": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "userCode",
+                "verificationUri",
+                "intervalSeconds",
+                "expiresInSeconds"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "info",
+                  "type": "string"
+                },
+                "links": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "label": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "url",
+                      "label"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message",
+                "links"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "progress",
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "flowId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "auth-callback",
+                  "type": "string"
+                },
+                "redirectUri": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "flowId",
+                "redirectUri"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prompt",
+                  "type": "string"
+                },
+                "prompt": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "text",
+                        "secret",
+                        "select",
+                        "manual-code"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "description"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "placeholder": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "promptId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "promptId",
+                    "kind",
+                    "message",
+                    "placeholder",
+                    "options"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "prompt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "prompt-withdrawn",
+                  "type": "string"
+                },
+                "promptId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "promptId"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "done",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "failed",
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ],
+          "x-volli-open-union": "kind"
+        },
+        "outputValidation": "documented-yield",
         "voidOutput": false
       },
       "ticket.move": {

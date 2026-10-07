@@ -189,7 +189,8 @@ describe("sessionHandlersFrom", () => {
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
     // 21 existing router handlers, session.history (VC-315), three queue
     // operations, four Session reads, the desktop-only tier's two (VC-608),
-    // two log reads (VC-699) and thirteen remote hosts commands (VC-700).
-    expect(Object.keys(context.handlers)).toHaveLength(48);
+    // two log reads (VC-699), fifteen remote hosts commands (VC-700, rename
+    // and devices among them) and ten sign-in operations (VC-702).
+    expect(Object.keys(context.handlers)).toHaveLength(58);
   });
 });
