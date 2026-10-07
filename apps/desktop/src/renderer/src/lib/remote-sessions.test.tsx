@@ -345,6 +345,38 @@ describe("binding remote Sessions (VC-713)", () => {
     expect(sessionListingReaderForProject("other")).not.toBe(workspaces.get("other")!.listing);
   });
 
+  it("cancels a forgotten project's pending re-read, and reads nothing more for it (N1)", async () => {
+    const options = deps();
+    const bound = bindRemoteSessions(options);
+    const target = options.window as unknown as EventTarget;
+    target.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    // Inside the window: one trailing re-read each is pending.
+    target.dispatchEvent(new Event("focus"));
+    expect(refreshed.toSorted()).toEqual(["other", "remote"]);
+    source.set(hostSnapshot([remoteHost(HOST, "box")], { remote: HOST }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refreshed.toSorted()).toEqual(["other", "remote", "remote"]);
+    bound.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends everything it owns when the window goes", async () => {
+    const options = deps();
+    bindRemoteSessions(options);
+    chatTransportFor("remote");
+    const target = options.window as unknown as EventTarget;
+    target.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    target.dispatchEvent(new Event("focus"));
+    target.dispatchEvent(new Event("pagehide"));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(workspaces.get("remote")!.dispose).toHaveBeenCalledOnce();
+    target.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refreshed.toSorted()).toEqual(["other", "remote"]);
+  });
+
   it("binds while cloud is on, and unbinds when it turns off", () => {
     const experiments = {
       on: true,

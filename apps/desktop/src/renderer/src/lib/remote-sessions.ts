@@ -123,18 +123,6 @@ export function bindRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     return workspace;
   };
 
-  // A project that stops being remote (forgotten, or its host gone) lets go
-  // of its streams and timers at once.
-  const prune = (): void => {
-    const remote = new Set(remoteProjectIds(deps.hosts.getState()));
-    for (const [projectId, workspace] of workspaces) {
-      if (remote.has(projectId)) continue;
-      workspaces.delete(projectId);
-      workspace.dispose();
-    }
-  };
-  const stopPruning = deps.hosts.subscribe(prune);
-
   const unregisterTransports = setRemoteChatTransports({
     forProject: (projectId) => workspaceOf(projectId)?.transport ?? null,
   });
@@ -177,8 +165,25 @@ export function bindRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     clock: deps.clock,
   });
 
+  // A project that stops being remote (forgotten, or its host gone) lets go
+  // of its streams and its pending re-reads at once.
+  const prune = (): void => {
+    const remote = new Set(remoteProjectIds(deps.hosts.getState()));
+    for (const [projectId, workspace] of workspaces) {
+      if (remote.has(projectId)) continue;
+      workspaces.delete(projectId);
+      workspace.dispose();
+    }
+    refresh.prune();
+  };
+  const stopPruning = deps.hosts.subscribe(prune);
+
   let stopped = false;
-  return {
+  // The window going (closed, reloaded, navigated) ends everything this owns
+  // at once, rather than leaving its timers to the page's teardown.
+  const stopOnPageHide = (): void => binding.stop();
+  deps.window.addEventListener("pagehide", stopOnPageHide);
+  const binding: RemoteSessions = {
     show(projectId, sessionId) {
       const workspace = stopped ? null : workspaceOf(projectId);
       return workspace === null ? () => {} : workspace.streams.show(sessionId);
@@ -187,6 +192,7 @@ export function bindRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     stop() {
       if (stopped) return;
       stopped = true;
+      deps.window.removeEventListener("pagehide", stopOnPageHide);
       refresh.stop();
       stopPruning();
       unregisterTransports();
@@ -195,6 +201,7 @@ export function bindRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       workspaces.clear();
     },
   };
+  return binding;
 }
 
 /** One remote Workspace over main's relay, as production builds it. */
