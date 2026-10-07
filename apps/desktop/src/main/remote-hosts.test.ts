@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { RemoteHostsUnavailableError } from "@volli/host-install";
 
 import {
-  consoleInstallLogger,
   createDesktopRemoteHosts,
   devTarballsFrom,
   deviceKeyPurpose,
@@ -118,12 +117,12 @@ describe("the composed engine", () => {
       inventory,
       unlockInventory: async () => {},
       enabled: () => false,
-      logger: consoleInstallLogger({
+      logger: {
         debug: (line: string) => lines.push(line),
         info: (line: string) => lines.push(line),
         warn: (line: string) => lines.push(line),
         error: (line: string) => lines.push(line),
-      }),
+      },
     });
     expect(() => hosts.snapshot()).toThrow(RemoteHostsUnavailableError);
     await expect(hosts.startAdd({ target: "deploy@box" })).rejects.toThrow(
@@ -131,16 +130,5 @@ describe("the composed engine", () => {
     );
     expect(() => readFileSync(join(root, "remote-hosts.json"))).toThrow();
     await hosts.close();
-  });
-
-  it("logs with the component and the fields it was given", () => {
-    const sink = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const logger = consoleInstallLogger(sink);
-    logger.info("step started", { step: "probe" });
-    logger.warn("w");
-    logger.debug("d");
-    logger.error("e");
-    expect(sink.info).toHaveBeenCalledWith("[volli] host-install: step started", { step: "probe" });
-    expect(sink.warn).toHaveBeenCalledWith("[volli] host-install: w", {});
   });
 });

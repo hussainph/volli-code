@@ -198,7 +198,7 @@ import {
   retiresSessionSecrets,
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
-import { consoleInstallLogger, createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
+import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
@@ -832,7 +832,8 @@ const appStartup = app.whenReady().then(async () => {
       await credentialKeyring.unlock?.();
     },
     enabled: () => isExperimentEnabled("cloud"),
-    logger: consoleInstallLogger(console),
+    // The app's structured log (VC-699): redacted, its fields never a secret.
+    logger: hostLogger("host-install"),
   });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),

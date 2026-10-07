@@ -130,17 +130,6 @@ export function devTarballsFrom(
   return list === undefined || list === "" ? [] : list.split(delimiter).filter(Boolean);
 }
 
-/** Lines to the app's log, `component: "host-install"`; their fields never carry a secret. */
-export function consoleInstallLogger(
-  sink: Pick<Console, "debug" | "info" | "warn" | "error">,
-): InstallLogger {
-  const line =
-    (level: "debug" | "info" | "warn" | "error") =>
-    (message: string, fields: Readonly<Record<string, unknown>> = {}) =>
-      sink[level](`[volli] host-install: ${message}`, fields);
-  return { debug: line("debug"), info: line("info"), warn: line("warn"), error: line("error") };
-}
-
 export interface DesktopRemoteHostsOptions {
   readonly userData: string;
   readonly appVersion: string;
