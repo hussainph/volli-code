@@ -14,9 +14,12 @@ export {
   hasLiveWork,
   type HostLiveWork,
   NO_LIVE_WORK,
+  projectSessionListing,
   publishSessionListingRow,
   readSessionPeekContent,
   sessionListingRowsForRoster,
+  ticketSessionListing,
+  type SessionListingSources,
   type SessionPeekContentPorts,
   watchSessionActivity,
 } from "../session-control";

@@ -86,6 +86,7 @@ describe("the v1 feature table", () => {
         "signIns.clearGitCredential",
       ],
       "auth.callback": ["auth.callback.deliver"],
+      "sessions.listing": ["session.listing", "session.listingForTicket"],
     });
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
@@ -99,6 +100,7 @@ describe("the v1 feature table", () => {
       "model-access",
       "sign-ins",
       "auth.callback",
+      "sessions.listing",
     ]);
     expect(HOST_V1_FEATURES.every(isHostFeature)).toBe(true);
   });

@@ -10,6 +10,7 @@ import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
 
+import { ComposerAddMenu } from "./composer-add-menu";
 import { EffortPill } from "./composer-effort-ui";
 import { ComposerPicker } from "./composer-picker-ui";
 import {
@@ -640,6 +641,36 @@ describe("the effort control's place in the footer", () => {
     // two triggers nothing else on the surface names.
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
     expect(html).not.toContain('aria-label="Attach files"');
+  });
+});
+
+describe("a Session on a remote host (VC-713)", () => {
+  it("runs the host's default model: no picker, no effort, a label naming it", () => {
+    const tree = composerTree(footerProps({ hostModelOnly: "hetzner-1" }));
+    expect(findElements(tree, ModelPill)).toEqual([]);
+    expect(findElements(tree, EffortPill)).toEqual([]);
+    expect(renderFooter({ hostModelOnly: "hetzner-1" })).toContain(
+      "hetzner-1&#x27;s default model",
+    );
+  });
+
+  it("keeps the picker for This Mac's Sessions, exactly as before", () => {
+    const tree = composerTree(footerProps({ hostModelOnly: null }));
+    expect(findElements(tree, ModelPill)).toHaveLength(1);
+    expect(renderFooter()).not.toContain('data-slot="host-model"');
+  });
+
+  it("says attachments are not available, and hands the add menu the reason", () => {
+    const tree = composerTree(
+      footerProps({
+        onAttachFiles: () => undefined,
+        attachUnavailable: "Not available on hetzner-1 yet",
+      }),
+    );
+    const [menu] = findElements(tree, ComposerAddMenu);
+    expect((menu!.props as { attachUnavailable?: string }).attachUnavailable).toBe(
+      "Not available on hetzner-1 yet",
+    );
   });
 });
 

@@ -199,8 +199,9 @@ describe("sessionHandlersFrom", () => {
     // operations, four Session reads, the desktop-only tier's two (VC-608),
     // two log reads (VC-699), sixteen remote hosts commands (VC-700, rename,
     // devices and an add's facts among them) and ten sign-in operations (VC-702)
-    // and eight remote sign-in commands (VC-702), the Workspace link relay's
-    // three (VC-711), and a host's projects' four (VC-710).
-    expect(Object.keys(context.handlers)).toHaveLength(74);
+    // and eight remote sign-in commands (VC-702), the two Session listing
+    // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
+    // projects' four (VC-710).
+    expect(Object.keys(context.handlers)).toHaveLength(76);
   });
 });

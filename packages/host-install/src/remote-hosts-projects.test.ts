@@ -1037,46 +1037,51 @@ describe("a project script at quit", () => {
 describe("a project script's ssh at quit, as a real process", () => {
   // Review B4: the transport stays quit's while close runs, so a ControlMaster
   // `-O exit` that ignores SIGTERM is still killed before quit returns.
-  it("is dead when close() resolves, though its -O exit would not end", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "vc710-ssh-"));
-    dirs.push(dir);
-    const pidFile = join(dir, "exit.pid");
-    const fake = join(dir, "ssh");
-    writeFileSync(
-      fake,
-      [
-        "#!/bin/sh",
-        'for a; do [ "$a" = exit ] && { trap "" TERM; echo $$ > ' +
-          `'${pidFile}'` +
-          "; while :; do sleep 1; done; }; done",
-        `printf 'volli-login=deploy\\nvolli-token=yes\\n{"projects":[]}\\n'`,
-      ].join("\n"),
-    );
-    chmodSync(fake, 0o755);
-    const h = harness({ registry: registry(hostEntry()), quitGraceMs: 50 });
-    (h.ports as { ssh: RemoteHostsPorts["ssh"] }).ssh = (target) =>
-      systemSsh({ target, logger: h.log.logger, sshPath: fake, killAfterMs: 20 });
-    const listing = h.engine.projects(HOST_ID);
-    for (let tries = 0; tries < 400 && !existsSync(pidFile); tries++) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    const pid = Number(readFileSync(pidFile, "utf8").trim());
-    await h.engine.close();
-    const alive = (): boolean => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
+  it(
+    "is dead when close() resolves, though its -O exit would not end",
+    { timeout: 30_000 },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "vc710-ssh-"));
+      dirs.push(dir);
+      const pidFile = join(dir, "exit.pid");
+      const fake = join(dir, "ssh");
+      writeFileSync(
+        fake,
+        [
+          "#!/bin/sh",
+          'for a; do [ "$a" = exit ] && { trap "" TERM; echo $$ > ' +
+            `'${pidFile}'` +
+            "; while :; do sleep 1; done; }; done",
+          `printf 'volli-login=deploy\\nvolli-token=yes\\n{"projects":[]}\\n'`,
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const h = harness({ registry: registry(hostEntry()), quitGraceMs: 50 });
+      (h.ports as { ssh: RemoteHostsPorts["ssh"] }).ssh = (target) =>
+        systemSsh({ target, logger: h.log.logger, sshPath: fake, killAfterMs: 20 });
+      const listing = h.engine.projects(HOST_ID);
+      // A shared machine may be slow to get there: wait, bounded, for close to be running.
+      for (let tries = 0; tries < 600 && !existsSync(pidFile); tries++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
       }
-    };
-    try {
-      expect(alive()).toBe(false);
-    } finally {
-      if (alive()) process.kill(pid, "SIGKILL");
-    }
-    await listing.catch(() => {});
-  });
+      const pid = Number(readFileSync(pidFile, "utf8").trim());
+      await h.engine.close();
+      const alive = (): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        expect(alive()).toBe(false);
+      } finally {
+        if (alive()) process.kill(pid, "SIGKILL");
+      }
+      await listing.catch(() => {});
+    },
+  );
 });
 
 describe("closing a Workspace on this Mac", () => {

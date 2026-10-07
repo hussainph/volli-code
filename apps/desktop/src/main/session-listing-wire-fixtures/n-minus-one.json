@@ -1,0 +1,42 @@
+{
+  "provenance": {
+    "revision": "119235167",
+    "peer": "A representative pre-feature peer, not a shipped release: main at 119235167 (#816), before VC-713. hostOffered is that build's hostd offer (HOSTD_FEATURES) as it stood; clientRequested is every feature that build knew (HOST_V1_FEATURES), not its desktop's actual request (which asked only for sign-ins and auth.callback). Neither names sessions.listing.",
+    "producer": "unknownOperation recorded once from VC-669's frozen, reconstructed Session peer (session-rpc-n-minus-one.test-support.ts) over the stock tRPC WebSocket adapter; it has no session.listing operation. The old peer's welcome in the skew case is synthesized by the test from hostOffered, not recorded.",
+    "format": "Canonical application-wire payloads; transport-local request ids omitted. Frozen: never refreshed to make a change pass."
+  },
+  "hostOffered": [
+    "sessions",
+    "sessions.queue",
+    "sessions.subscribe",
+    "sessions.history",
+    "session.read",
+    "board.read",
+    "board.write",
+    "sign-ins",
+    "auth.callback"
+  ],
+  "clientRequested": [
+    "sessions",
+    "sessions.queue",
+    "host.logs",
+    "sessions.subscribe",
+    "sessions.history",
+    "session.read",
+    "board.read",
+    "board.write",
+    "model-access",
+    "sign-ins",
+    "auth.callback"
+  ],
+  "unknownOperation": {
+    "procedure": "session.listing",
+    "input": {
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+    },
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "No \"query\"-procedure on path \"session.listing\""
+    }
+  }
+}

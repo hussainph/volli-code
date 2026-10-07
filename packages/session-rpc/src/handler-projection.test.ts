@@ -139,6 +139,8 @@ const SAMPLE_INPUTS: {
   "logs.follow": {},
   "protocol.welcome": undefined,
   "session.list": { projectId: PROJECT },
+  "session.listing": { projectId: PROJECT },
+  "session.listingForTicket": { ticketId: "ticket-1" },
   "session.show": { projectId: PROJECT, session: "s-1" },
   "session.peek": { projectId: PROJECT, session: "s-1", lines: 5 },
   "session.answer": { projectId: PROJECT, session: "s-1" },
