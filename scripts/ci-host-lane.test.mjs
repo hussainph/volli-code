@@ -194,6 +194,10 @@ test("cloud acceptance is nightly, macOS-only and separate from flag-off core e2
   const job = jobs["smoke-cloud"];
   assert.equal(job["runs-on"], "macos-15");
   assert.equal(job.needs, "changes");
+  assert.equal(
+    job.steps.find((step) => step.name === "Checkout").with.ref,
+    "${{ github.event.pull_request.head.sha || github.sha }}",
+  );
   const smoke = job.steps.find((step) => step.name === "Run flag-on remote acceptance");
   assert.equal(smoke.run, "node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs");
   assert.equal(smoke.env.VOLLI_EXPERIMENTAL, "cloud");

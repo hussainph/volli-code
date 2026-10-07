@@ -128,13 +128,13 @@ async function journey() {
   });
 
   // VC-710 is on main: every production project action now has to pass.
-  const projectSurface = await snap();
-  if (!projectSurface.text.includes(`Open a project on ${REMOTE_HOST}`)) {
-    await hostChip();
-    await click("button", REMOTE_HOST, { contains: true, first: true });
-    await wait(`Open a project on ${REMOTE_HOST}`);
-  }
   await step(2, "Create/open project: project label and selected remote Host chip", async () => {
+    const projectSurface = await snap();
+    if (!projectSurface.text.includes(`Open a project on ${REMOTE_HOST}`)) {
+      await hostChip();
+      await click("button", REMOTE_HOST, { contains: true, first: true });
+      await wait(`Open a project on ${REMOTE_HOST}`);
+    }
     await click("button", "New project…");
     await type(`Git URL or folder on ${REMOTE_HOST}`, fixture.projectPath);
     await type("Name (optional)", REMOTE_PROJECT);
@@ -268,6 +268,10 @@ try {
 } catch (error) {
   failed = true;
   console.error(error.stack);
+  for (let n = 1; n <= 8; n++) {
+    if (!results.some((row) => row.step === n))
+      record(n, "BLOCKED", "Not run", "Earlier action or deployment prerequisite failed");
+  }
 } finally {
   if (instance) {
     const stopped = await exec(process.execPath, [cli, "stop", instance.id], {

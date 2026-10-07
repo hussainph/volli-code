@@ -239,7 +239,16 @@ export async function startSshdFixture({ dir, runnerAccountHome = false }) {
       "--",
       `${user}@127.0.0.1`,
     ];
-    return { host: "127.0.0.1", port, user, identityFile, knownHostsFile, sshArgs, stop };
+    return {
+      host: "127.0.0.1",
+      port,
+      user,
+      identityFile,
+      knownHostsFile,
+      sshArgs,
+      stop,
+      diagnostics: () => stderr,
+    };
   } catch (error) {
     await stop();
     throw error;

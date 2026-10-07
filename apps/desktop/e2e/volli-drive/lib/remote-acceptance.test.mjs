@@ -101,6 +101,15 @@ test("script has real ask_user calls, answered continuation and a separate reope
     text: STREAM_REPLY,
     delayMs: 1500,
   });
+  assert.equal(
+    acceptanceScript({ text: "remote-stream-turn", body: { tools: [{ name: "read" }] } }).text,
+    STREAM_REPLY,
+  );
+  assert.equal(
+    acceptanceScript({ text: "remote-answer-question", body: { tools: [{ name: "read" }] } }),
+    undefined,
+  );
+  assert.equal(acceptanceScript({ text: "remote-stream-turn", body: {} }), undefined);
   const question = acceptanceScript(turn("remote-answer-question"));
   assert.equal(question.toolCalls[0].name, "ask_user");
   assert.equal(question.toolCalls[0].arguments.question, ANSWER_QUESTION);
@@ -143,7 +152,7 @@ test("journey never seeds its acceptance actions or injects product links", () =
     assert.ok(smoke.includes(label), label);
   assert.doesNotMatch(
     smoke,
-    /XFAIL|XPASS|BLOCKED|EXPECTED_FAILURE/u,
+    /XFAIL|XPASS|EXPECTED_FAILURE/u,
     "All four glue tickets are merged: no acceptance waivers remain",
   );
   assert.ok(

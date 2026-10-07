@@ -47,7 +47,10 @@ export function stableWaitingLabel(line) {
 
 export function acceptanceScript(turn) {
   // Auto-titling has no tools and must not consume the scripted conversation.
-  if (!turn.body.tools?.some((tool) => tool.name === "ask_user")) return undefined;
+  if (!turn.body.tools?.length) return undefined;
+  if (turn.text.includes("remote-stream-turn")) return { text: STREAM_REPLY, delayMs: 1500 };
+  // Never manufacture a tool the production host did not offer.
+  if (!turn.body.tools.some((tool) => tool.name === "ask_user")) return undefined;
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
@@ -77,7 +80,6 @@ export function acceptanceScript(turn) {
       ],
     };
   }
-  if (turn.text.includes("remote-stream-turn")) return { text: STREAM_REPLY, delayMs: 1500 };
   return undefined;
 }
 
@@ -174,6 +176,7 @@ export async function prepareRemoteAcceptance(layout, provider) {
       projectPath: repo.dir,
       async stop() {
         try {
+          await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());
           // Save only the daemon's log, never auth/device/key/config files.
           await fs
             .copyFile(join(home, "Library/Logs/volli-hostd.log"), join(layout.logsDir, "hostd.log"))
@@ -248,6 +251,7 @@ export async function prepareRemoteAcceptance(layout, provider) {
       },
     };
   } catch (error) {
+    await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());
     await fixture.stop();
     throw error;
   }
