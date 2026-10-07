@@ -40,11 +40,11 @@ jobs:
           VOLLI_DIAG_OUT: ${{ runner.temp }}/diag
         run: |
           mkdir -p "$VOLLI_DIAG_OUT"
-          export VOLLI_DIAG_PROFILE=0
+          export VOLLI_DIAG_PROFILE=1
           for rep in 1 2 3; do
-            for v in dfl+300 dfl+300-loud dfl+300-nohide dfl+300-waitpaint dfl+3000-loud; do
+            for v in early noenter-on noenter-off; do
               echo "=== rep $rep $v"
-              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso3-r$rep-$v" || echo "FAILED $v $rep"
+              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso4-r$rep-$v" || echo "FAILED $v $rep"
             done
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
