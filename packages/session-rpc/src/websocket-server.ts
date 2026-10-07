@@ -260,6 +260,8 @@ export interface HostProtocolListenerOptions<Router extends AnyRouter> {
    * Required, so a host never offers by omission a feature it cannot answer.
    */
   readonly features: readonly HostFeature[];
+  /** Host-connection offer, when different from the Workspace offer above. */
+  readonly hostFeatures?: readonly HostFeature[];
   readonly limits?: Partial<HostProtocolListenerLimits>;
   readonly log?: (event: HostProtocolListenerEvent) => void;
   /** The scope each inbound request is handled in. Absent: handled as it arrives. */
@@ -426,7 +428,8 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
   const limits: HostProtocolListenerLimits = { ...DEFAULT_LISTENER_LIMITS, ...options.limits };
   validateListenerLimits(limits);
   const features = [...options.features];
-  assertHostFeatureReadiness(options.router, features);
+  const hostFeatures = [...(options.hostFeatures ?? options.features)];
+  assertHostFeatureReadiness(options.router, [...new Set([...features, ...hostFeatures])]);
   const log = options.log ?? ignore;
   const connections = new WeakMap<WebSocket, Connection>();
   /** Every accepted TCP socket, until it closes: the connection budget. */
@@ -609,7 +612,12 @@ export async function startHostProtocolListener<Router extends AnyRouter>(
     const negotiated = negotiateWelcome(
       hello,
       workspace === undefined
-        ? { scope: "host", host: options.host, protocol: HOST_PROTOCOL_VERSIONS, features }
+        ? {
+            scope: "host",
+            host: options.host,
+            protocol: HOST_PROTOCOL_VERSIONS,
+            features: hostFeatures,
+          }
         : { host: options.host, protocol: HOST_PROTOCOL_VERSIONS, workspace, features },
       grant.actor,
     );

@@ -11160,9 +11160,11 @@
                   "additionalProperties": false,
                   "properties": {
                     "scheme": {
+                      "maxLength": 128,
                       "type": "string"
                     },
                     "value": {
+                      "maxLength": 8192,
                       "type": "string"
                     }
                   },
@@ -36892,8 +36894,6 @@
               "type": "string"
             },
             "name": {
-              "maxLength": 512,
-              "minLength": 1,
               "type": "string"
             },
             "source": {

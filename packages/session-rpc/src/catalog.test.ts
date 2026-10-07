@@ -344,6 +344,107 @@ describe("follow-up feature compatibility", () => {
   });
 });
 
+describe("host-connection-only catalog entries, before parsing", () => {
+  // The stream probe exercises the same admission chain as any future
+  // workspaces subscription; today's production feature has query/mutation only.
+  const entries = [
+    {
+      ...probeEntryForScope("workspaces.list"),
+      catalog: { actor: "user", scope: "host", idempotency: "read" },
+    },
+    {
+      ...probeEntryForScope("workspaces.create"),
+      catalog: { actor: "user", scope: "host", idempotency: "command-id" },
+    },
+    {
+      ...probeEntryForScope("workspaces.changes"),
+      catalog: { actor: "user", scope: "host", idempotency: "read" },
+    },
+  ] as const satisfies readonly VerbEntry[];
+
+  it("refuses a Workspace actor before parsing query, mutation and subscription, even when operations grant them", async () => {
+    const parse = vi.fn((input: unknown) => input);
+    const handler = vi.fn(() => "answer");
+    const streamHandler = vi.fn(async function* () {
+      yield "answer";
+    });
+    const builders = createCatalogBuilders<CatalogCallerContext, (typeof entries)[number]>({
+      entries,
+    });
+    const input = z.preprocess(parse, z.string().min(1));
+    const router = builders.catalogRouter({
+      workspaces: {
+        list: builders
+          .hostProcedure("workspaces.list")
+          .input(input)
+          .output(z.string())
+          .query(handler),
+        create: builders
+          .hostProcedure("workspaces.create")
+          .input(input)
+          .output(z.string())
+          .mutation(handler),
+        changes: builders
+          .hostProcedure("workspaces.changes")
+          .input(input)
+          .subscription(streamHandler),
+      },
+    });
+    const call = (caller: RouterCaller) =>
+      router.createCaller({
+        caller,
+        diagnostics: new RpcDiagnosticLog(),
+        operations: new Set(entries.map(({ key }) => key)),
+      });
+    for (const actor of [device, sessionActor, worker]) {
+      for (const value of ["valid", ""]) {
+        for (const result of [
+          call(actor).workspaces.list(value),
+          call(actor).workspaces.create(value),
+          call(actor).workspaces.changes(value),
+        ]) {
+          expect(hostErrorOf(await refusal(result))).toMatchObject({
+            code: "FORBIDDEN",
+            reason: "verb-refused",
+          });
+        }
+      }
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(streamHandler).not.toHaveBeenCalled();
+    // Scope gates must preserve the trusted desktop door and host device access.
+    for (const actor of [
+      LOCAL_DESKTOP_CALLER,
+      as({ kind: "device", deviceId: DEVICE, scope: "host" }),
+    ]) {
+      await expect(call(actor).workspaces.list("valid")).resolves.toBe("answer");
+      await expect(call(actor).workspaces.create("valid")).resolves.toBe("answer");
+      const stream = await call(actor).workspaces.changes("valid");
+      expect(await stream[Symbol.asyncIterator]().next()).toMatchObject({
+        value: "answer",
+        done: false,
+      });
+    }
+    expect(parse).toHaveBeenCalledTimes(6);
+    expect(handler).toHaveBeenCalledTimes(4);
+    expect(streamHandler).toHaveBeenCalledTimes(2);
+  });
+});
+
+function probeEntryForScope<Key extends string>(key: Key) {
+  return {
+    key,
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: key },
+    listed: false,
+    group: "Read",
+    summary: "Scope admission probe.",
+    options: [],
+  } as const;
+}
+
 describe("workspace scope, before any read", () => {
   it("refuses a host device before Workspace input parsing, lookup, or the handler", async () => {
     const parse = vi.fn((input: unknown) => input);

@@ -31,14 +31,25 @@ export interface HostWorkspacesOptions {
   /** Git's command-scope helper value, not a token. Empty means no helpers. */
   readonly gitCredentialHelper: string;
   readonly detachedWork?: DetachedWorkPort;
+  /** The shared registration's committed new-project announcement. */
+  readonly onCreated?: (project: Project) => void;
   /** Internal fixture seam. Never pass this from production composition or protocol input. */
   readonly testOnly?: {
     readonly allowFileUrls?: boolean;
     readonly timeoutMs?: number;
     readonly outputLimit?: number;
     readonly capacity?: number;
+    readonly now?: () => number;
+    readonly catalogBytes?: number;
+    readonly catalogTimeoutMs?: number;
+    readonly rowTimeoutMs?: number;
   };
 }
+
+// hostd permits 2 MiB frames. Keep 64 KiB for tRPC framing/metadata; measure
+// the actual UTF-8 JSON answer, including punctuation and the omitted count.
+const CATALOG_MAX_JSON_BYTES = 2 * 1024 * 1024 - 64 * 1024;
+const OUTCOME_RETENTION_MS = 60 * 60_000;
 
 type FailureCode = Extract<HostWorkspaceCreateResult, { ok: false }>["failure"]["code"];
 const messages: Record<FailureCode, string> = {
@@ -51,7 +62,8 @@ const messages: Record<FailureCode, string> = {
   "registration-failed": "The host could not register the project.",
   "still-running": "This command is still running. Retry with the same command ID.",
   interrupted: "The host is shutting down. List projects after reconnecting.",
-  capacity: "The host is at its command capacity. Retry later; retained outcomes clear on restart.",
+  capacity:
+    "The host is at its command capacity. Retry when running work finishes or retained outcomes expire.",
 };
 const failure = (code: FailureCode): HostWorkspaceCreateResult => ({
   ok: false,
@@ -109,9 +121,15 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
   });
   const children = new Set<ChildProcess>();
   const active = new Set<Promise<HostWorkspaceCreateResult>>();
-  // Never evict a completed outcome: eviction could repeat a previously accepted intent.
-  const outcomes = new Map<string, { intent: string; result?: HostWorkspaceCreateResult }>();
+  // Settled outcomes are replayable for one hour. Running work never expires.
+  // Outside that horizon the operation's natural idempotency decides the result.
+  const outcomes = new Map<
+    string,
+    { intent: string; result?: HostWorkspaceCreateResult; expiresAt?: number }
+  >();
   const capacity = options.testOnly?.capacity ?? 1000;
+  const now = options.testOnly?.now ?? Date.now;
+  const catalogBytes = options.testOnly?.catalogBytes ?? CATALOG_MAX_JSON_BYTES;
   // One coalesced catalog plus at most four creates: each runs git serially,
   // so dropped transports cannot leave an unbounded number of children.
   const maxCreates = 4;
@@ -126,7 +144,7 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     GIT_ASKPASS: "true",
     SSH_ASKPASS: "true",
     GIT_ALLOW_PROTOCOL: options.testOnly?.allowFileUrls ? "https:ssh:file" : "https:ssh",
-    GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes",
+    GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
   });
   const config = [
     "-c",
@@ -199,13 +217,14 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     });
   }
 
-  async function row(project: Project): Promise<HostWorkspace | null> {
+  let catalogGitBusy = false;
+  async function row(project: Project, deadline = Infinity): Promise<HostWorkspace | null> {
     if (!/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/iu.test(project.id))
       return null;
     if (
       !isAbsolute(project.path) ||
       project.path.length > bounds.path ||
-      project.path.includes("\0")
+      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(project.path)
     )
       return null;
     let path: string;
@@ -214,31 +233,69 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     } catch {
       return null;
     }
-    if (path.length > bounds.path) return null;
+    if (path.length > bounds.path || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(path)) return null;
     const name = project.name.slice(0, bounds.name);
-    if (!name) return null;
+    if (!name || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(name)) return null;
+    // A timed-out filesystem read may finish later. It must not start new work.
+    if (Date.now() >= deadline || (deadline !== Infinity && catalogGitBusy)) return null;
     let gitRemoteUrl: string | null = null;
+    if (deadline !== Infinity) catalogGitBusy = true;
     try {
-      gitRemoteUrl = safeRemote(await git(["config", "--get", "remote.origin.url"], path));
-    } catch {
+      gitRemoteUrl = safeRemote(
+        await git(
+          ["config", "--get", "remote.origin.url"],
+          path,
+          Math.min(10_000, deadline - Date.now()),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof GitFailure && error.code === "clone-timeout") return null;
       /* No readable origin. */
+    } finally {
+      if (deadline !== Infinity) catalogGitBusy = false;
     }
     return { id: project.id, name, path, gitRemoteUrl };
   }
   async function readCatalog(): Promise<HostWorkspaceList> {
     assertOpen();
-    const projects = listProjects(options.db);
+    const projects = listProjects(options.db).toSorted(
+      (a, b) =>
+        a.sortOrder - b.sortOrder || a.createdAt - b.createdAt || a.id.localeCompare(b.id, "en"),
+    );
     const workspaces: HostWorkspace[] = [];
+    // Reserve the widest possible omitted count even when fewer rows are excluded.
+    let bytes = Buffer.byteLength(
+      JSON.stringify({ workspaces: [], omitted: projects.length }),
+      "utf8",
+    );
     let omitted = 0;
+    const deadline = Date.now() + (options.testOnly?.catalogTimeoutMs ?? 10_000);
     for (const project of projects) {
-      if (workspaces.length === bounds.rows) {
+      if (workspaces.length === bounds.rows || Date.now() >= deadline) {
         omitted++;
         continue;
       }
-      const workspace = await row(project);
+      const rowDeadline = Math.min(deadline, Date.now() + (options.testOnly?.rowTimeoutMs ?? 1000));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const workspace = await Promise.race([
+        row(project, rowDeadline),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), Math.max(0, rowDeadline - Date.now()));
+        }),
+      ]).finally(() => clearTimeout(timer));
       assertOpen();
-      if (workspace === null) omitted++;
-      else workspaces.push(workspace);
+      if (workspace === null) {
+        omitted++;
+        continue;
+      }
+      const added =
+        Buffer.byteLength(JSON.stringify(workspace), "utf8") + (workspaces.length === 0 ? 0 : 1);
+      if (bytes + added > catalogBytes) {
+        omitted++;
+        continue;
+      }
+      bytes += added;
+      workspaces.push(workspace);
     }
     return { workspaces, omitted };
   }
@@ -256,7 +313,12 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     let unexpected: FailureCode = "clone-failed";
     try {
       assertOpen();
-      if (input.name !== undefined && (!input.name.trim() || input.name.length > bounds.name))
+      if (
+        input.name !== undefined &&
+        (!input.name.trim() ||
+          input.name.length > bounds.name ||
+          /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.name))
+      )
         return failure("invalid-source");
       let path: string;
       if ("path" in input.source) {
@@ -309,6 +371,11 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
       const result = await createProject(
         {
           db: registrationDb,
+          onCreated: (project) => {
+            // The insert committed even if its notification fails: keep its clone.
+            registered = true;
+            options.onCreated?.(project);
+          },
           detectBaseBranch: async (directory) => {
             // This awaited port is also the final shutdown fence before core's synchronous DB write.
             let branch: string | null = null;
@@ -361,6 +428,10 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     }
   }
   function create(input: HostWorkspaceCreateInput): Promise<HostWorkspaceCreateResult> {
+    const at = now();
+    for (const [id, retained] of outcomes) {
+      if (retained.expiresAt !== undefined && retained.expiresAt <= at) outcomes.delete(id);
+    }
     const intent = createHash("sha256")
       .update(JSON.stringify([input.source, input.name ?? null]))
       .digest("hex");
@@ -372,13 +443,19 @@ export function createHostWorkspaces(options: HostWorkspacesOptions) {
     if (closed) return Promise.resolve(failure("interrupted"));
     if (outcomes.size >= capacity || active.size >= maxCreates)
       return Promise.resolve(failure("capacity"));
-    const entry: { intent: string; result?: HostWorkspaceCreateResult } = { intent };
+    const entry: { intent: string; result?: HostWorkspaceCreateResult; expiresAt?: number } = {
+      intent,
+    };
     outcomes.set(input.commandId, entry);
-    const work = execute(input).then((result) => {
-      entry.result = result;
-      active.delete(work);
-      return result;
-    });
+    const work = execute(input)
+      .then((result) => {
+        entry.result = result;
+        entry.expiresAt = now() + OUTCOME_RETENTION_MS;
+        return result;
+      })
+      .finally(() => {
+        active.delete(work);
+      });
     active.add(work);
     // The host tracker observes our bounded ownership, not an abandoned
     // filesystem promise that would re-block its drain after close returned.

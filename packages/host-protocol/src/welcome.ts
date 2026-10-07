@@ -5,7 +5,7 @@
  * it sent and judges the answer against it.
  */
 import { isHostActor, isHostScopeActor } from "./actor";
-import { HOST_SCOPE_FEATURES } from "./features";
+import { HOST_CONNECTION_ONLY_FEATURES, HOST_SCOPE_FEATURES } from "./features";
 import { hostError, type HostError } from "./errors";
 import {
   checkWorkspaceFence,
@@ -22,6 +22,11 @@ import { isEpoch, isUuidV4 } from "./identity";
 
 const MAX_FEATURES = 256;
 const MAX_HOST_VERSION_LENGTH = 128;
+
+/** Host-scope bootstrap only: UTF-16 code-unit bounds (String.length / Zod max).
+ * Scheme is an open, reserved string vocabulary, not a closed enum. Workspace
+ * proofs retain their pre-VC-722 grammar and wire schema unchanged. */
+export const HOST_SCOPE_PROOF_LIMITS = Object.freeze({ scheme: 128, value: 8192 });
 
 /** What {@link validateWelcome} answers: the welcome to record, or why not. */
 export type WelcomeValidation<Welcome = HostWelcome> =
@@ -131,6 +136,10 @@ export function isHostScopeWelcome(value: unknown): value is HostScopeWelcome {
     !("lastSeen" in value) &&
     isHostScopeActor(value.actor) &&
     isWelcomeFields(value) &&
+    (value.proof === null ||
+      (isHostWelcomeProof(value.proof) &&
+        value.proof.scheme.length <= HOST_SCOPE_PROOF_LIMITS.scheme &&
+        value.proof.value.length <= HOST_SCOPE_PROOF_LIMITS.value)) &&
     (value.features as string[]).every((feature) =>
       (HOST_SCOPE_FEATURES as readonly string[]).includes(feature),
     )
@@ -145,7 +154,10 @@ export function isHostWelcome(value: unknown): value is HostWelcome {
     isUuidV4(value.workspace.id) &&
     isEpoch(value.workspace.epoch) &&
     isHostActor(value.actor) &&
-    isWelcomeFields(value)
+    isWelcomeFields(value) &&
+    !(value.features as readonly string[]).some((feature) =>
+      (HOST_CONNECTION_ONLY_FEATURES as readonly string[]).includes(feature),
+    )
   );
 }
 

@@ -45,6 +45,8 @@ export interface ProjectCreatePorts {
   readonly detectBaseBranch?: (path: string) => Promise<string | null>;
   readonly now?: () => number;
   readonly newId?: () => string;
+  /** Announces a newly committed registration once; never an existing row or a preview. */
+  readonly onCreated?: (project: Project) => void;
 }
 
 /**
@@ -99,7 +101,10 @@ export async function planProjectCreate(
     createdAt: now,
     updatedAt: now,
   };
-  if (options.write) insertProject(db, project);
+  if (options.write) {
+    insertProject(db, project);
+    ports.onCreated?.(project);
+  }
   return { kind: "new", project };
 }
 

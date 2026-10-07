@@ -72,7 +72,15 @@ export function createWorkspacesRouter() {
               z.strictObject({ path: z.string().min(1).max(bounds.path) }),
               z.strictObject({ gitUrl: z.string().min(1).max(bounds.gitUrl) }),
             ]),
-            name: z.string().trim().min(1).max(bounds.name).optional(),
+            name: z
+              .string()
+              .refine(
+                (name) => !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(name),
+                "Name contains control characters.",
+              )
+              .transform((name) => name.trim())
+              .pipe(z.string().min(1).max(bounds.name))
+              .optional(),
           }),
         )
         .output(createResult)

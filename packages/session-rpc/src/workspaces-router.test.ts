@@ -175,6 +175,10 @@ describe("closed, bounded Workspace schemas", () => {
       ["x", true],
       ["x".repeat(BOUNDS.name), true],
       ["x".repeat(BOUNDS.name + 1), false],
+      ["x\n", false],
+      ["x\0y", false],
+      ["x\u2028y", false],
+      ["x\u2029y", false],
     ] as const) {
       expect(createInput.safeParse({ ...input, name }).success).toBe(valid);
     }

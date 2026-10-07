@@ -1,0 +1,65 @@
+{
+  "sourceRevision": "2323b19dac96eea3a9d77e512c1fadbccdc8f34c",
+  "api": "startHostdProtocolListener + createHostLink",
+  "requestedFeatures": [
+    "sessions",
+    "board.read",
+    "sign-ins",
+    "host.logs",
+    "future.feature"
+  ],
+  "sent": [
+    {
+      "method": "connectionParams",
+      "data": {
+        "volli-hello": "{\"protocol\":{\"min\":1,\"max\":1},\"client\":{\"kind\":\"desktop\",\"version\":\"1\"},\"workspaceId\":\"2f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f\",\"lastSeen\":null,\"features\":[\"sessions\",\"board.read\",\"sign-ins\",\"host.logs\",\"future.feature\"],\"credential\":\"fixture-not-a-secret\",\"nonce\":\"j4j8gi4HmbVZ6RLLfdnokJ91iLi9xHmBsbFCry2d-g4\"}"
+      },
+      "volliTrace": {
+        "traceId": "c6c4e43411525a5da576388a9761cbb1",
+        "spanId": "2e31e7211f498967"
+      }
+    },
+    {
+      "id": 1,
+      "method": "query",
+      "params": {
+        "path": "protocol.welcome"
+      },
+      "volliTrace": {
+        "traceId": "c6c4e43411525a5da576388a9761cbb1",
+        "spanId": "833e4c1ec4ba0af6"
+      }
+    }
+  ],
+  "received": [
+    {
+      "id": 1,
+      "result": {
+        "type": "data",
+        "data": {
+          "protocolVersion": 1,
+          "host": {
+            "id": "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
+            "version": "pre-vc722-fixture"
+          },
+          "workspace": {
+            "id": "2f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
+            "epoch": 0
+          },
+          "actor": {
+            "kind": "device",
+            "deviceId": "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
+            "workspaceId": "2f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f"
+          },
+          "features": [
+            "sessions",
+            "board.read",
+            "sign-ins",
+            "host.logs"
+          ],
+          "proof": null
+        }
+      }
+    }
+  ]
+}

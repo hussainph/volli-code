@@ -45,7 +45,7 @@ import {
 } from "@volli/host-core/db";
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
-import type { DetachedWorkPort } from "@volli/host-core/board";
+import { BoardChangeFeed, type DetachedWorkPort } from "@volli/host-core/board";
 import { insertSession, resetRetentionWatcherForTest, testSession } from "@volli/host-core/testing";
 
 import { HostdBootError } from "./boot-error";
@@ -1351,6 +1351,7 @@ describe("the host protocol listener (VC-663)", () => {
       const path = join(root, "first-project");
       mkdirSync(path);
       const input = { commandId: randomUUID(), source: { path }, name: "First" };
+      const stamp = vi.spyOn(BoardChangeFeed.prototype, "noteDataChanged");
       const result = await remote.workspaces.create.mutate(input);
       expect(result).toMatchObject({
         ok: true,
@@ -1362,6 +1363,18 @@ describe("the host protocol listener (VC-663)", () => {
         omitted: 0,
       });
       expect(listProjects(db)).toHaveLength(1);
+      if (!result.ok) throw new Error("registration failed");
+      expect(stamp).toHaveBeenCalledExactlyOnceWith({ projectId: result.workspace.id });
+      expect(stamp.mock.contexts[0]).toBeInstanceOf(BoardChangeFeed);
+      const feed = stamp.mock.contexts[0] as BoardChangeFeed;
+      const cursor = feed.cursor(result.workspace.id);
+      expect(cursor.split(":").at(-1)).toBe("1");
+      expect(await remote.workspaces.create.mutate({ ...input, commandId: randomUUID() })).toEqual(
+        result,
+      );
+      expect(stamp).toHaveBeenCalledOnce();
+      expect(feed.cursor(result.workspace.id)).toBe(cursor);
+      stamp.mockRestore();
       expect(
         await expectHostError(remote.board.snapshot.query({ projectId: WORKSPACE })),
       ).toMatchObject({
@@ -1489,7 +1502,6 @@ describe("the host protocol listener (VC-663)", () => {
           "board.write",
           "sign-ins",
           "auth.callback",
-          "host.workspaces",
           "sessions.listing",
         ],
       });

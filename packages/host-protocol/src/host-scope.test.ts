@@ -11,6 +11,7 @@ import {
   encodeHostHello,
   readHostHello,
   HOST_SCOPE_FEATURES,
+  HOST_SCOPE_PROOF_LIMITS,
   HOST_PROTOCOL_VERSIONS,
   hostError,
   isHostActor,
@@ -259,6 +260,27 @@ describe("host-scoped v1 handshake", () => {
       ok: false,
       error: { reason: "protocol-version-unsupported" },
     });
+  });
+
+  it("bounds only host-scope proof strings in UTF-16 code units", () => {
+    expect(HOST_SCOPE_PROOF_LIMITS).toEqual({ scheme: 128, value: 8192 });
+    for (const field of ["scheme", "value"] as const) {
+      const max = HOST_SCOPE_PROOF_LIMITS[field];
+      for (const unit of ["x", "界", "😀"]) {
+        const exact = unit.repeat(max / unit.length);
+        const proof = { scheme: "reserved.future-proof", value: "", [field]: exact };
+        expect(isHostScopeWelcome({ ...welcome, proof })).toBe(true);
+        expect(isHostScopeWelcome({ ...welcome, proof: { ...proof, [field]: exact + "x" } })).toBe(
+          false,
+        );
+        // The legacy Workspace grammar deliberately keeps its unbounded proof.
+        expect(
+          isHostWelcome({ ...workspaceWelcome, proof: { ...proof, [field]: exact + unit } }),
+        ).toBe(true);
+      }
+    }
+    expect(isHostScopeWelcome({ ...welcome, proof: { scheme: "", value: "" } })).toBe(true);
+    expect(isHostScopeWelcome({ ...welcome, proof: { scheme: "x" } })).toBe(false);
   });
 
   it("an N-1 peer refuses a host hello rather than silently selecting a Workspace", async () => {

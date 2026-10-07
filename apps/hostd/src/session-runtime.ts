@@ -357,6 +357,8 @@ export function createHeadlessSessionRuntime(input: {
               env: input.env,
               gitCredentialHelper: options.gitCredentialHelper ?? "",
               detachedWork: host.detachedWork,
+              onCreated: (project) =>
+                ports.events.publish("data-changed", { projectId: project.id }),
             });
       let sessionReads: SessionReadPort | undefined;
       return {
