@@ -45,6 +45,7 @@ import {
   type RemoteWorkspace,
 } from "./remote-sessions";
 import {
+  remoteSessionListingRegistrations,
   sessionListingReaderForProject,
   sessionListingReaderForTicket,
 } from "./session-listing-reader";
@@ -554,17 +555,22 @@ describe("binding remote Sessions (VC-713)", () => {
     };
     const stop = bindRemoteSessionsWhileCloud(experiments as never, () => deps());
     expect(remoteSessions()).not.toBeNull();
+    // Exactly one remote listing with cloud on, and none off (the binding is its one owner).
+    expect(remoteSessionListingRegistrations()).toBe(1);
     experiments.on = false;
     for (const listener of experiments.listeners) listener();
     expect(remoteSessions()).toBeNull();
+    expect(remoteSessionListingRegistrations()).toBe(0);
     experiments.on = true;
     for (const listener of experiments.listeners) listener();
     const first = remoteSessions();
     // A change that leaves the flag on keeps the one binding.
     for (const listener of experiments.listeners) listener();
     expect(remoteSessions()).toBe(first);
+    expect(remoteSessionListingRegistrations()).toBe(1);
     stop();
     expect(remoteSessions()).toBeNull();
+    expect(remoteSessionListingRegistrations()).toBe(0);
     expect(experiments.listeners.size).toBe(0);
   });
 

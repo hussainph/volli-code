@@ -25,16 +25,26 @@ export interface RemoteSessionListing {
 }
 
 let remote: RemoteSessionListing | null = null;
+/** Registrations not yet removed: the remote-Sessions binding is meant to be the only one. */
+const active = new Set<RemoteSessionListing>();
 
 /**
  * Registers the remote half. Returns the unregister, which only removes this
- * registration (a later one stays).
+ * registration (a later one stays). Its one production owner is the
+ * remote-Sessions binding (`bindRemoteSessionsWhileCloud`).
  */
 export function setRemoteSessionListing(listing: RemoteSessionListing): () => void {
   remote = listing;
+  active.add(listing);
   return () => {
+    active.delete(listing);
     if (remote === listing) remote = null;
   };
+}
+
+/** How many remote listing registrations are in place: one with `cloud` on, none off. */
+export function remoteSessionListingRegistrations(): number {
+  return active.size;
 }
 
 function localReader(): SessionListingReader {
