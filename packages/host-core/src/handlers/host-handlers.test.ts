@@ -340,6 +340,76 @@ describe("sign-ins on a remote host, from this desktop (VC-702 PR 2)", () => {
   });
 });
 
+describe("the Workspace link relay (VC-711)", () => {
+  const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+
+  it("answers unavailable without the port, a stream included", async () => {
+    const empty = handlers();
+    const quiet = { emit() {}, fail() {} };
+    for (const call of [
+      () => empty["hostLink.query"]({ workspaceId: WORKSPACE, path: "board.snapshot" }, USER),
+      () => empty["hostLink.mutate"]({ workspaceId: WORKSPACE, path: "board.setPriority" }, USER),
+      () =>
+        empty["hostLink.subscribe"]({ workspaceId: WORKSPACE, path: "board.changes" }, USER, quiet),
+    ]) {
+      expect(await unavailable(call)).toBe("Remote projects are unavailable on this host");
+    }
+  });
+
+  it("passes each call through the port once, a stream's events into its sink", async () => {
+    const stop = vi.fn();
+    const port = {
+      query: vi.fn(async () => ({ answered: "query" })),
+      mutate: vi.fn(async () => ({ answered: "mutate" })),
+      subscribe: vi.fn(
+        async (
+          _workspaceId: string,
+          _path: string,
+          _input: unknown,
+          listener: (event: unknown) => void,
+          _options?: { lastEventId?: string },
+        ) => {
+          listener({ kind: "data", data: 1, id: "1" });
+          listener({ kind: "complete" });
+          return stop;
+        },
+      ),
+    };
+    const map = handlers({ hostLinkRelay: port });
+    expect(
+      await map["hostLink.query"](
+        { workspaceId: WORKSPACE, path: "board.snapshot", input: { projectId: "p" } },
+        USER,
+      ),
+    ).toEqual({ answered: "query" });
+    expect(
+      await map["hostLink.mutate"]({ workspaceId: WORKSPACE, path: "board.setPriority" }, USER),
+    ).toEqual({ answered: "mutate" });
+    const emitted: unknown[] = [];
+    const into = { emit: (event: unknown) => void emitted.push(event), fail() {} };
+    expect(
+      await map["hostLink.subscribe"](
+        { workspaceId: WORKSPACE, path: "board.changes", input: {}, lastEventId: "9" },
+        USER,
+        into,
+      ),
+    ).toBe(stop);
+    await map["hostLink.subscribe"]({ workspaceId: WORKSPACE, path: "logs.follow" }, USER, into);
+    expect(emitted).toEqual([
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+      { kind: "data", data: 1, id: "1" },
+      { kind: "complete" },
+    ]);
+    expect(port.query).toHaveBeenCalledWith(WORKSPACE, "board.snapshot", { projectId: "p" });
+    expect(port.mutate).toHaveBeenCalledWith(WORKSPACE, "board.setPriority", undefined);
+    expect(port.subscribe.mock.calls.map((call) => [call[1], call[2], call[4]])).toEqual([
+      ["board.changes", {}, { lastEventId: "9" }],
+      ["logs.follow", undefined, {}],
+    ]);
+  });
+});
+
 describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {

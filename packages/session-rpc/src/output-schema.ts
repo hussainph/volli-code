@@ -2,7 +2,8 @@
  * only AI SDK part payloads and JSON Schema documents are extensible JSON.
  * No transforms/custom parsers: these validators also publish with z.toJSONSchema.
  * x-volli-open-union marks only HP's tolerant-read output extension points;
- * writers still validate exhaustively, and all other unions stay closed.
+ * x-volli-open-enum marks scalar reader tolerance (before nullable wrappers).
+ * Writers still validate exhaustively, and unmarked vocabularies stay closed.
  */
 import { z } from "zod";
 import {
@@ -567,7 +568,9 @@ export const sessionCommandWireSchema = z.object({
   sessionId: text,
   receipt: receiptSchema.nullable(),
   throughSequence: sequence,
-  refusal: z.enum(["benign", "failure"]).nullable(),
+  // commandRefusal's reader maps unknown severities to failure (wire.ts),
+  // without discarding the receipt or treating the command as a success.
+  refusal: z.enum(["benign", "failure"]).meta({ "x-volli-open-enum": true }).nullable(),
   stop: z
     .object({
       sessionId: text,

@@ -284,6 +284,14 @@ export interface RemoteHosts {
    */
   signInLink(hostId: string): HostLink | null;
   /**
+   * The link of a remote Workspace this Mac opened, while it is `ready`
+   * (VC-711), for desktop main's Workspace link relay; null while it has none
+   * ready, or no host here serves the Workspace. The same shape as
+   * {@link RemoteHosts.signInLink}: the caller never closes it (the engine
+   * owns every link) and learns it went through `subscribeState`.
+   */
+  workspaceLink(workspaceId: string): HostLink | null;
+  /**
    * Closes its tunnel and links, drops it and its device key. The box is
    * untouched. When the registry would not save, refuses and keeps it all.
    */
@@ -1631,6 +1639,14 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       for (const held of runtimes.get(hostId)!.links.values()) {
         const state = held.link.getState();
         if (state.status === "ready" && hostOffersSignIns(state.welcome)) return held.link;
+      }
+      return null;
+    },
+    workspaceLink(workspaceId) {
+      guard();
+      for (const runtime of runtimes.values()) {
+        const link = runtime.links.get(workspaceId)?.link;
+        if (link?.getState().status === "ready") return link;
       }
       return null;
     },

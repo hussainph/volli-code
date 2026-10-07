@@ -5,16 +5,20 @@ import {
   attentionSchema,
   eventSchema,
   receiptSchema,
+  sessionCommandWireSchema,
   streamEmissionWireSchema,
 } from "./output-schema";
 
 const marker = "x-volli-open-union";
 type Node = Record<string, unknown>;
-function markedUnions(value: unknown): Node[] {
-  if (Array.isArray(value)) return value.flatMap(markedUnions);
+function markedUnions(value: unknown, annotation = marker): Node[] {
+  if (Array.isArray(value)) return value.flatMap((node) => markedUnions(node, annotation));
   if (value === null || typeof value !== "object") return [];
   const node = value as Node;
-  return [...(marker in node ? [node] : []), ...Object.values(node).flatMap(markedUnions)];
+  return [
+    ...(annotation in node ? [node] : []),
+    ...Object.values(node).flatMap((child) => markedUnions(child, annotation)),
+  ];
 }
 function vocabulary(node: Node): string {
   const discriminator = node[marker];
@@ -32,6 +36,34 @@ function vocabulary(node: Node): string {
   expect(new Set(values).size).toBe(values.length);
   return JSON.stringify([discriminator, values.toSorted()]);
 }
+
+describe("explicit tolerant-read output scalars", () => {
+  it("marks only command refusal severity, on the enum before its nullable wrapper", () => {
+    const enumMarker = "x-volli-open-enum";
+    const refusal = z.toJSONSchema(sessionCommandWireSchema).properties!.refusal as Node;
+    expect(refusal[enumMarker]).toBeUndefined();
+    const nodes = markedUnions(refusal, enumMarker);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]![enumMarker]).toBe(true);
+    expect(nodes[0]!.enum).toEqual(["benign", "failure"]);
+    // Metadata is a reader promise, not a widening of the host's validator.
+    expect(sessionCommandWireSchema.shape.refusal.safeParse("future-severity").success).toBe(false);
+    const sites = new Set<string>();
+    for (const [key, procedure] of Object.entries(sessionProcedureSchemas())) {
+      expect(markedUnions(z.toJSONSchema(procedure.input, { io: "input" }), enumMarker)).toEqual(
+        [],
+      );
+      const marked = markedUnions(z.toJSONSchema(procedure.output), enumMarker);
+      if (marked.length > 0) {
+        sites.add(key);
+        expect(marked).toEqual(nodes);
+      }
+    }
+    expect(sites).toEqual(
+      new Set(["session.command", "session.cancelQueued", "session.editQueued"]),
+    );
+  });
+});
 
 describe("explicit tolerant-read output unions", () => {
   const open = [

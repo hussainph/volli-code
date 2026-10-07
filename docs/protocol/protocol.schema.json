@@ -1153,6 +1153,250 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "hostLink.mutate": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "input": {},
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            },
+            "workspaceId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspaceId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostLink.query": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "input": {},
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            },
+            "workspaceId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspaceId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostLink.subscribe": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "input": {},
+            "lastEventId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            },
+            "workspaceId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspaceId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "data": {},
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "data",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "data"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "resnapshot",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "lost",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "complete",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ],
+          "x-volli-open-union": "kind"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "hostSignIns.answer": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2287,6 +2531,11 @@
             "path": {
               "maxLength": 4096,
               "type": "string"
+            },
+            "sudoPassword": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
@@ -2366,7 +2615,10 @@
                         "refused",
                         "bad-url",
                         "destination-exists",
+                        "needs-password",
+                        "wrong-password",
                         "needs-sudo",
+                        "needs-credential",
                         "clone-failed",
                         "unavailable"
                       ],
@@ -10654,7 +10906,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"
@@ -11623,7 +11876,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"
@@ -12095,7 +12349,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"

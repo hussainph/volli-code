@@ -245,6 +245,9 @@ export function sessionHandlersFrom(
     "hosts.openWorkspace": remote("hosts.openWorkspace"),
     "hosts.closeWorkspace": remote("hosts.closeWorkspace"),
     "hostAdd.facts": remote("hostAdd.facts"),
+    "hostLink.query": remote("hostLink.query"),
+    "hostLink.mutate": remote("hostLink.mutate"),
+    "hostLink.subscribe": remote("hostLink.subscribe"),
   };
   return { ...handlers, ...desktop };
 }

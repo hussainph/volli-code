@@ -166,6 +166,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hosts.openWorkspace": "ipc",
   "hosts.closeWorkspace": "ipc",
   "hostAdd.facts": "ipc",
+  // The Workspace link relay (VC-711).
+  "hostLink.query": "ipc",
+  "hostLink.mutate": "ipc",
+  "hostLink.subscribe": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

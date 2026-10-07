@@ -63,6 +63,9 @@ import {
   type HostSignInAnswerInput,
   type HostSignInFlow,
   type HostSignInStartInput,
+  type HostLinkRelayCall,
+  type HostLinkRelayEvent,
+  type HostLinkRelaySubscribeCall,
   type HostSignInRunEvent,
   type HostSignInSendResult,
   type HostSignInStatus,
@@ -95,6 +98,7 @@ import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { RemoteHostsPort, RemoteHostUpdateWhen } from "./remote-hosts-port";
 import type { RemoteSignInsPort } from "./remote-sign-ins-port";
+import type { HostLinkRelayPort } from "./host-link-relay-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -320,6 +324,17 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
   readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  /**
+   * The Workspace link relay (VC-711): a remote project's public operations
+   * over desktop main's Workspace link, {@link HostHandlerOptions.hostLinkRelay}'s
+   * or unavailable.
+   */
+  readonly "hostLink.query": HostHandler<HostLinkRelayCall, unknown>;
+  readonly "hostLink.mutate": HostHandler<HostLinkRelayCall, unknown>;
+  readonly "hostLink.subscribe": HostSubscriptionHandler<
+    HostLinkRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -427,6 +442,11 @@ export interface HostHandlerOptions {
    * host that adds none (hostd): `hostSignIns.*` answer unavailable.
    */
   readonly remoteSignIns?: RemoteSignInsPort | null;
+  /**
+   * The Workspace link relay (VC-711): desktop main's remote Workspace links,
+   * or null on a host that holds none (hostd): `hostLink.*` answer unavailable.
+   */
+  readonly hostLinkRelay?: HostLinkRelayPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -441,6 +461,7 @@ const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
+const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 
 /**
  * Runs a handler with the ids its input names joined to the operation's log
@@ -516,6 +537,7 @@ function hostHandlerEntries(
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
+  const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
     options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir });
@@ -774,5 +796,18 @@ function hostHandlerEntries(
       done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
     "hosts.closeWorkspace": ({ hostId, workspaceId }) =>
       done(() => remoteHosts().closeWorkspace(hostId, workspaceId)),
+    // The Workspace link relay (VC-711): desktop main's, through its port.
+    "hostLink.query": ({ workspaceId, path, input }) =>
+      hostLinkRelay().query(workspaceId, path, input),
+    "hostLink.mutate": ({ workspaceId, path, input }) =>
+      hostLinkRelay().mutate(workspaceId, path, input),
+    "hostLink.subscribe": async ({ workspaceId, path, input, lastEventId }, _call, sink) =>
+      hostLinkRelay().subscribe(
+        workspaceId,
+        path,
+        input,
+        (event) => sink.emit(event),
+        lastEventId === undefined ? {} : { lastEventId },
+      ),
   };
 }

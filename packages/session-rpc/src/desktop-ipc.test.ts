@@ -106,6 +106,9 @@ describe("the desktop's IPC exposure", () => {
       "hosts.openWorkspace",
       "hosts.closeWorkspace",
       "hostAdd.facts",
+      "hostLink.query",
+      "hostLink.mutate",
+      "hostLink.subscribe",
     ]);
   });
 

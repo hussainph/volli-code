@@ -11,6 +11,7 @@ import {
   webSocketContractLink,
 } from "@volli/host-protocol/testing";
 import {
+  HOST_LINK_RELAY_PATH_MAX,
   OperationUnavailableError,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
@@ -37,6 +38,7 @@ import {
   DESKTOP_STREAM_OVERFLOW_MESSAGE,
   DESKTOP_STREAM_SOURCE_FAILURE_MESSAGE,
   desktopProcedureSchemas,
+  hostLinkRelayEventSchema,
   type DesktopRouter,
   type DesktopRouterContext,
   type DesktopRouterHandlers,
@@ -272,6 +274,9 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hosts.createProject": record("hosts.createProject", CREATED),
     "hosts.openWorkspace": record("hosts.openWorkspace", null),
     "hosts.closeWorkspace": record("hosts.closeWorkspace", null),
+    "hostLink.query": record("hostLink.query", { answered: "query" }),
+    "hostLink.mutate": record("hostLink.mutate", { answered: "mutate" }),
+    "hostLink.subscribe": stream("hostLink.subscribe", { kind: "started" }),
     ...fixture.overrides,
   };
 }
@@ -499,6 +504,155 @@ describeContract<Host, DesktopRouter>(
         "hostSignIns.cancel",
         "hostSignIns.run",
       ]);
+    });
+
+    // The Workspace link relay (VC-711): the window's alone, through the map.
+    it("relays the window's calls to a remote project, and ends a stream at its last event", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const call = { workspaceId: WORKSPACE, path: "board.snapshot", input: { projectId: "p" } };
+      expect(await client.hostLink.query.query(call)).toEqual({ answered: "query" });
+      expect(
+        await client.hostLink.mutate.mutate({ workspaceId: WORKSPACE, path: "board.setPriority" }),
+      ).toEqual({ answered: "mutate" });
+      const ended = Promise.withResolvers<void>();
+      const events: unknown[] = [];
+      const subscription = client.hostLink.subscribe.subscribe(
+        { workspaceId: WORKSPACE, path: "board.changes", input: {}, lastEventId: "41" },
+        {
+          onData: (event) => void events.push(event),
+          onError: (error) => ended.reject(error),
+          onComplete: () => ended.resolve(),
+        },
+      );
+      await vi.waitFor(() => expect(fixture.sinks.has("hostLink.subscribe")).toBe(true));
+      const sink = fixture.sinks.get("hostLink.subscribe")!;
+      await sink.emit({ kind: "data", data: { cursor: "42" }, id: "42" });
+      const lost = {
+        kind: "lost",
+        error: { code: "SERVICE_UNAVAILABLE", message: "gone", reason: "host-unreachable" },
+      };
+      await sink.emit(lost);
+      await sink.emit({ kind: "data", data: "after the end" });
+      await ended.promise;
+      subscription.unsubscribe();
+      expect(events).toEqual([
+        { kind: "started" },
+        { kind: "data", data: { cursor: "42" }, id: "42" },
+        lost,
+      ]);
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["hostLink.subscribe"]));
+      expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
+        ["hostLink.query", call],
+        ["hostLink.mutate", { workspaceId: WORKSPACE, path: "board.setPriority" }],
+        [
+          "hostLink.subscribe",
+          { workspaceId: WORKSPACE, path: "board.changes", input: {}, lastEventId: "41" },
+        ],
+      ]);
+      for (const { call: made } of fixture.calls) expect(made).toEqual(WINDOW_CALL);
+    });
+
+    // What main answers travels typed: the link's own reasons, the host's, and
+    // a code with no reason; the map's unavailable stays the router's.
+    it("passes a relayed failure's reason on, and a host's bare code", async () => {
+      const thrown: unknown[] = [
+        // A link's own failure: the host error is the error's `data.hostError`.
+        {
+          message: "x",
+          data: {
+            code: "SERVICE_UNAVAILABLE",
+            hostError: {
+              code: "SERVICE_UNAVAILABLE",
+              message: "The project's host can't be reached",
+              reason: "host-unreachable",
+            },
+          },
+        },
+        Object.assign(new Error("board.setPriority is not granted"), {
+          code: "FORBIDDEN",
+          reason: "verb-refused",
+        }),
+        { message: "Not found", data: { code: "NOT_FOUND" } },
+        new OperationUnavailableError("Remote projects are unavailable on this host"),
+      ];
+      let index = 0;
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "hostLink.query": () => {
+          throw thrown[index++];
+        },
+      });
+      const client = await connect(fixture);
+      const call = () => client.hostLink.query.query({ workspaceId: WORKSPACE, path: "board.x" });
+      expect(await expectHostError(call())).toEqual({
+        code: "SERVICE_UNAVAILABLE",
+        message: "The project's host can't be reached",
+        reason: "host-unreachable",
+      });
+      expect(await expectHostError(call())).toEqual({
+        code: "FORBIDDEN",
+        message: "board.setPriority is not granted",
+        reason: "verb-refused",
+      });
+      expect(await expectHostError(call())).toEqual({ code: "NOT_FOUND", message: "Not found" });
+      expect(await expectHostError(call())).toEqual({
+        code: "NOT_IMPLEMENTED",
+        message: "Remote projects are unavailable on this host",
+        reason: "operation-unavailable",
+      });
+    });
+
+    it("refuses a network caller the relay, and a malformed relay call before the handler", async () => {
+      for (const caller of [device, session]) {
+        const fixture = host(caller);
+        const client = await connect(fixture);
+        expect(
+          await expectHostError(
+            client.hostLink.mutate.mutate({ workspaceId: WORKSPACE, path: "board.setPriority" }),
+          ),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(fixture.calls).toEqual([]);
+      }
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const longest = `a.${"b".repeat(HOST_LINK_RELAY_PATH_MAX - 2)}`;
+      expect(await client.hostLink.query.query({ workspaceId: WORKSPACE, path: longest })).toEqual({
+        answered: "query",
+      });
+      const malformed: [string, () => Promise<unknown>][] = [
+        [
+          "not a Workspace id",
+          () => client.hostLink.query.query({ workspaceId: "w", path: "a.b" }),
+        ],
+        ["no dot", () => client.hostLink.query.query({ workspaceId: WORKSPACE, path: "board" })],
+        [
+          "path too long",
+          () => client.hostLink.query.query({ workspaceId: WORKSPACE, path: `${longest}c` }),
+        ],
+        [
+          "a path that is not a name",
+          () => client.hostLink.mutate.mutate({ workspaceId: WORKSPACE, path: "../board.x" }),
+        ],
+        [
+          "an unknown key",
+          () =>
+            client.hostLink.query.query({ workspaceId: WORKSPACE, path: "a.b", extra: 1 } as never),
+        ],
+        [
+          "an empty resume id",
+          () =>
+            collect((handlers) =>
+              client.hostLink.subscribe.subscribe(
+                { workspaceId: WORKSPACE, path: "a.b", lastEventId: "" },
+                handlers,
+              ),
+            ).failed,
+        ],
+      ];
+      for (const [what, call] of malformed) {
+        expect(await expectHostError(call()), what).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls.map(({ key }) => key)).toEqual(["hostLink.query"]);
     });
 
     // Remote hosts (VC-700 PR 2): desktop main's registry, the window's alone.
@@ -955,6 +1109,9 @@ describe("the desktop router's grammar", () => {
         "hosts.createProject",
         "hosts.openWorkspace",
         "hosts.closeWorkspace",
+        "hostLink.query",
+        "hostLink.mutate",
+        "hostLink.subscribe",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
@@ -988,6 +1145,8 @@ describe("the desktop router's grammar", () => {
     }
     expect(schemas["hosts.subscribe"]!.output).toBe(remoteHostsSnapshotSchema);
     expect(schemas["hostAdd.subscribe"]!.output).toBe(addHostEventSchema);
+    expect(schemas["hostLink.subscribe"]).toMatchObject({ type: "subscription" });
+    expect(schemas["hostLink.subscribe"]!.output).toBe(hostLinkRelayEventSchema);
     // Every schema publishes as JSON Schema: no transform, no custom parser.
     for (const [key, { input, output }] of Object.entries(schemas)) {
       expect(() => z.toJSONSchema(input, { io: "input" }), key).not.toThrow();
