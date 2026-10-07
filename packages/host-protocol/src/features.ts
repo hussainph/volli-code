@@ -137,6 +137,23 @@ export const HOST_FEATURE_OPERATIONS = {
   "sessions.listing": ["session.listing", "session.listingForTicket"],
   /** Host-wide project discovery and creation, without a Workspace connection (VC-722). */
   "host.workspaces": ["workspaces.list", "workspaces.create"],
+  /** Model catalog/defaults/preferences on a host connection (VC-729), device-only.
+   * Separate operation namespace: the model-access feature remains frozen.
+   * Sign-ins are deliberately not granted by this feature.
+   */
+  "host.model-defaults": [
+    "hostModels.inspect",
+    "hostModels.defaults",
+    "hostModels.setDefault",
+    "hostModels.hiddenModels",
+    "hostModels.setHiddenModels",
+    "hostModels.compactionPolicy",
+    "hostModels.setCompactionPolicy",
+    "hostModels.codeModePolicy",
+    "hostModels.setCodeModePolicy",
+    "hostModels.pickerView",
+    "hostModels.setPickerView",
+  ],
 } as const satisfies Readonly<Record<HostFeature, readonly string[]>>;
 
 /** A feature this build can grant. */
@@ -148,11 +165,13 @@ export const HOST_SCOPE_FEATURES = [
   "auth.callback",
   "host.logs",
   "host.workspaces",
+  "host.model-defaults",
 ] as const satisfies readonly HostV1Feature[];
 
 /** Features reserved for a host connection, never granted to a Workspace connection. */
 export const HOST_CONNECTION_ONLY_FEATURES = [
   "host.workspaces",
+  "host.model-defaults",
 ] as const satisfies readonly HostV1Feature[];
 
 /** Every operation some v1 feature grants, or the base set. */

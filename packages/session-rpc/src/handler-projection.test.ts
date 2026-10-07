@@ -1,7 +1,8 @@
 import { createWorkspacesRouter } from "./workspaces-router";
 /**
  * Every router procedure is a projection of the host's handler map (VC-668):
- * it reaches exactly `handlers[its own key]`, and nothing else in the map.
+ * it reaches exactly `handlers[its own key]`, or the existing Model Access
+ * handler for a declared `HANDLER_PROJECTION_KEYS` wire alias, and nothing else.
  *
  * The context types already hold no domain port but `handlers`
  * (`RouterContextPorts`); this drives each procedure through the real
@@ -13,6 +14,7 @@ import { LOCAL_DEVICE_ACTOR, type HostActor } from "@volli/host-protocol";
 import {
   DESKTOP_HANDLER_KEYS,
   DOOR_LOCAL_CATALOG_KEYS,
+  HANDLER_PROJECTION_KEYS,
   HandlerRefusedError,
   HOST_HANDLER_KEYS,
   OperationUnavailableError,
@@ -109,16 +111,27 @@ const SAMPLE_INPUTS: {
   "settings.experiments": undefined,
   "settings.setExperiment": { id: "cloud", enabled: true },
   "modelAccess.inspect": { refresh: false },
+  "hostModels.inspect": { refresh: false },
   "modelAccess.defaults": undefined,
+  "hostModels.defaults": undefined,
   "modelAccess.setDefault": { purpose: "ticket", selection: null },
+  "hostModels.setDefault": { purpose: "ticket", selection: null },
   "modelAccess.hiddenModels": undefined,
+  "hostModels.hiddenModels": undefined,
   "modelAccess.setHiddenModels": [],
+  "hostModels.setHiddenModels": [],
   "modelAccess.compactionPolicy": undefined,
+  "hostModels.compactionPolicy": undefined,
   "modelAccess.setCompactionPolicy": { autoCompaction: true },
+  "hostModels.setCompactionPolicy": { autoCompaction: true },
   "modelAccess.codeModePolicy": undefined,
+  "hostModels.codeModePolicy": undefined,
   "modelAccess.setCodeModePolicy": { enabled: true, models: {} },
+  "hostModels.setCodeModePolicy": { enabled: true, models: {} },
   "modelAccess.pickerView": undefined,
+  "hostModels.pickerView": undefined,
   "modelAccess.setPickerView": "all",
+  "hostModels.setPickerView": "all",
   "session.snapshot": SESSION,
   "session.history": { ...SESSION, before: 2 },
   "session.projection": SESSION,
@@ -244,7 +257,7 @@ function routerCallers(handlers: never) {
   };
 }
 
-describe("every router procedure projects its own handler (VC-668)", () => {
+describe("every router procedure projects one declared handler (VC-668, VC-729)", () => {
   it("holds no domain port but the map, and a handler for every family key", () => {
     expectTypeOf<SessionRouterContextPorts>().toEqualTypeOf<never>();
     expectTypeOf<BoardRouterContextPorts>().toEqualTypeOf<never>();
@@ -270,6 +283,12 @@ describe("every router procedure projects its own handler (VC-668)", () => {
             : callers.session;
     await drive(procedureAt(caller, key), SAMPLE_INPUTS[key]);
     expect(reached).toEqual([key]);
+  });
+
+  it.each(HANDLER_PROJECTION_KEYS)("%s reaches the existing Model Access handler", async (key) => {
+    const { handlers, reached } = recordingHandlers();
+    await drive(procedureAt(routerCallers(handlers).session, key), SAMPLE_INPUTS[key]);
+    expect(reached).toEqual([key.replace("hostModels.", "modelAccess.")]);
   });
 
   it.each(DOOR_LOCAL_CATALOG_KEYS)("%s is the router's own, and reads no handler", async (key) => {

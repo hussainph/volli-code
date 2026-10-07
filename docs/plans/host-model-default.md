@@ -15,10 +15,16 @@ recovered through Re-add, rather than a pending picker.
 
 ## Scope and decisions to confirm
 
-Reuse the existing default-model ladder, hidden-model preferences, picker view,
-compaction and Code Mode policy. Keep Decision models, secrets, web and harness
-settings out of this surface. Provider authentication remains in **Sign-ins on
-<host>**, whose main-owned flows never pass through the generic relay.
+The box screen offers the existing six-row default-model ladder, Compaction,
+Code Mode (including per-model pins) and Catalog visibility. Decision models and
+Accounts are hidden; provider authentication has one door to **Sign-ins on
+<host>**, whose main-owned flows never pass through the generic relay. Secrets,
+web, harness settings and per-project overrides stay out of scope.
+
+The feature also carries picker-view preferences to match the existing client
+interface, but this screen has no picker-view control and the remote composer
+still has no model picker. All new output vocabularies are closed, reusing the
+existing Model Access schemas rather than widening them.
 
 The cloud acceptance journey deploys only fake-provider network configuration.
 It stores the API key and selects the default through production UI before starting

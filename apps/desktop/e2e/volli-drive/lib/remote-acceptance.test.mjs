@@ -64,6 +64,18 @@ test("CLI source guards remote acceptance before build/reservation/spawn (no CLI
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.ok(smoke.indexOf("assertAcceptanceRunner();") < smoke.indexOf("await journey();"));
 });
+test("the box default is chosen through UI after key storage, never through a SQLite seed", () => {
+  const arrange = read("./remote-acceptance.mjs");
+  assert.doesNotMatch(arrange, /sqlite3|volli:model-access-defaults|seedDefaultModel/u);
+  assert.match(arrange, /AZURE_OPENAI_BASE_URL: provider\.baseUrl/u);
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const key = smoke.indexOf("await wait(`Signed in on ${REMOTE_HOST} · API key`)");
+  const picker = smoke.indexOf('await click("button", `Models on ${REMOTE_HOST}…`)');
+  const select = smoke.indexOf('await click("option", "GPT-4.1 mini")');
+  const session = smoke.indexOf('await send("remote-stream-turn")');
+  assert.ok(key > 0 && picker > key && select > picker && session > select);
+  assert.match(smoke, /await shot\("step-4-model-default"\)/u);
+});
 test("project success toast cannot make navigation actionable during dialog exit", () => {
   const exiting = [
     "- button [ref=f2e931]:",

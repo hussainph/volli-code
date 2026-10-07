@@ -1252,6 +1252,104 @@ export function createSessionRouter() {
         }
       },
     );
+  // One schema/handler projection, two independently frozen wire features.
+  // hostModels admission is stricter; its domain command remains modelAccess.
+  function modelAccessProcedures(namespace: "modelAccess" | "hostModels") {
+    return {
+      inspect: hostProcedure(`${namespace}.inspect`)
+        .input(z.object({ refresh: z.boolean().optional() }))
+        .output(modelAccessSnapshotSchema)
+        .query(async ({ ctx, input }) =>
+          modelAccessSnapshotSchema.parse(
+            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
+          ),
+        ),
+      defaults: hostProcedure(`${namespace}.defaults`)
+        .output(modelAccessDefaultsSchema)
+        .query(async ({ ctx }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
+          ),
+        ),
+      setDefault: hostProcedure(`${namespace}.setDefault`)
+        .input(
+          z
+            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
+            // Clearing ticket/utility means "use the Board default"; clearing
+            // global would leave every purpose resolving to nothing, which is a
+            // state the UI never offers and this edge refuses to mint.
+            .refine(
+              (input) => input.purpose !== "global" || input.selection !== null,
+              "The Board default cannot be cleared — choose a model instead",
+            ),
+        )
+        .output(modelAccessDefaultsSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
+          ),
+        ),
+      hiddenModels: hostProcedure(`${namespace}.hiddenModels`)
+        .output(hiddenModelsSchema)
+        .query(async ({ ctx }) =>
+          hiddenModelsSchema.parse(
+            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
+          ),
+        ),
+      setHiddenModels: hostProcedure(`${namespace}.setHiddenModels`)
+        .input(hiddenModelsSchema)
+        .output(hiddenModelsSchema)
+        .mutation(async ({ ctx, input }) => {
+          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
+          return input;
+        }),
+      compactionPolicy: hostProcedure(`${namespace}.compactionPolicy`)
+        .output(compactionPolicySchema)
+        .query(async ({ ctx }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCompactionPolicy: hostProcedure(`${namespace}.setCompactionPolicy`)
+        .input(compactionPolicySchema)
+        .output(compactionPolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
+          ),
+        ),
+      codeModePolicy: hostProcedure(`${namespace}.codeModePolicy`)
+        .output(codeModePolicySchema)
+        .query(async ({ ctx }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCodeModePolicy: hostProcedure(`${namespace}.setCodeModePolicy`)
+        .input(codeModePolicySchema)
+        .output(codeModePolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
+          ),
+        ),
+      pickerView: hostProcedure(`${namespace}.pickerView`)
+        .output(modelPickerViewSchema)
+        .query(async ({ ctx }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
+          ),
+        ),
+      setPickerView: hostProcedure(`${namespace}.setPickerView`)
+        .input(modelPickerViewSchema)
+        .output(modelPickerViewSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
+          ),
+        ),
+    };
+  }
   return catalogRouter({
     // Sign-ins on a host (VC-702): their own module, this router's family.
     ...signInProcedures(),
@@ -1341,100 +1439,8 @@ export function createSessionRouter() {
           ),
         ),
     },
-    modelAccess: {
-      inspect: hostProcedure("modelAccess.inspect")
-        .input(z.object({ refresh: z.boolean().optional() }))
-        .output(modelAccessSnapshotSchema)
-        .query(async ({ ctx, input }) =>
-          modelAccessSnapshotSchema.parse(
-            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
-          ),
-        ),
-      defaults: hostProcedure("modelAccess.defaults")
-        .output(modelAccessDefaultsSchema)
-        .query(async ({ ctx }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
-          ),
-        ),
-      setDefault: hostProcedure("modelAccess.setDefault")
-        .input(
-          z
-            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the Board default"; clearing
-            // global would leave every purpose resolving to nothing, which is a
-            // state the UI never offers and this edge refuses to mint.
-            .refine(
-              (input) => input.purpose !== "global" || input.selection !== null,
-              "The Board default cannot be cleared — choose a model instead",
-            ),
-        )
-        .output(modelAccessDefaultsSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
-          ),
-        ),
-      hiddenModels: hostProcedure("modelAccess.hiddenModels")
-        .output(hiddenModelsSchema)
-        .query(async ({ ctx }) =>
-          hiddenModelsSchema.parse(
-            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
-          ),
-        ),
-      setHiddenModels: hostProcedure("modelAccess.setHiddenModels")
-        .input(hiddenModelsSchema)
-        .output(hiddenModelsSchema)
-        .mutation(async ({ ctx, input }) => {
-          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
-          return input;
-        }),
-      compactionPolicy: hostProcedure("modelAccess.compactionPolicy")
-        .output(compactionPolicySchema)
-        .query(async ({ ctx }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCompactionPolicy: hostProcedure("modelAccess.setCompactionPolicy")
-        .input(compactionPolicySchema)
-        .output(compactionPolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
-          ),
-        ),
-      codeModePolicy: hostProcedure("modelAccess.codeModePolicy")
-        .output(codeModePolicySchema)
-        .query(async ({ ctx }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCodeModePolicy: hostProcedure("modelAccess.setCodeModePolicy")
-        .input(codeModePolicySchema)
-        .output(codeModePolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
-          ),
-        ),
-      pickerView: hostProcedure("modelAccess.pickerView")
-        .output(modelPickerViewSchema)
-        .query(async ({ ctx }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
-          ),
-        ),
-      setPickerView: hostProcedure("modelAccess.setPickerView")
-        .input(modelPickerViewSchema)
-        .output(modelPickerViewSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
-          ),
-        ),
-    },
+    modelAccess: modelAccessProcedures("modelAccess"),
+    hostModels: modelAccessProcedures("hostModels"),
     session: {
       // The socket's Session reads, forced to the caller's Workspace (D4).
       list: workspaceProcedure("session.list", sessionListInput, readWorkspace)

@@ -23,12 +23,21 @@ SSH enrollment grants every Workspace on the host and hence host scope.
 Only host catalog entries are reachable, still under their own actor policy.
 A Workspace operation is `FORBIDDEN` / `workspace-scope-required` before input
 parsing or handler invocation. Host-scope feature grants are restricted to
-`sign-ins`, `auth.callback`, `host.logs`, `host.workspaces`. Conversely,
-`host.workspaces` is never offered/granted to Workspace connections, and
-`workspaces.*` refuses Workspace actors before input parsing. Sign-ins, logs
+`sign-ins`, `auth.callback`, `host.logs`, `host.workspaces` and
+`host.model-defaults` (VC-729). Conversely, `host.workspaces` and
+`host.model-defaults` are never offered/granted to Workspace connections, and
+`workspaces.*` and `hostModels.*` refuse Workspace actors before input parsing. Sign-ins, logs
 and callbacks intentionally remain available on both connection scopes.
 Host bootstrap proof fields alone are bounded to scheme 128 / value 8192 UTF-16
 code units; scheme is an open reserved vocabulary. Workspace proofs are unchanged.
+
+VC-729's `host.model-defaults` grants exactly `hostModels.inspect`, `defaults`,
+`setDefault`, `hiddenModels`, `setHiddenModels`, `compactionPolicy`,
+`setCompactionPolicy`, `codeModePolicy`, `setCodeModePolicy`, `pickerView` and
+`setPickerView`. Each projects the existing `modelAccess.*` schema and handler;
+output enums remain closed, and default writes retain the availability check.
+No provider sign-in operations belong to this feature. An old host omits it;
+a client offers Re-add to update, never probes the missing operations.
 
 The new frozen `host.workspaces` feature grants exactly:
 

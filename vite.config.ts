@@ -44,6 +44,7 @@ export default defineConfig({
       // Actual old-peer recordings, kept byte-for-byte with their capture.
       "packages/host-protocol/fixtures/pre-vc722-host-refusal.json",
       "packages/host-protocol/fixtures/pre-vc722-workspace.json",
+      "packages/host-protocol/fixtures/pre-vc729-host-models.json",
     ],
     sortPackageJson: {},
   },

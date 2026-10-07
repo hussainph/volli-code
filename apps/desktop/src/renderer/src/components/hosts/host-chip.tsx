@@ -27,6 +27,8 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
 
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -143,9 +145,10 @@ export function HostSwitcher({
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
   const list = hosts.some((host) => host.id === current.id) ? hosts : [current, ...hosts];
-  // Sign-ins on any remote host this Mac can reach, the current one first (AM2).
-  const signInHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
-    (host) => !host.local && (host.link.status === "open" || host.link.status === "version-skewed"),
+  // Preferences for every remote host, the current one first (AM2). Models
+  // remains a door on older/offline hosts so its named recovery is reachable.
+  const preferenceHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
+    (host) => !host.local,
   );
   return (
     <div role="group" aria-label="Hosts">
@@ -199,18 +202,29 @@ export function HostSwitcher({
         );
       })}
       <div className="my-1 h-px bg-border/60" />
-      {signInHosts.map((host) => (
-        <MenuAction
-          key={`sign-ins:${host.id}`}
-          icon={KeyIcon}
-          label={`Sign-ins on ${host.name}…`}
-          onAct={() => {
-            onDone();
-            useHostSignInSheet
-              .getState()
-              .open({ hostId: host.id, hostName: host.name, providerId: null });
-          }}
-        />
+      {preferenceHosts.map((host) => (
+        <React.Fragment key={host.id}>
+          {host.link.status === "open" || host.link.status === "version-skewed" ? (
+            <MenuAction
+              icon={KeyIcon}
+              label={`Sign-ins on ${host.name}…`}
+              onAct={() => {
+                onDone();
+                useHostSignInSheet
+                  .getState()
+                  .open({ hostId: host.id, hostName: host.name, providerId: null });
+              }}
+            />
+          ) : null}
+          <MenuAction
+            icon={CpuIcon}
+            label={`Models on ${host.name}…`}
+            onAct={() => {
+              onDone();
+              useHostModelSheet.getState().open({ hostId: host.id, hostName: host.name });
+            }}
+          />
+        </React.Fragment>
       ))}
       {addHostOffered ? (
         <MenuAction

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { ChromeBar } from "@renderer/components/chrome-bar";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useRemoteHostsStore, setRemoteHostsApi } from "@renderer/stores/remote-hosts";
@@ -27,6 +28,7 @@ afterEach(async () => {
   toast.success.mockClear();
   toast.error.mockClear();
   setRemoteHostsApi(null);
+  useHostModelSheet.getState().close();
   vi.restoreAllMocks();
   useRemoteHostsStore.setState({
     addHostActivity: null,
@@ -201,10 +203,19 @@ describe("host chip", () => {
     expect(rows.slice(3)).toEqual([
       "Retry now",
       "Sign-ins on hetzner-1…",
+      "Models on hetzner-1…",
+      "Models on mac-mini…",
       "Add a host…",
       "Manage hosts…",
     ]);
     expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("hetzner-1");
+  });
+
+  it("opens Models for the named host, including an offline or older host", async () => {
+    world = hostWorld();
+    await world.render(<HostChip />);
+    await click(await openSwitcher(), "Models on mac-mini…");
+    expect(useHostModelSheet.getState().target).toEqual({ hostId: MINI_ID, hostName: "mac-mini" });
   });
 
   it("keeps a detached add visible and opens its existing sheet", async () => {

@@ -1661,6 +1661,13 @@ describe("the slice", () => {
     expect(slice()).toBe(before);
   });
 
+  it("delegates an empty history page without replacing the resident slice", () => {
+    const { store, slice } = seeded();
+    const before = slice();
+    store.getState().prependHistory("durable-9", 7, { frames: [], before: null });
+    expect(slice()).toBe(before);
+  });
+
   it("latches starting until a command settles it", () => {
     const { store, slice } = seeded();
 
@@ -2582,7 +2589,7 @@ describe("a Session's transport follows its project (VC-713)", () => {
     expect(asked.every((projectId) => projectId === "remote")).toBe(true);
   });
 
-  it("says whose default is missing when a remote host has none, and opens no settings", async () => {
+  it("offers the correct host's picker when its default is missing, never local settings", async () => {
     const { remote, store } = routed();
     useExperimentsStore.setState({
       snapshot: { cloud: { enabled: true, source: "storage" } } as never,
@@ -2607,6 +2614,21 @@ describe("a Session's transport follows its project (VC-713)", () => {
         expect.anything(),
       );
       expect(useUiStore.getState().settingsOpen).toBe(false);
+      const { useHostModelSheet } = await import("./host-model-sheet");
+      const options = vi.mocked(toast.error).mock.calls.at(-1)?.[1];
+      expect(options?.action).toMatchObject({ label: "Choose a model" });
+      if (
+        options?.action !== null &&
+        typeof options?.action === "object" &&
+        "onClick" in options.action
+      ) {
+        options.action.onClick({} as never);
+      }
+      expect(useHostModelSheet.getState().target).toEqual({
+        hostId: "host-hetzner",
+        hostName: "hetzner-1",
+      });
+      useHostModelSheet.getState().close();
     } finally {
       detach();
     }
