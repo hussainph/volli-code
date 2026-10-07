@@ -43,7 +43,8 @@ export type DesktopIpcRouterPath = RouterProcedurePaths<DesktopIpcRouters>;
  *   reading a diagnostic log over the channel it runs Sessions on;
  * - `websocket-only`: the host protocol's own, for a network caller (the
  *   welcome a handshake negotiated, which the window never has; the socket's
- *   Session reads, Workspace-scoped). The renderer keeps its own listing.
+ *   Session reads, Workspace-scoped; a remote host's sign-ins, owned by the
+ *   asking connection, VC-702). The renderer keeps its own listing.
  */
 export type DesktopIpcExposure = "ipc" | "lab-only" | "websocket-only";
 
@@ -91,6 +92,18 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "session.answer": "websocket-only",
   "session.subscribeQueue": "websocket-only",
   "protocol.welcome": "websocket-only",
+  // Sign-ins on a remote host (VC-702): a connection owns its flows, and the
+  // desktop's own window signs in over its own Model Access IPC.
+  "signIns.status": "websocket-only",
+  "signIns.setApiKey": "websocket-only",
+  "signIns.signOut": "websocket-only",
+  "signIns.start": "websocket-only",
+  "signIns.subscribe": "websocket-only",
+  "signIns.answer": "websocket-only",
+  "signIns.cancel": "websocket-only",
+  "signIns.setGitCredential": "websocket-only",
+  "signIns.clearGitCredential": "websocket-only",
+  "auth.callback.deliver": "websocket-only",
   "labDiagnostics.list": "lab-only",
   "labDiagnostics.subscribe": "lab-only",
   // The board (VC-565): the desktop window's board with `cloud` on, the same
@@ -124,6 +137,19 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",
+  "hosts.snapshot": "ipc",
+  "hosts.subscribe": "ipc",
+  "hosts.retry": "ipc",
+  "hosts.updateHost": "ipc",
+  "hosts.cancelScheduledUpdate": "ipc",
+  "hosts.signIn": "ipc",
+  "hosts.forget": "ipc",
+  "hostAdd.start": "ipc",
+  "hostAdd.subscribe": "ipc",
+  "hostAdd.answer": "ipc",
+  "hostAdd.sudoPassword": "ipc",
+  "hostAdd.retry": "ipc",
+  "hostAdd.cancel": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

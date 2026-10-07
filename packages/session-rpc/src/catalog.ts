@@ -64,6 +64,7 @@ import {
   isQueueRevisionConflict,
   isHandlerRefused,
   isOperationUnavailable,
+  isSignInRefused,
   isolatePerformanceObserver,
   readOptionalPerformanceClock,
   type CatalogEntry,
@@ -72,7 +73,10 @@ import {
   type CatalogKeyOfScope,
   type CatalogKeyRefusingIntents,
   type HandlerCall,
+  type HandlerConnection,
   type HostActorKindName,
+  type SignInRefusalReason,
+  type SignInRefusedError,
   type VerbEntry,
   type VerbRegistryEntry,
   type VerbScope,
@@ -221,6 +225,15 @@ export interface CatalogCallerContext {
    * unbounded.
    */
   maxResponseBytes?: number;
+  /**
+   * The network connection this call arrived on: a random id the door minted
+   * for it (HP § The Client is a connection, F2). Set by the WebSocket
+   * listener with `admission`; absent on the desktop's in-process IPC. A
+   * handler sees it, with the admission's signal and the welcome's features,
+   * as `HandlerCall.connection`, and keys per-connection state (a sign-in
+   * flow, VC-702) by it.
+   */
+  connectionId?: string;
 }
 
 /**
@@ -268,20 +281,40 @@ export type RouterContextPorts<Ctx> = Exclude<keyof Ctx, keyof CatalogCallerCont
  * authenticated: the person (the desktop's own window, or a paired device),
  * or a Session. Never from input.
  */
-export function handlerCallOf(actor: CallerActor): HandlerCall {
+export function handlerCallOf(actor: CallerActor, connection?: HandlerConnection): HandlerCall {
   if (isLocalDeviceActor(actor)) return { actor: { kind: "user" }, origin: "desktop-window" };
+  const on = connection === undefined ? {} : { connection };
   switch (actor.kind) {
     case "device":
-      return { actor: { kind: "user" } };
+      return { actor: { kind: "user" }, ...on };
     case "session":
       // A router names the Session, never its ticket: no entry admits a
       // Session to an attributed write yet. VC-565 resolves the ticket when
       // the board's `session-own` entries land.
-      return { actor: { kind: "session", sessionId: actor.sessionId, ticketId: null } };
+      return { actor: { kind: "session", sessionId: actor.sessionId, ticketId: null }, ...on };
     case "worker":
       // HOST_ACTOR_POLICY admits no worker to any entry.
       throw new HostProcedureError("verb-refused", "No catalog entry is open to a worker.");
   }
+}
+
+/**
+ * The connection a network door's call arrived on, as a handler may see it
+ * (F2): its id, the admission's signal, and the features its welcome granted.
+ * Undefined for a door with no connection (the desktop's in-process IPC).
+ */
+export function handlerConnectionOf(ctx: CatalogCallerContext): HandlerConnection | undefined {
+  if (ctx.connectionId === undefined || ctx.admission === undefined) return undefined;
+  return {
+    id: ctx.connectionId,
+    closed: ctx.admission.signal,
+    features: ctx.welcome?.features ?? [],
+  };
+}
+
+/** A sign-in refusal (VC-702) as the reason the host protocol names. */
+function signInRefusal(error: SignInRefusedError): HostProcedureError {
+  return new HostProcedureError(error.reason, error.message, error);
 }
 
 /**
@@ -296,6 +329,7 @@ export async function hostAnswer<Answer>(run: () => Answer | Promise<Answer>): P
     if (isHandlerRefused(error)) {
       throw new HostProcedureError("verb-refused", error.message, error);
     }
+    if (isSignInRefused(error)) throw signInRefusal(error);
     if (isOperationUnavailable(error)) {
       throw new HostProcedureError(
         "operation-unavailable",
@@ -342,6 +376,11 @@ export const CREDENTIAL_INVALID_MESSAGE = "This connection's credential is no lo
 
 /** Same message for a foreign and an absent resource, so neither reveals the other. */
 export const WORKSPACE_UNKNOWN_MESSAGE = "Not found in this Workspace.";
+
+/** Every sign-in refusal a handler may throw is a reason the host protocol names. */
+export type SignInRefusalReasonCoverage = AssertNever<
+  Exclude<SignInRefusalReason, HostErrorReason>
+>;
 
 /** Pins host-protocol's actor kinds to the shared mapping's, in both directions. */
 type AssertNever<Type extends never> = Type;
@@ -806,7 +845,7 @@ export function createCatalogBuilders<
         );
       }
       // The handler learns who is calling from the door, never from input.
-      const result = await next({ ctx: { call: handlerCallOf(actor) } });
+      const result = await next({ ctx: { call: handlerCallOf(actor, handlerConnectionOf(ctx)) } });
       // A command id reused for a different intent is the client's conflict,
       // and the one the wire names; every other ledger conflict stays what it
       // was. Any area's ledger opts in by the shared brand.
@@ -819,6 +858,9 @@ export function createCatalogBuilders<
       }
       if (!result.ok && isCommandIntentConflict(result.error.cause)) {
         throw new HostProcedureError("command-conflict", result.error.message, result.error.cause);
+      }
+      if (!result.ok && isSignInRefused(result.error.cause)) {
+        throw signInRefusal(result.error.cause);
       }
       // The map judged the call again under the door's policy and refused it
       // before its handler ran (VC-668): the same refusal this middleware gives.

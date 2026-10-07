@@ -98,6 +98,23 @@ export interface HandlerCall {
    * change is published. VC-565's `commandId` reconciliation retires it.
    */
   readonly origin?: "desktop-window";
+  /**
+   * The connection that asked (HP § The Client is a connection, F2), set by a
+   * network door and absent on the desktop's in-process IPC. A handler whose
+   * state belongs to the asking connection (a sign-in flow, VC-702) keys it
+   * by this, never by anything in its input.
+   */
+  readonly connection?: HandlerConnection;
+}
+
+/** One network connection, as a handler may see it: never its credential. */
+export interface HandlerConnection {
+  /** Random, per connection: what owns per-connection state. */
+  readonly id: string;
+  /** Aborts, never to be restored, when the connection's admission ends. */
+  readonly closed: AbortSignal;
+  /** The features its welcome granted, client capabilities included. */
+  readonly features: readonly string[];
 }
 
 /** One entry of the host's handler map: the whole command, whichever door called. */

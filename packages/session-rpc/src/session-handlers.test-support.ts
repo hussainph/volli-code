@@ -34,6 +34,7 @@ import type {
   SessionCreateResult,
   SessionRouterContext,
   SessionRouterHandlers,
+  SignInRouterHandlers,
 } from "./index";
 import type { SessionStartResult } from "@volli/session-engine";
 
@@ -69,6 +70,8 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
     workspaceId: string,
     args: Record<string, unknown>,
   ) => Promise<AgentResponse>;
+  /** Sign-ins on a host (VC-702), handler by handler; an absent one answers unavailable. */
+  signIns?: Partial<SignInRouterHandlers>;
   /** The host's recent log (VC-699): host-core's ring. */
   readLogs?: (query: HostLogsQuery) => HostLogsBatch;
   followLogs?: (
@@ -92,7 +95,28 @@ const PREFERENCES = "Model Access preferences are unavailable on this transport"
 const RUNTIME = "The Session runtime is unavailable on this host";
 const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
+const SIGN_INS = "Sign-ins are unavailable on this host";
+
+/** Each sign-in handler the test stated, or one that answers unavailable. */
+function signInHandlersFrom(stated: Partial<SignInRouterHandlers> = {}): SignInRouterHandlers {
+  const unavailable = (): never => {
+    throw new OperationUnavailableError(SIGN_INS);
+  };
+  return {
+    "signIns.status": stated["signIns.status"] ?? unavailable,
+    "signIns.setApiKey": stated["signIns.setApiKey"] ?? unavailable,
+    "signIns.signOut": stated["signIns.signOut"] ?? unavailable,
+    "signIns.start": stated["signIns.start"] ?? unavailable,
+    "signIns.subscribe": stated["signIns.subscribe"] ?? (async () => unavailable()),
+    "signIns.answer": stated["signIns.answer"] ?? unavailable,
+    "signIns.cancel": stated["signIns.cancel"] ?? unavailable,
+    "signIns.setGitCredential": stated["signIns.setGitCredential"] ?? unavailable,
+    "signIns.clearGitCredential": stated["signIns.clearGitCredential"] ?? unavailable,
+    "auth.callback.deliver": stated["auth.callback.deliver"] ?? unavailable,
+  };
+}
 const BOARD = "The board is unavailable: the database did not open";
+const REMOTE_HOSTS = "Remote hosts are unavailable on this host";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(
@@ -104,6 +128,7 @@ export function sessionHandlersFrom(
     return (bound as (...args: never[]) => unknown).bind(ports.runtime) as SessionRuntime[Method];
   };
   const handlers: SessionRouterHandlers = {
+    ...signInHandlersFrom(ports.signIns),
     "sessions.create": (input) => need(ports.createSession, SESSIONS)(input),
     "sessions.attach": (input) => need(ports.attachSession, SESSIONS)(input),
     "settings.experiments": () => need(ports.readExperiments, EXPERIMENTS)(),
@@ -181,11 +206,30 @@ export function sessionHandlersFrom(
     "session.answer": ({ workspaceId, args }) =>
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
+  /** A remote hosts key: the case's own handler, or unavailable, as on hostd. */
+  const remote = <Key extends keyof DesktopRouterHandlers>(key: Key): DesktopRouterHandlers[Key] =>
+    ((...args: unknown[]) =>
+      (need(ports.desktop?.[key], REMOTE_HOSTS) as (...args: unknown[]) => unknown)(
+        ...args,
+      )) as DesktopRouterHandlers[Key];
   const desktop: DesktopRouterHandlers = {
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+    "hosts.snapshot": remote("hosts.snapshot"),
+    "hosts.subscribe": remote("hosts.subscribe"),
+    "hosts.retry": remote("hosts.retry"),
+    "hosts.updateHost": remote("hosts.updateHost"),
+    "hosts.cancelScheduledUpdate": remote("hosts.cancelScheduledUpdate"),
+    "hosts.signIn": remote("hosts.signIn"),
+    "hosts.forget": remote("hosts.forget"),
+    "hostAdd.start": remote("hostAdd.start"),
+    "hostAdd.subscribe": remote("hostAdd.subscribe"),
+    "hostAdd.answer": remote("hostAdd.answer"),
+    "hostAdd.sudoPassword": remote("hostAdd.sudoPassword"),
+    "hostAdd.retry": remote("hostAdd.retry"),
+    "hostAdd.cancel": remote("hostAdd.cancel"),
   };
   return { ...handlers, ...desktop };
 }

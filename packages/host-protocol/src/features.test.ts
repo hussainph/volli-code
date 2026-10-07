@@ -5,6 +5,7 @@ import {
   HOST_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_V1_FEATURES,
+  hostOffersSignIns,
   operationsGrantedBy,
 } from "./features";
 import { isHostFeature } from "./handshake";
@@ -73,6 +74,18 @@ describe("the v1 feature table", () => {
         "modelAccess.pickerView",
         "modelAccess.setPickerView",
       ],
+      "sign-ins": [
+        "signIns.status",
+        "signIns.setApiKey",
+        "signIns.signOut",
+        "signIns.start",
+        "signIns.subscribe",
+        "signIns.answer",
+        "signIns.cancel",
+        "signIns.setGitCredential",
+        "signIns.clearGitCredential",
+      ],
+      "auth.callback": ["auth.callback.deliver"],
     });
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
@@ -84,6 +97,8 @@ describe("the v1 feature table", () => {
       "board.read",
       "board.write",
       "model-access",
+      "sign-ins",
+      "auth.callback",
     ]);
     expect(HOST_V1_FEATURES.every(isHostFeature)).toBe(true);
   });
@@ -124,5 +139,12 @@ describe("the refusing verifier", () => {
         client: { kind: "cli", version: "1" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("hostOffersSignIns", () => {
+  it("reads sign-ins off the welcome: an older host never granted them (N−1)", () => {
+    expect(hostOffersSignIns({ features: ["sessions", "sign-ins"] })).toBe(true);
+    expect(hostOffersSignIns({ features: ["sessions", "session.read"] })).toBe(false);
   });
 });

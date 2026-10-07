@@ -1,0 +1,249 @@
+{
+  "provenance": {
+    "revision": "VC-702 (#811)",
+    "peer": "VC-702 public client: the desktop's host link requesting sign-ins and auth.callback",
+    "producer": "Today's createHostRouter behind the production listener (startHostProtocolListener), the host's real handler map and HostSignIns over a scripted Pi, fake stores and a fake loopback replay",
+    "sources": [
+      "packages/session-rpc/src/sign-ins.ts",
+      "packages/host-core/src/host-sign-ins/service.ts"
+    ],
+    "format": "Canonical application-wire payloads recorded through the stock tRPC WebSocket client; transport-local request and subscription ids omitted. Refresh with VOLLI_RECORD_SIGN_IN_WIRE=1 and review the diff."
+  },
+  "welcome": {
+    "requested": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "sign-ins",
+      "auth.callback"
+    ],
+    "granted": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "sign-ins",
+      "auth.callback"
+    ]
+  },
+  "status": {
+    "procedure": "signIns.status",
+    "input": null,
+    "output": {
+      "providers": [
+        {
+          "providerId": "anthropic",
+          "label": "Claude",
+          "state": "missing",
+          "kind": null,
+          "methods": [
+            {
+              "type": "oauth",
+              "label": "Subscription",
+              "isSubscription": true
+            }
+          ]
+        },
+        {
+          "providerId": "openrouter",
+          "label": "OpenRouter",
+          "state": "missing",
+          "kind": null,
+          "methods": [
+            {
+              "type": "api-key",
+              "label": "API key",
+              "isSubscription": false
+            }
+          ]
+        },
+        {
+          "providerId": "xai",
+          "label": "xAI",
+          "state": "missing",
+          "kind": null,
+          "methods": [
+            {
+              "type": "oauth",
+              "label": "Subscription",
+              "isSubscription": true
+            }
+          ]
+        }
+      ],
+      "git": []
+    }
+  },
+  "setApiKey": {
+    "procedure": "signIns.setApiKey",
+    "input": {
+      "providerId": "openrouter",
+      "key": "sk-fixture-WIRE-RECORDING-ONLY"
+    },
+    "output": {
+      "providers": [
+        {
+          "providerId": "anthropic",
+          "label": "Claude",
+          "state": "missing",
+          "kind": null,
+          "methods": [
+            {
+              "type": "oauth",
+              "label": "Subscription",
+              "isSubscription": true
+            }
+          ]
+        },
+        {
+          "providerId": "openrouter",
+          "label": "OpenRouter",
+          "state": "signed-in",
+          "kind": "api-key",
+          "methods": [
+            {
+              "type": "api-key",
+              "label": "API key",
+              "isSubscription": false
+            }
+          ]
+        },
+        {
+          "providerId": "xai",
+          "label": "xAI",
+          "state": "missing",
+          "kind": null,
+          "methods": [
+            {
+              "type": "oauth",
+              "label": "Subscription",
+              "isSubscription": true
+            }
+          ]
+        }
+      ],
+      "git": []
+    }
+  },
+  "deviceCode": {
+    "start": {
+      "procedure": "signIns.start",
+      "input": {
+        "providerId": "xai"
+      },
+      "output": {
+        "flowId": "id-1"
+      }
+    },
+    "frames": [
+      {
+        "kind": "device-code",
+        "userCode": "WXYZ-1234",
+        "verificationUri": "https://accounts.x.ai/device",
+        "intervalSeconds": 5,
+        "expiresInSeconds": 900
+      },
+      {
+        "kind": "done"
+      }
+    ]
+  },
+  "relay": {
+    "start": {
+      "procedure": "signIns.start",
+      "input": {
+        "providerId": "anthropic"
+      },
+      "output": {
+        "flowId": "id-2"
+      }
+    },
+    "frames": [
+      {
+        "kind": "auth-callback",
+        "flowId": "id-2",
+        "redirectUri": "http://localhost:53692/callback"
+      },
+      {
+        "kind": "auth-url",
+        "url": "https://claude.ai/oauth/authorize?code=true&state=pkce&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback",
+        "instructions": null
+      },
+      {
+        "kind": "prompt",
+        "prompt": {
+          "promptId": "id-3",
+          "kind": "manual-code",
+          "message": "Paste the authorization code",
+          "placeholder": null,
+          "options": []
+        }
+      },
+      {
+        "kind": "prompt-withdrawn",
+        "promptId": "id-3"
+      },
+      {
+        "kind": "done"
+      }
+    ],
+    "deliver": {
+      "procedure": "auth.callback.deliver",
+      "input": {
+        "flowId": "id-2",
+        "pathAndQuery": "/callback?code=fixture-code&state=pkce"
+      },
+      "output": {
+        "status": 200
+      }
+    }
+  },
+  "refusal": {
+    "procedure": "signIns.cancel",
+    "input": {
+      "flowId": "another-connections-flow"
+    },
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "There is no such sign-in on this connection.",
+      "reason": "sign-in-unknown"
+    }
+  },
+  "oldClient": {
+    "requested": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "model-access"
+    ],
+    "granted": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write"
+    ],
+    "refusal": {
+      "procedure": "signIns.status",
+      "input": null,
+      "output": {
+        "code": "FORBIDDEN",
+        "message": "signIns.status is not among the features this connection negotiated.",
+        "reason": "verb-refused"
+      }
+    }
+  }
+}

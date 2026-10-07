@@ -67,6 +67,15 @@ export const HOST_ERROR_REASON_CODES = {
   "response-too-large": "PAYLOAD_TOO_LARGE",
   "operation-unavailable": "NOT_IMPLEMENTED",
   /**
+   * Sign-ins (VC-702). No such flow on this connection: a flow another
+   * connection owns answers exactly as an absent one.
+   */
+  "sign-in-unknown": "NOT_FOUND",
+  /** The flow, step or callback grant is not in a state to take this. */
+  "sign-in-conflict": "CONFLICT",
+  /** This host cannot sign in that way: an unknown provider, method or git host. */
+  "sign-in-unsupported": "PRECONDITION_FAILED",
+  /**
    * Client-side: the client host link (VC-670) had no validated connection to
    * send on, or lost it before the host answered. A call is never queued for a
    * later connection, so a mutation that meets this was either never sent or

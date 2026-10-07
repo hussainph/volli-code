@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawn as nodeSpawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -20,12 +21,15 @@ import {
   connectionOptions,
   discoverHostKeys,
   ensureControlDir,
+  CANCELLED,
+  exitsWithin,
   runProcess,
   shellQuote,
   systemSsh,
+  TIMED_OUT,
   UnsafeControlDirError,
 } from "./ssh";
-import { recordingLogger, scriptedSpawn, type FakeChild } from "./testing/fake-process";
+import { fakeChild, recordingLogger, scriptedSpawn, type FakeChild } from "./testing/fake-process";
 
 const TARGET = { destination: "deploy@box", port: null, label: "box" };
 let root: string;
@@ -173,10 +177,75 @@ describe("running a process", () => {
       stderr: "no spawn",
     });
     const hung = scriptedSpawn(() => {});
-    const result = await runProcess(hung.spawn, "ssh", [], { timeoutMs: 5 });
-    expect(result).toMatchObject({ code: 255 });
+    const result = await runProcess(hung.spawn, "ssh", [], { timeoutMs: 5, killAfterMs: 5 });
+    expect(result).toMatchObject({ code: 255, stderr: TIMED_OUT });
     expect(classifySshFailure(result)?.kind).toBe("unreachable");
-    expect(hung.children[0]!.killed).toEqual(["SIGTERM"]);
+    // Ignored SIGTERM, then SIGKILL; answered once there was nothing left to wait on.
+    expect(hung.children[0]!.killed).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("answers a command it ends only once its process has exited", async () => {
+    let exited = false;
+    const { spawn, children } = scriptedSpawn((child) => {
+      child.err("partial");
+      child.process.kill = ((signal: string) => {
+        child.killed.push(signal);
+        if (signal === "SIGKILL") {
+          exited = true;
+          child.exit(null);
+        }
+        return true;
+      }) as never;
+    });
+    const controller = new AbortController();
+    const running = runProcess(spawn, "ssh", [], {
+      timeoutMs: 5,
+      killAfterMs: 10,
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    // Already ending on its timeout: an abort now changes nothing.
+    controller.abort();
+    const result = await running;
+    expect(exited).toBe(true);
+    expect(children[0]!.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(result).toEqual({ code: 255, stdout: "", stderr: `partial\n${TIMED_OUT}` });
+  });
+
+  it("ends a command when its signal aborts, and spawns nothing for one already aborted", async () => {
+    const controller = new AbortController();
+    const { spawn, children } = scriptedSpawn((child) => {
+      child.process.kill = ((signal: string) => {
+        child.killed.push(signal);
+        child.exit(null);
+        return true;
+      }) as never;
+    });
+    const running = runProcess(spawn, "ssh", [], { signal: controller.signal });
+    controller.abort();
+    expect(await running).toMatchObject({ code: 255, stderr: CANCELLED });
+    expect(children[0]!.killed).toEqual(["SIGTERM"]);
+    expect(await runProcess(spawn, "ssh", [], { signal: controller.signal })).toEqual({
+      code: 255,
+      stdout: "",
+      stderr: CANCELLED,
+    });
+    expect(children).toHaveLength(1);
+  });
+
+  it("answers at once when it ends a process that has exited but not yet closed", async () => {
+    const controller = new AbortController();
+    const { spawn, children } = scriptedSpawn((child) => {
+      setImmediate(() => {
+        child.process.emit("exit", 0);
+        controller.abort();
+      });
+    });
+    expect(await runProcess(spawn, "ssh", [], { signal: controller.signal })).toMatchObject({
+      code: 255,
+      stderr: CANCELLED,
+    });
+    expect(children[0]!.killed).toEqual([]);
   });
 
   it("settles once, whatever the child does after a timeout, and ignores a stdin that closed early", async () => {
@@ -252,6 +321,161 @@ describe("the system ssh runner", () => {
     expect(existsSync(dir)).toBe(true);
     await owned.close();
     expect(existsSync(dir)).toBe(false);
+  });
+});
+
+/** Each command's child exits only when SIGKILLed, as one ignoring SIGTERM does. */
+const stubborn = () =>
+  scriptedSpawn((child) => {
+    if (child.args.includes("exit")) {
+      child.exit(0);
+      return;
+    }
+    child.process.kill = ((signal: string) => {
+      child.killed.push(signal);
+      if (signal === "SIGKILL") child.exit(null);
+      return true;
+    }) as never;
+  });
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+describe("the runner owns its ssh processes", () => {
+  it("ends every running command at close, waits for it, then ends the master", async () => {
+    const { spawn, children } = stubborn();
+    const ssh = systemSsh({
+      target: TARGET,
+      logger: recordingLogger().logger,
+      spawn,
+      controlDir: join(root, "c"),
+      killAfterMs: 5,
+    });
+    const running = [ssh.exec("sleep forever"), ssh.exec("sleep longer", { timeoutMs: 60_000 })];
+    const closed = ssh.close();
+    // Every call shares the one close.
+    expect(ssh.close()).toBe(closed);
+    await closed;
+    for (const result of await Promise.all(running)) {
+      expect(result).toMatchObject({ code: 255, stderr: CANCELLED });
+    }
+    expect(children.slice(0, 2).map((child) => child.killed)).toEqual([
+      ["SIGTERM", "SIGKILL"],
+      ["SIGTERM", "SIGKILL"],
+    ]);
+    expect(children[2]!.args).toEqual(expect.arrayContaining(["-O", "exit"]));
+    // A command after close spawns nothing.
+    expect(await ssh.exec("true")).toMatchObject({ code: 255, stderr: CANCELLED });
+    expect(children).toHaveLength(3);
+  });
+
+  it("ends one command on its own signal, leaving the connection open", async () => {
+    const { spawn, children } = stubborn();
+    const ssh = systemSsh({
+      target: TARGET,
+      logger: recordingLogger().logger,
+      spawn,
+      controlDir: join(root, "c"),
+      killAfterMs: 5,
+    });
+    const controller = new AbortController();
+    const running = ssh.exec("sleep forever", { signal: controller.signal });
+    controller.abort();
+    expect(await running).toMatchObject({ code: 255, stderr: CANCELLED });
+    expect(children[0]!.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    const next = ssh.exec("true");
+    children[1]!.exit(0);
+    expect(await next).toMatchObject({ code: 0 });
+    await ssh.close();
+  });
+
+  it("leaves no live process behind when a real one ignores SIGTERM", async () => {
+    // A stand-in `ssh` that ignores SIGTERM and never exits on its own; `-O exit` exits at once.
+    const fakeSsh = join(root, "stubborn-ssh");
+    writeFileSync(
+      fakeSsh,
+      `#!/usr/bin/env node
+if (process.argv.includes("-O")) process.exit(0);
+process.on("SIGTERM", () => {});
+process.stderr.write("ready\n");
+setInterval(() => {}, 1000);
+`,
+    );
+    chmodSync(fakeSsh, 0o755);
+    const pids: number[] = [];
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const ssh = systemSsh({
+      target: TARGET,
+      logger: recordingLogger().logger,
+      sshPath: fakeSsh,
+      controlDir: join(root, "c"),
+      killAfterMs: 50,
+      spawn: (command, args) => {
+        const child = nodeSpawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"] });
+        pids.push(child.pid!);
+        child.stderr!.once("data", () => ready());
+        return child;
+      },
+    });
+
+    try {
+      const command = ssh.exec("pretend long install");
+      await started;
+      await ssh.close();
+      expect(await command).toMatchObject({
+        code: 255,
+        stderr: expect.stringContaining(CANCELLED),
+      });
+      // Gone by the time close answers: no pause, no extra wait.
+      expect(pids.map(alive)).toEqual([false, false]);
+    } finally {
+      for (const pid of pids) if (alive(pid)) process.kill(pid, "SIGKILL");
+    }
+  });
+});
+
+describe("waiting out SIGKILLed processes", () => {
+  it("answers at once for one already gone, on exit or error, and after its bound for one that lingers", async () => {
+    const gone = fakeChild("ssh", []);
+    Object.assign(gone.process, { exitCode: 0, signalCode: null });
+    await exitsWithin([gone.process], 60_000);
+    const killed = fakeChild("ssh", []);
+    Object.assign(killed.process, { exitCode: null, signalCode: "SIGKILL" });
+    await exitsWithin([killed.process], 60_000);
+    const exiting = fakeChild("ssh", []);
+    const failing = fakeChild("ssh", []);
+    const both = exitsWithin([exiting.process, failing.process], 60_000);
+    exiting.exit(null);
+    failing.fail(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    await both;
+    const stuck = fakeChild("ssh", []);
+    const started = Date.now();
+    await exitsWithin([stuck.process], 20);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+  });
+
+  it("leaves the master to ControlPersist when closing has no time left, and kills nothing it does not own", async () => {
+    const { spawn, children } = scriptedSpawn(() => {});
+    const { lines, logger } = recordingLogger();
+    const ssh = systemSsh({ target: TARGET, logger, spawn, controlDir: join(root, "c") });
+    await ssh.close({ deadline: Date.now() - 1 });
+    expect(children).toHaveLength(0);
+    expect(lines.map((line) => line.msg)).toContain(
+      "ssh master left to its ControlPersist: no time to end it",
+    );
+    await ssh.kill!();
+    expect(lines.map((line) => line.msg)).not.toContain(
+      "ssh processes still running past the deadline; killing them",
+    );
   });
 });
 
