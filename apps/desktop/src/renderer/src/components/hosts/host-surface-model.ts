@@ -149,6 +149,14 @@ function incompatibleSurface(
         action: MANAGE_HOSTS,
         graced: false,
       };
+    case "too-many-projects":
+      return {
+        tone: "attention",
+        icon: "warning",
+        line: `Too many projects open on ${host.name} · Read-only`,
+        action: MANAGE_HOSTS,
+        graced: false,
+      };
   }
 }
 
@@ -266,6 +274,8 @@ function incompatibleDetail(reason: HostIncompatibility): HostDetail {
       return { kind: "incompatible", text: "No longer accepts this Mac", action: MANAGE_HOSTS };
     case "fenced":
       return { kind: "incompatible", text: "No longer serves this project", action: MANAGE_HOSTS };
+    case "too-many-projects":
+      return { kind: "incompatible", text: "Too many projects open", action: MANAGE_HOSTS };
   }
 }
 

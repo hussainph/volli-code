@@ -25,6 +25,11 @@ export {
   type SessionReadHandlerInput,
   type SessionReadPort,
 } from "../handlers/host-handlers";
+export type {
+  RemoteHostsPort,
+  RemoteHostsUnsubscribe,
+  RemoteHostUpdateWhen,
+} from "../handlers/remote-hosts-port";
 export {
   ADMITTED,
   admittedHandlers,

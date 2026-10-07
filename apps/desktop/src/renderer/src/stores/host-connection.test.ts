@@ -221,6 +221,13 @@ describe("aggregateLink", () => {
     expect(aggregateLink([TOO_OLD, FENCED, DATABASE])).toBe(DATABASE);
     expect(aggregateLink([FENCED, TOO_OLD])).toBe(FENCED);
   });
+
+  it("never reads a host as this Mac's own link cap: the projects past it are their own", () => {
+    const OVER: HostLinkView = { status: "incompatible", reason: "too-many-projects" };
+    expect(aggregateLink([OVER])).toBe(OPEN_LINK);
+    expect(aggregateLink([OVER, SKEWED, OVER])).toBe(SKEWED);
+    expect(aggregateLink([OFFLINE, OVER])).toBe(OFFLINE);
+  });
 });
 
 describe("isBlocking", () => {
@@ -328,6 +335,17 @@ describe("hostLinkView", () => {
         base,
       ),
     ).toEqual({ status: "incompatible", reason: "refused" });
+    // Desktop main's own refusal past its link cap (VC-700), never a host's.
+    expect(
+      hostLinkView(
+        {
+          status: "refused",
+          error: hostError("too-many-projects" as never, "Too many projects open on box"),
+          closeCode: null,
+        },
+        base,
+      ),
+    ).toEqual({ status: "incompatible", reason: "too-many-projects" });
   });
 
   it("reads a fence as fenced and a closed link as offline with no retry", () => {

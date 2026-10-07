@@ -139,6 +139,9 @@ importers:
       '@volli/host-core':
         specifier: workspace:*
         version: link:../../packages/host-core
+      '@volli/host-install':
+        specifier: workspace:*
+        version: link:../../packages/host-install
       '@volli/host-protocol':
         specifier: workspace:*
         version: link:../../packages/host-protocol
@@ -629,6 +632,13 @@ importers:
         version: 0.3.0(@opentelemetry/api@1.9.1)(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.3.0))(typescript@7.0.2)(yaml@2.9.0)
 
   packages/host-install:
+    dependencies:
+      '@volli/host-protocol':
+        specifier: workspace:*
+        version: link:../host-protocol
+      '@volli/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

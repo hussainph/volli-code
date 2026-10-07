@@ -40,8 +40,13 @@ import type {
   SessionStreamEmission,
 } from "@volli/session-engine";
 import {
+  isOperationUnavailable,
   OperationUnavailableError,
   roleImpliedByTicket,
+  type AddHostAnswer,
+  type AddHostEvent,
+  type AddHostStartInput,
+  type AddHostStepId,
   type AgentResponse,
   type CodeModePolicy,
   type CompactionPolicy,
@@ -59,6 +64,7 @@ import {
   type ModelPurpose,
   type ModelSelection,
   type LatestSessionSignal,
+  type RemoteHostsSnapshot,
   type SessionReadVerb,
   type Ticket,
   type WorktreeTrimSettings,
@@ -68,6 +74,7 @@ import type { DetachedWorkPort } from "../detached-work";
 import { withLogContext } from "../log/context";
 import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
+import type { RemoteHostsPort, RemoteHostUpdateWhen } from "./remote-hosts-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -212,6 +219,32 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
    */
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
+  /**
+   * Remote hosts this desktop added over SSH (VC-700 PR 2), all host-placed:
+   * {@link HostHandlerOptions.remoteHosts}'s, or unavailable.
+   */
+  readonly "hosts.snapshot": HostHandler<void, RemoteHostsSnapshot>;
+  /** The current snapshot first, then every change. */
+  readonly "hosts.subscribe": HostSubscriptionHandler<void, RemoteHostsSnapshot>;
+  readonly "hosts.retry": HostHandler<{ hostId: string }, null>;
+  readonly "hosts.updateHost": HostHandler<{ hostId: string; when: RemoteHostUpdateWhen }, null>;
+  readonly "hosts.cancelScheduledUpdate": HostHandler<{ hostId: string }, null>;
+  readonly "hosts.signIn": HostHandler<{ hostId: string; providerId: string }, null>;
+  readonly "hosts.forget": HostHandler<{ hostId: string }, null>;
+  readonly "hostAdd.start": HostHandler<AddHostStartInput, { flowId: string }>;
+  /** The flow's current view first, then every change and log line. */
+  readonly "hostAdd.subscribe": HostSubscriptionHandler<{ flowId: string }, AddHostEvent>;
+  readonly "hostAdd.answer": HostHandler<
+    { flowId: string; questionId: string; answer: AddHostAnswer },
+    null
+  >;
+  /** Write-only: the password is never echoed, and an error that carries it is scrubbed. */
+  readonly "hostAdd.sudoPassword": HostHandler<
+    { flowId: string; questionId: string; password: string },
+    null
+  >;
+  readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
+  readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -300,6 +333,14 @@ export interface HostHandlerOptions {
   readonly ticketSignals?: ((projectId: string) => Promise<readonly LatestSessionSignal[]>) | null;
   /** Where Pi keeps saved tool output, which an archive or delete releases (VC-469). */
   readonly piSessionsDirectory?: string;
+  /**
+   * The remote hosts this desktop added over SSH, and their add flows
+   * (VC-700 PR 2): desktop main's registry. Absent or null (hostd, a desktop
+   * that did not build one): every `hosts.*` and `hostAdd.*` entry answers
+   * unavailable. A port that cannot act now throws `OperationUnavailableError`
+   * itself (`./remote-hosts-port`).
+   */
+  readonly remoteHosts?: RemoteHostsPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -310,6 +351,7 @@ const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport"
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
+const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
 
 /**
@@ -328,6 +370,28 @@ function joined<Result>(
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
   return service;
+}
+
+/** Runs a command for its effect: the bridge's answer is `null`. */
+async function done(run: () => unknown): Promise<null> {
+  await run();
+  return null;
+}
+
+const REDACTED = "[redacted]";
+
+/**
+ * A failure that must not carry `secret`: an error whose message names it is
+ * replaced by one that does not (its brand kept, its cause and stack dropped,
+ * since either could carry the secret too). Every door records and shows an
+ * error's message, so this is where a write-only input stays write-only.
+ */
+function withoutSecret(error: unknown, secret: string): unknown {
+  if (secret === "" || !(error instanceof Error) || !error.message.includes(secret)) return error;
+  const message = error.message.split(secret).join(REDACTED);
+  return isOperationUnavailable(error)
+    ? new OperationUnavailableError(message)
+    : new Error(message);
 }
 
 /**
@@ -360,6 +424,7 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
+  const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
@@ -534,5 +599,33 @@ function hostHandlerEntries(
       return null;
     },
     "worktree.trimSettings": () => getTrimSettings(board()),
+    // Remote hosts (VC-700 PR 2): desktop main's registry, through its port.
+    "hosts.snapshot": () => remoteHosts().snapshot(),
+    "hosts.subscribe": async (_input, _call, sink) =>
+      remoteHosts().subscribe((snapshot) => sink.emit(snapshot)),
+    "hosts.retry": ({ hostId }) => done(() => remoteHosts().retry(hostId)),
+    "hosts.updateHost": ({ hostId, when }) => done(() => remoteHosts().updateHost(hostId, when)),
+    "hosts.cancelScheduledUpdate": ({ hostId }) =>
+      done(() => remoteHosts().cancelScheduledUpdate(hostId)),
+    "hosts.signIn": ({ hostId, providerId }) =>
+      done(() => remoteHosts().signIn(hostId, providerId)),
+    "hosts.forget": ({ hostId }) => done(() => remoteHosts().forget(hostId)),
+    "hostAdd.start": async (input) => {
+      const { flowId } = await remoteHosts().startAdd(input);
+      return { flowId };
+    },
+    "hostAdd.subscribe": async ({ flowId }, _call, sink) =>
+      remoteHosts().subscribeAdd(flowId, (event) => sink.emit(event)),
+    "hostAdd.answer": ({ flowId, questionId, answer }) =>
+      done(() => remoteHosts().answerAdd(flowId, questionId, answer)),
+    "hostAdd.sudoPassword": async ({ flowId, questionId, password }) => {
+      try {
+        return await done(() => remoteHosts().sudoPassword(flowId, questionId, password));
+      } catch (error) {
+        throw withoutSecret(error, password);
+      }
+    },
+    "hostAdd.retry": ({ flowId, from }) => done(() => remoteHosts().retryAdd(flowId, from)),
+    "hostAdd.cancel": ({ flowId }) => done(() => remoteHosts().cancelAdd(flowId)),
   };
 }

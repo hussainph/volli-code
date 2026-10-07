@@ -192,11 +192,13 @@ import {
   CREDENTIAL_INVENTORY_FILE_NAME,
   CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
   keychainCredentialKeyring,
+  SealedInventory,
   SecretStore,
   SecretService,
   retiresSessionSecrets,
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
+import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
@@ -804,6 +806,37 @@ const appStartup = app.whenReady().then(async () => {
   let ptyManagerRef: PtyManager | undefined;
   // Capture-only wrapper: successful keychain use is observed by all host-owned secrets.
   const keychainUse = observeKeychainUse(safeStorage);
+  // One keychain-wrapped key seals the host's credential inventory: the web
+  // search keys' family and remote hosts' device keys alike (VC-643, VC-700).
+  const credentialInventoryPath = join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME);
+  const credentialKeyring =
+    harnessPorts?.keyring ??
+    keychainCredentialKeyring({
+      path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+      keychain: safeStorage,
+      inventoryPath: credentialInventoryPath,
+    });
+  // Hosts this Mac added over SSH (VC-700): every call refuses while `cloud` is off.
+  const remoteHosts = createDesktopRemoteHosts({
+    userData: app.getPath("userData"),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    manifestPath: join(__dirname, "hostd-release-manifest.json"),
+    env: process.env,
+    inventory: new SealedInventory({
+      path: credentialInventoryPath,
+      keyring: credentialKeyring,
+      families: ["host-private"],
+    }),
+    unlockInventory: async () => {
+      await credentialKeyring.unlock?.();
+    },
+    enabled: () => isExperimentEnabled("cloud"),
+    // The app's structured log (VC-699): redacted, its fields never a secret.
+    logger: hostLogger("host-install"),
+    // Lid open, screen unlocked, network back: every tunnel and link tries now.
+    wake: { powerMonitor, net },
+  });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -812,13 +845,7 @@ const appStartup = app.whenReady().then(async () => {
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
-      keyring:
-        harnessPorts?.keyring ??
-        keychainCredentialKeyring({
-          path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-          keychain: safeStorage,
-          inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
-        }),
+      keyring: credentialKeyring,
       // A key file never prompts, so harness mode may always unlock it.
       mayUnlockUnattended: harnessPorts === null ? keychainUse.used : () => true,
       onResult: (result) =>
@@ -1449,6 +1476,7 @@ const appStartup = app.whenReady().then(async () => {
           : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
       // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
       piSessionsDirectory,
+      remoteHosts: remoteHostsPort(remoteHosts),
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
@@ -1596,7 +1624,7 @@ const appStartup = app.whenReady().then(async () => {
       registerAcceptedQuitCoordinator({
         lifecycle: quittingApp,
         shutdownNativeSessions: async () => {
-          await Promise.all([hostCore.stop("quit"), systemShutdownFlush]);
+          await Promise.all([hostCore.stop("quit"), systemShutdownFlush, remoteHosts.close()]);
         },
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),

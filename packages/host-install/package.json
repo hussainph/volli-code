@@ -13,12 +13,20 @@
     "./contract": {
       "types": "./src/contract.ts",
       "import": "./src/contract.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@volli/host-protocol": "workspace:*",
+    "@volli/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

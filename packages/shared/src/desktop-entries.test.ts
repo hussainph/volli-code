@@ -51,6 +51,34 @@ describe("the desktop-only tier", () => {
     ).toEqual({ actor: "user", scope: "host", idempotency: "natural" });
   });
 
+  // VC-700 PR 2: the remote hosts registry and its add flows are desktop
+  // main's, across every Workspace, so every one of them is host-placed.
+  it("declares the remote hosts commands host-placed, reads as reads", () => {
+    const remote = DESKTOP_ENTRIES.filter(
+      ({ key }) => key.startsWith("hosts.") || key.startsWith("hostAdd."),
+    );
+    expect(remote.map(({ key }) => key)).toEqual([
+      "hosts.snapshot",
+      "hosts.subscribe",
+      "hosts.retry",
+      "hosts.updateHost",
+      "hosts.cancelScheduledUpdate",
+      "hosts.signIn",
+      "hosts.forget",
+      "hostAdd.start",
+      "hostAdd.subscribe",
+      "hostAdd.answer",
+      "hostAdd.sudoPassword",
+      "hostAdd.retry",
+      "hostAdd.cancel",
+    ]);
+    for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
+    expect(
+      remote.filter(({ idempotency }) => idempotency === "read").map(({ key }) => key),
+    ).toEqual(["hosts.snapshot", "hosts.subscribe", "hostAdd.subscribe"]);
+    expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
+  });
+
   it("has no client-local or split placement to give a host command", () => {
     expectTypeOf<DesktopEntryPlacement>().toEqualTypeOf<"workspace" | "host">();
   });

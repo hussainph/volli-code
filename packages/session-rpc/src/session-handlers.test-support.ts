@@ -93,6 +93,7 @@ const RUNTIME = "The Session runtime is unavailable on this host";
 const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
 const BOARD = "The board is unavailable: the database did not open";
+const REMOTE_HOSTS = "Remote hosts are unavailable on this host";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(
@@ -181,11 +182,30 @@ export function sessionHandlersFrom(
     "session.answer": ({ workspaceId, args }) =>
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
+  /** A remote hosts key: the case's own handler, or unavailable, as on hostd. */
+  const remote = <Key extends keyof DesktopRouterHandlers>(key: Key): DesktopRouterHandlers[Key] =>
+    ((...args: unknown[]) =>
+      (need(ports.desktop?.[key], REMOTE_HOSTS) as (...args: unknown[]) => unknown)(
+        ...args,
+      )) as DesktopRouterHandlers[Key];
   const desktop: DesktopRouterHandlers = {
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+    "hosts.snapshot": remote("hosts.snapshot"),
+    "hosts.subscribe": remote("hosts.subscribe"),
+    "hosts.retry": remote("hosts.retry"),
+    "hosts.updateHost": remote("hosts.updateHost"),
+    "hosts.cancelScheduledUpdate": remote("hosts.cancelScheduledUpdate"),
+    "hosts.signIn": remote("hosts.signIn"),
+    "hosts.forget": remote("hosts.forget"),
+    "hostAdd.start": remote("hostAdd.start"),
+    "hostAdd.subscribe": remote("hostAdd.subscribe"),
+    "hostAdd.answer": remote("hostAdd.answer"),
+    "hostAdd.sudoPassword": remote("hostAdd.sudoPassword"),
+    "hostAdd.retry": remote("hostAdd.retry"),
+    "hostAdd.cancel": remote("hostAdd.cancel"),
   };
   return { ...handlers, ...desktop };
 }

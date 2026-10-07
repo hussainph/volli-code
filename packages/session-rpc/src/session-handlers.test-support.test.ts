@@ -9,6 +9,7 @@ import { LOCAL_DESKTOP_CALLER } from "./catalog";
 import { RpcDiagnosticLog } from "./index";
 
 const CALL: HandlerCall = { actor: { kind: "user" } };
+const HOST = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const sessionMayAct = () => true;
 const resourceWorkspace = () => null;
 type Ports = Omit<LegacySessionPorts, "caller" | "diagnostics">;
@@ -57,6 +58,23 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
     () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
     () => handlers["worktree.trimSettings"](undefined, CALL),
+    () => handlers["hosts.snapshot"](undefined, CALL),
+    () => handlers["hosts.subscribe"](undefined, CALL, sink),
+    () => handlers["hosts.retry"]({ hostId: HOST }, CALL),
+    () => handlers["hosts.updateHost"]({ hostId: HOST, when: "now" }, CALL),
+    () => handlers["hosts.cancelScheduledUpdate"]({ hostId: HOST }, CALL),
+    () => handlers["hosts.signIn"]({ hostId: HOST, providerId: "anthropic" }, CALL),
+    () => handlers["hosts.forget"]({ hostId: HOST }, CALL),
+    () => handlers["hostAdd.start"]({ target: "you@box" }, CALL),
+    () => handlers["hostAdd.subscribe"]({ flowId: "f" }, CALL, sink),
+    () =>
+      handlers["hostAdd.answer"](
+        { flowId: "f", questionId: "q1", answer: { kind: "adopt" } },
+        CALL,
+      ),
+    () => handlers["hostAdd.sudoPassword"]({ flowId: "f", questionId: "q1", password: "p" }, CALL),
+    () => handlers["hostAdd.retry"]({ flowId: "f" }, CALL),
+    () => handlers["hostAdd.cancel"]({ flowId: "f" }, CALL),
   ];
 }
 
@@ -108,10 +126,27 @@ describe("sessionHandlersFrom", () => {
       writeCodeModePolicy: port as never,
       readModelPickerView: port as never,
       writeModelPickerView: port as never,
-      desktop: { "project.reorder": port as never, "worktree.trimSettings": port as never },
+      desktop: {
+        "project.reorder": port as never,
+        "worktree.trimSettings": port as never,
+        "hosts.snapshot": port as never,
+        "hosts.subscribe": port as never,
+        "hosts.retry": port as never,
+        "hosts.updateHost": port as never,
+        "hosts.cancelScheduledUpdate": port as never,
+        "hosts.signIn": port as never,
+        "hosts.forget": port as never,
+        "hostAdd.start": port as never,
+        "hostAdd.subscribe": port as never,
+        "hostAdd.answer": port as never,
+        "hostAdd.sudoPassword": port as never,
+        "hostAdd.retry": port as never,
+        "hostAdd.cancel": port as never,
+      },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(17);
+    expect(port).toHaveBeenCalledTimes(30);
+    expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
       sessionId: "s",
@@ -149,8 +184,8 @@ describe("sessionHandlersFrom", () => {
     });
     expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
     // 21 existing router handlers, session.history (VC-315), three queue
-    // operations, four Session reads, the desktop-only tier's two (VC-608) and
-    // two log reads (VC-699).
-    expect(Object.keys(context.handlers)).toHaveLength(33);
+    // operations, four Session reads, the desktop-only tier's two (VC-608),
+    // two log reads (VC-699) and thirteen remote hosts commands (VC-700).
+    expect(Object.keys(context.handlers)).toHaveLength(46);
   });
 });

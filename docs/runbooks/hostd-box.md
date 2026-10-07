@@ -1008,6 +1008,27 @@ let that one binary make user namespaces; never answer "No usable sandbox!"
 with `--no-sandbox`. Why the unit allows `RestrictNamespaces=user pid net`:
 `apps/hostd/README.md`, "Running under systemd".
 
+## Added from a Mac ("Add a host", M2)
+
+When the desktop adds this box for you (VC-700) rather than you following
+the steps above:
+
+- **Host keys.** Trusting the box adds its key to your `~/.ssh/known_hosts`,
+  as `ssh`'s own prompt would. If the box is reinstalled its key changes, and
+  the connection stops until you remove the old line on your Mac:
+  `ssh-keygen -R <host>`.
+- **Old enrollments.** Re-adding the box enrolls your Mac afresh; the old
+  device stays enrolled until you revoke it here:
+
+  ```bash
+  sudo volli-hostd devices list --system          # or: volli-hostd devices list --user
+  sudo volli-hostd devices revoke <deviceId> --system
+  ```
+
+- **A crash mid-add** can leave that add's device key in the Mac's sealed
+  inventory. It is never used; the inventory cannot list its keys yet, so
+  nothing collects it.
+
 ## What M1 does not cover
 
 - Attaching the desktop app (or a phone) to this host: M2.
