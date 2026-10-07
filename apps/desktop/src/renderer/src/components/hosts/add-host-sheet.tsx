@@ -373,11 +373,15 @@ function SudoBody({
   flow: AddHostFlow;
   busy: boolean;
 }) {
-  const [password, setPassword] = React.useState("");
+  // Uncontrolled: the password lives in the field alone, never in React state
+  // or props. Submit reads it once, clears the field, and hands it to main.
+  const field = React.useRef<HTMLInputElement>(null);
   const submit = () => {
-    if (password.length === 0 || busy) return;
+    const input = field.current;
+    if (input === null || input.value.length === 0 || busy) return;
+    const password = input.value;
+    input.value = "";
     flow.sudoPassword(password);
-    setPassword("");
   };
   return (
     <>
@@ -391,14 +395,14 @@ function SudoBody({
         }}
       >
         <Input
+          ref={field}
           autoFocus
           type="password"
           autoComplete="off"
           aria-label={prompt.placeholder}
           placeholder={prompt.placeholder}
           className="h-9 text-sm"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
+          defaultValue=""
         />
       </form>
       {prompt.userInstall === null ? null : (

@@ -284,6 +284,10 @@ export interface RemoteHosts {
   /** Kept in the flow's memory only, for sudo's stdin, until the flow next stops. */
   sudoPassword(flowId: string, questionId: string, password: string): Promise<void>;
   retryAdd(flowId: string, from?: AddHostStepId): Promise<void>;
+  /**
+   * Cancels a flow. Allowed with `cloud` off too, for a flow already under
+   * way: turning the flag off must still let the window stop it.
+   */
   cancelAdd(flowId: string): Promise<void>;
   /** Stops everything: at quit. Every call shares the first. */
   close(): Promise<void>;
@@ -1475,7 +1479,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       );
     },
     async cancelAdd(flowId) {
-      guard();
+      // The one call that stays open with `cloud` off: a flow already under
+      // way when the flag turned off is still stopped (the window cancels it
+      // as its sheet unmounts). It starts nothing, and needs no started engine.
+      if (closed) throw new RemoteHostsUnavailableError();
       const flow = flowOf(flowId);
       // Done: the host is in the registry, too late to cancel (Forget undoes it).
       if (flow.status === "done" || flow.status === "cancelled") return;

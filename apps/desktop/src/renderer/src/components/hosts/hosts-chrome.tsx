@@ -8,7 +8,7 @@
 import * as React from "react";
 
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
-import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { AddHostSheet } from "./add-host-sheet";
 import { openAddHostSheet, openHostsSettings } from "./host-entry";
@@ -16,10 +16,18 @@ import { useCloudEnabled } from "./use-hosts";
 
 export function HostsChrome() {
   const cloud = useCloudEnabled();
+  // A read-only hosts file offers no Add, here as in Settings → Hosts.
+  const writable = useHostsWritable();
   React.useEffect(() => {
     if (!cloud) return;
     const store = useHostConnectionStore.getState();
-    store.setEntryPoints({ addHost: openAddHostSheet, manageHosts: openHostsSettings });
+    store.setEntryPoints({
+      addHost: writable ? openAddHostSheet : null,
+      manageHosts: openHostsSettings,
+    });
+  }, [cloud, writable]);
+  React.useEffect(() => {
+    if (!cloud) return;
     return () => {
       useHostConnectionStore.getState().setEntryPoints({ addHost: null, manageHosts: null });
       useRemoteHostsStore.getState().closeAddHost();

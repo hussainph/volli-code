@@ -1215,10 +1215,11 @@ describe("refusals", () => {
       () => h.engine.answerAdd("flow-1", "q1", { kind: "open" }),
       () => h.engine.sudoPassword("flow-1", "q1", PASSWORD),
       () => h.engine.retryAdd("flow-1"),
-      () => h.engine.cancelAdd("flow-1"),
     ]) {
       await expect(call()).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
     }
+    // Cancel stays open with the flag off, for flows already under way: none here.
+    await expect(h.engine.cancelAdd("flow-1")).rejects.toMatchObject({ code: "unknown-flow" });
     // Nothing ran on the box, nothing was saved.
     expect(h.box.scripts).toEqual([]);
     expect(h.box.transports).toEqual([]);

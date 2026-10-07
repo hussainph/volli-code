@@ -55,6 +55,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useHostsWritable } from "@renderer/stores/remote-hosts";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -242,7 +243,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // at the moment a row runs, and the palette re-renders whenever it opens.
   const editorCommands = buildEditorCommandItems(open && canGoToLine());
   // Adding and managing hosts (VC-700): only with `cloud` on.
-  const hostCommands = buildHostCommandItems(useCloudEnabled() && open);
+  const hostCommands = buildHostCommandItems(useCloudEnabled() && open, useHostsWritable());
 
   // Closed and invisible: every board/session mutation would otherwise
   // re-run this projects×tickets×sessions rebuild for nothing. Gating on

@@ -652,6 +652,24 @@ describe("answers must fit the question asked now (note 4)", () => {
   });
 });
 
+describe("cloud turning off with a flow under way (PR 3)", () => {
+  it("refuses everything but cancel, which still stops the flow and removes its key", async () => {
+    let on = true;
+    const h = harness({ enabled: () => on });
+    h.box.trusted = false;
+    const { flowId, w } = await startAdd(h);
+    on = false;
+    expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(RemoteHostsUnavailableError);
+    await expect(h.engine.retryAdd(flowId)).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
+    await h.engine.cancelAdd(flowId);
+    expect(w.views().at(-1)?.status).toBe("cancelled");
+    expect(h.keys.keys.size).toBe(0);
+    expect(h.box.transports.every((transport) => transport.closed)).toBe(true);
+    await h.engine.close();
+    await expect(h.engine.cancelAdd(flowId)).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
+  });
+});
+
 describe("which answers each question takes", () => {
   it("is exactly the ones it offers", () => {
     expect(answerFits(q("host-key"), { kind: "accept-host-key" })).toBe(true);

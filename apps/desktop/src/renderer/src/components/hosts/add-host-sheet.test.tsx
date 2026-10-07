@@ -2,6 +2,7 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
@@ -31,7 +32,7 @@ afterEach(async () => {
   await world?.cleanup();
   world = null;
   setRemoteHostsApi(null);
-  useRemoteHostsStore.setState({ hosts: [], addHost: { open: false, target: "" } });
+  useRemoteHostsStore.setState({ hosts: [], readOnly: null, addHost: { open: false, target: "" } });
   useUiStore.getState().setSettingsOpen(false);
   toast.mockClear();
   toast.error.mockClear();
@@ -475,5 +476,142 @@ describe("Add a host", () => {
     await click(sheet(), "Close");
     expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+  });
+});
+
+describe("Add a host: the review's probes", () => {
+  const SUDO = {
+    id: "q1",
+    kind: "sudo-password",
+    step: "install",
+    reason: "install",
+    command: "sudo example",
+    retry: false,
+  } as const;
+
+  it("never renders the sudo password into the field's value attribute", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({ status: "question", at: "install", question: SUDO }),
+    });
+    const field = sheet().querySelector<HTMLInputElement>('input[type="password"]')!;
+    await type(field, "synthetic-probe-secret");
+    expect(field.getAttribute("value")).not.toBe("synthetic-probe-secret");
+    expect(sheet().innerHTML).not.toContain("synthetic-probe-secret");
+  });
+
+  it("holds the password in no React state while the RPC is pending", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({ status: "question", at: "install", question: SUDO }),
+    });
+    const field = sheet().querySelector<HTMLInputElement>('input[type="password"]')!;
+    await type(field, "synthetic-probe-secret");
+    const send = api.sudoPassword;
+    let resolve!: (value: null) => void;
+    api.sudoPassword = (...args) => {
+      void send(...args);
+      return new Promise((done) => {
+        resolve = done;
+      });
+    };
+    await click(sheet(), "Run it");
+    expect(field.value).toBe("");
+    expect(api.calls.at(-1)).toEqual(["sudoPassword", "flow-1", "synthetic-probe-secret", "q1"]);
+    // Every hook state of the field's component and its alternate fiber.
+    const key = Object.keys(field).find((name) => name.startsWith("__reactFiber$"))!;
+    let fiber = (
+      field as unknown as Record<string, { type?: { name?: string }; return?: unknown }>
+    )[key] as
+      | {
+          type?: { name?: string };
+          return?: unknown;
+          memoizedState?: unknown;
+          alternate?: { memoizedState?: unknown };
+        }
+      | undefined;
+    while (fiber !== undefined && fiber !== null && fiber.type?.name !== "SudoBody") {
+      fiber = fiber.return as typeof fiber;
+    }
+    expect(fiber?.type?.name).toBe("SudoBody");
+    const states: unknown[] = [];
+    for (
+      let hook = fiber?.memoizedState as { memoizedState?: unknown; next?: unknown } | null;
+      hook;
+      hook = hook.next as typeof hook
+    ) {
+      states.push(hook.memoizedState);
+    }
+    for (
+      let hook = fiber?.alternate?.memoizedState as
+        | { memoizedState?: unknown; next?: unknown }
+        | null
+        | undefined;
+      hook;
+      hook = hook.next as typeof hook
+    ) {
+      states.push(hook.memoizedState);
+    }
+    expect(
+      JSON.stringify(states, (_, value: unknown) =>
+        value instanceof HTMLElement ? "<element>" : value,
+      ),
+    ).not.toContain("synthetic-probe-secret");
+    await act(async () => resolve(null));
+  });
+
+  it("cancels a flow whose start answers after Close", async () => {
+    let resolve!: (answer: { flowId: string }) => void;
+    const start = api.startAdd;
+    api.startAdd = (request) => {
+      void start(request);
+      return new Promise((done) => {
+        resolve = done;
+      });
+    };
+    await openSheet("deploy@box");
+    await click(sheet(), "Connect");
+    await click(sheet(), "Close");
+    await act(async () => resolve({ flowId: "flow-1" }));
+    expect(api.calls).toContainEqual(["cancelAdd", "flow-1"]);
+    expect(api.following("flow-1")).toBe(false);
+  });
+
+  it("says nothing of a start refused after Close", async () => {
+    let reject!: (error: Error) => void;
+    api.startAdd = () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      });
+    await openSheet("deploy@box");
+    await click(sheet(), "Connect");
+    await click(sheet(), "Close");
+    await act(async () => reject(new Error("No host named box")));
+    expect(api.calls.filter(([method]) => method === "cancelAdd")).toEqual([]);
+  });
+
+  it("cancels an unfinished flow when cloud turns off and the sheet unmounts", async () => {
+    await startFlow();
+    await act(async () => useExperimentsStore.setState({ snapshot: null }));
+    expect(api.following("flow-1")).toBe(false);
+    expect(api.calls).toContainEqual(["cancelAdd", "flow-1"]);
+  });
+
+  it("offers no Add through the switcher, the opener or ⌘K's builder on a read-only hosts file", async () => {
+    await openSheet();
+    await click(sheet(), "Close");
+    await act(async () =>
+      useRemoteHostsStore.getState().setHosts([registryHost()], "A newer Volli saved this file."),
+    );
+    expect(useHostConnectionStore.getState().entryPoints.addHost).toBeNull();
+    expect(useHostConnectionStore.getState().entryPoints.manageHosts).not.toBeNull();
+    const { openAddHostSheet } = await import("./host-entry");
+    await act(async () => openAddHostSheet());
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    // Writable again: Add comes back.
+    await act(async () => useRemoteHostsStore.getState().setHosts([registryHost()], null));
+    expect(useHostConnectionStore.getState().entryPoints.addHost).not.toBeNull();
   });
 });

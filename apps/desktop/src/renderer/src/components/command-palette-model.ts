@@ -339,17 +339,21 @@ export interface CommandPaletteHostItem {
   keywords: string[];
 }
 
-/** The host rows, only with the `cloud` experiment on: off, the palette is unchanged. */
-export function buildHostCommandItems(cloud: boolean): CommandPaletteHostItem[] {
+/**
+ * The host rows, only with the `cloud` experiment on: off, the palette is
+ * unchanged. A read-only hosts file (`writable` false) offers no Add.
+ */
+export function buildHostCommandItems(cloud: boolean, writable = true): CommandPaletteHostItem[] {
   if (!cloud) return [];
+  const add: CommandPaletteHostItem = {
+    kind: "host-command",
+    id: "add-host",
+    title: "Add a host…",
+    hint: "Install Volli host on a machine over SSH",
+    keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
+  };
   return [
-    {
-      kind: "host-command",
-      id: "add-host",
-      title: "Add a host…",
-      hint: "Install Volli host on a machine over SSH",
-      keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
-    },
+    ...(writable ? [add] : []),
     {
       kind: "host-command",
       id: "manage-hosts",

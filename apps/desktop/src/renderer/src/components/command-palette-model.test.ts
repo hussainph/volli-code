@@ -13,6 +13,7 @@ import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
   buildEditorCommandItems,
+  buildHostCommandItems,
   paletteRunContext,
 } from "./command-palette-model";
 import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
@@ -103,6 +104,17 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     ...overrides,
   };
 }
+
+describe("the palette's host rows", () => {
+  it("are none with cloud off, both with it on, and no Add on a read-only hosts file", () => {
+    expect(buildHostCommandItems(false)).toEqual([]);
+    expect(buildHostCommandItems(true).map((item) => item.id)).toEqual([
+      "add-host",
+      "manage-hosts",
+    ]);
+    expect(buildHostCommandItems(true, false).map((item) => item.id)).toEqual(["manage-hosts"]);
+  });
+});
 
 describe("buildCommandPaletteItems", () => {
   it("lists every ticket with current-project and recency ordering", () => {

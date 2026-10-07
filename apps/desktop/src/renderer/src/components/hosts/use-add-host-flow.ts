@@ -139,12 +139,23 @@ export function useAddHostFlow(
     [onError],
   );
 
+  /**
+   * The start in flight, if any: left (Close, unmount) before main answered,
+   * its flow is cancelled the moment the answer lands, never followed.
+   */
+  const starting = React.useRef<{ abandoned: boolean } | null>(null);
+
   const cancel = React.useCallback(() => {
+    if (starting.current !== null) starting.current.abandoned = true;
     const now = current.current;
     if (now.kind !== "flow" || finished(now.view)) return;
     // Fire and forget: the flow is left either way, and main discards it.
     api.cancelAdd(now.flowId).catch(() => {});
   }, [api]);
+
+  // Leaving by any road, the sheet's body unmounting included (Close, or
+  // `cloud` turning off), cancels an unfinished flow and a start in flight.
+  React.useEffect(() => cancel, [cancel]);
 
   return {
     phase,
@@ -156,8 +167,19 @@ export function useAddHostFlow(
       if (now.kind !== "entry" || now.starting) return;
       const target = now.target.trim();
       setPhase({ ...now, starting: true, error: null });
+      const attempt = { abandoned: false };
+      starting.current = attempt;
+      const settled = (): boolean => {
+        if (starting.current === attempt) starting.current = null;
+        return attempt.abandoned;
+      };
       api.startAdd({ target }).then(
-        ({ flowId: id }) =>
+        ({ flowId: id }) => {
+          if (settled()) {
+            // Left while main was starting it: it never reaches the screen.
+            api.cancelAdd(id).catch(() => {});
+            return;
+          }
           setPhase({
             kind: "flow",
             flowId: id,
@@ -167,9 +189,12 @@ export function useAddHostFlow(
             omitted: 0,
             lost: false,
             busy: false,
-          }),
-        (error: unknown) =>
-          setPhase({ kind: "entry", target: now.target, error: messageOf(error), starting: false }),
+          });
+        },
+        (error: unknown) => {
+          if (settled()) return;
+          setPhase({ kind: "entry", target: now.target, error: messageOf(error), starting: false });
+        },
       );
     },
     // Each names the question on screen: one main no longer asks is refused there.
