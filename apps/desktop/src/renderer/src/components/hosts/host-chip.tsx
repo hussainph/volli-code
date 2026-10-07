@@ -86,7 +86,7 @@ export function HostChip() {
 
 function EnabledHostChip() {
   const [open, setOpen] = React.useState(false);
-  // The tile draws the HOST (its projects' worst link); the detail under the
+  // The tile draws the HOST's engine-owned health; the detail under the
   // current host in the switcher speaks for the project in front.
   const host = useCurrentHost();
   const view = useProjectHostView(useCurrentProjectId());
@@ -129,7 +129,7 @@ export function HostSwitcher({
   view = current,
   onDone,
 }: {
-  /** The current project's host, with the host's aggregate link. */
+  /** The current project's host, with the host's own health. */
   current: HostRecord;
   /** The same host as the current project sees it (its own link): the detail row's. */
   view?: HostRecord;
@@ -137,6 +137,7 @@ export function HostSwitcher({
 }) {
   const hosts = useHostConnectionStore((state) => state.hosts);
   const claims = useHostConnectionStore((state) => state.projects);
+  const sourceError = useHostConnectionStore((state) => state.sourceError);
   const addHostOffered = useAddHostOffered();
   const counts = projectCounts({ hosts, projects: claims });
   const offline = hosts.some((host) => host.link.status === "offline");
@@ -144,10 +145,22 @@ export function HostSwitcher({
   const list = hosts.some((host) => host.id === current.id) ? hosts : [current, ...hosts];
   // Sign-ins on any remote host this Mac can reach, the current one first (AM2).
   const signInHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
-    (host) => !host.local && host.link.status !== "offline",
+    (host) => !host.local && (host.link.status === "open" || host.link.status === "version-skewed"),
   );
   return (
     <div role="group" aria-label="Hosts">
+      {sourceError !== null ? (
+        <div role="status" className="flex items-center gap-2 px-2 py-2 text-ui text-destructive">
+          <span className="min-w-0 flex-1">{sourceError}</span>
+          <Button
+            size="xs"
+            variant="secondary"
+            onClick={() => useHostConnectionStore.getState().retrySources()}
+          >
+            Retry now
+          </Button>
+        </div>
+      ) : null}
       {list.map((host) => {
         const projects = counts.get(host.id) ?? 0;
         const meta = hostMeta(host, projects, now);
@@ -162,23 +175,27 @@ export function HostSwitcher({
           );
         }
         return (
-          <SwitcherRow
-            key={host.id}
-            host={host}
-            meta={meta}
-            disabled={host.local && projects === 0}
-            onSelect={() => {
-              const target = useProjectsStore
-                .getState()
-                .projects.find(
-                  (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
-                );
-              onDone();
-              if (target !== undefined) useProjectsStore.getState().select(target.id);
-              // A remote host with no project open here (VC-710): open one on it.
-              else if (!host.local) useRemoteHostsStore.getState().openProjectSheet(host.id);
-            }}
-          />
+          <div key={host.id}>
+            <SwitcherRow
+              host={host}
+              meta={meta}
+              disabled={host.local && projects === 0}
+              onSelect={() => {
+                const target = useProjectsStore
+                  .getState()
+                  .projects.find(
+                    (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
+                  );
+                onDone();
+                if (target !== undefined) useProjectsStore.getState().select(target.id);
+                // A remote host with no project open here (VC-710): open one on it.
+                else if (!host.local) useRemoteHostsStore.getState().openProjectSheet(host.id);
+              }}
+            />
+            {host.link.status === "offline" || host.link.status === "incompatible" ? (
+              <HostDetailRow host={host} />
+            ) : null}
+          </div>
         );
       })}
       <div className="my-1 h-px bg-border/60" />
@@ -376,7 +393,7 @@ function DetailBody({
       return (
         <DetailLine
           icon={<WifiSlashIcon aria-hidden className="size-4 text-muted-foreground" />}
-          text="Sessions there keep running"
+          text={detail.text ?? "Sessions there keep running"}
         >
           <Button size="xs" variant="secondary" onClick={() => store.retry(host.id)}>
             Retry now
@@ -426,7 +443,7 @@ function DetailLine({
       {icon}
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-ui",
+          "min-w-0 flex-1 text-ui break-words",
           tone === "attention" ? "text-attention" : "text-muted-foreground",
         )}
       >

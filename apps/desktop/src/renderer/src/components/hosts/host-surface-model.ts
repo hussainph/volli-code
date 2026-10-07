@@ -28,7 +28,8 @@ export type HostSurfaceAction =
   | { readonly kind: "retry"; readonly label: "Retry now" }
   | { readonly kind: "update-host"; readonly label: "Update host" }
   | { readonly kind: "update-app"; readonly label: "Update Volli" }
-  | { readonly kind: "manage-hosts"; readonly label: "Manage hosts…" };
+  | { readonly kind: "manage-hosts"; readonly label: "Manage hosts…" }
+  | { readonly kind: "forget-project"; readonly label: "Forget"; readonly workspaceId: string };
 
 /** One line, at most one action: what the Island says for a state that needs saying. */
 export interface HostSurface {
@@ -90,6 +91,32 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
       };
     }
     case "incompatible":
+      if (link.refusalCode === "workspace-unknown") {
+        return {
+          tone: "error",
+          icon: "warning",
+          line: `This project isn’t on ${host.name} any more`,
+          ...(link.workspaceId === undefined
+            ? {}
+            : {
+                action: {
+                  kind: "forget-project",
+                  label: "Forget",
+                  workspaceId: link.workspaceId,
+                } as const,
+              }),
+          graced: false,
+        };
+      }
+      if (link.reason === "refused" && link.refusalCode) {
+        return {
+          tone: "error",
+          icon: "warning",
+          line: `${host.name} refused this connection (${link.refusalCode}) · Read-only`,
+          action: MANAGE_HOSTS,
+          graced: false,
+        };
+      }
       return incompatibleSurface(host, link.reason, link.requiredVersion);
     case "open":
     case "version-skewed":
@@ -235,7 +262,7 @@ export function hostMeta(host: HostRecord, projects: number, now: number, locale
  */
 export type HostDetail =
   | { readonly kind: "updating"; readonly progress: number; readonly targetVersion: string }
-  | { readonly kind: "offline" }
+  | { readonly kind: "offline"; readonly text?: string }
   | { readonly kind: "incompatible"; readonly text: string; readonly action: HostSurfaceAction }
   | { readonly kind: "sign-in"; readonly signIn: HostSignIn }
   | { readonly kind: "update-scheduled" }
@@ -250,8 +277,28 @@ export function hostDetail(host: HostRecord): HostDetail | null {
     };
   }
   const link = host.link;
-  if (link.status === "offline") return { kind: "offline" };
-  if (link.status === "incompatible") return incompatibleDetail(link.reason);
+  if (link.status === "offline")
+    return {
+      kind: "offline",
+      ...(link.detail ? { text: `Can’t reach ${host.name} · ${link.detail}` } : {}),
+    };
+  if (link.status === "incompatible") {
+    if (link.refusalCode === "workspace-unknown" && link.workspaceId !== undefined) {
+      return {
+        kind: "incompatible",
+        text: `This project isn’t on ${host.name} any more`,
+        action: { kind: "forget-project", label: "Forget", workspaceId: link.workspaceId },
+      };
+    }
+    if (link.reason === "refused" && link.refusalCode) {
+      return {
+        kind: "incompatible",
+        text: `Connection refused (${link.refusalCode})`,
+        action: MANAGE_HOSTS,
+      };
+    }
+    return incompatibleDetail(link.reason);
+  }
   const signIn = host.expiredSignIns[0];
   if (signIn !== undefined) return { kind: "sign-in", signIn };
   if (link.status === "version-skewed") {

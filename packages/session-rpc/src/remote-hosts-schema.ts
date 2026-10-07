@@ -164,6 +164,40 @@ const remoteHost = z.object({
   system: z.string().nullable(),
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
+  // Reuses the existing CLOSED link-state union; no new output enum.
+  reachability: z
+    .object({
+      state: linkState,
+      everReady: z.boolean(),
+      droppedAt: z.number().nullable(),
+    })
+    .optional(),
+  lastWelcome: z
+    .object({
+      at: z.number(),
+      hostId: z.string(),
+      version: z.string(),
+      protocol: z.number().int().positive(),
+      features: z
+        .array(z.string().max(MAX_GRANTED_FEATURE_LENGTH))
+        .max(MAX_GRANTED_FEATURES)
+        .readonly(),
+    })
+    .nullable()
+    .optional(),
+  signInExpiry: z
+    .array(
+      z.object({
+        providerId: z.string(),
+        name: z.string(),
+        expiresAt: z.number().nullable(),
+        expired: z.boolean(),
+      }),
+    )
+    .readonly()
+    .nullable()
+    .optional(),
+  lastSshFailure: z.object({ code: z.string(), line: z.string() }).nullable().optional(),
 });
 const remoteProjectLink = z.object({
   hostId: z.string(),

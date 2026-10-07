@@ -8,13 +8,14 @@ import { ChromeBar } from "@renderer/components/chrome-bar";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { useRemoteHostsStore, setRemoteHostsApi } from "@renderer/stores/remote-hosts";
+import { createFakeRemoteHostsApi } from "@renderer/stores/remote-hosts.test-support";
 import { useUiStore } from "@renderer/stores/ui";
 
 import { HostChip } from "./host-chip";
 import { click, HETZNER_ID, hostWorld, MINI_ID, type HostWorld } from "./hosts.test-support";
 
-const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn() }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast, Toaster: () => null }));
 
 let world: HostWorld | null = null;
@@ -24,6 +25,8 @@ afterEach(async () => {
   world = null;
   toast.mockClear();
   toast.success.mockClear();
+  toast.error.mockClear();
+  setRemoteHostsApi(null);
   vi.restoreAllMocks();
 });
 
@@ -69,6 +72,81 @@ describe("host chip, flag off", () => {
 });
 
 describe("host chip", () => {
+  it("shows an SSH failure reason even on a non-current host with no projects", async () => {
+    world = hostWorld({ selected: "local" });
+    act(() => {
+      const before = world!.remote.getSnapshot();
+      world!.remote.set({
+        ...before,
+        projects: {},
+        // Fixture snapshots use copy-on-write, just like the real source.
+        // oxlint-disable-next-line no-map-spread
+        hosts: before.hosts.map((host) => ({
+          ...host,
+          link: {
+            status: "offline",
+            since: 0,
+            retryAt: null,
+            detail: "Load an SSH key for hetzner-1.",
+          },
+        })),
+      });
+    });
+    await world.render(<HostChip />);
+    const list = await openSwitcher();
+    expect(list.textContent).toContain("Can’t reach hetzner-1 · Load an SSH key for hetzner-1.");
+  });
+
+  it("shows the missing-project refusal with Forget, wired to hosts.closeWorkspace", async () => {
+    const api = createFakeRemoteHostsApi();
+    setRemoteHostsApi(api);
+    world = hostWorld();
+    act(() =>
+      world!.remote.setProjectLink("remote", {
+        status: "incompatible",
+        reason: "refused",
+        refusalCode: "workspace-unknown",
+        workspaceId: "remote",
+      }),
+    );
+    await world.render(<HostChip />);
+    const list = await openSwitcher();
+    expect(list.textContent).toContain("This project isn’t on hetzner-1 any more");
+    await click(list, "Forget");
+    expect(api.calls).toEqual([["closeWorkspace", HETZNER_ID, "remote"]]);
+    api.refuseNext("closeWorkspace", "Registry cannot be written");
+    await click(list, "Forget");
+    expect(toast.error).toHaveBeenCalledWith("Registry cannot be written");
+  });
+
+  it("shows a subscription error before any remote host was read, with Retry now", async () => {
+    world = hostWorld({ selected: "local" });
+    const retrySubscription = vi.fn();
+    const detach = useHostConnectionStore.getState().attach({
+      getSnapshot: () => ({
+        hosts: [],
+        projects: {},
+        error: "Couldn’t read host state: stream lost",
+      }),
+      subscribe: () => () => {},
+      retry: vi.fn(),
+      updateHost: vi.fn(),
+      cancelScheduledUpdate: vi.fn(),
+      signIn: vi.fn(),
+      retrySubscription,
+    });
+    try {
+      await world.render(<HostChip />);
+      const list = await openSwitcher();
+      const error = list.querySelector('[role="status"]')!;
+      expect(error.textContent).toContain("Couldn’t read host state: stream lost");
+      await click(error, "Retry now");
+      expect(retrySubscription).toHaveBeenCalledOnce();
+    } finally {
+      act(() => detach());
+    }
+  });
+
   it("names the current project's host", async () => {
     world = hostWorld();
     await world.render(<HostChip />);
@@ -115,7 +193,12 @@ describe("host chip", () => {
     expect(rows[1]).toContain("hetzner-1");
     expect(rows[2]).toContain("mac-mini");
     expect(rows[2]).toContain("Offline · since");
-    expect(rows.slice(3)).toEqual(["Sign-ins on hetzner-1…", "Add a host…", "Manage hosts…"]);
+    expect(rows.slice(3)).toEqual([
+      "Retry now",
+      "Sign-ins on hetzner-1…",
+      "Add a host…",
+      "Manage hosts…",
+    ]);
     expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("hetzner-1");
   });
 
@@ -158,8 +241,8 @@ describe("host chip", () => {
       row.textContent?.includes("mac-mini"),
     );
     expect(mini?.disabled).toBe(false);
-    // A host serving no project has no link to judge (links are per project).
-    expect(mini?.textContent).toContain("0 projects");
+    // A host serving no project still reports its own health.
+    expect(mini?.textContent).toContain("Offline");
     const select = vi.spyOn(useProjectsStore.getState(), "select").mockImplementation(() => {});
     await act(async () => mini!.click());
     expect(select).not.toHaveBeenCalled();
@@ -367,7 +450,7 @@ describe("host chip, accessibility and per-project links", () => {
     expect(document.activeElement).toBe(chip());
   });
 
-  it("draws the host's worst link on the tile, and the current project's own under it", async () => {
+  it("draws source-owned host health on the tile, and the current project's refusal under it", async () => {
     world = hostWorld();
     // `spare` joins `remote` on hetzner-1 and is fenced; `remote` (current) serves.
     act(() => {
@@ -381,9 +464,7 @@ describe("host chip, accessibility and per-project links", () => {
       });
     });
     await world.render(<HostChip />);
-    expect(chip().querySelector('[data-slot="host-glyph"]')?.getAttribute("data-badge")).toBe(
-      "fail",
-    );
+    expect(chip().querySelector('[data-slot="host-glyph"]')?.getAttribute("data-badge")).toBeNull();
     const list = await openSwitcher();
     // The current project serves, so its detail line has nothing to say.
     expect(list.textContent).not.toContain("No longer serves this project");

@@ -248,7 +248,13 @@ function FlowScreen({
         />
         <div className="min-w-0">
           <DialogTitle className="truncate">
-            <SwapText>{done ? `${name} is ready` : name}</SwapText>
+            <SwapText>
+              {done
+                ? host?.reachability?.state.status === "ready"
+                  ? `${name} is ready`
+                  : `${name} · Connected over SSH`
+                : name}
+            </SwapText>
           </DialogTitle>
           <DialogDescription className={cn("truncate text-ui", !done && "font-mono")}>
             {done && view !== null ? readySummary(view, host) : target}

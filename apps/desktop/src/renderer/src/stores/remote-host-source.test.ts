@@ -14,6 +14,13 @@ import {
   type RemoteHostsRpc,
 } from "./remote-host-source";
 import { createThisMacSource } from "./host-sources";
+import { useExperimentsStore } from "./experiments";
+import { useRemoteHostsStore } from "./remote-hosts";
+import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
+import { toast } from "sonner";
+
+vi.mock("../lib/session-rpc-ipc-link", () => ({ sessionRpcClient: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
 const ERROR = { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "down" };
@@ -85,6 +92,7 @@ function fakeClient() {
       refuse = error;
     },
     unsubscribed: () => unsubscribed,
+    handlers,
   };
 }
 
@@ -103,6 +111,181 @@ function timers(clock: { now: number }) {
 }
 
 describe("the remote host source", () => {
+  it("uses engine host health even with no projects or a refused project, and maps known expiry", () => {
+    const fake = fakeClient();
+    const clock = { now: 1_000 };
+    const timer = timers(clock);
+    const source = createRemoteHostSource(fake.client, {
+      now: () => clock.now,
+      setTimer: timer.setTimer,
+    });
+    const store = createHostConnectionStore();
+    store.getState().attach(source);
+    const ready = remote({
+      reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+      signInExpiry: [
+        { providerId: "anthropic", name: "Claude", expiresAt: 500, expired: true },
+        { providerId: "openai", name: "OpenAI", expiresAt: 5_000, expired: false },
+      ],
+    });
+    fake.push(snapshot([ready]));
+    const first = store.getState().hosts[0];
+    expect(first).toMatchObject({
+      link: { status: "open" },
+      expiredSignIns: [{ providerId: "anthropic", name: "Claude" }],
+    });
+    fake.push(snapshot([ready]));
+    expect(store.getState().hosts[0]).toBe(first);
+    fake.push(
+      snapshot([ready], {
+        p1: {
+          status: "refused",
+          error: { ...ERROR, reason: "workspace-unknown" },
+          closeCode: 4404,
+        },
+      }),
+    );
+    expect(store.getState().hosts[0]?.link.status).toBe("open");
+    expect(store.getState().projects.p1?.link).toMatchObject({
+      status: "incompatible",
+      refusalCode: "workspace-unknown",
+      workspaceId: "p1",
+    });
+    const down = remote({
+      reachability: {
+        state: { status: "unreachable", error: ERROR, attempt: 0, retryAt: 0, closeCode: null },
+        everReady: true,
+        droppedAt: 1_000,
+      },
+    });
+    fake.push(snapshot([down]));
+    expect(store.getState().hosts[0]?.link.status).toBe("reconnecting");
+    clock.now = 6_000;
+    timer.armed.at(-1)!.run();
+    expect(store.getState().hosts[0]?.link).toMatchObject({
+      status: "offline",
+      since: 1_000,
+      detail: "down",
+    });
+    fake.push(
+      snapshot([
+        {
+          ...down,
+          lastSshFailure: { code: "key-refused", line: "No SSH key loaded for hetzner-1." },
+        },
+      ]),
+    );
+    expect(store.getState().hosts[0]?.link).toMatchObject({
+      detail: "No SSH key loaded for hetzner-1.",
+    });
+    fake.push(snapshot([ready]));
+    expect(store.getState().hosts[0]?.link.status).toBe("open");
+    source.close();
+  });
+
+  it("arms the earliest grace across projects and engine host states, in either order", () => {
+    const fake = fakeClient();
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const source = createRemoteHostSource(fake.client, {
+      now: () => clock.now,
+      setTimer: timer.setTimer,
+    });
+    fake.push(snapshot([remote()], { a: { status: "ready" }, b: { status: "ready" } }));
+    const down: RemoteHostLinkState = {
+      status: "unreachable",
+      error: ERROR,
+      attempt: 0,
+      retryAt: 0,
+      closeCode: null,
+    };
+    clock.now = 1000;
+    fake.push(snapshot([remote()], { a: down, b: { status: "ready" } }));
+    clock.now = 2000;
+    fake.push(snapshot([remote()], { a: down, b: down }));
+    expect(timer.armed.at(-1)?.at).toBe(6000);
+    fake.push(
+      snapshot(
+        [
+          remote({ reachability: { state: down, everReady: true, droppedAt: 500 } }),
+          remote({ id: "second", reachability: { state: down, everReady: true, droppedAt: 1500 } }),
+        ],
+        { b: down, a: down },
+      ),
+    );
+    expect(timer.armed.at(-1)?.at).toBe(5500);
+    source.close();
+  });
+
+  it("bounds subscription backoff, ignores superseded callbacks, and cancels retries on close", () => {
+    const fake = fakeClient();
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const source = createRemoteHostSource(fake.client, {
+      now: () => clock.now,
+      setTimer: timer.setTimer,
+    });
+    const first = fake.handlers[0]!;
+    fake.fail("bad read");
+    expect(source.getSnapshot().error).toContain("connection failed");
+    const failed = source.getSnapshot();
+    first.onData(snapshot([remote()]));
+    first.onError(new Error("late"));
+    expect(source.getSnapshot()).toBe(failed);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+      const next = timer.armed.at(-1)!;
+      expect(next.at - clock.now).toBe(delay);
+      clock.now = next.at;
+      next.run();
+      fake.fail(new Error("again"));
+    }
+    source.retry(HOST);
+    expect(timer.armed.at(-1)?.cancelled).toBe(true);
+    expect(fake.calls).toEqual([]);
+    fake.fail(new Error("again"));
+    source.retrySubscription?.();
+    fake.push(snapshot([remote()]));
+    fake.fail(new Error("after recovery"));
+    expect(timer.armed.at(-1)!.at - clock.now).toBe(1_000);
+    const last = timer.armed.at(-1)!;
+    source.close();
+    expect(last.cancelled).toBe(true);
+    last.run();
+    source.retrySubscription?.();
+    fake.fail(new Error("after close"));
+  });
+
+  it("handles synchronous subscription errors and thrown setup without leaking the subscription", () => {
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const fake = fakeClient();
+    const stop = vi.fn();
+    const source = createRemoteHostSource(
+      {
+        ...fake.client,
+        subscribe(handlers) {
+          handlers.onError(new Error("sync"));
+          return stop;
+        },
+      },
+      { setTimer: timer.setTimer, now: () => 0 },
+    );
+    expect(source.getSnapshot().error).toContain("sync");
+    expect(stop).toHaveBeenCalledOnce();
+    source.close();
+    const thrown = createRemoteHostSource(
+      {
+        ...fake.client,
+        subscribe() {
+          throw new Error("thrown");
+        },
+      },
+      { setTimer: timer.setTimer },
+    );
+    expect(thrown.getSnapshot().error).toContain("thrown");
+    thrown.close();
+  });
+
   it("names what each ready project's link granted, keeping the same array while it is the same (VC-712)", () => {
     const fake = fakeClient();
     const source = createRemoteHostSource(fake.client, { now: () => 1_000 });
@@ -138,7 +321,7 @@ describe("the remote host source", () => {
     expect(source.getSnapshot().projects["p1"]!.granted).toEqual(["host.logs"]);
   });
 
-  it("sends hosts with no link of their own, and each project with its own", () => {
+  it("keeps unknown host health connecting, independently of ready projects", () => {
     const fake = fakeClient();
     const source = createRemoteHostSource(fake.client, { now: () => 1_000 });
     expect(source.getSnapshot()).toEqual({ hosts: [], projects: {} });
@@ -167,6 +350,7 @@ describe("the remote host source", () => {
           liveSessions: null,
           update: null,
           expiredSignIns: [],
+          link: { status: "connecting" },
         },
         expect.objectContaining({ id: "b", name: "pi" }),
       ],
@@ -177,7 +361,7 @@ describe("the remote host source", () => {
         p3: { hostId: "b", link: { status: "version-skewed", availableVersion: "1.2.0" } },
       },
     });
-    expect(source.getSnapshot().hosts[0]).not.toHaveProperty("link");
+    expect(source.getSnapshot().hosts[0]?.link).toEqual({ status: "connecting" });
   });
 
   it("words every Workspace link state the way any other source would", () => {
@@ -256,21 +440,47 @@ describe("the remote host source", () => {
     expect(source.getSnapshot().projects["p1"]?.link.status).toBe("offline");
   });
 
-  it("forgets a project main stops naming, and reads no hosts when main offers none", () => {
+  it("keeps remote claims on a subscription error, then resubscribes and recovers", () => {
     const fake = fakeClient();
-    const source = createRemoteHostSource(fake.client, { now: () => 0 });
-    const seen = vi.fn();
-    source.subscribe(seen);
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const onHosts = vi.fn();
+    const source = createRemoteHostSource(fake.client, {
+      now: () => clock.now,
+      setTimer: timer.setTimer,
+      onHosts,
+    });
+    const store = createHostConnectionStore();
+    store.getState().attach(source);
     fake.push(snapshot([remote()], { p1: { status: "ready" }, p2: { status: "ready" } }));
     fake.push(snapshot([remote()], { p1: { status: "ready" } }));
     expect(Object.keys(source.getSnapshot().projects)).toEqual(["p1"]);
-    fake.push(snapshot([remote({ name: "renamed" })], { p1: { status: "ready" } }));
-    expect(source.getSnapshot().hosts[0]?.name).toBe("renamed");
-    fake.fail(new Error("Remote hosts are unavailable on this host"));
-    expect(source.getSnapshot()).toEqual({ hosts: [], projects: {} });
-    const calls = seen.mock.calls.length;
-    fake.fail(new Error("still off"));
-    expect(seen).toHaveBeenCalledTimes(calls);
+    fake.fail(new Error("stream lost"));
+    expect(store.getState().sourceError).toContain("stream lost");
+    expect(store.getState().projects.p1).toMatchObject({
+      hostId: HOST,
+      link: { status: "offline", detail: expect.stringContaining("stream lost") },
+    });
+    expect(store.getState().hosts[0]?.link.status).toBe("offline");
+    expect(onHosts).toHaveBeenLastCalledWith([remote()], expect.stringContaining("stream lost"));
+    expect(timer.armed.at(-1)?.at).toBe(1000);
+    expect(fake.unsubscribed()).toBe(1);
+    clock.now = 1000;
+    timer.armed.at(-1)!.run();
+    fake.push(
+      snapshot(
+        [
+          remote({
+            reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          }),
+        ],
+        { p1: { status: "ready" } },
+      ),
+    );
+    expect(store.getState().sourceError).toBeNull();
+    expect(store.getState().hosts[0]?.link).toEqual({ status: "open" });
+    expect(store.getState().projects.p1?.link).toEqual({ status: "open" });
+    source.close();
   });
 
   it("sends each action once, and says so when one is refused", async () => {
@@ -339,6 +549,60 @@ describe("the remote host source", () => {
 });
 
 describe("the tier client and the flag", () => {
+  it("uses the production binding and keeps Settings hosts on a read failure", () => {
+    let handlers: Parameters<RemoteHostsClient["subscribe"]>[0] | undefined;
+    const unsubscribe = vi.fn();
+    const mutate = vi.fn<RemoteHostsRpc["hosts"]["retry"]["mutate"]>().mockResolvedValue(null);
+    const rpc: RemoteHostsRpc = {
+      hosts: {
+        subscribe: {
+          subscribe(_input, next) {
+            handlers = next;
+            return { unsubscribe };
+          },
+        },
+        retry: { mutate },
+        updateHost: { mutate },
+        cancelScheduledUpdate: { mutate },
+        signIn: { mutate },
+      },
+    };
+    vi.mocked(sessionRpcClient).mockReturnValue(rpc as ReturnType<typeof sessionRpcClient>);
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    const stop = attachRemoteHostsWhileCloud();
+    handlers!.onData(snapshot([remote()]));
+    expect(useRemoteHostsStore.getState().hosts).toEqual([remote()]);
+    handlers!.onError(new Error("failed read"));
+    expect(useRemoteHostsStore.getState().hosts).toEqual([remote()]);
+    expect(useRemoteHostsStore.getState().readOnly).toContain("failed read");
+    stop();
+    expect(useRemoteHostsStore.getState().hosts).toEqual([]);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    useExperimentsStore.setState({ snapshot: null });
+  });
+
+  it("runs the default timer and toast, and words a project before its host is named", async () => {
+    vi.useFakeTimers();
+    const fake = fakeClient();
+    const source = createRemoteHostSource(fake.client);
+    try {
+      fake.push(snapshot([], { orphan: { status: "ready" } }));
+      expect(source.getSnapshot().projects.orphan?.link.status).toBe("open");
+      fake.refuseWith(new Error("action failed"));
+      source.updateHost(HOST, "now");
+      await Promise.resolve();
+      expect(toast.error).toHaveBeenCalledWith("action failed");
+      fake.fail(new Error("lost"));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fake.handlers).toHaveLength(2);
+      fake.push(snapshot([]));
+      expect(source.getSnapshot()).toEqual({ hosts: [], projects: {} });
+    } finally {
+      source.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("speaks hosts.* over the desktop tier", async () => {
     const calls: unknown[] = [];
     let unsubscribed = false;

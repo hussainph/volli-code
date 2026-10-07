@@ -25,7 +25,7 @@
  */
 import { create } from "zustand";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
-import { REMOTE_HOST_TOO_MANY_PROJECTS } from "@volli/shared";
+import { REMOTE_HOST_TOO_MANY_PROJECTS, type RemoteHostLinkState } from "@volli/shared";
 
 /** A host's id: the host's own UUID for a remote one, {@link THIS_MAC_HOST_ID} for this Mac. */
 export type HostId = string;
@@ -71,7 +71,12 @@ export type HostLinkView =
   /** Served before, dropped, and getting back. Silent for a grace period. */
   | { readonly status: "reconnecting" }
   /** Down past the grace period. `retryAt` (epoch ms) is the next automatic attempt. */
-  | { readonly status: "offline"; readonly since: number; readonly retryAt: number | null }
+  | {
+      readonly status: "offline";
+      readonly since: number;
+      readonly retryAt: number | null;
+      readonly detail?: string;
+    }
   /** Served, but the host is older than this app and a compatible update is available. */
   | { readonly status: "version-skewed"; readonly availableVersion: string }
   /** Answered, and cannot serve this app. Read-only until its one recovery. */
@@ -80,6 +85,10 @@ export type HostLinkView =
       readonly reason: HostIncompatibility;
       /** The host version this app needs (`host-too-old`), when the source knows it. */
       readonly requiredVersion?: string;
+      /** The refusal's named reason (or code), not a guess about enrollment. */
+      readonly refusalCode?: string;
+      /** Only the refused project's recovery may forget it. */
+      readonly workspaceId?: string;
     };
 
 export type HostLinkStatus = HostLinkView["status"];
@@ -108,9 +117,8 @@ export interface HostRecord {
   /** The host's Volli version, `null` when unknown (and always for This Mac). */
   readonly version: string | null;
   /**
-   * The HOST's link as the chip draws it: the store derives it from the links
-   * of the projects the host serves ({@link aggregateLink}), worst first. A
-   * project's own write access never reads this — see {@link ProjectLink}.
+   * The HOST's engine-owned health, independent of its projects. A project's
+   * own write access never reads this — see {@link ProjectLink}.
    */
   readonly link: HostLinkView;
   /** Sessions running on the host right now, `null` when the source cannot say. */
@@ -120,11 +128,10 @@ export interface HostRecord {
 }
 
 /**
- * A host as a source names it: everything but the link, which a source
- * reports per project (a client keeps one host link per Workspace, and each
- * is fenced on its own — HP § The client host link).
+ * A source names host health separately from per-project access. Missing
+ * remote health is unknown, never inferred from the project's links.
  */
-export type HostSourceRecord = Omit<HostRecord, "link">;
+export type HostSourceRecord = Omit<HostRecord, "link"> & { readonly link?: HostLinkView };
 
 /**
  * Which host serves one project, and how THAT project's link reads. Project A
@@ -148,6 +155,8 @@ export interface HostSourceSnapshot {
   readonly hosts: readonly HostSourceRecord[];
   /** Project id → one of this snapshot's hosts, and the project's own link. */
   readonly projects: Readonly<Record<string, ProjectLink>>;
+  /** A failed source read, kept visible until its next successful snapshot. */
+  readonly error?: string | null;
 }
 
 /**
@@ -166,6 +175,8 @@ export interface HostConnectionSource {
   subscribe(listener: () => void): () => void;
   /** Retry now: reconnect the host's links at once (`HostLink.reconnect`). */
   retry(hostId: HostId): void;
+  /** Explicit recovery for the source's subscription, when it has failed. */
+  retrySubscription?(): void;
   /** Update the host's Volli now, or once its running Sessions finish. */
   updateHost(hostId: HostId, when: "now" | "when-idle"): void;
   /** Withdraws an update scheduled `when-idle`. */
@@ -176,6 +187,7 @@ export interface HostConnectionSource {
 
 /** The link This Mac's projects always have: the in-process host is the process itself. */
 export const OPEN_LINK: HostLinkView = Object.freeze({ status: "open" });
+const UNKNOWN_HOST_LINK: HostLinkView = Object.freeze({ status: "connecting" });
 
 /** The record the store answers for This Mac when no source has said anything. */
 export const THIS_MAC_HOST: HostRecord = Object.freeze({
@@ -201,11 +213,13 @@ export interface HostEntryPoints {
 }
 
 export interface HostConnectionState {
-  /** Every host, This Mac first, then each source's hosts in its own order. Each `link` is the host's aggregate. */
+  /** Every host, This Mac first, then each source's hosts in its own order. Each `link` is source-owned host health. */
   readonly hosts: readonly HostRecord[];
   /** Project id → its host and its own link, merged across sources. A project nobody claims is on This Mac, open. */
   readonly projects: Readonly<Record<string, ProjectLink>>;
   readonly entryPoints: HostEntryPoints;
+  readonly sourceError: string | null;
+  retrySources(): void;
   /** Adds a source; the returned function detaches it. */
   attach(source: HostConnectionSource): () => void;
   setEntryPoints(entryPoints: Partial<HostEntryPoints>): void;
@@ -242,8 +256,10 @@ export function createHostConnectionStore() {
       const sourceHosts: HostSourceRecord[] = [];
       const projects: Record<string, ProjectLink> = {};
       const nextOwners = new Map<HostId, HostConnectionSource>();
+      let sourceError: string | null = null;
       for (const source of sources) {
         const snapshot = source.getSnapshot();
+        sourceError ??= snapshot.error ?? null;
         for (const host of snapshot.hosts) {
           // Two sources naming one host: the first attached keeps it. A host
           // id is the host's own UUID, so this is a registry bug upstream,
@@ -271,7 +287,11 @@ export function createHostConnectionStore() {
         else links.push(claim.link);
       }
       const hosts = sourceHosts.map((host) =>
-        record(host, aggregateLink(linksByHost.get(host.id) ?? [])),
+        record(
+          host,
+          host.link ??
+            (host.local ? aggregateLink(linksByHost.get(host.id) ?? []) : UNKNOWN_HOST_LINK),
+        ),
       );
       hosts.sort((a, b) => Number(b.local) - Number(a.local));
       owners = nextOwners;
@@ -279,6 +299,7 @@ export function createHostConnectionStore() {
       set({
         hosts: sameItems(previous.hosts, hosts) ? previous.hosts : hosts,
         projects: sameClaims(previous.projects, projects) ? previous.projects : projects,
+        sourceError,
       });
     }
 
@@ -290,6 +311,10 @@ export function createHostConnectionStore() {
       hosts: [],
       projects: {},
       entryPoints: { addHost: null, manageHosts: null },
+      sourceError: null,
+      retrySources() {
+        for (const source of sources) source.retrySubscription?.();
+      },
       attach(source) {
         sources.push(source);
         const unsubscribe = source.subscribe(merge);
@@ -366,7 +391,7 @@ export function isRemoteProject(state: HostReadable, projectId: string | null): 
   return hostIdOfProject(state, projectId) !== THIS_MAC_HOST_ID;
 }
 
-/** The host a project runs on, with the host's aggregate link (the chip's). */
+/** The host a project runs on, with the host's own health (the chip's). */
 export function hostOfProject(state: HostReadable, projectId: string | null): HostRecord {
   const hostId = hostIdOfProject(state, projectId);
   return (
@@ -513,7 +538,10 @@ export interface HostLinkContext {
  * `database-too-new` never comes from the link: the host reports it (VC-602),
  * and the source sets it directly.
  */
-export function hostLinkView(state: HostLinkState, context: HostLinkContext): HostLinkView {
+export function hostLinkView(
+  state: HostLinkState | RemoteHostLinkState,
+  context: HostLinkContext,
+): HostLinkView {
   switch (state.status) {
     case "ready":
       return context.availableUpdate
@@ -530,7 +558,12 @@ export function hostLinkView(state: HostLinkState, context: HostLinkContext): Ho
     case "unreachable": {
       const since = context.droppedAt ?? context.now;
       if (withinGrace(context, since)) return { status: "reconnecting" };
-      return { status: "offline", since, retryAt: state.retryAt };
+      return {
+        status: "offline",
+        since,
+        retryAt: state.retryAt,
+        ...(state.error.message ? { detail: state.error.message } : {}),
+      };
     }
     case "refused":
       // Desktop main's own refusal, past its link cap: a reason no host sends.
@@ -538,7 +571,11 @@ export function hostLinkView(state: HostLinkState, context: HostLinkContext): Ho
         return { status: "incompatible", reason: "too-many-projects" };
       }
       if (state.error.reason !== "protocol-version-unsupported") {
-        return { status: "incompatible", reason: "refused" };
+        return {
+          status: "incompatible",
+          reason: "refused",
+          refusalCode: state.error.reason || state.error.code,
+        };
       }
       return context.hostIsNewer
         ? { status: "incompatible", reason: "host-too-new" }
@@ -567,7 +604,7 @@ function withinGrace(context: HostLinkContext, since: number): boolean {
  * reconnecting grace. A source arms one timer for it and re-maps then.
  */
 export function hostLinkViewChangesAt(
-  state: HostLinkState,
+  state: HostLinkState | RemoteHostLinkState,
   context: HostLinkContext,
 ): number | null {
   if (state.status !== "connecting" && state.status !== "unreachable") return null;
@@ -583,7 +620,7 @@ export interface HostLinkTracker {
    * {@link HostLinkTracker.view} asks for); answers its view and when to ask again.
    */
   view(
-    state: HostLinkState,
+    state: HostLinkState | RemoteHostLinkState,
     now: number,
     facts?: Pick<HostLinkContext, "availableUpdate" | "hostIsNewer" | "requiredVersion">,
   ): { readonly link: HostLinkView; readonly recheckAt: number | null };

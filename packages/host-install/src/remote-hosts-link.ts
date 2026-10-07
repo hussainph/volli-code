@@ -7,8 +7,7 @@
  * `ready` if any is (the host serves), else `refused`, else `fenced` (the
  * host answered and will not serve until the person acts), else
  * `unreachable`, else `connecting`. A ready link's welcome is dropped. With
- * none, the tunnel answers: starting is `connecting`, up is `ready`, down is
- * `unreachable`, closed is `closed`.
+ * none, host-scoped status evidence answers; TCP alone stays connecting.
  */
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import type { RemoteHostLink, RemoteHostLinkError, RemoteHostLinkState } from "@volli/shared";
@@ -23,6 +22,8 @@ export interface LinkInputs {
   /** Epoch ms of the tunnel's next attempt, when it is down. */
   readonly retryAt: number;
   readonly links: readonly HostLinkState[];
+  /** Validated hostd status, only for host health (never a Workspace's readiness). */
+  readonly health?: RemoteHostLinkState;
 }
 
 function errorOf(error: { code: string; message: string; reason?: string }): RemoteHostLinkError {
@@ -68,7 +69,7 @@ export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {
     case "starting":
       return { status: "connecting", attempt: inputs.attempt };
     case "up":
-      return { status: "ready" };
+      return inputs.health ?? { status: "connecting", attempt: inputs.attempt };
     case "down":
       return {
         status: "unreachable",
@@ -82,7 +83,7 @@ export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {
   }
 }
 
-/** `previous`, moved on to `state`: ready ever since launch, and when it last left ready. */
+/** `previous`, moved on to `state`: ready ever since launch, and the current outage's start. */
 export function nextRemoteHostLink(
   previous: RemoteHostLink | null,
   state: RemoteHostLinkState,
@@ -93,7 +94,11 @@ export function nextRemoteHostLink(
   return {
     state,
     everReady: (previous?.everReady ?? false) || ready,
-    droppedAt: wasReady && !ready ? now : (previous?.droppedAt ?? null),
+    droppedAt: ready
+      ? null
+      : wasReady
+        ? now
+        : (previous?.droppedAt ?? (state.status === "connecting" ? null : now)),
   };
 }
 
