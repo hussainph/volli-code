@@ -1492,6 +1492,17 @@ const appStartup = app.whenReady().then(async () => {
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
       logs: desktopLog?.ring ?? null,
+      // The Session listing rows (VC-713): the bodies `volli:session-list`
+      // reads, so this Mac's map answers `session.listing` as hostd's does.
+      sessionListing:
+        sessionEngine === null || sessionDb === null
+          ? null
+          : {
+              db: sessionDb,
+              listSessions: (query) => sessionEngine.listSessions(query),
+              liveAttachmentIds: () =>
+                new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
+            },
       boardFeed,
       ticketSignals:
         sessionEngine === null

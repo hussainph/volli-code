@@ -54,6 +54,12 @@ export interface ComposerAddMenuProps {
   imagesUnsupported?: boolean;
   /** The picker rows are offered only where a `/` or `@` would open one. */
   pickers?: boolean;
+  /**
+   * Why files cannot be attached here ("Not available on hetzner-1 yet",
+   * VC-713): the attach row stays, disabled, and says so, instead of a row
+   * that would attach something the Session's host cannot read.
+   */
+  attachUnavailable?: string | null;
   className?: string;
 }
 
@@ -64,12 +70,14 @@ export function ComposerAddMenu({
   onFiles,
   imagesUnsupported = false,
   pickers = true,
+  attachUnavailable = null,
   className,
 }: ComposerAddMenuProps): React.ReactElement | null {
   const caret = useComposerCaretBinding();
   const picker = useFilePicker(onFiles ?? NO_FILES);
   const insert = pickers ? caret.insert : undefined;
-  if (onFiles === undefined && insert === undefined) return null;
+  const attachRow = onFiles !== undefined || attachUnavailable !== null;
+  if (!attachRow && insert === undefined) return null;
 
   return (
     <>
@@ -111,13 +119,21 @@ export function ComposerAddMenu({
             caret.focus();
           }}
         >
-          {onFiles === undefined ? null : (
+          {attachUnavailable !== null ? (
+            <DropdownMenuItem disabled data-slot="attach-unavailable">
+              <PaperclipIcon />
+              <span className="flex flex-col">
+                Attach files…
+                <span className="text-muted-foreground">{attachUnavailable}</span>
+              </span>
+            </DropdownMenuItem>
+          ) : onFiles === undefined ? null : (
             <DropdownMenuItem onSelect={picker.open}>
               <PaperclipIcon />
               Attach files…
             </DropdownMenuItem>
           )}
-          {onFiles !== undefined && insert !== undefined ? <DropdownMenuSeparator /> : null}
+          {attachRow && insert !== undefined ? <DropdownMenuSeparator /> : null}
           {insert === undefined ? null : (
             <>
               <DropdownMenuItem onSelect={() => insert("/")}>
@@ -134,7 +150,7 @@ export function ComposerAddMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {onFiles === undefined ? null : picker.input}
+      {onFiles === undefined || attachUnavailable !== null ? null : picker.input}
     </>
   );
 }
