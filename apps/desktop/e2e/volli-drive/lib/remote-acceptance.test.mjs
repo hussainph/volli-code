@@ -124,7 +124,7 @@ test("visible controls handle colon-quoted YAML keys and disabled rows without r
   assert.equal(visibleControls(tree, "button", "volli-acceptance", { contains: true }).length, 1);
   assert.equal(visibleControls(tree, "button", "Connect").length, 1);
 });
-const selfAddQuestion = `- paragraph: This is the Mac you're using. Its projects already run here. Add it anyway (for testing)?
+const selfAddQuestion = `- paragraph: This is the Mac you’re using. Its projects already run here. Add it anyway (for testing)?
 - button "Add anyway" [ref=e1]
 - button "Cancel" [ref=e2]`;
 test("host add tolerates pre-VC-724 readiness and handles the optional self-add question first", () => {
@@ -143,6 +143,11 @@ test("host add tolerates pre-VC-724 readiness and handles the optional self-add 
   assert.match(smoke, /await click\("button", "Add anyway"\)/u);
 });
 test("self-add requires the full visible question and enabled unambiguous answers", () => {
+  assert.throws(
+    () => acceptanceHostAddState(selfAddQuestion.replace("you’re", "you're"), "box"),
+    /confirmation text/u,
+    "ASCII apostrophe cannot substitute for the exact production copy",
+  );
   assert.throws(
     () =>
       acceptanceHostAddState(selfAddQuestion.replace("Its projects already run here. ", ""), "box"),
