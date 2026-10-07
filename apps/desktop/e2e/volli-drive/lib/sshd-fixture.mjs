@@ -49,8 +49,14 @@ async function freePort() {
  * 0700 directory. Caller owns removal, after stop(). This is NOT a sandbox:
  * remote commands have the current user's machine-wide authority.
  */
-export async function startSshdFixture({ dir }) {
+export async function startSshdFixture({ dir, runnerAccountHome = false }) {
   const account = userInfo();
+  if (
+    runnerAccountHome &&
+    (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_OS !== "macOS")
+  ) {
+    throw new Error("Account-home fixture is disposable macOS CI only");
+  }
   if (process.platform !== "darwin" || account.uid === 0) {
     throw new Error("Fixture requires unprivileged macOS");
   }
@@ -143,7 +149,7 @@ export async function startSshdFixture({ dir }) {
       "Subsystem sftp /usr/libexec/sftp-server",
       // Avoid the person's shell startup files and HOME-based writes. System
       // shell startup files still apply; this is a fixture, not OS isolation.
-      `SetEnv ${quote(`HOME=${dir}`)} ${quote(`ZDOTDIR=${dir}`)}`,
+      `SetEnv ${quote(`HOME=${runnerAccountHome ? account.homedir : dir}`)} ${quote(`ZDOTDIR=${dir}`)} ${quote("GIT_CONFIG_NOSYSTEM=1")} ${quote(`GIT_CONFIG_GLOBAL=${join(dir, "gitconfig")}`)} ${quote("GIT_TERMINAL_PROMPT=0")}`,
       "",
     ].join("\n"),
     { flag: "wx", mode: 0o600 },

@@ -327,6 +327,194 @@ describe("script, defaultDelayMs", () => {
   });
 });
 
+const request = (provider, input, stream = false) =>
+  fetch(`${provider.baseUrl}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "api-key": FAKE_API_KEY },
+    body: JSON.stringify({ model: provider.modelId, input, stream }),
+  });
+
+describe("scripted Responses function calls", () => {
+  const calls = [
+    {
+      name: "ask_user",
+      arguments: {
+        question: 'Which path: "small" or full? 🌱',
+        options: [
+          { id: "small", label: "Small" },
+          { id: "full", label: "Full" },
+        ],
+        allowOther: false,
+      },
+    },
+    { name: "ask_user", arguments: JSON.stringify({ question: "Keep this pending?" }) },
+  ];
+  test("nonstream tool-only replies contain function_call items, not synthetic text", async () => {
+    const provider = await startFakeProvider({ script: [{ toolCalls: calls }], chunkDelayMs: 0 });
+    try {
+      const res = await request(provider, "ask twice");
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.status, "completed");
+      assert.equal(body.output_text, "");
+      assert.equal(body.output.length, 2);
+      assert.ok(body.usage.output_tokens > 1, "usage includes function names/arguments");
+      for (const [index, item] of body.output.entries()) {
+        assert.equal(item.type, "function_call");
+        assert.equal(item.status, "completed");
+        assert.equal(item.name, calls[index].name);
+        assert.match(item.id, /^fc_\w+$/);
+        assert.match(item.call_id, /^call_\w+$/);
+        assert.equal(
+          item.arguments,
+          typeof calls[index].arguments === "string"
+            ? calls[index].arguments
+            : JSON.stringify(calls[index].arguments),
+        );
+      }
+      assert.notEqual(body.output[0].id, body.output[1].id);
+      assert.notEqual(body.output[0].call_id, body.output[1].call_id);
+      assert.equal(
+        (await (await request(provider, "fallback")).json()).output_text,
+        "fake-agent: fallback",
+      );
+    } finally {
+      await provider.close();
+    }
+  });
+
+  test("mixed text and multiple tools stream ordered, identity-consistent SSE lifecycles", async () => {
+    const provider = await startFakeProvider({
+      script: [{ text: "A decision is needed.", toolCalls: calls }],
+      chunkDelayMs: 0,
+    });
+    try {
+      const res = await request(provider, "mixed", true);
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get("content-type"), /text\/event-stream/);
+      const frames = (await res.text()).trim().split("\n\n");
+      const events = frames.map((frame) => {
+        const [eventLine, dataLine] = frame.split("\n");
+        const event = JSON.parse(dataLine.slice("data: ".length));
+        assert.equal(eventLine, `event: ${event.type}`);
+        return event;
+      });
+      assert.deepEqual(
+        events.map((event) => event.sequence_number),
+        events.map((_, index) => index),
+      );
+      assert.deepEqual(
+        events.slice(0, 2).map((event) => event.type),
+        ["response.created", "response.in_progress"],
+      );
+      const completed = events.at(-1);
+      assert.equal(completed.type, "response.completed");
+      assert.equal(completed.response.status, "completed");
+      assert.equal(completed.response.id, events[0].response.id);
+      assert.equal(completed.response.output.length, 3);
+      assert.equal(completed.response.output[0].content[0].text, "A decision is needed.");
+      const added = events.filter((event) => event.type === "response.output_item.added");
+      const done = events.filter((event) => event.type === "response.output_item.done");
+      assert.deepEqual(
+        added.map((event) => event.output_index),
+        [0, 1, 2],
+      );
+      assert.deepEqual(
+        done.map((event) => event.item),
+        completed.response.output,
+      );
+      for (const [index, call] of calls.entries()) {
+        const outputIndex = index + 1;
+        const item = completed.response.output[outputIndex];
+        const toolEvents = events.filter((event) => event.output_index === outputIndex);
+        assert.equal(toolEvents[0].type, "response.output_item.added");
+        assert.equal(toolEvents[0].item.status, "in_progress");
+        assert.equal(toolEvents[0].item.arguments, "");
+        assert.equal(toolEvents[0].item.call_id, item.call_id);
+        assert.equal(toolEvents[0].item.id, item.id);
+        const deltas = toolEvents.filter(
+          (event) => event.type === "response.function_call_arguments.delta",
+        );
+        assert.ok(deltas.length >= 2);
+        assert.equal(deltas.map((event) => event.delta).join(""), item.arguments);
+        assert.ok(deltas.every((event) => event.item_id === item.id));
+        const argsDone = toolEvents.at(-2);
+        assert.equal(argsDone.type, "response.function_call_arguments.done");
+        assert.equal(argsDone.item_id, item.id);
+        assert.equal(argsDone.arguments, item.arguments);
+        assert.equal(toolEvents.at(-1).type, "response.output_item.done");
+        assert.deepEqual(
+          JSON.parse(item.arguments),
+          typeof call.arguments === "string" ? JSON.parse(call.arguments) : call.arguments,
+        );
+      }
+    } finally {
+      await provider.close();
+    }
+  });
+
+  test("pi-ai's Azure parser keeps multiple function calls separate after a text item", async () => {
+    const provider = await startFakeProvider({
+      script: [{ text: "Two decisions.", toolCalls: calls }],
+      chunkDelayMs: 0,
+    });
+    try {
+      const { builtinModels } = await piAi("providers/all.js");
+      const { InMemoryCredentialStore } = await piAi("index.js");
+      const models = builtinModels({ credentials: new InMemoryCredentialStore() });
+      const model = models.getModel(provider.providerId, provider.modelId);
+      const stream = models.streamSimple(
+        model,
+        { messages: [{ role: "user", content: "multiple tools", timestamp: Date.now() }] },
+        { apiKey: provider.apiKey, env: provider.env },
+      );
+      const ended = [];
+      for await (const event of stream) {
+        if (event.type === "toolcall_end") ended.push(event);
+      }
+      const message = await stream.result();
+      assert.equal(message.stopReason, "toolUse", message.errorMessage);
+      assert.equal(collectText(message), "Two decisions.");
+      const parsed = message.content.filter((block) => block.type === "toolCall");
+      assert.equal(parsed.length, 2);
+      assert.deepEqual(
+        ended.map((event) => event.contentIndex),
+        [1, 2],
+      );
+      assert.notEqual(parsed[0].id, parsed[1].id);
+      for (const [index, call] of parsed.entries()) {
+        assert.equal(call.name, calls[index].name);
+        assert.deepEqual(
+          call.arguments,
+          typeof calls[index].arguments === "string"
+            ? JSON.parse(calls[index].arguments)
+            : calls[index].arguments,
+        );
+        assert.match(call.id, /^call_\w+\|fc_\w+$/);
+        assert.ok(!("partialJson" in call));
+      }
+    } finally {
+      await provider.close();
+    }
+  });
+
+  test("an empty toolCalls array retains echo and explicit empty-text behaviour", async () => {
+    const provider = await startFakeProvider({
+      script: [{ toolCalls: [] }, { toolCalls: [], text: "" }],
+    });
+    try {
+      const echo = await (await request(provider, "unchanged")).json();
+      assert.equal(echo.output_text, "fake-agent: unchanged");
+      assert.equal(echo.output[0].type, "message");
+      const empty = await (await request(provider, "empty")).json();
+      assert.equal(empty.output_text, "");
+      assert.equal(empty.output[0].content[0].text, "");
+    } finally {
+      await provider.close();
+    }
+  });
+});
+
 describe("CLI entry", () => {
   test("prints the launch contract as one JSON line and serves until SIGTERM", async () => {
     const child = spawn(process.execPath, [PROVIDER_CLI, "--port", "0"], {
@@ -435,6 +623,36 @@ if (process.env.RUN_TURN === "1") {
     text: message.content.filter((b) => b.type === "text").map((b) => b.text).join(""),
   };
 }
+if (process.env.RUN_ASK_TOOL === "1") {
+  // The production tool and schema, with an automated host-port resolution;
+  // no Electron, interaction UI, or real person participates in this test.
+  const { createAskUserTool } = await import(src("tools.ts"));
+  const asked = [];
+  const tool = createAskUserTool(async (request) => {
+    asked.push(request);
+    return { optionIds: ["small"], response: "fixture answer" };
+  });
+  const model = access.models.getModel(providerId, modelId);
+  const messages = [{ role: "user", content: "ask, answer, then ask again", timestamp: Date.now() }];
+  const turn = async () => {
+    const stream = access.models.streamSimple(model, { messages, tools: [tool] });
+    const events = [];
+    for await (const event of stream) events.push(event.type);
+    return { message: await stream.result(), events };
+  };
+  const first = await turn();
+  const call = first.message.content.find((block) => block.type === "toolCall");
+  if (!call) throw new Error(first.message.errorMessage ?? "no function tool call parsed");
+  const result = await tool.execute(call.id, call.arguments, new AbortController().signal);
+  messages.push(first.message, {
+    role: "toolResult", toolCallId: call.id, toolName: call.name,
+    content: result.content, isError: false, timestamp: Date.now(),
+  });
+  const second = await turn();
+  // Deliberately leave the second call unexecuted/unanswered. Host durability
+  // and reopening the pending interaction belong to the acceptance smoke.
+  out.askTurns = { first, second, asked, result };
+}
 out.blocked = blocked;
 out.agentDirEntries = existsSync(process.env.PI_CODING_AGENT_DIR) ? readdirSync(process.env.PI_CODING_AGENT_DIR) : [];
 process.stdout.write(JSON.stringify(out) + "\n");
@@ -495,6 +713,79 @@ describe("(d) Volli's piOwnedModelAccess + inspectPiModelAccess, env-only creden
     assert.equal(out.model.state, "authentication-required");
     assert.deepEqual(out.availableModels, [], "an empty isolated profile has no available model");
     assert.deepEqual(out.blocked, []);
+  });
+
+  test("real Azure parser and runtime ask_user tool replay an answer before a second question", async () => {
+    const firstArgs = {
+      question: "Small patch or full migration?",
+      options: [
+        { id: "small", label: "Small patch" },
+        { id: "full", label: "Full migration" },
+      ],
+      allowOther: false,
+    };
+    const secondArgs = { question: "Leave this second decision pending?" };
+    const seen = [];
+    const scriptedProvider = await startFakeProvider({
+      chunkDelayMs: 0,
+      script: async (turn) => {
+        seen.push(turn);
+        assert.ok(turn.body.tools.some((tool) => tool.name === "ask_user"));
+        const outputs = turn.body.input.filter((item) => item.type === "function_call_output");
+        if (outputs.length === 0) {
+          assert.equal(turn.index, 0);
+          return {
+            text: "One decision first.",
+            toolCalls: [{ name: "ask_user", arguments: firstArgs }],
+          };
+        }
+        assert.equal(turn.index, 1);
+        assert.equal(outputs.length, 1);
+        assert.match(JSON.stringify(outputs[0].output), /Chose: small/);
+        assert.match(JSON.stringify(outputs[0].output), /fixture answer/);
+        const replayedCall = turn.body.input.find((item) => item.type === "function_call");
+        assert.equal(replayedCall.call_id, outputs[0].call_id);
+        assert.match(replayedCall.id, /^fc_\w+$/);
+        assert.deepEqual(JSON.parse(replayedCall.arguments), firstArgs);
+        return { toolCalls: [{ name: "ask_user", arguments: JSON.stringify(secondArgs) }] };
+      },
+    });
+    try {
+      const env = isolatedEnv({ ...scriptedProvider.env, RUN_ASK_TOOL: "1" });
+      const out = await runChild(env);
+      const { first, second, asked, result } = out.askTurns;
+      assert.equal(first.message.stopReason, "toolUse", first.message.errorMessage);
+      assert.equal(collectText(first.message), "One decision first.");
+      assert.equal(second.message.stopReason, "toolUse", second.message.errorMessage);
+      assert.equal(collectText(second.message), "", "tool-only turn has no echo text");
+      const firstCall = first.message.content.find((block) => block.type === "toolCall");
+      const secondCall = second.message.content.find((block) => block.type === "toolCall");
+      assert.equal(firstCall.name, "ask_user");
+      assert.equal(secondCall.name, "ask_user");
+      assert.deepEqual(firstCall.arguments, firstArgs);
+      assert.deepEqual(secondCall.arguments, secondArgs);
+      assert.match(firstCall.id, /^call_\w+\|fc_\w+$/);
+      assert.notEqual(firstCall.id, secondCall.id);
+      assert.equal(
+        seen[1].body.input.find((item) => item.type === "function_call_output").call_id,
+        firstCall.id.split("|")[0],
+      );
+      for (const turn of [first, second]) {
+        assert.equal(turn.events.filter((type) => type === "toolcall_start").length, 1);
+        assert.ok(turn.events.filter((type) => type === "toolcall_delta").length >= 2);
+        assert.equal(turn.events.filter((type) => type === "toolcall_end").length, 1);
+        assert.equal(turn.events.at(-1), "done");
+        assert.ok(turn.message.usage.totalTokens > 0);
+        assert.ok(turn.message.content.every((block) => !("partialJson" in block)));
+      }
+      assert.deepEqual(asked, [{ toolCallId: firstCall.id, ...firstArgs }]);
+      assert.equal(result.content[0].text, "Chose: small\n\nfixture answer");
+      assert.equal(seen.length, 2, "no model continuation for the unanswered second call");
+      assert.deepEqual(out.blocked, []);
+      assert.ok(!out.agentDirEntries.includes("auth.json"));
+    } finally {
+      await scriptedProvider.close();
+    }
   });
 
   test("with ONLY the fake provider env, the pinned model is available and a turn completes", async () => {

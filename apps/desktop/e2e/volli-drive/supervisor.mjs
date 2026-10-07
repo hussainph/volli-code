@@ -50,6 +50,11 @@ import {
 } from "./lib/core.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
+import {
+  assertAcceptanceRunner,
+  acceptanceScript,
+  prepareRemoteAcceptance,
+} from "./lib/remote-acceptance.mjs";
 
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const L = instanceLayout(spec.scratch, spec.evidence);
@@ -91,6 +96,7 @@ let electronPid = null;
 let electronIdentity = null;
 let electronExit = null;
 let provider = null;
+let remoteFixture = null;
 let server = null;
 let seeded = null;
 let stopping = false;
@@ -474,6 +480,10 @@ async function finalize(reason, { keepScratch = false } = {}) {
   if (app && electronExit === null) {
     close = await closeAppBounded(app).catch((error) => ({ kind: "error", error: error.message }));
   }
+  let remoteCleanupError = null;
+  await remoteFixture?.stop?.().catch((error) => {
+    remoteCleanupError = error.message;
+  });
   await provider?.close?.().catch(() => {});
   const after = await owned().catch(() => []);
   const targets = [...new Map([...before, ...after].map((p) => [p.pid, p])).values()];
@@ -498,6 +508,7 @@ async function finalize(reason, { keepScratch = false } = {}) {
     seeded,
     electron: { pid: electronPid, exit: electronExit, close },
     keychainViolations: violated,
+    remoteCleanupError,
     keychainViolationExit: electronExit?.code === HARNESS_VIOLATION_EXIT_CODE,
     leftovers,
     scratchRemoved: !keepScratch,
@@ -549,16 +560,27 @@ async function boot() {
   );
   // The one gate, checked again here: the supervisor can be started by hand.
   assertLaunchable(spec);
+  if (spec.remoteAcceptance) assertAcceptanceRunner();
   if (spec.model === "fake") {
     const { startFakeProvider } = await import("./lib/fake-provider.mjs");
     provider = await startFakeProvider({
+      ...(spec.remoteAcceptance ? { script: acceptanceScript } : {}),
       log: (record) => slog(`[fake-provider] ${JSON.stringify(record)}`),
     });
     slog(`fake provider at ${provider.url} (${provider.providerId}/${provider.modelId})`);
   }
   mark("providerReady");
   const { path, loginShell } = await prepareEnvironment();
-  const extraEnv = electronExtraEnv(L, { loginShell, path, providerEnv: provider?.env ?? {} });
+  if (spec.remoteAcceptance) remoteFixture = await prepareRemoteAcceptance(L, provider);
+  const extraEnv = {
+    ...electronExtraEnv(L, { loginShell, path, providerEnv: provider?.env ?? {} }),
+    ...(spec.remoteAcceptance
+      ? {
+          VOLLI_EXPERIMENTAL: "cloud",
+          VOLLI_HOSTD_DEV_TARBALLS: spec.remoteAcceptance.tarballs,
+        }
+      : {}),
+  };
   mark("launchStart");
   // Re-checked at the call: nothing between the gate above and here may have
   // pointed smoke-kit at a packed app.
@@ -652,6 +674,42 @@ async function handle(cmd, args) {
   armIdle();
   void recordMembers();
   switch (cmd) {
+    case "acceptance-fixture":
+      if (!remoteFixture) throw new Error("Not a remote acceptance instance");
+      return { projectPath: remoteFixture.projectPath };
+    case "acceptance-model":
+      if (!remoteFixture) throw new Error("Not a remote acceptance instance");
+      await remoteFixture.configureModel();
+      transcript({ cmd: "acceptance-model", setup: "operator model deployment configuration" });
+      return { configured: true };
+    case "native-quit": {
+      // The real application's native Quit menu item, not the menu-bar test
+      // controller. No injected live-work count: a local scripted turn holds it.
+      const result = await app.evaluate(({ Menu }) => {
+        // Serialized into Electron main: this cannot close over supervisor code.
+        // oxlint-disable-next-line unicorn/consistent-function-scoping
+        const walk = (menu) =>
+          menu?.items.flatMap((item) => [item, ...(walk(item.submenu) ?? [])]) ?? [];
+        const quit = walk(Menu.getApplicationMenu()).find((item) => item.role === "quit");
+        if (!quit) throw new Error("Native Quit menu item missing");
+        const label = quit.label;
+        quit.click();
+        return { label };
+      });
+      await waitUntil("all app windows closed", () => app.windows().length === 0, {
+        timeout: 10_000,
+      });
+      current = { generation: ++generation, window: null, refs: new Set() };
+      transcript({ cmd: "native-quit", label: result.label });
+      return result;
+    }
+    case "native-reopen":
+      // macOS activation is the production reopen path (also used by the
+      // tray's Open Volli). Never set renderer state or inject a HostLink.
+      await app.evaluate(({ app: electronApp }) => electronApp.emit("activate"));
+      await app.firstWindow();
+      transcript({ cmd: "native-reopen" });
+      return snapshot();
     case "ping":
       return { id: spec.id };
     case "snapshot": {
