@@ -13,7 +13,8 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { createSessionRecord, createTicket } from "@volli/shared";
 import type { Project, SessionRecord, Ticket } from "@volli/shared";
-import { migrate } from "./migrations";
+import { MIGRATIONS, migrate } from "./migrations";
+import type { Migration } from "./migrations";
 import { guardTransactionOwnership, throwTransactionViolation } from "./transaction-gate";
 
 /**
@@ -41,6 +42,47 @@ import { guardTransactionOwnership, throwTransactionViolation } from "./transact
  */
 export function openRawDb(dbPath: string): Database.Database {
   return new Database(dbPath);
+}
+
+/**
+ * Hand-applies the migrations `include` selects, in order, to a scratch
+ * fixture: how a suite builds a database at an OLDER version for a migration
+ * to then upgrade. Each runs exactly as it always has (its own `apply` if it
+ * has one, its `sql` otherwise), one autocommit statement at a time, with the
+ * handle's foreign-key setting untouched. What is different is that SQLite is
+ * not asked to flush those commits to disk: `synchronous` is OFF while the
+ * fixture is built and put back before this returns, so whatever the test
+ * runs next (usually `migrate`, with its fsync'd rollback point) runs exactly
+ * as it did before.
+ *
+ * WHY (VC-717). Every DDL statement of every hand-applied migration is its
+ * own commit, and under the default `synchronous = FULL` each commit flushes
+ * the journal and then the database. Building a v34 lineage this way issued
+ * ~500 fsyncs, a v43 one ~800 (strace, on CI's ubuntu-24.04 runner) — and the
+ * count grows with every migration added. On an idle runner a flush costs
+ * ~0.3 ms and nobody notices; on one whose disk is throttled it costs
+ * milliseconds, and `migrations.test.ts` timed out at 5 s in exactly the
+ * tests that build the deepest fixtures, while its CPU-bound fresh-install
+ * tests stayed at tens of milliseconds in the same run. A fixture's
+ * durability against power loss is not what any of these tests is about.
+ * `synchronous` decides when SQLite waits for the disk, not what it writes:
+ * the v2 through v43 lineages built this way were checked byte-identical to
+ * the flushing build's.
+ */
+export function applyMigrationsByHand(
+  db: Database.Database,
+  include: (migration: Migration) => boolean,
+): void {
+  const previous = db.pragma("synchronous", { simple: true }) as number;
+  db.pragma("synchronous = OFF");
+  try {
+    for (const migration of MIGRATIONS.filter(include)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+  } finally {
+    db.pragma(`synchronous = ${previous}`);
+  }
 }
 
 export interface TestDb {
