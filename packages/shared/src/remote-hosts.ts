@@ -227,6 +227,41 @@ export const REMOTE_HOST_LINK_CAP = 24;
 /** The reason a project past {@link REMOTE_HOST_LINK_CAP} reads, refused by this Mac (never by the host). */
 export const REMOTE_HOST_TOO_MANY_PROJECTS = "too-many-projects";
 
+/* ── Managing a host (VC-700 PR 3) ───────────────────────────────────── */
+
+/** The longest label a host may be given. */
+export const REMOTE_HOST_NAME_MAX = 64;
+
+/** `hosts.rename`: this Mac's label for a host. The host's own name never changes. */
+export interface RenameRemoteHostInput {
+  readonly hostId: string;
+  /** Trimmed; 1 to {@link REMOTE_HOST_NAME_MAX} characters, no control characters. */
+  readonly name: string;
+}
+
+/** One device enrolled with a host (`volli-hostd devices list`): never a key. */
+export interface RemoteHostDevice {
+  readonly deviceId: string;
+  /** What it called itself when it enrolled ("Hussain's MacBook Pro"). */
+  readonly name: string;
+  /** The enrolled key's fingerprint. */
+  readonly fingerprint: string;
+  /** ISO 8601. */
+  readonly enrolledAt: string;
+  /** How it enrolled (`ssh`). */
+  readonly via: string;
+  /** ISO 8601 once revoked, else `null`. */
+  readonly revokedAt: string | null;
+  /** This Mac's own enrollment (its `deviceId` is the registry's). */
+  readonly thisMac: boolean;
+}
+
+/** `hosts.devices`: the devices a host has enrolled, read over SSH when asked. */
+export interface RemoteHostDevices {
+  readonly hostId: string;
+  readonly devices: readonly RemoteHostDevice[];
+}
+
 /** The text a refusal of an action v1 does not do yet carries. */
 export const REMOTE_HOST_UPDATE_UNAVAILABLE =
   "Updating a host from this Mac comes in a later build: re-run Add a host to install this version.";
