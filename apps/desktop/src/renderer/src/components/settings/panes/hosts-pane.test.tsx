@@ -156,6 +156,26 @@ describe("Settings → Hosts", () => {
     await vi.waitFor(() => expect(root.textContent).not.toContain("Add a host…"));
   });
 
+  it("offers no Rename or Forget on a read-only hosts file: no menu, a plain name, Forget disabled", async () => {
+    const line = "This Mac’s hosts file is from a newer Volli.";
+    const root = await renderPane();
+    await act(async () =>
+      useRemoteHostsStore.getState().setHosts(useRemoteHostsStore.getState().hosts, line),
+    );
+    expect(root.querySelector('[aria-label^="More for"]')).toBeNull();
+    await openHost(root, "studio");
+    expect(root.querySelector('[aria-label="Host name"]')).toBeNull();
+    expect(
+      [...root.querySelectorAll("button")].some((b) => b.textContent?.includes("Rename")),
+    ).toBe(false);
+    const forget = [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Forget…",
+    );
+    expect(forget?.disabled).toBe(true);
+    expect(root.textContent).toContain(line);
+    expect(api.calls.filter(([method]) => method === "rename" || method === "forget")).toEqual([]);
+  });
+
   it("lists a host's projects", async () => {
     const root = await renderPane();
     await openHost(root, "hetzner-1");

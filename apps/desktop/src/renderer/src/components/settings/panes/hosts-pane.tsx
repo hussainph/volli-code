@@ -76,7 +76,7 @@ import {
   type HostRecord,
 } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { remoteHosts, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { remoteHosts, useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { deviceMeta, hostFacts, hostHealth, hostRowMeta, orderDevices } from "./hosts-pane-model";
 
@@ -129,9 +129,10 @@ export function HostsPane() {
   const [forgetting, setForgetting] = React.useState<RemoteHost | null>(null);
   const forgettingShown = useLastPresent(forgetting);
 
+  const writable = useHostsWritable();
   const open = (id: string, rename = false) => {
     setDirection(1);
-    setView({ kind: "host", id, rename });
+    setView({ kind: "host", id, rename: rename && writable });
   };
   const back = () => {
     setDirection(-1);
@@ -188,7 +189,10 @@ export function HostsPane() {
         </motion.div>
       </AnimatePresence>
 
-      <AlertDialog open={forgetting !== null} onOpenChange={(next) => !next && setForgetting(null)}>
+      <AlertDialog
+        open={forgetting !== null && writable}
+        onOpenChange={(next) => !next && setForgetting(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Forget {forgettingShown?.name}?</AlertDialogTitle>
@@ -317,6 +321,8 @@ function HostRow({
 }) {
   const { remote, record, projects } = host;
   const health = record === undefined ? null : hostHealth(record, projects);
+  // A read-only hosts file: nothing to rename or forget, so no menu at all.
+  const writable = useHostsWritable();
   return (
     <ListRow
       data-host-row=""
@@ -336,29 +342,31 @@ function HostRow({
       trailing={health === null ? undefined : <Health state={health.state}>{health.label}</Health>}
       actions={
         <>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`More for ${remote.name}`}
-                className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-              >
-                <DotsThreeIcon weight="bold" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={onRename}>
-                <PencilSimpleIcon />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={onForget}>
-                <TrashIcon />
-                Forget…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {writable ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`More for ${remote.name}`}
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                >
+                  <DotsThreeIcon weight="bold" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={onRename}>
+                  <PencilSimpleIcon />
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={onForget}>
+                  <TrashIcon />
+                  Forget…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <CaretRightIcon
             aria-hidden
             onClick={onOpen}
@@ -386,6 +394,7 @@ function HostPage({
 }) {
   const { remote, record, projects } = host;
   const health = record === undefined ? null : hostHealth(record, projects);
+  const readOnly = useRemoteHostsStore((state) => state.readOnly);
   return (
     <>
       <div className="flex items-center gap-4 rounded-lg bg-card px-4 py-4">
@@ -414,7 +423,7 @@ function HostPage({
       </div>
 
       <PrefSection title="Host" icon={HardDrivesIcon}>
-        <NameRow host={remote} startEditing={startRename} />
+        <NameRow host={remote} startEditing={startRename} readOnly={readOnly !== null} />
         {hostFacts(remote).map((fact) => (
           <PrefRow key={fact.label} label={fact.label} hint={fact.hint}>
             <span className="truncate text-ui text-muted-foreground">{fact.value}</span>
@@ -429,12 +438,13 @@ function HostPage({
       <div className="rounded-lg bg-card px-4 py-4">
         <PrefRow
           label="Forget host"
-          hint="Removes this Mac’s pairing and its key. Nothing on the host changes."
+          hint={readOnly ?? "Removes this Mac’s pairing and its key. Nothing on the host changes."}
         >
           <Button
             size="sm"
             variant="outline"
             className="text-destructive hover:text-destructive"
+            disabled={readOnly !== null}
             onClick={onForget}
           >
             Forget…
@@ -449,11 +459,22 @@ function HostPage({
  * The name, edited where it is read: this Mac's label for the host, never
  * the host's own name. Enter or blur commits, Escape puts it back.
  */
-function NameRow({ host, startEditing }: { host: RemoteHost; startEditing: boolean }) {
-  const [editing, setEditing] = React.useState(startEditing);
+function NameRow({
+  host,
+  startEditing,
+  readOnly,
+}: {
+  host: RemoteHost;
+  startEditing: boolean;
+  /** The hosts file cannot change: the name is read, never edited. */
+  readOnly: boolean;
+}) {
+  const [editing, setEditing] = React.useState(startEditing && !readOnly);
   return (
     <PrefRow label="Name" hint="What this Mac calls it. The host’s own name doesn’t change.">
-      {editing ? (
+      {readOnly ? (
+        <span className="truncate text-ui text-muted-foreground">{host.name}</span>
+      ) : editing ? (
         <InlineRename
           size="field"
           value={host.name}

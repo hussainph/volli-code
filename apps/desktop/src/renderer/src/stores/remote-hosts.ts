@@ -143,6 +143,15 @@ export function setRemoteHostsApi(next: RemoteHostsApi | null): void {
   api = next;
 }
 
+/**
+ * Whether this Mac's hosts can change now: `false` while main reports the
+ * hosts file read-only (newer Volli, unreadable). Settings → Hosts offers no
+ * Add, Rename or Forget then, rather than letting main refuse each.
+ */
+export function useHostsWritable(): boolean {
+  return useRemoteHostsStore((state) => state.readOnly === null);
+}
+
 /** One remote host's registry record, or `undefined` (This Mac, or gone). */
 export function remoteHostOf(
   hosts: readonly RemoteHost[],
