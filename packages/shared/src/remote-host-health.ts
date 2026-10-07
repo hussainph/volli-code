@@ -25,11 +25,14 @@ export function remoteHostDiagnostic(
   max: number = REMOTE_HOST_HEALTH_LIMITS.diagnostic,
 ): string {
   const scrubbed = redactLogText(
-    text.replace(URL_SECRETS, "$1$2?[redacted]").replace(URL_USERINFO, "$1[redacted]@"),
+    text
+      .replace(/\bvdc1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu, "[redacted]")
+      .replace(URL_SECRETS, "$1$2?[redacted]")
+      .replace(URL_USERINFO, "$1[redacted]@"),
     Number.MAX_SAFE_INTEGER,
   );
   const line = scrubbed
-    .replace(/[\p{Cc}]+/gu, " ")
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;

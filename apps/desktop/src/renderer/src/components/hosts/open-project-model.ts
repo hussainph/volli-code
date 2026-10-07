@@ -8,12 +8,13 @@
  * retry, "New project…", or Re-add, or a legacy command to run once on the host, with Copy.
  * Words: the host's own name, "project" and "this Mac"; never Workspace.
  */
-import type {
-  HostWorkspace,
-  HostWorkspaceCreateResult,
-  RemoteHostProject,
-  RemoteHostProjects,
-  RemoteProjectFailure,
+import {
+  gitUrlProblem,
+  type HostWorkspace,
+  type HostWorkspaceCreateResult,
+  type RemoteHostProject,
+  type RemoteHostProjects,
+  type RemoteProjectFailure,
 } from "@volli/shared";
 
 /** Modern rows intentionally have no prefix or ticket count. */
@@ -138,8 +139,8 @@ export function projectSource(text: string): ProjectSource | null {
 }
 
 /**
- * Why the field cannot be sent yet, in one line, or `null`. The host judges
- * the rest (a folder it cannot see, a URL it will not clone) in its own.
+ * Why the field cannot be sent yet, in one line, or `null`. The complete
+ * clone admission policy runs here before any URL leaves this window.
  */
 export function sourceProblem(
   source: ProjectSource | null,
@@ -147,12 +148,12 @@ export function sourceProblem(
   modern = false,
 ): string | null {
   if (source === null) return null;
-  // A token rides in a query, a fragment or a URL's password: it never leaves this window.
-  if (
-    source.kind === "git" &&
-    (/[?#%]/u.test(source.gitUrl) || /:\/\/[^/@]*:[^/@]*@/u.test(source.gitUrl))
-  ) {
-    return `Use the repository's plain URL: a token goes in Sign-ins on ${hostName}, not in the URL.`;
+  if (source.kind === "git") {
+    const problem = gitUrlProblem(source.gitUrl);
+    if (problem === "credentials" || problem === "query") {
+      return `Use the repository's plain URL: a token goes in Sign-ins on ${hostName}, not in the URL.`;
+    }
+    if (problem !== null) return "That isn't a git URL this Mac can clone: use https or ssh.";
   }
   if (
     source.kind === "path" &&

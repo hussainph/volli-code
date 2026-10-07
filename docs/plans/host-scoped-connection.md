@@ -163,5 +163,19 @@ each flow's lifetime to its physical connection.
 vocabulary (`connecting`, `ready`, `older`, `unavailable`) and an open `granted`
 string vocabulary bounded at the IPC schema. Existing consumers may ignore it.
 Modern catalog/create uses `host.workspaces`; absolute remote folder paths and
-repository URLs retain the shared registration/admission rules. The renderer
+repository URLs retain the shared registration/admission rules. The pure shared
+`gitUrlProblem` is used both for renderer feedback and main's pre-forward create
+guard: HTTPS usernames, passwords, query/fragment/percent encodings and invalid
+transports never leave this Mac; SSH/scp usernames remain valid. The renderer
 uses HOST readiness for logs and projects, never a ready Workspace as a proxy.
+
+Main validates every generic HOST answer/yield against the actual public output
+schema before IPC. Invalid answers fail whole with client-side `response-invalid`
+/ `BAD_GATEWAY`; this adds to the closed recognized reason vocabulary, not the
+frozen Workspace wire schemas. Diagnostics and nested logs scrub signed `vdc1`
+statements and the held connection credential by exact value through an opaque
+redactor (no credential getter), plus URL secrets and control characters. Unsafe
+catalog names/paths fail whole rather than being clipped into different identities;
+unsafe remote URLs become null. Main-owned sign-in/callback routing is unchanged.
+The renderer catalog adapter has no runtime test/lab setter; lab fixtures go
+through its production IPC route.

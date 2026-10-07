@@ -3,14 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createProjectOnHost,
-  hostWorkspacesApi,
   projectsOnHost,
-  setHostWorkspacesApi,
   setRemoteHostsApi,
   usesLegacyProjects,
 } from "./remote-hosts";
-import { relayHostScope } from "../lib/relay-host-scope";
-vi.mock("../lib/relay-host-scope", () => ({ relayHostScope: vi.fn() }));
+import { hostWorkspacesApi } from "../lib/host-workspaces-api";
+vi.mock("../lib/host-workspaces-api", () => ({ hostWorkspacesApi: vi.fn() }));
 
 import { createFakeRemoteHostsApi, registryHost } from "./remote-hosts.test-support";
 
@@ -29,13 +27,13 @@ function fake() {
   }));
   const factory = vi.fn(() => ({ list, create }));
   setRemoteHostsApi(legacy);
-  setHostWorkspacesApi(factory);
+  vi.mocked(hostWorkspacesApi).mockImplementation(factory);
   return { legacy, list, create, factory };
 }
 
 afterEach(() => {
   setRemoteHostsApi(null);
-  setHostWorkspacesApi(null);
+  vi.mocked(hostWorkspacesApi).mockReset();
 });
 
 describe("HOST project catalog routing", () => {
@@ -105,7 +103,7 @@ describe("HOST project catalog routing", () => {
     "capacity",
   ] as const)("preserves the named HOST refusal %s", async (code) => {
     const f = fake();
-    setHostWorkspacesApi(() => ({
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({
       list: f.list,
       create: async () => ({ ok: false, failure: { code, message: code } }),
     }));
@@ -154,27 +152,6 @@ describe("HOST project catalog routing", () => {
     expect(f.legacy.calls).toEqual([["projects", host.id]]);
     expect(f.factory).not.toHaveBeenCalled();
   });
-});
-
-it("uses a typed HostRouter client over the dedicated HOST relay in production", async () => {
-  const query = vi.fn(async () => ({ workspaces: [ROW], omitted: 0 }));
-  const mutate = vi.fn(async () => ({ ok: true, workspace: ROW }));
-  vi.mocked(relayHostScope).mockImplementation((hostId) => ({
-    hostId,
-    getState: () => ({ status: "open" }),
-    subscribeState: () => () => {},
-    query,
-    mutate,
-    subscribe: vi.fn(),
-  }));
-  const api = hostWorkspacesApi("host-a");
-  expect(await api.list()).toEqual({ workspaces: [ROW], omitted: 0 });
-  expect(await api.create(INPUT)).toEqual({ ok: true, workspace: ROW });
-  expect(relayHostScope).toHaveBeenCalledWith("host-a");
-  expect(query).toHaveBeenCalledWith("workspaces.list", undefined, {});
-  expect(mutate).toHaveBeenCalledWith("workspaces.create", INPUT, {});
-  setHostWorkspacesApi(null);
-  expect(await createProjectOnHost(modern(), INPUT)).toEqual({ ok: true, project: ROW });
 });
 
 it("sends the minimum old system path input without an optional name or sudo", async () => {

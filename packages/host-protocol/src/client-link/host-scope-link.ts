@@ -13,6 +13,8 @@ import {
 export type HostScopeLinkState = ClientLinkState<HostScopeWelcome>;
 export interface HostScopeLink extends ClientLink<HostScopeWelcome> {
   readonly hostId: string;
+  /** Main's diagnostic boundary can redact the held statement without reading it. */
+  redactDiagnostic(text: string): string;
 }
 export interface HostScopeLinkOptions extends Omit<
   HostLinkOptions,
@@ -25,14 +27,20 @@ export interface HostScopeLinkOptions extends Omit<
 
 export function createHostScopeLink(options: HostScopeLinkOptions): HostScopeLink {
   if (!isUuidV4(options.hostId)) throw new Error("A host scope link requires a pinned host UUIDv4");
+  let heldCredential = "";
+  const redactDiagnostic = (text: string): string =>
+    heldCredential === "" ? text : text.replaceAll(heldCredential, "[redacted]");
   const transport = createClientLink<HostScopeHello, HostScopeWelcome>(options, {
-    buildHello: (credential) =>
-      buildHostHello({
+    redactDiagnostic,
+    buildHello: (credential) => {
+      heldCredential = credential;
+      return buildHostHello({
         scope: "host",
         client: options.client,
         credential,
         features: options.features,
-      }),
+      });
+    },
     welcomePath: "protocol.hostWelcome",
     refusalProbePath: "protocol.welcome",
     scope: "host",
@@ -44,5 +52,5 @@ export function createHostScopeLink(options: HostScopeLinkOptions): HostScopeLin
             : (options.verifyProof?.(validated, sent) ?? null),
       }),
   });
-  return { ...transport, hostId: options.hostId };
+  return { ...transport, hostId: options.hostId, redactDiagnostic };
 }

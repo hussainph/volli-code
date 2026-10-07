@@ -402,6 +402,8 @@ export interface ClientLinkHandshake<Hello, Welcome> {
   readonly validate: (welcome: unknown, hello: Hello) => WelcomeValidation<Welcome>;
   readonly accepted?: (welcome: Welcome) => void;
   readonly scope?: "workspace" | "host";
+  /** HOST-only opaque redaction before a failed connection's diagnostics escape. */
+  readonly redactDiagnostic?: (text: string) => string;
   /** An N-1 listener does not know the modern bootstrap path. Read its known
    * bootstrap to obtain the actual handshake refusal; NOT_FOUND alone is
    * never compatibility evidence. */
@@ -662,6 +664,12 @@ export function createClientLink<
 
   /** Settles the link once for a connection that failed, and retires it. */
   function fail(current: Connection<Hello> | null, outcome: Outcome): void {
+    if (handshake.redactDiagnostic !== undefined) {
+      outcome = {
+        ...outcome,
+        error: { ...outcome.error, message: handshake.redactDiagnostic(outcome.error.message) },
+      };
+    }
     if (current !== null) {
       if (current.retired || connection !== current) return;
       retire(current);

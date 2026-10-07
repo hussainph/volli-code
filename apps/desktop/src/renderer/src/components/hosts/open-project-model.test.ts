@@ -89,7 +89,7 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     expect(projectSource("~/code/acme")).toEqual({ kind: "path", path: "~/code/acme" });
   });
 
-  it("asks a folder for a full path, and leaves the rest to the host", () => {
+  it("asks a folder for a full path and rejects unsafe clone URLs before transport", () => {
     expect(sourceProblem(null, "box")).toBeNull();
     expect(sourceProblem({ kind: "path", path: "acme" }, "box")).toBe(
       "A folder on box is a full path, like /srv/volli/app.",
@@ -101,18 +101,24 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       "A folder on box is a full path, like /srv/volli/app.",
     );
     expect(sourceProblem({ kind: "path", path: "/home/me/acme" }, "box", true)).toBeNull();
-    expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBeNull();
+    expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBe(
+      "That isn't a git URL this Mac can clone: use https or ssh.",
+    );
     const plain =
       "Use the repository's plain URL: a token goes in Sign-ins on box, not in the URL.";
     for (const gitUrl of [
       "https://x.io/r.git?access_token=t",
+      "https://u@x.io/r.git",
+      "https://fixture_token@x.io/r.git",
       "https://x.io/r.git#t",
       "https://x.io/r.git%3Ft",
       "https://u:t0k@x.io/r.git",
     ]) {
       expect(sourceProblem({ kind: "git", gitUrl }, "box"), gitUrl).toBe(plain);
     }
-    expect(sourceProblem({ kind: "git", gitUrl: "https://u@x.io/r.git" }, "box")).toBeNull();
+    for (const gitUrl of ["https://x.io/r.git", "ssh://deploy@x.io/r.git", "git@x.io:r.git"]) {
+      expect(sourceProblem({ kind: "git", gitUrl }, "box", true)).toBeNull();
+    }
   });
 
   it("hints where a clone goes, and says what runs while it does", () => {

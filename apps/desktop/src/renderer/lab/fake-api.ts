@@ -160,6 +160,12 @@ function node(
   return proxy;
 }
 
+// The production Session RPC singleton captures request once. Keep this lab
+// door stable while activations replace its fixture, so it cannot keep calling
+// a catalog belonging to a scratch that has already cleaned up.
+let currentRpcRequest: Api["sessionRpc"]["request"];
+const requestCurrentRpc: Api["sessionRpc"]["request"] = (request) => currentRpcRequest(request);
+
 /**
  * Installs the fake bridge on `window.api`. Call once, before rendering.
  *
@@ -172,5 +178,18 @@ export function installFakeApi(overrides: ApiOverrides = {}): void {
   // Cleared per install so switching scratches re-reports what the new one
   // leaves unstubbed, rather than staying quiet about a different surface.
   warned.clear();
-  window.api = node(overrides, [], new Map()) as Api;
+  const next = node(overrides, [], new Map()) as Api;
+  currentRpcRequest = next.sessionRpc.request;
+  window.api = node(
+    {
+      ...overrides,
+      sessionRpc: {
+        request: requestCurrentRpc,
+        onEvent: next.sessionRpc.onEvent,
+        cancel: next.sessionRpc.cancel,
+      },
+    },
+    [],
+    new Map(),
+  ) as Api;
 }

@@ -264,6 +264,20 @@ describe("host-scope link shares transport without Workspace wire fields", () =>
     },
   );
 
+  it("redacts the held statement by exact value without exporting it, including handshake failures", async () => {
+    const f = await host();
+    const credential = await f.options.credential();
+    f.state.error = hostError("credential-invalid", `Reflected: ${credential}`);
+    const link = f.create({ credential: () => credential });
+    await until(link, "refused");
+    expect(link.getState()).toMatchObject({ error: { message: "Reflected: [redacted]" } });
+    expect(link.redactDiagnostic(`twice ${credential} ${credential}`)).toBe(
+      "twice [redacted] [redacted]",
+    );
+    expect(link).not.toHaveProperty("credential");
+    expect(link).not.toHaveProperty("heldCredential");
+  });
+
   it("never probes or downgrades a named Workspace refusal carrying NOT_FOUND", async () => {
     const f = await host();
     f.state.error = hostError("workspace-unknown", "No Workspace");
@@ -343,6 +357,7 @@ describe("host-scope link shares transport without Workspace wire fields", () =>
       deliver = resolve;
     });
     const closed = f.create({ credential: () => pending });
+    expect(closed.redactDiagnostic("no held credential")).toBe("no held credential");
     closed.close();
     deliver(await f.options.credential());
     await new Promise((resolve) => setTimeout(resolve, 10));

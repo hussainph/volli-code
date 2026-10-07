@@ -13,7 +13,8 @@
  *
  * Pick a scenario, then "Open a project on hetzner-1…", or "New project…".
  * The script answers after a short wait, as SSH would. Nothing reaches SSH or
- * main: the API is `createFakeRemoteHostsApi`.
+ * main: legacy calls use `createFakeRemoteHostsApi`; modern calls keep the
+ * shipped HOST adapter and relay over a lab-only fake preload IPC catalog.
  */
 import * as React from "react";
 import type { HostWorkspace, RemoteHostProject, RemoteHostProjects } from "@volli/shared";
@@ -21,12 +22,14 @@ import type { HostWorkspace, RemoteHostProject, RemoteHostProjects } from "@voll
 import { HostsChrome } from "@renderer/components/hosts/hosts-chrome";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useExperimentsStore } from "@renderer/stores/experiments";
-import {
-  setHostWorkspacesApi,
-  setRemoteHostsApi,
-  useRemoteHostsStore,
-} from "@renderer/stores/remote-hosts";
+import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
+import { createHostWorkspacesIpcFixture } from "../host-workspaces-ipc";
 import { createFakeRemoteHostsApi, registryHost } from "@renderer/stores/remote-hosts.test-support";
+
+const catalogFixture = createHostWorkspacesIpcFixture();
+export const api = { sessionRpc: catalogFixture.bridge };
 
 export const title = "Open a project on a host — list, open, create";
 export const note =
@@ -116,11 +119,11 @@ export default function HostOpenProjectScratch() {
     useExperimentsStore.setState({
       snapshot: { ...before, cloud: { enabled: true, source: "storage" } },
     });
-    const api = createFakeRemoteHostsApi();
+    const legacyApi = createFakeRemoteHostsApi();
     let creates = 0;
     let unreachableReads = 0;
-    const scripted: typeof api = {
-      ...api,
+    const scripted: typeof legacyApi = {
+      ...legacyApi,
       async projects(hostId) {
         await wait(700);
         const current = scenarioRef.current;
@@ -180,16 +183,16 @@ export default function HostOpenProjectScratch() {
             },
           };
         }
-        return api.createProject(input);
+        return legacyApi.createProject(input);
       },
       async openWorkspace(hostId, workspaceId) {
         await wait(200);
-        return api.openWorkspace(hostId, workspaceId);
+        return legacyApi.openWorkspace(hostId, workspaceId);
       },
     };
     setRemoteHostsApi(scripted);
     let made: HostWorkspace | null = null;
-    setHostWorkspacesApi(() => ({
+    const detachCatalog = catalogFixture.connect(HOST.id, {
       list: async () => {
         await wait(700);
         return {
@@ -211,7 +214,18 @@ export default function HostOpenProjectScratch() {
         made = row;
         return { ok: true, workspace: row };
       },
-    }));
+    });
+    const connectionBefore = useHostConnectionStore.getState().hosts;
+    if (scenario === "modern-mac") {
+      useHostConnectionStore.setState({
+        hosts: [
+          ...connectionBefore.filter((record) => record.id !== HOST.id),
+          remoteHost(HOST.id, HOST.name, {
+            hostScope: { status: "ready", granted: ["host.workspaces"] },
+          }),
+        ],
+      });
+    }
     useRemoteHostsStore.getState().setHosts([
       scenario === "modern-mac" || scenario === "older-user"
         ? registryHost({
@@ -229,7 +243,8 @@ export default function HostOpenProjectScratch() {
         : HOST,
     ]);
     return () => {
-      setHostWorkspacesApi(null);
+      detachCatalog();
+      useHostConnectionStore.setState({ hosts: connectionBefore });
       setRemoteHostsApi(null);
       useRemoteHostsStore.getState().closeProjectSheet();
       useRemoteHostsStore.getState().setHosts([], null);

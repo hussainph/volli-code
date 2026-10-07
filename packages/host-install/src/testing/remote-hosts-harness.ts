@@ -352,6 +352,7 @@ export function fakeHostScopeLinks(
     const listeners = new Set<(state: HostScopeLinkState) => void>();
     const link: FakeHostScopeLink = {
       hostId: options.hostId,
+      redactDiagnostic: String,
       options,
       listeners,
       closed: false,

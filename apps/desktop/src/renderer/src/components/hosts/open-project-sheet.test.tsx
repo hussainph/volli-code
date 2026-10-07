@@ -15,16 +15,15 @@ import type {
 } from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
-import {
-  setHostWorkspacesApi,
-  setRemoteHostsApi,
-  useRemoteHostsStore,
-} from "@renderer/stores/remote-hosts";
+import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
   createFakeRemoteHostsApi,
   registryHost,
   type FakeRemoteHostsApi,
 } from "@renderer/stores/remote-hosts.test-support";
+
+import { hostWorkspacesApi } from "@renderer/lib/host-workspaces-api";
+vi.mock("@renderer/lib/host-workspaces-api", () => ({ hostWorkspacesApi: vi.fn() }));
 
 import { HostsChrome } from "./hosts-chrome";
 import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
@@ -57,7 +56,7 @@ afterEach(async () => {
   await world?.cleanup();
   world = null;
   setRemoteHostsApi(null);
-  setHostWorkspacesApi(null);
+  vi.mocked(hostWorkspacesApi).mockReset();
   useRemoteHostsStore.setState({
     hosts: [],
     readOnly: null,
@@ -411,7 +410,7 @@ describe("projects before a Workspace on a modern HOST connection", () => {
   it("lists modern rows honestly and creates on a user install, with no SSH or sudo", async () => {
     const list = vi.fn(async () => ({ workspaces: [MODERN_ROW], omitted: 0 }));
     const create = vi.fn(async () => ({ ok: true as const, workspace: MODERN_ROW }));
-    setHostWorkspacesApi(() => ({ list, create }));
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
     await openSheet("list", MODERN);
     expect(list).toHaveBeenCalledOnce();
     expect(sheet().textContent).toContain(ACME.path);
@@ -432,10 +431,35 @@ describe("projects before a Workspace on a modern HOST connection", () => {
     expect(api.calls).toEqual([["openWorkspace", HOST.id, ACME.id]]);
   });
 
+  it.each([
+    "https://fixture_token@github.com/me/acme.git",
+    "https://user:fixture_password@github.com/me/acme.git",
+    "https://github.com/me/acme.git?token=fixture",
+    "https://github.com/me/acme.git#fixture",
+    "https://github.com/me/acme.git%3Ftoken=fixture",
+    "file:///srv/acme",
+    "http://github.com/me/acme.git",
+  ])("blocks prohibited modern clone URL before transport: %s", async (url) => {
+    const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
+    const create = vi.fn();
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
+    await openSheet("new", MODERN);
+    await type("Git URL or folder on hetzner-1", url);
+    expect(sheet().textContent).toContain(
+      url.startsWith("file:") || url.startsWith("http:")
+        ? "That isn't a git URL this Mac can clone"
+        : "Use the repository's plain URL",
+    );
+    expect(button("Create and open")?.disabled).toBe(true);
+    await act(async () => sheet().querySelector("form")!.requestSubmit());
+    expect(create).not.toHaveBeenCalled();
+    expect(api.calls).toEqual([]);
+  });
+
   it("requires an absolute folder path on modern hosts without SSH shell expansion", async () => {
     const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
     const create = vi.fn();
-    setHostWorkspacesApi(() => ({ list, create }));
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
     await openSheet("new", MODERN);
     await type("Git URL or folder on hetzner-1", "~/acme");
     expect(sheet().textContent).toContain("A folder on hetzner-1 is a full path");
@@ -459,7 +483,7 @@ describe("projects before a Workspace on a modern HOST connection", () => {
         failure: { code: "target-exists", message: "Target exists; check the project list." },
       })
       .mockResolvedValueOnce({ ok: true, workspace: MODERN_ROW });
-    setHostWorkspacesApi(() => ({ list, create }));
+    vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
     await openSheet("new", MODERN);
     await type("Git URL or folder on hetzner-1", "https://example.test/acme.git");
     expect(sheet().textContent).toContain("Cloned on the host, then added.");
@@ -489,7 +513,7 @@ describe("projects before a Workspace on a modern HOST connection", () => {
     "says a modern %s failure and never falls back to SSH",
     async (status) => {
       const list = vi.fn();
-      setHostWorkspacesApi(() => ({ list, create: vi.fn() }));
+      vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create: vi.fn() }));
       await openSheet("list", { ...MODERN, hostScope: { status, granted: [] } });
       expect(sheet().textContent).toContain(
         status === "ready" ? "did not grant project access" : "Try again when it reconnects",

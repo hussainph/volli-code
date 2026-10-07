@@ -143,10 +143,19 @@ describe("bounded host health producer", () => {
 describe("host diagnostic one-line policy", () => {
   it("strips controls, redacts URL userinfo/query/fragment and credential-shaped text before bounding", () => {
     const token = `ghp_${"a".repeat(36)}`;
-    const text = `bad\u0007\n https://person:fake-password@example.test/path?token=fake-query#fake-fragment ${token} https://user:fake-other@example.test/plain`;
+    const text = `bad\u0007\n\u202e\u2028 vdc1.fixture_body.fixture_signature https://person:fake-password@example.test/path?token=fake-query#fake-fragment ${token} https://user:fake-other@example.test/plain`;
     const line = remoteHostDiagnostic(text);
     expect(line).not.toMatch(/[\p{Cc}]/u);
-    for (const secret of ["fake-password", "fake-query", "fake-fragment", "fake-other", token])
+    for (const secret of [
+      "fake-password",
+      "fake-query",
+      "fake-fragment",
+      "fake-other",
+      token,
+      "vdc1.",
+      "fixture_body",
+      "fixture_signature",
+    ])
       expect(line).not.toContain(secret);
     expect(line).toContain("[redacted]");
     expect(remoteHostDiagnostic("x".repeat(limits.diagnostic))).toHaveLength(limits.diagnostic);

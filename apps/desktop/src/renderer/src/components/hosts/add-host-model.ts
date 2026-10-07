@@ -95,7 +95,7 @@ function verbOf(id: ChecklistRowId, name: string): string {
 }
 
 /** What a done row found, from the flow's facts; the noun where it found nothing to say. */
-function foundOf(id: ChecklistRowId, view: AddHostFlowView): string {
+function foundOf(id: ChecklistRowId, view: AddHostFlowView, host: RemoteHost | undefined): string {
   const { facts } = view;
   switch (id) {
     case "connect":
@@ -115,8 +115,9 @@ function foundOf(id: ChecklistRowId, view: AddHostFlowView): string {
       if (facts.keepsRunning === false) return "Stops when you log out";
       return view.startup ?? NOUNS.start;
     case "pair":
-      // VC-719: the flow proved SSH (and pairing), not that hostd answered —
-      // the engine's health probe says ready, on the host, afterwards.
+      // Modern completion waits for an authenticated HOST welcome. Before
+      // validation (or with old DTO evidence), only the SSH claim is known.
+      if (completedHostWelcome(view, host)) return "Connected";
       return facts.alreadyPaired ? "Already paired with this Mac" : "Connected over SSH";
   }
 }
@@ -132,7 +133,7 @@ function rowMark(statuses: readonly AddHostStepStatus[], view: AddHostFlowView):
 }
 
 /** The checklist's rows: five, each saying what it found once done. */
-export function stepRows(view: AddHostFlowView): StepRow[] {
+export function stepRows(view: AddHostFlowView, host?: RemoteHost): StepRow[] {
   const status = new Map(view.steps.map((step) => [step.id, step.status]));
   // Already paired: the check found it, and pairing is in place; nothing else need run.
   const paired = view.question?.kind === "already-paired";
@@ -144,7 +145,7 @@ export function stepRows(view: AddHostFlowView): StepRow[] {
       paired && id === "pair"
         ? "Already paired with this Mac"
         : mark === "done"
-          ? foundOf(id, view)
+          ? foundOf(id, view, host)
           : mark === "active"
             ? `${verbOf(id, view.name)}…`
             : NOUNS[id];
@@ -297,13 +298,16 @@ export function questionPrompt(
 
 const OS_NAMES = { linux: "Linux", macos: "macOS" } as const;
 
-/**
- * The finished sheet's one-line summary, from what the add found:
- * "Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0"; the registry's OS where
- * the add did not say. When it says nothing of the host, the one proved
- * claim stands (VC-719): never "Ready" — that is the engine's health to
- * say, on the host, after the sheet closes.
- */
+function completedHostWelcome(view: AddHostFlowView, host: RemoteHost | undefined): boolean {
+  return (
+    view.status === "done" &&
+    view.hostId === host?.id &&
+    host?.hostScope?.status === "ready" &&
+    host.hostScope.granted.length > 0
+  );
+}
+
+/** The finished sheet's summary uses found OS/version facts, or the proved connection. */
 export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined): string {
   const { facts } = view;
   const os = facts.os ?? host?.os ?? null;
@@ -313,7 +317,11 @@ export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined
     facts.arch,
     version === null ? null : `Volli host ${version}`,
   ].filter((part): part is string => part !== null);
-  return parts.length === 0 ? "Connected over SSH" : parts.join(" · ");
+  return parts.length === 0
+    ? completedHostWelcome(view, host)
+      ? "Connected"
+      : "Connected over SSH"
+    : parts.join(" · ");
 }
 
 /**

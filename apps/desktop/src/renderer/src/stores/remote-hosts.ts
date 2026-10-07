@@ -26,20 +26,13 @@ import type {
   RemoteHostProjects,
 } from "@volli/shared";
 import { create } from "zustand";
-import { createTRPCClient } from "@trpc/client";
-import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";
-import type { HostRouter } from "@volli/session-rpc";
-import type {
-  HostWorkspaceCreateInput,
-  HostWorkspaceCreateResult,
-  HostWorkspaceList,
-} from "@volli/shared";
+import type { HostWorkspaceCreateInput } from "@volli/shared";
 
 import type {
   HostProjectsListing,
   ProjectCreateResult,
 } from "../components/hosts/open-project-model";
-import { relayHostScope } from "../lib/relay-host-scope";
+import { hostWorkspacesApi } from "../lib/host-workspaces-api";
 import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 
 /** What managing remote hosts asks of desktop main (the desktop-only tier). */
@@ -243,27 +236,6 @@ export function remoteHostOf(
   return hostId === null ? undefined : hosts.find((host) => host.id === hostId);
 }
 
-/** Typed HOST catalog: no Workspace has to be open to make these calls. */
-export interface HostWorkspacesApi {
-  list(): Promise<HostWorkspaceList>;
-  create(input: HostWorkspaceCreateInput): Promise<HostWorkspaceCreateResult>;
-}
-export function hostWorkspacesApi(hostId: string): HostWorkspacesApi {
-  const client = createTRPCClient<HostRouter>({
-    links: [hostLinkTrpcLink(relayHostScope(hostId))],
-  });
-  return {
-    list: () => client.workspaces.list.query(),
-    create: (input) => client.workspaces.create.mutate(input),
-  };
-}
-
-let workspacesApi: (hostId: string) => HostWorkspacesApi = hostWorkspacesApi;
-/** Tests can replace the typed production adapter without casting protocol output. */
-export function setHostWorkspacesApi(next: ((hostId: string) => HostWorkspacesApi) | null): void {
-  workspacesApi = next ?? hostWorkspacesApi;
-}
-
 /** Absent is the pre-HOST DTO; only explicit incompatibility is classified older. */
 export function usesLegacyProjects(host: RemoteHost): boolean {
   return host.hostScope === undefined || host.hostScope.status === "older";
@@ -282,7 +254,7 @@ export async function projectsOnHost(host: RemoteHost): Promise<HostProjectsList
     return host.mode === "user" ? { ...listing, adds: { kind: "user-install" } } : listing;
   }
   requireHostWorkspaces(host);
-  const listing = await workspacesApi(host.id).list();
+  const listing = await hostWorkspacesApi(host.id).list();
   return {
     hostId: host.id,
     projects: listing.workspaces,
@@ -306,7 +278,7 @@ export async function createProjectOnHost(
     });
   }
   requireHostWorkspaces(host);
-  const result = await workspacesApi(host.id).create(input);
+  const result = await hostWorkspacesApi(host.id).create(input);
   return result.ok
     ? { ok: true, project: result.workspace }
     : { ok: false, failure: { ...result.failure, command: null } };
