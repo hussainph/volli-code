@@ -49,6 +49,7 @@ export function refuseRemoteTicket(ticketId: string | null | undefined): boolean
 }
 
 const NO_SUBSCRIPTION = () => () => {};
+const readCloud = (): boolean => isExperimentOn(useExperimentsStore.getState().snapshot, "cloud");
 
 /**
  * {@link remoteHostNow} for a component: the remote host serving the project,
@@ -58,7 +59,6 @@ const NO_SUBSCRIPTION = () => () => {};
  * mounts behind it.
  */
 export function useRemoteProjectHost(projectId: string | null): HostRecord | null {
-  const readCloud = () => isExperimentOn(useExperimentsStore.getState().snapshot, "cloud");
   const cloud = useSyncExternalStore(useExperimentsStore.subscribe, readCloud, readCloud);
   const read = () => (cloud ? remoteHostNow(projectId) : null);
   return useSyncExternalStore(
