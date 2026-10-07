@@ -31,8 +31,10 @@ import {
   type SessionReadState,
 } from "@volli/shared";
 
+import { sessionListingReaderForTicket } from "@renderer/lib/session-listing-reader";
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import type { ListingRefreshOptions } from "./project-sessions";
 import { markSessionRead } from "./session-read-mark";
 
 /** The Session id a listing row answers to, whichever shape it arrived in. */
@@ -80,7 +82,7 @@ export interface TicketSessionRecordsState {
   /** The latest failed baseline's detail, cleared when a read starts or lands. */
   listingError: Readonly<Record<string, string | null>>;
   /** Re-fetches `ticketId`'s rows from main and replaces the cached list. Toasts on failure. */
-  refresh(ticketId: string): Promise<void>;
+  refresh(ticketId: string, options?: ListingRefreshOptions): Promise<void>;
   /**
    * {@link refresh}, but only for a ticket this cache has never read.
    *
@@ -154,27 +156,37 @@ export function createTicketSessionRecordsStore() {
     listingState: {},
     listingError: {},
 
-    refresh(ticketId) {
+    refresh(ticketId, options = {}) {
       const existing = inFlight.get(ticketId);
       if (existing !== undefined) return existing;
+      const quiet = options.quiet === true;
       // VC-383's roster has four facts, not one convenient `undefined` test:
       // no entry has never been read, `loading` owns the skeleton, `loaded`
       // earns an empty sentence, and `failed` must stand the skeleton down.
       // Keeping this beside the rows makes the distinction reusable by another
       // client instead of re-derived by every JSX consumer.
-      set((state) => ({
-        listingState: { ...state.listingState, [ticketId]: "loading" },
-        listingError: { ...state.listingError, [ticketId]: null },
-      }));
+      // A quiet read (VC-713: a remote ticket's poll, focus or reconnect
+      // re-read) keeps the rows on screen while it runs and, failing, keeps
+      // them and says nothing: nobody is waiting on it, and the next is due.
+      if (!quiet || ticketSessionListingStateOf(get(), ticketId) !== "loaded") {
+        set((state) => ({
+          listingState: { ...state.listingState, [ticketId]: "loading" },
+          listingError: { ...state.listingError, [ticketId]: null },
+        }));
+      }
+      const failed = (message: string): void => {
+        if (quiet && ticketSessionListingStateOf(get(), ticketId) === "loaded") return;
+        if (!quiet) toastError(`Couldn't load sessions: ${message}`);
+        set((state) => ({
+          listingState: { ...state.listingState, [ticketId]: "failed" },
+          listingError: { ...state.listingError, [ticketId]: message },
+        }));
+      };
       const pending = (async () => {
         try {
-          const result = await window.api.sessions.listForTicket({ ticketId });
+          const result = await sessionListingReaderForTicket(ticketId).listForTicket({ ticketId });
           if (!result.ok) {
-            toastError(`Couldn't load sessions: ${result.error}`);
-            set((state) => ({
-              listingState: { ...state.listingState, [ticketId]: "failed" },
-              listingError: { ...state.listingError, [ticketId]: result.error },
-            }));
+            failed(result.error);
             return;
           }
           set((state) => ({
@@ -183,12 +195,7 @@ export function createTicketSessionRecordsStore() {
             listingError: { ...state.listingError, [ticketId]: null },
           }));
         } catch (error) {
-          const message = errorMessage(error);
-          toastError(`Couldn't load sessions: ${message}`);
-          set((state) => ({
-            listingState: { ...state.listingState, [ticketId]: "failed" },
-            listingError: { ...state.listingError, [ticketId]: message },
-          }));
+          failed(errorMessage(error));
         }
       })().finally(() => inFlight.delete(ticketId));
       inFlight.set(ticketId, pending);

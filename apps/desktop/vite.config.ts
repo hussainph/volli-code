@@ -578,6 +578,9 @@ export default defineConfig(({ mode }) => ({
         // missed branch is a question nobody sees on reopen, or a poll that
         // never stops.
         "src/lib/remote-listing-refresh.ts",
+        // Which door a project's Session listing is read through (VC-713): a
+        // wrong branch calls `window.api` with a remote project's id.
+        "src/lib/session-listing-reader.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
