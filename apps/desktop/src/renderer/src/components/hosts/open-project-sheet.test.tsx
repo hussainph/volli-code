@@ -17,6 +17,7 @@ import {
 } from "@renderer/stores/remote-hosts.test-support";
 
 import { HostsChrome } from "./hosts-chrome";
+import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
 import { click, HETZNER_ID, hostWorld, type HostWorld } from "./hosts.test-support";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -185,6 +186,72 @@ describe("Open a project on <host>…", () => {
       { hostId: HOST.id, path: "/srv/volli/acme" },
     ]);
     expect(useRemoteHostsStore.getState().openProject.open).toBe(false);
+  });
+
+  it("asks for the sudo password a clone needs: read once, sent once, cleared, and asked once more if wrong", async () => {
+    const refuse = (code: "needs-password" | "wrong-password"): CreateRemoteProjectResult => ({
+      ok: false,
+      failure: {
+        code,
+        message: code === "needs-password" ? "Enter your password." : "Wrong.",
+        command: null,
+      },
+    });
+    api.nextCreate = refuse("needs-password");
+    await openSheet("new");
+    await type("Git URL or folder on hetzner-1", "https://github.com/me/acme");
+    await click(sheet(), "Create and open");
+    await settle();
+    const field = () =>
+      sheet().querySelector<HTMLInputElement>('input[aria-label="Your password on hetzner-1"]');
+    expect(field()?.type).toBe("password");
+    expect(button("Clone with sudo")?.disabled).toBe(true);
+    api.nextCreate = refuse("wrong-password");
+    await type("Your password on hetzner-1", "wrong-one");
+    await click(sheet(), "Clone with sudo");
+    expect(api.calls.at(-1)).toEqual([
+      "createProject",
+      { hostId: HOST.id, gitUrl: "https://github.com/me/acme", sudoPassword: "wrong-one" },
+    ]);
+    await settle();
+    // Asked once more, the field empty.
+    expect(sheet().textContent).toContain("Wrong.");
+    expect(field()?.value).toBe("");
+    await type("Your password on hetzner-1", "still-wrong");
+    await click(sheet(), "Clone with sudo");
+    await settle();
+    // Twice wrong: it stops asking; Try again starts over without one.
+    expect(field()).toBeNull();
+    api.nextCreate = null;
+    await click(sheet(), "Try again");
+    await settle();
+    expect(api.calls.at(-2)).toEqual([
+      "createProject",
+      { hostId: HOST.id, gitUrl: "https://github.com/me/acme" },
+    ]);
+    expect(useRemoteHostsStore.getState().openProject.open).toBe(false);
+  });
+
+  it("sends a clone that needs a token to Sign-ins on the host", async () => {
+    api.nextCreate = {
+      ok: false,
+      failure: {
+        code: "needs-credential",
+        message: "Add a GitHub token in Sign-ins on hetzner-1, then try again.",
+        command: null,
+      },
+    };
+    await openSheet("new");
+    await type("Git URL or folder on hetzner-1", "https://github.com/me/private");
+    await click(sheet(), "Create and open");
+    await settle();
+    expect(sheet().textContent).toContain("Add a GitHub token in Sign-ins on hetzner-1");
+    // The sign-in sheet itself is VC-702's (its own tests): here, only that it is asked to open.
+    const open = vi.spyOn(useHostSignInSheet.getState(), "open").mockImplementation(() => {});
+    await click(sheet(), "Sign-ins on hetzner-1…");
+    expect(open).toHaveBeenCalledWith({ hostId: HOST.id, hostName: "hetzner-1", providerId: null });
+    expect(useRemoteHostsStore.getState().openProject.open).toBe(false);
+    open.mockRestore();
   });
 
   it("says when a create threw, and goes Back to the list", async () => {

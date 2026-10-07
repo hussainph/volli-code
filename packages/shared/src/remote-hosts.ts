@@ -368,6 +368,11 @@ export interface CreateRemoteProjectInput {
   readonly gitUrl?: string;
   /** Its name on the board; the folder's name when absent. */
   readonly name?: string;
+  /**
+   * The login's sudo password, when the clone needs one (`needs-password`):
+   * write-only, passed only on `sudo -S`'s stdin, never echoed or logged.
+   */
+  readonly sudoPassword?: string;
 }
 
 /** Why a project was not added, each with its one line (`message`). */
@@ -386,8 +391,14 @@ export type RemoteProjectFailureCode =
   | "bad-url"
   /** The folder to clone into is already there. */
   | "destination-exists"
-  /** Cloning needs sudo with a password; `command` clones by hand. */
+  /** Cloning as hostd's account needs the login's sudo password: the sheet asks for it. */
+  | "needs-password"
+  /** The sudo password given did not work. */
+  | "wrong-password"
+  /** The login cannot use sudo at all; `command` clones by hand. */
   | "needs-sudo"
+  /** The git host wants a token: add (or replace) one in Sign-ins on the host. */
+  | "needs-credential"
   /** git clone failed: the URL, the network, or credentials. */
   | "clone-failed"
   /** The host answered nothing this Mac believes. */

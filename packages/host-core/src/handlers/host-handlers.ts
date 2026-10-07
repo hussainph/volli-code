@@ -762,7 +762,14 @@ function hostHandlerEntries(
     "hosts.devices": ({ hostId }) => remoteHosts().devices(hostId),
     "hostAdd.facts": ({ flowId }) => remoteHosts().addFacts(flowId),
     "hosts.projects": ({ hostId }) => remoteHosts().projects(hostId),
-    "hosts.createProject": (input) => remoteHosts().createProject(input),
+    // The sudo password (VC-710) is write-only, as the add flow's: scrubbed from any error.
+    "hosts.createProject": async (input) => {
+      try {
+        return await remoteHosts().createProject(input);
+      } catch (error) {
+        throw withoutSecret(error, input.sudoPassword ?? "");
+      }
+    },
     "hosts.openWorkspace": ({ hostId, workspaceId }) =>
       done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
     "hosts.closeWorkspace": ({ hostId, workspaceId }) =>

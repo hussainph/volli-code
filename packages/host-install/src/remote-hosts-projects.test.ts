@@ -5,7 +5,7 @@
  * over the fake SSH runner.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -205,12 +205,152 @@ describe("the project scripts, in a real shell", () => {
       name: "Acme",
       gitUrl: "git@github.com:me/acme.git",
     });
-    expect(create).toContain("sudo -n -u volli true </dev/null 2>/dev/null || fail needs-sudo");
-    expect(create).toContain("sudo -n -u volli -H env GIT_TERMINAL_PROMPT=0");
+    expect(create).toContain(
+      "if sudo -n -u volli true </dev/null 2>/dev/null; then set -- sudo -n -u volli -H",
+    );
+    expect(create).toContain("  fail needs-password");
+    expect(create).not.toContain("sudo -S");
+    expect(create).toContain(`c="!'$b' git-credential --data-dir '/var/lib/volli-hostd'"`);
     expect(create).toContain("GIT_ALLOW_PROTOCOL=https:ssh");
-    expect(create).toContain('git clone --quiet --no-recurse-submodules -- "$u" "$d"');
     expect(create).toContain(`exec "$v" project add "$d" --name 'Acme' --json </dev/null`);
     expect(spawnSync("/bin/sh", ["-n", "-c", create]).status).toBe(0);
+    const withPassword = createProjectScript({
+      mode: "system",
+      path: "/srv/volli/acme",
+      name: null,
+      gitUrl: "https://github.com/me/acme",
+      sudoPassword: true,
+    });
+    expect(withPassword).toContain("  set -- sudo -S -p '' -u volli -H");
+    expect(withPassword).toContain("h='github.com'");
+  });
+
+  it("clones with Volli's credential helper for that command only: the token never on a command line", () => {
+    const home = fakeUserHome();
+    const bin = join(home, "fake-bin");
+    mkdirSync(bin);
+    // git as the box would run it: it says what it was asked, and makes the folder.
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "$HOME/git-args"\nfor last; do :; done\nmkdir -p "$last/.git"\n`,
+    );
+    // Volli's helper: a token for example.invalid, and nothing for anything else.
+    writeFileSync(
+      join(bin, "helper"),
+      `#!/bin/sh\ncat > "$HOME/helper-asked"\ngrep -q 'host=example.invalid' "$HOME/helper-asked" && printf 'username=x-access-token\\npassword=SECRET-TOKEN\\n'\n`,
+    );
+    chmodSync(join(bin, "git"), 0o755);
+    chmodSync(join(bin, "helper"), 0o755);
+    mkdirSync(join(home, "checkouts"));
+    const into = join(home, "checkouts/acme");
+    const result = run(
+      createProjectScript({
+        mode: "user",
+        path: into,
+        name: null,
+        gitUrl: "https://example.invalid/me/acme.git",
+        credentialHelper: `!'${join(bin, "helper")}'`,
+      }),
+      home,
+      { PATH: `${bin}:${process.env["PATH"] ?? "/usr/bin:/bin"}` },
+    );
+    expect(scriptFacts(result.stdout)).toMatchObject({ credential: true, fail: null });
+    expect(lastJsonObject(result.stdout)?.["args"]).toBe(`project add ${into} --json`);
+    const args = readFileSync(join(home, "git-args"), "utf8").trim().split("\n");
+    expect(args).toEqual([
+      "-c",
+      `credential.helper=!'${join(bin, "helper")}'`,
+      "clone",
+      "--quiet",
+      "--no-recurse-submodules",
+      "--",
+      "https://example.invalid/me/acme.git",
+      into,
+    ]);
+    expect(readFileSync(join(home, "helper-asked"), "utf8")).toBe(
+      "protocol=https\nhost=example.invalid\n\n",
+    );
+    expect(`${result.stdout}${result.stderr}`).not.toContain("SECRET-TOKEN");
+    // An ssh URL asks for no token: there is no https host to ask about.
+    const ssh = run(
+      createProjectScript({
+        mode: "user",
+        path: join(home, "checkouts/other"),
+        name: null,
+        gitUrl: "git@example.invalid:me/other.git",
+        credentialHelper: `!'${join(bin, "helper")}'`,
+      }),
+      home,
+      { PATH: `${bin}:${process.env["PATH"] ?? "/usr/bin:/bin"}` },
+    );
+    expect(scriptFacts(ssh.stdout).credential).toBe(false);
+  });
+
+  it("on a system install, runs the clone as volli: sudo -n, else the password on sudo -S, else stops", () => {
+    const home = fakeUserHome();
+    const bin = join(home, "fake-bin");
+    mkdirSync(bin);
+    // sudo as a box would answer: $SUDO is nopasswd, password (takes "pw" on -S), or none.
+    writeFileSync(
+      join(bin, "sudo"),
+      [
+        "#!/bin/sh",
+        'echo "$*" >> "$HOME/sudo-calls"',
+        'if [ "$SUDO" = none ]; then echo "sudo: deploy is not in the sudoers file" >&2; exit 1; fi',
+        'case "$1" in',
+        '  -n) [ "$SUDO" = nopasswd ] || { echo "sudo: a password is required" >&2; exit 1; }; shift 4 ;;',
+        '  -S) IFS= read -r p; [ "$p" = pw ] || { echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; }; shift 6 ;;',
+        "esac",
+        '[ "$1" = -H ] && shift',
+        'exec "$@"',
+      ].join("\n"),
+    );
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nfor last; do :; done\nmkdir -p "$last/.git"\n`);
+    chmodSync(join(bin, "sudo"), 0o755);
+    chmodSync(join(bin, "git"), 0o755);
+    mkdirSync(join(home, "checkouts"));
+    const env = (sudo: string) => ({
+      SUDO: sudo,
+      PATH: `${bin}:${process.env["PATH"] ?? "/usr/bin:/bin"}`,
+    });
+    const script = (path: string, sudoPassword: boolean) =>
+      createProjectScript({
+        mode: "system",
+        path: join(home, "checkouts", path),
+        name: null,
+        gitUrl: "https://example.invalid/me/acme.git",
+        sudoPassword,
+      });
+    const facts = (result: { stdout: string }) => scriptFacts(result.stdout);
+
+    // Passwordless: cloned as volli (the system CLI is not on this machine, so the add says nothing).
+    const free = run(script("a", false), home, env("nopasswd"));
+    expect(free.stdout).toContain("volli-cloned=yes");
+    expect(facts(free).fail).toBeNull();
+    // A password needed, none given: the sheet asks.
+    expect(facts(run(script("b", false), home, env("password"))).fail).toBe("needs-password");
+    // Given, on stdin only.
+    const given = spawnSync("/bin/sh", ["-c", script("c", true)], {
+      env: { HOME: home, ...env("password") },
+      input: "pw\n",
+      encoding: "utf8",
+    });
+    expect(given.stdout).toContain("volli-cloned=yes");
+    const wrong = spawnSync("/bin/sh", ["-c", script("d", true)], {
+      env: { HOME: home, ...env("password") },
+      input: "nope\n",
+      encoding: "utf8",
+    });
+    expect(facts({ stdout: wrong.stdout }).fail).toBe("sudo-failed");
+    expect(
+      createFailure("box", facts({ stdout: wrong.stdout }), null, wrong.stderr, {
+        path: "/srv/volli/d",
+        gitUrl: "https://example.invalid/me/acme.git",
+      }).code,
+    ).toBe("wrong-password");
+    // No sudo at all: the command to run by hand, whatever was typed.
+    expect(facts(run(script("e", true), home, env("none"))).fail).toBe("needs-sudo");
+    expect(readFileSync(join(home, "sudo-calls"), "utf8")).not.toContain("pw");
   });
 
   it("issues an operator token with one quoted command", () => {
@@ -255,13 +395,15 @@ describe("reading what the host said", () => {
   });
 
   it("reads the login, the token and a stop; an unlikely login is none", () => {
-    expect(scriptFacts("volli-login=alice\nvolli-token=yes\nvolli-fail=clone-failed\n")).toEqual({
-      login: "alice",
-      token: true,
-      fail: "clone-failed",
-    });
-    expect(scriptFacts("volli-login=a;b\n")).toEqual({ login: null, token: false, fail: null });
-    expect(scriptFacts("")).toEqual({ login: null, token: false, fail: null });
+    expect(
+      scriptFacts(
+        "volli-login=alice\nvolli-token=yes\nvolli-credential=no\nvolli-fail=clone-failed\n",
+      ),
+    ).toEqual({ login: "alice", token: true, fail: "clone-failed", credential: false });
+    expect(scriptFacts("volli-credential=yes\n").credential).toBe(true);
+    const none = { login: null, token: false, fail: null, credential: null };
+    expect(scriptFacts("volli-login=a;b\n")).toEqual(none);
+    expect(scriptFacts("")).toEqual(none);
   });
 
   it("finds the last JSON object, and the CLI's error in it", () => {
@@ -318,7 +460,7 @@ describe("reading what the host said", () => {
   });
 
   it("words every way a create stops, each with its one line and, where one helps, a command", () => {
-    const facts = { login: "alice", token: false, fail: null };
+    const facts = { login: "alice", token: false, fail: null, credential: null };
     const context = { path: "/srv/volli/acme", gitUrl: "https://x.io/acme.git" };
     const failure = (
       fail: string | null,
@@ -328,7 +470,8 @@ describe("reading what the host said", () => {
     ) => createFailure("box", { ...facts, login, fail }, error, stderr, context);
     expect(failure("needs-sudo", null)).toEqual({
       code: "needs-sudo",
-      message: "Cloning on box needs your password: clone it there, then add it by its path.",
+      message:
+        "Cloning on box needs sudo, which this login can’t use: clone it there, then add it by its path.",
       command: "sudo -u volli -H git clone -- 'https://x.io/acme.git' '/srv/volli/acme'",
     });
     expect(
@@ -341,11 +484,13 @@ describe("reading what the host said", () => {
       message: "box can’t write to the folder above /srv/volli/acme.",
       command: null,
     });
-    expect(failure("clone-failed", null, "Cloning…\nfatal: repository not found\n")).toEqual({
-      code: "clone-failed",
-      message: "git couldn’t clone it on box: fatal: repository not found",
-      command: null,
-    });
+    expect(failure("clone-failed", null, "Cloning…\nfatal: unable to access: timed out\n")).toEqual(
+      {
+        code: "clone-failed",
+        message: "git couldn’t clone it on box: fatal: unable to access: timed out",
+        command: null,
+      },
+    );
     expect(failure("clone-failed", null).message).toBe("git couldn’t clone it on box.");
     expect(failure(null, { code: "FORBIDDEN_ACTOR", reason: "no token" })).toEqual({
       code: "not-operator",
@@ -371,6 +516,72 @@ describe("reading what the host said", () => {
       code: "unavailable",
       message: "box didn’t answer.",
       command: null,
+    });
+    const refusedBy = (gitUrl: string, credential: boolean | null, stderr: string) =>
+      createFailure("box", { ...facts, fail: "clone-failed", credential }, null, stderr, {
+        ...context,
+        gitUrl,
+      });
+    expect(refusedBy("https://github.com/me/acme", false, "remote: Repository not found.")).toEqual(
+      {
+        code: "needs-credential",
+        message: "Add a GitHub token in Sign-ins on box, then try again.",
+        command: null,
+      },
+    );
+    expect(
+      refusedBy("https://git.example.com:8443/me/acme", null, "fatal: Authentication failed"),
+    ).toMatchObject({
+      message: "Add a token for git.example.com:8443 in Sign-ins on box, then try again.",
+    });
+    expect(
+      refusedBy("https://github.com/me/acme", true, "fatal: Authentication failed"),
+    ).toMatchObject({
+      code: "needs-credential",
+      message:
+        "github.com refused the token on box: replace it in Sign-ins on box, then try again.",
+    });
+    expect(refusedBy("https://github.com/me/acme", false, "Could not resolve host")).toMatchObject({
+      code: "clone-failed",
+      message: "git couldn’t clone it on box: Could not resolve host",
+    });
+    expect(
+      refusedBy(
+        "git@github.com:me/acme.git",
+        null,
+        "git@github.com: Permission denied (publickey).",
+      ),
+    ).toEqual({
+      code: "clone-failed",
+      message:
+        "box has no SSH key its git host accepts: use the https URL, with a token in Sign-ins on box.",
+      command: null,
+    });
+    expect(
+      createFailure("box", { ...facts, fail: "clone-failed" }, null, "", {
+        ...context,
+        gitUrl: null,
+      }).message,
+    ).toBe("git couldn’t clone it on box.");
+    expect(refusedBy("git@github.com:me/acme.git", null, "fatal: early EOF")).toMatchObject({
+      code: "clone-failed",
+      message: "git couldn’t clone it on box: fatal: early EOF",
+    });
+    expect(failure("needs-password", null)).toEqual({
+      code: "needs-password",
+      message: "Cloning on box runs as its volli account: enter your password on box to go on.",
+      command: null,
+    });
+    expect(
+      failure("sudo-failed", null, "Sorry, try again.\nsudo: 1 incorrect password attempt\n"),
+    ).toEqual({
+      code: "wrong-password",
+      message: "That password didn’t work on box.",
+      command: null,
+    });
+    expect(failure("sudo-failed", null, "sudo: unknown user volli\n")).toMatchObject({
+      code: "unavailable",
+      message: "sudo didn’t run the clone on box.",
     });
   });
 });
@@ -668,7 +879,31 @@ describe("creating a project on a host", () => {
     });
     expect(
       await h.engine.createProject({ hostId: HOST_ID, gitUrl: "https://github.com/me/acme" }),
-    ).toMatchObject({ ok: false, failure: { code: "clone-failed" } });
+    ).toMatchObject({
+      ok: false,
+      failure: {
+        code: "needs-credential",
+        message: "Add a GitHub token in Sign-ins on box, then try again.",
+      },
+    });
+  });
+
+  it("sends a sudo password only on the script's stdin, and only for a clone", async () => {
+    const h = harness({ registry: registry(hostEntry()), overrides: [added()] });
+    const secret = "hunter2-sudo-secret";
+    await h.engine.createProject({
+      hostId: HOST_ID,
+      gitUrl: "https://github.com/me/acme",
+      sudoPassword: secret,
+    });
+    const cloned = h.box.scripts.at(-1)!;
+    expect(cloned.stdin).toBe(`${secret}\n`);
+    expect(cloned.script).toContain("set -- sudo -S -p '' -u volli -H");
+    expect(cloned.script).not.toContain(secret);
+    // A folder needs no sudo: a password given anyway goes nowhere.
+    await h.engine.createProject({ hostId: HOST_ID, path: "/srv/volli/a", sudoPassword: secret });
+    expect(h.box.scripts.at(-1)!.stdin).toBeNull();
+    expect(JSON.stringify(h.log.lines)).not.toContain(secret);
   });
 
   it("is unreachable when SSH is, in one line", async () => {

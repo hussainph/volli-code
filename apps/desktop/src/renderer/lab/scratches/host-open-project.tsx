@@ -7,7 +7,9 @@
  * command, with Copy); Agents share your account (a user install: no New
  * project…); Can't reach it (then Try again); and New project… refused, then
  * made (the first create answers the operator-token refusal with its command,
- * the next clones and opens).
+ * the next clones and opens); a clone that needs your sudo password (asked
+ * in the sheet, wrong once, then made); and a private repo with no token
+ * yet (its line sends you to Sign-ins on the host).
  *
  * Pick a scenario, then "Open a project on hetzner-1…", or "New project…".
  * The script answers after a short wait, as SSH would. Nothing reaches SSH or
@@ -26,7 +28,15 @@ export const title = "Open a project on a host — list, open, create";
 export const note =
   "VC-710: the real sheet over a scripted main (projects, empty, operator token, user install, unreachable, a refused then made create)";
 
-type Scenario = "projects" | "fresh" | "operator" | "user" | "unreachable" | "create";
+type Scenario =
+  | "projects"
+  | "fresh"
+  | "operator"
+  | "user"
+  | "unreachable"
+  | "create"
+  | "sudo"
+  | "token";
 
 const SCENARIOS: readonly { value: Scenario; label: string }[] = [
   { value: "projects", label: "A host with projects" },
@@ -35,6 +45,8 @@ const SCENARIOS: readonly { value: Scenario; label: string }[] = [
   { value: "user", label: "Agents share your account" },
   { value: "unreachable", label: "Can’t reach it (then retry)" },
   { value: "create", label: "New project… refused, then made" },
+  { value: "sudo", label: "Clone needs your sudo password (wrong once)" },
+  { value: "token", label: "Private repo, no token yet" },
 ];
 
 const HOST = registryHost({
@@ -72,6 +84,8 @@ function listingFor(scenario: Scenario): Omit<RemoteHostProjects, "hostId"> | Er
       return { projects: PROJECTS, adds: { kind: "ready" } };
     case "fresh":
     case "create":
+    case "sudo":
+    case "token":
       return { projects: [], adds: { kind: "ready" } };
     case "operator":
       return { projects: [], adds: { kind: "needs-operator", command: COMMAND } };
@@ -119,6 +133,40 @@ export default function HostOpenProjectScratch() {
               message:
                 "This Mac can’t add projects on hetzner-1 yet. Run this there once, then try again.",
               command: COMMAND,
+            },
+          };
+        }
+        if (scenarioRef.current === "sudo" && input.gitUrl !== undefined) {
+          // Asked, then a wrong one, then made.
+          if (input.sudoPassword === undefined) {
+            return {
+              ok: false,
+              failure: {
+                code: "needs-password",
+                message:
+                  "Cloning on hetzner-1 runs as its volli account: enter your password on hetzner-1 to go on.",
+                command: null,
+              },
+            };
+          }
+          if (creates % 3 === 2) {
+            return {
+              ok: false,
+              failure: {
+                code: "wrong-password",
+                message: "That password didn’t work on hetzner-1.",
+                command: null,
+              },
+            };
+          }
+        }
+        if (scenarioRef.current === "token" && input.gitUrl !== undefined) {
+          return {
+            ok: false,
+            failure: {
+              code: "needs-credential",
+              message: "Add a GitHub token in Sign-ins on hetzner-1, then try again.",
+              command: null,
             },
           };
         }

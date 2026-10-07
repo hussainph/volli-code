@@ -5,6 +5,8 @@ import {
   canCreate,
   creatingLine,
   failedLine,
+  failureRecovery,
+  SUDO_TRIES,
   listNotice,
   projectRows,
   projectSource,
@@ -105,5 +107,29 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       "Couldn’t close Acme: That didn’t work.",
     );
     expect(failedLine("create", "box", "nope")).toBe("Couldn’t add box: That didn’t work.");
+  });
+
+  it("offers the sudo field (once more after a wrong one), Sign-ins, or a retry", () => {
+    const failure = (code: Parameters<typeof failureRecovery>[0]["code"]) => ({
+      code,
+      message: "x",
+      command: null,
+    });
+    expect(failureRecovery(failure("needs-password"), "box", 0)).toEqual({
+      kind: "password",
+      again: false,
+    });
+    expect(failureRecovery(failure("wrong-password"), "box", 1)).toEqual({
+      kind: "password",
+      again: true,
+    });
+    expect(failureRecovery(failure("wrong-password"), "box", SUDO_TRIES)).toEqual({
+      kind: "retry",
+    });
+    expect(failureRecovery(failure("needs-credential"), "box", 0)).toEqual({
+      kind: "sign-ins",
+      label: "Sign-ins on box…",
+    });
+    expect(failureRecovery(failure("clone-failed"), "box", 0)).toEqual({ kind: "retry" });
   });
 });

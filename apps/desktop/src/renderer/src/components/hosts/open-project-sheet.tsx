@@ -18,6 +18,7 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import type { RemoteHost, RemoteProjectFailure } from "@volli/shared";
 import { toast } from "sonner";
@@ -37,11 +38,13 @@ import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { remoteHostOf, remoteHosts, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { CommandLine } from "./add-host-sheet";
+import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
 import { EASE_OUT, HostGlyph, useMotionTiming } from "./host-parts";
 import {
   canCreate,
   creatingLine,
   failedLine,
+  failureRecovery,
   listNotice,
   projectRows,
   projectSource,
@@ -370,12 +373,28 @@ function NewProjectScreen({
   const [name, setName] = React.useState("");
   const [running, setRunning] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<RemoteProjectFailure | null>(null);
+  // The sudo password field is uncontrolled: its text is read once, on
+  // submit, and cleared at once. Only whether it has any lives in state.
+  const password = React.useRef<HTMLInputElement>(null);
+  const [hasPassword, setHasPassword] = React.useState(false);
+  const [tries, setTries] = React.useState(0);
   const source = projectSource(text);
   const problem = sourceProblem(source, host.name);
-  const ready = source !== null && problem === null && running === null;
+  const recovery = failure === null ? null : failureRecovery(failure, host.name, tries);
+  const asking = recovery?.kind === "password";
+  const ready = source !== null && problem === null && running === null && (!asking || hasPassword);
 
   const create = (): void => {
     if (source === null || problem !== null) return;
+    let sudoPassword: string | null = null;
+    if (asking && password.current !== null) {
+      sudoPassword = password.current.value;
+      password.current.value = "";
+      setHasPassword(false);
+      setTries((count) => count + 1);
+    } else {
+      setTries(0);
+    }
     setFailure(null);
     setRunning(creatingLine(source, host.name));
     const label = name.trim();
@@ -384,6 +403,7 @@ function NewProjectScreen({
         hostId: host.id,
         ...(source.kind === "git" ? { gitUrl: source.gitUrl } : { path: source.path }),
         ...(label === "" ? {} : { name: label }),
+        ...(sudoPassword === null || sudoPassword === "" ? {} : { sudoPassword }),
       })
       .then(
         async (result) => {
@@ -455,6 +475,36 @@ function NewProjectScreen({
           <div role="alert" className="flex flex-col gap-2 px-1 pt-2">
             <p className="text-ui text-destructive">{failure.message}</p>
             {failure.command === null ? null : <CommandLine command={failure.command} />}
+            {asking ? (
+              <Input
+                ref={password}
+                autoFocus
+                type="password"
+                autoComplete="off"
+                aria-label={`Your password on ${host.name}`}
+                placeholder={`Your password on ${host.name}`}
+                className="h-9 text-sm"
+                onChange={(event) => setHasPassword(event.target.value.length > 0)}
+              />
+            ) : null}
+            {recovery?.kind === "sign-ins" ? (
+              <div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  type="button"
+                  onClick={() => {
+                    close();
+                    useHostSignInSheet
+                      .getState()
+                      .open({ hostId: host.id, hostName: host.name, providerId: null });
+                  }}
+                >
+                  <KeyIcon />
+                  {recovery.label}
+                </Button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -471,7 +521,7 @@ function NewProjectScreen({
         </Button>
         <span className="flex-1" />
         <Button size="sm" type="submit" disabled={!ready}>
-          {failure === null ? "Create and open" : "Try again"}
+          {failure === null ? "Create and open" : asking ? "Clone with sudo" : "Try again"}
         </Button>
       </div>
     </form>

@@ -9,7 +9,7 @@
  * retry, "New project…", or a command to run once on the host, with Copy.
  * Words: the host's own name, "project" and "this Mac"; never Workspace.
  */
-import type { RemoteHostProject, RemoteHostProjects } from "@volli/shared";
+import type { RemoteHostProject, RemoteHostProjects, RemoteProjectFailure } from "@volli/shared";
 
 /** The host's list, as the sheet holds it while it reads, and after. */
 export type ProjectListState =
@@ -146,4 +146,34 @@ export function failedLine(
 ): string {
   const verb = what === "open" ? "open" : what === "close" ? "close" : "add";
   return `Couldn’t ${verb} ${name}: ${messageOf(error)}`;
+}
+
+/** How many times the sheet asks for a sudo password before it stops asking. */
+export const SUDO_TRIES = 2;
+
+/**
+ * What a create's refusal offers beside its line: the sudo password field
+ * (asked again once after a wrong one), Sign-ins on the host (a token for
+ * the git host), or just trying again.
+ */
+export type FailureRecovery =
+  | { readonly kind: "password"; readonly again: boolean }
+  | { readonly kind: "sign-ins"; readonly label: string }
+  | { readonly kind: "retry" };
+
+export function failureRecovery(
+  failure: RemoteProjectFailure,
+  hostName: string,
+  tries: number,
+): FailureRecovery {
+  switch (failure.code) {
+    case "needs-password":
+      return { kind: "password", again: false };
+    case "wrong-password":
+      return tries < SUDO_TRIES ? { kind: "password", again: true } : { kind: "retry" };
+    case "needs-credential":
+      return { kind: "sign-ins", label: `Sign-ins on ${hostName}…` };
+    default:
+      return { kind: "retry" };
+  }
 }

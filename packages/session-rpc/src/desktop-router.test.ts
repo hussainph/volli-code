@@ -1063,6 +1063,13 @@ describeContract<Host, DesktopRouter>(
       expect(await client.hosts.createProject.mutate({ hostId: HOST, path: "/a" })).toEqual(
         CREATED,
       );
+      // The longest sudo password passes (write-only: never in a call's record).
+      const sudo = {
+        hostId: HOST,
+        gitUrl: "https://github.com/me/acme",
+        sudoPassword: "p".repeat(1024),
+      };
+      expect(await client.hosts.createProject.mutate(sudo)).toEqual(CREATED);
       const workspace = { hostId: HOST, workspaceId: WORKSPACE };
       expect(await client.hosts.openWorkspace.mutate(workspace)).toBeNull();
       expect(await client.hosts.closeWorkspace.mutate(workspace)).toBeNull();
@@ -1070,6 +1077,7 @@ describeContract<Host, DesktopRouter>(
         ["hosts.projects", { hostId: HOST }],
         ["hosts.createProject", git],
         ["hosts.createProject", { hostId: HOST, path: "/a" }],
+        ["hosts.createProject", sudo],
         ["hosts.openWorkspace", workspace],
         ["hosts.closeWorkspace", workspace],
       ]);
@@ -1123,6 +1131,19 @@ describeContract<Host, DesktopRouter>(
           () => client.hosts.createProject.mutate({ hostId: HOST, path: "/a", sudo: 1 } as never),
         ],
         [
+          "an empty sudo password",
+          () => client.hosts.createProject.mutate({ hostId: HOST, gitUrl: "u", sudoPassword: "" }),
+        ],
+        [
+          "a sudo password too long",
+          () =>
+            client.hosts.createProject.mutate({
+              hostId: HOST,
+              gitUrl: "u",
+              sudoPassword: "p".repeat(1025),
+            }),
+        ],
+        [
           "a Workspace that is no id",
           () => client.hosts.openWorkspace.mutate({ hostId: HOST, workspaceId: "acme" }),
         ],
@@ -1162,6 +1183,10 @@ describeContract<Host, DesktopRouter>(
         expect(() => remoteHostProjectsSchema.parse(value), what).toThrow();
       }
       expect(createProjectResultSchema.parse(CREATED)).toEqual(CREATED);
+      for (const code of ["needs-password", "wrong-password", "needs-credential"] as const) {
+        const refused = { ok: false, failure: { code, message: "x", command: null } } as const;
+        expect(createProjectResultSchema.parse(refused)).toEqual(refused);
+      }
       expect(() =>
         createProjectResultSchema.parse({
           ok: false,

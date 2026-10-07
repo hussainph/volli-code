@@ -757,6 +757,29 @@ describe("remote hosts commands", () => {
     expect(remote.addFacts).toHaveBeenCalledWith(FLOW);
   });
 
+  it("never lets a create's sudo password out in an error (VC-710)", async () => {
+    const secret = "hunter2-create-secret";
+    const { remote } = port({
+      createProject: vi.fn(async () => {
+        throw new Error(`sudo said ${secret}`);
+      }),
+    });
+    const map = handlers({ remoteHosts: remote });
+    const input = { hostId: HOST, gitUrl: "https://github.com/me/acme", sudoPassword: secret };
+    await expect(map["hosts.createProject"](input, WINDOW)).rejects.toThrow("sudo said [redacted]");
+    const plain = port({
+      createProject: vi.fn(async () => {
+        throw new Error("no such host");
+      }),
+    });
+    await expect(
+      handlers({ remoteHosts: plain.remote })["hosts.createProject"](
+        { hostId: HOST, path: "/a" },
+        WINDOW,
+      ),
+    ).rejects.toThrow("no such host");
+  });
+
   // The registry's own refusals (an unknown host, a bad label, a host it could
   // not reach) travel as it threw them, exactly as `hosts.forget`'s do.
   it("passes a rename's or a device list's failure on as the registry threw it", async () => {

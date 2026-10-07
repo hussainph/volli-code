@@ -259,6 +259,7 @@ export const createProjectInputSchema = z
     path: z.string().max(REMOTE_HOST_PROJECT_TEXT_MAX).optional(),
     gitUrl: z.string().max(MAX_GIT_URL_LENGTH).optional(),
     name: z.string().max(REMOTE_HOST_NAME_MAX).optional(),
+    sudoPassword: z.string().min(1).max(MAX_SUDO_PASSWORD_LENGTH).optional(),
   })
   .refine((input) => input.path !== undefined || input.gitUrl !== undefined, {
     message: "A project needs a folder or a git URL.",
@@ -293,7 +294,10 @@ const remoteProjectFailure = z.strictObject({
     "refused",
     "bad-url",
     "destination-exists",
+    "needs-password",
+    "wrong-password",
     "needs-sudo",
+    "needs-credential",
     "clone-failed",
     "unavailable",
   ]),

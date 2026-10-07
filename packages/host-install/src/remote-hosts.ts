@@ -1013,13 +1013,19 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     script: string,
     label: "projects" | "create-project",
     timeoutMs: number,
+    /** The login's sudo password, for the script's stdin only: never logged or kept. */
+    sudoPassword: string | null = null,
   ): Promise<SshExecResult | null> {
     const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
     const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
     projectSsh.add(ssh);
     let result: SshExecResult;
     try {
-      result = await ssh.exec(script, { label, timeoutMs });
+      result = await ssh.exec(script, {
+        label,
+        timeoutMs,
+        ...(sudoPassword === null ? {} : { stdin: `${sudoPassword}\n` }),
+      });
     } catch (error) {
       log.warn(`${label}: ssh failed`, { error: messageOf(error) });
       return null;
@@ -1123,6 +1129,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         `A folder on ${entry.name} is a full path, like /srv/volli/app.`,
       );
     }
+    // Only a clone runs as hostd's account; a password for anything else is dropped here.
+    const sudoPassword = gitUrl !== null && input.sudoPassword ? input.sudoPassword : null;
     const name = input.name?.trim() || null;
     if (name !== null && (name.length > PROJECT_NAME_MAX || CONTROL_CHARACTER.test(name))) {
       return refusedHere(
@@ -1133,9 +1141,16 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     log.info("adding a project", { clone: gitUrl !== null });
     const result = await runProjectScript(
       entry,
-      createProjectScript({ mode: entry.mode, path, name, gitUrl }),
+      createProjectScript({
+        mode: entry.mode,
+        path,
+        name,
+        gitUrl,
+        sudoPassword: sudoPassword !== null,
+      }),
       "create-project",
       CREATE_PROJECT_TIMEOUT_MS,
+      sudoPassword,
     );
     if (result === null) {
       return refusedHere("host-unreachable", `Couldn't reach ${entry.name}.`);
@@ -1157,6 +1172,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       path,
       gitUrl,
     });
+    // Never the password: not in a failure's words, nor in the log below.
     log.warn("adding a project failed", { failure: failure.code, code: result.code });
     return { ok: false, failure };
   }
