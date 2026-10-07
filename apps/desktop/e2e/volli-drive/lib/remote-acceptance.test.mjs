@@ -18,6 +18,7 @@ import {
   REOPEN_REPLY,
   controlLabel,
   visibleControls,
+  hasActionableControl,
   stableWaitingLabel,
   visibleServingRow,
   snapshotSubtree,
@@ -61,6 +62,23 @@ test("CLI source guards remote acceptance before build/reservation/spawn (no CLI
     assert.ok(launch.indexOf(boundary) > guard, boundary);
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.ok(smoke.indexOf("assertAcceptanceRunner();") < smoke.indexOf("await journey();"));
+});
+test("project success toast cannot make navigation actionable during dialog exit", () => {
+  const exiting = [
+    "- button [ref=f2e931]:",
+    "  - generic [ref=f2e187]: Home",
+    '- region "Notifications alt+T":',
+    "  - generic: Opened Remote acceptance on volli-acceptance",
+    "- dialog [ref=f2e1016]:",
+    '  - button "Close" [ref=f2e953]',
+  ].join("\n");
+  assert.equal(hasActionableControl(exiting, "button", "Home"), false);
+  const ready = '- button "Home" [ref=f2e1020]';
+  assert.equal(hasActionableControl(ready, "button", "Home"), true);
+  assert.equal(hasActionableControl('- button "Home" [disabled]', "button", "Home"), false);
+  assert.equal(hasActionableControl('- button "Home"', "button", "Home"), false);
+  assert.equal(hasActionableControl(`${ready}\n${ready}`, "button", "Home"), false);
+  assert.equal(hasActionableControl('- button "Home page" [ref=e1]', "button", "Home"), false);
 });
 test("artifact setting is explicit, absolute and cannot silently fall back to downloads", () => {
   for (const value of ["", undefined, "relative.tar.gz", "/tmp/foo.zip", "/tmp/a.tar.gz:"])

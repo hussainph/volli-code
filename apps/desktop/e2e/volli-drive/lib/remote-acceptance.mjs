@@ -38,6 +38,11 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** An exiting dialog can leave background text visible before its names/refs return. */
+export function hasActionableControl(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  return hits.length === 1 && hits[0].includes("[ref=") && !hits[0].includes("[disabled]");
+}
 /** The visible subtree of one named surface, not matching background controls. */
 export function snapshotSubtree(tree, role, name) {
   const hits = visibleControls(tree, role, name);

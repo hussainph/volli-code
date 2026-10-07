@@ -19,6 +19,7 @@ import {
   REOPEN_REPLY,
   snapshotSubtree,
   visibleControls as controls,
+  hasActionableControl,
   stableWaitingLabel,
   visibleServingRow,
   REMOTE_HOST,
@@ -211,6 +212,14 @@ async function journey() {
         })?.status,
         "PASS",
         "The folder project must open through production UI registration",
+      );
+      // The success toast arrives before the project's dialog has finished
+      // exiting. Wait for navigation's real accessibility name/ref to return;
+      // text behind a still-modal dialog is not an actionable Home button.
+      await waitUntil(
+        "project dialog exits and Home is actionable",
+        async () => hasActionableControl((await snap()).text, "button", "Home"),
+        { timeout: 10_000, interval: 100 },
       );
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
