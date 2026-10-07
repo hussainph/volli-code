@@ -2,30 +2,19 @@
  * Every connected remote host in the one log viewer (VC-712; exit criterion
  * 6 of "Remote dogfood v1").
  *
- * Desktop main holds each remote Workspace's link; the window reaches one
- * through the Workspace link relay (`relayHostLink`, VC-711). This watches the
- * host-connection store and keeps one log source per remote host registered
- * ({@link registerRemoteLogSource}), labelled with the host's name:
- *
- * - **Registered** when one of the host's projects has a ready link whose
- *   welcome granted `host.logs` (`ProjectLink.granted`).
- * - **Read over any ready, granted link of the host**, the least loaded
- *   first: the project the window shows carries its board and its chats, so
- *   it comes last. When the link in use closes, the source moves to the next
- *   ready one and resumes after its last line; when every one is full (the
- *   relay's stream budget, AM1), it polls the newest lines instead.
- * - **Its dot is the host's link**: live while a link serves it; connecting
- *   while the host's links come back; failed, worded, while it cannot be
- *   reached or cannot serve.
- * - **Unregistered** when the host is forgotten, or loses its links: none
- *   of its projects is left, or each one's link has closed or can no longer
- *   serve this app. A host that only dropped stays, its dot saying so.
+ * Modern hosts use the dedicated engine-owned HOST connection, even before
+ * a project is open. Only older/legacy hosts borrow their ready, granted
+ * Workspace links, least loaded first. One source is registered per host;
+ * a temporary drop retains it with a connecting/failed dot and the reading
+ * resumes from its cursor. Forgetting the host or cloud-off unregisters it
+ * and ends every active reading. HOST grants never imply Workspace access.
  *
  * Nothing here runs for a host the store does not list, so with `cloud` off
  * (no remote hosts at all) nothing registers.
  */
 import type { HostError } from "@volli/host-protocol";
 
+import { relayHostScope } from "../../lib/relay-host-scope";
 import { isLinkReady, relayHostLink, type RelayHostLinkOptions } from "../../lib/relay-host-link";
 import {
   useHostConnectionStore,
@@ -61,6 +50,8 @@ export interface RemoteLogSourcesOptions {
   readonly shown?: () => string | null;
   /** One Workspace's link as a log source reads it: the relay, by default. */
   readonly link?: (workspaceId: string) => LogSourceLink;
+  /** Dedicated HOST connection; modern hosts never borrow a Workspace link. */
+  readonly hostLink?: (hostId: string) => LogSourceLink;
   readonly register?: (source: LogSource) => () => void;
   readonly timing?: HostLinkLogSourceTiming;
 }
@@ -94,6 +85,30 @@ export function relayLogLink(
   };
 }
 
+/** HOST-scoped logs use the same loss, resume and budget contract as Workspace logs. */
+export function relayHostLogLink(
+  hostId: string,
+  options: Omit<NonNullable<Parameters<typeof relayHostScope>[1]>, "onStreamLimited"> = {},
+): LogSourceLink {
+  const calls = relayHostScope(hostId, options);
+  return {
+    query: (path, input) => calls.query(path, input),
+    subscribe(path, input, handlers) {
+      const own = relayHostScope(hostId, {
+        ...options,
+        onStreamLimited: ({ error }: { error: HostError }) => handlers.onLimited?.(error),
+      });
+      return own.subscribe(path, input, {
+        onData: (data) => handlers.onData(data),
+        onResnapshot: (error) => handlers.onResnapshot(error),
+        onError: (error) => handlers.onError(error),
+        onStarted: () => handlers.onStarted?.(),
+        onComplete: () => handlers.onComplete?.(),
+      });
+    },
+  };
+}
+
 /** Whether a project's link has closed for good, or cannot serve this app: it is no link. */
 function isGone(link: HostLinkView): boolean {
   return link.status === "incompatible" || (link.status === "offline" && link.retryAt === null);
@@ -105,6 +120,10 @@ export function waitingStatus(host: HostRecord | undefined): {
   readonly detail?: string;
 } {
   const name = host?.name ?? "This host";
+  if (host?.hostScope?.status === "ready" && !host.hostScope.granted.includes(HOST_LOGS_FEATURE))
+    return { status: "failed", detail: `${name} did not grant log access.` };
+  if (host?.hostScope?.status === "unavailable")
+    return { status: "failed", detail: `${name} can’t serve its log right now.` };
   switch (host?.link.status) {
     case "connecting":
     case "reconnecting":
@@ -156,6 +175,7 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
   const hosts = options.hosts ?? useHostConnectionStore;
   const shown = options.shown ?? (() => null);
   const linkOf = options.link ?? ((workspaceId: string) => relayLogLink(workspaceId));
+  const hostLinkOf = options.hostLink ?? ((hostId: string) => relayHostLogLink(hostId));
   const register = options.register ?? registerRemoteLogSource;
 
   interface Registered {
@@ -164,8 +184,9 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
     readonly unregister: () => void;
   }
   const registered = new Map<string, Registered>();
-  /** One link per Workspace, kept while its project is listed: a source compares them by key. */
+  /** One cached adapter per Workspace or HOST, compared by stable source key. */
   const links = new Map<string, LogSourceLink>();
+  const hostLinks = new Map<string, LogSourceLink>();
   const listeners = new Set<() => void>();
 
   const hostOf = (hostId: string): HostRecord | undefined =>
@@ -173,6 +194,17 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
 
   /** The host's ready links that grant `host.logs`: the shown project's last, then by id. */
   function readyOf(hostId: string): readonly LogSourceLinkChoice[] {
+    const host = hostOf(hostId);
+    if (host?.hostScope !== undefined && host.hostScope.status !== "older") {
+      if (host.hostScope.status !== "ready" || !host.hostScope.granted.includes(HOST_LOGS_FEATURE))
+        return [];
+      let link = hostLinks.get(hostId);
+      if (link === undefined) {
+        link = hostLinkOf(hostId);
+        hostLinks.set(hostId, link);
+      }
+      return [{ key: `host:${hostId}`, link }];
+    }
     const current = shown();
     return Object.entries(hosts.getState().projects)
       .filter(([, claim]) => claim.hostId === hostId && servesLogs(claim))
@@ -201,6 +233,9 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
 
   function sync(): void {
     const state = hosts.getState();
+    for (const hostId of hostLinks.keys()) {
+      if (!state.hosts.some((host) => host.id === hostId)) hostLinks.delete(hostId);
+    }
     for (const workspaceId of links.keys()) {
       if (!(workspaceId in state.projects)) links.delete(workspaceId);
     }
@@ -212,9 +247,13 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
       // project left, each one's link gone, or ready without `host.logs` (a
       // host that reconnected as one with no log to offer). A link still on
       // its way back keeps the source (`every` of none is true).
-      const noLog = claims.every(
-        (claim) => isGone(claim.link) || (isLinkReady(claim.link) && !servesLogs(claim)),
-      );
+      const scope = host.hostScope;
+      const modern = scope !== undefined && scope.status !== "older";
+      const noLog = modern
+        ? scope.status === "ready" && !scope.granted.includes(HOST_LOGS_FEATURE)
+        : claims.every(
+            (claim) => isGone(claim.link) || (isLinkReady(claim.link) && !servesLogs(claim)),
+          );
       if (held !== undefined && noLog) {
         registered.delete(host.id);
         held.unregister();
@@ -259,6 +298,7 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
     for (const held of Array.from(registered.values())) held.unregister();
     registered.clear();
     links.clear();
+    hostLinks.clear();
     listeners.clear();
   };
 }

@@ -140,6 +140,7 @@ describe("adding a host end to end", () => {
           addedAt: new Date(NOW).toISOString(),
           liveSessions: null,
           reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          hostScope: { status: "older", granted: [] },
           lastWelcome: null,
           signInExpiry: null,
           lastSshFailure: null,

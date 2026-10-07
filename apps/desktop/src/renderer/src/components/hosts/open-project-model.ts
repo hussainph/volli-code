@@ -1,20 +1,40 @@
 /**
- * "Open a project on <host>…" (VC-710), as its sheet reads it: pure. The
- * host's projects are read from it over SSH each time the sheet opens
- * (`hosts.projects`); a row opens one on this Mac (`hosts.openWorkspace`),
- * and "New project…" makes one there from a git URL or a folder on the host
- * (`hosts.createProject`), then opens it.
+ * "Open a project on <host>…", as its sheet reads it: pure. Modern hosts
+ * answer the HOST-scoped workspaces catalog before any Workspace is open.
+ * Legacy rows still carry their SSH catalog's prefix and ticket counts;
+ * HOST rows don't invent either. Open/Close remain desktop registry actions.
  *
  * Every state that is not a list says one line and offers one recovery: a
- * retry, "New project…", or a command to run once on the host, with Copy.
+ * retry, "New project…", or Re-add, or a legacy command to run once on the host, with Copy.
  * Words: the host's own name, "project" and "this Mac"; never Workspace.
  */
-import type { RemoteHostProject, RemoteHostProjects, RemoteProjectFailure } from "@volli/shared";
+import type {
+  HostWorkspace,
+  HostWorkspaceCreateResult,
+  RemoteHostProject,
+  RemoteHostProjects,
+  RemoteProjectFailure,
+} from "@volli/shared";
+
+/** Modern rows intentionally have no prefix or ticket count. */
+export type HostProject = RemoteHostProject | HostWorkspace;
+export interface HostProjectsListing {
+  readonly hostId: string;
+  readonly projects: readonly HostProject[];
+  readonly adds: RemoteHostProjects["adds"];
+  readonly omitted?: number;
+}
+export type ProjectFailure =
+  | RemoteProjectFailure
+  | (Extract<HostWorkspaceCreateResult, { ok: false }>["failure"] & { readonly command: null });
+export type ProjectCreateResult =
+  | { readonly ok: true; readonly project: HostProject }
+  | { readonly ok: false; readonly failure: ProjectFailure };
 
 /** The host's list, as the sheet holds it while it reads, and after. */
 export type ProjectListState =
   | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly listing: RemoteHostProjects }
+  | { readonly kind: "ready"; readonly listing: HostProjectsListing }
   | { readonly kind: "error"; readonly message: string };
 
 /** One project on the host, as its row says it. */
@@ -31,14 +51,17 @@ const tickets = (count: number): string => (count === 1 ? "1 ticket" : `${count}
 
 /** The host's projects, by name, each marked when this Mac has it open. */
 export function projectRows(
-  projects: readonly RemoteHostProject[],
+  projects: readonly HostProject[],
   opened: ReadonlySet<string>,
 ): readonly ProjectRowView[] {
   return projects
     .map((project) => ({
       id: project.id,
       name: project.name,
-      meta: `${project.prefix} · ${project.path} · ${tickets(project.tickets)}`,
+      meta:
+        "prefix" in project
+          ? `${project.prefix} · ${project.path} · ${tickets(project.tickets)}`
+          : project.path,
       opened: opened.has(project.id),
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
@@ -48,7 +71,8 @@ export function projectRows(
 export type NoticeRecovery =
   | { readonly kind: "retry"; readonly label: string }
   | { readonly kind: "new"; readonly label: string }
-  | { readonly kind: "copy"; readonly command: string };
+  | { readonly kind: "copy"; readonly command: string }
+  | { readonly kind: "re-add"; readonly label: string };
 
 /** A state's one line and one recovery. */
 export interface ProjectNotice {
@@ -74,12 +98,10 @@ export function listNotice(state: ProjectListState, hostName: string): ProjectNo
         recovery: { kind: "copy", command: adds.command },
       };
     case "user-install":
-      return projects.length > 0
-        ? null
-        : {
-            line: `${hostName} runs Volli as your login, so this Mac can’t add projects to it.`,
-            recovery: { kind: "retry", label: "Refresh" },
-          };
+      return {
+        line: `Update ${hostName} to create projects from here`,
+        recovery: { kind: "re-add", label: "Re-add" },
+      };
     case "ready":
       return projects.length > 0
         ? null
@@ -135,9 +157,11 @@ export function sourceProblem(source: ProjectSource | null, hostName: string): s
 }
 
 /** The field's hint: where a clone goes, which a folder is not. */
-export function sourceHint(source: ProjectSource | null): string {
+export function sourceHint(source: ProjectSource | null, modern = false): string {
   return source?.kind === "git"
-    ? "Cloned into /srv/volli on the host, then added."
+    ? modern
+      ? "Cloned on the host, then added."
+      : "Cloned into /srv/volli on the host, then added."
     : "A git URL, or a folder already on the host.";
 }
 
@@ -173,7 +197,7 @@ export type FailureRecovery =
   | { readonly kind: "retry" };
 
 export function failureRecovery(
-  failure: RemoteProjectFailure,
+  failure: ProjectFailure,
   hostName: string,
   tries: number,
 ): FailureRecovery {
@@ -187,4 +211,19 @@ export function failureRecovery(
     default:
       return { kind: "retry" };
   }
+}
+
+/** One id for an accepted intent, including explicit retries after an ambiguous answer. */
+export function createProjectIntent(newId: () => string = () => crypto.randomUUID()) {
+  let accepted: { key: string; commandId: string } | null = null;
+  return {
+    edited() {
+      accepted = null;
+    },
+    accept(source: ProjectSource, name: string): string {
+      const key = JSON.stringify([source, name.trim()]);
+      if (accepted?.key !== key) accepted = { key, commandId: newId() };
+      return accepted.commandId;
+    },
+  };
 }

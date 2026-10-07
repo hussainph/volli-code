@@ -10,7 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 
-import type { HostLink, HostLinkOptions, HostLinkState } from "@volli/host-protocol/client-link";
+import type {
+  HostLink,
+  HostLinkOptions,
+  HostLinkState,
+  HostScopeLink,
+  HostScopeLinkOptions,
+  HostScopeLinkState,
+} from "@volli/host-protocol/client-link";
 import type { AddHostEvent, AddHostView, RemoteHostsSnapshot } from "@volli/shared";
 
 import { PROBE_SCRIPT } from "../probe";
@@ -143,12 +150,15 @@ export function fakeBoxes(...overrides: Handler[]) {
     open(target: SshTarget): SshTransport {
       const record = { target, closed: false };
       let status = false;
+      let used = false;
       transports.push(record);
       return {
         target,
         async exec(script, options = {}) {
-          status = options.label === "host-status";
-          if (status) {
+          const isStatus = options.label === "host-status";
+          if (!used) status = isStatus;
+          used = true;
+          if (isStatus && status) {
             transports.splice(transports.indexOf(record), 1);
             statusTransports.push(record);
           }
@@ -159,7 +169,7 @@ export function fakeBoxes(...overrides: Handler[]) {
             for await (const chunk of options.stdin as Readable) sent += (chunk as Buffer).length;
             stdin = `<${sent} bytes>`;
           }
-          (status ? statusScripts : scripts).push({ script, stdin });
+          (isStatus ? statusScripts : scripts).push({ script, stdin });
           for (const handler of [...overrides, defaults]) {
             const result = await handler(script, options);
             if (result !== undefined) return { code: 0, stdout: "", stderr: "", ...result };
@@ -318,6 +328,65 @@ export function fakeLinks() {
   return { factory, made };
 }
 
+export interface FakeHostScopeLink extends HostScopeLink {
+  readonly options: HostScopeLinkOptions;
+  readonly listeners: Set<(state: HostScopeLinkState) => void>;
+  closed: boolean;
+  reconnects: number;
+  wakes: string[];
+  set(state: HostScopeLinkState): void;
+}
+
+/** Default N-1 refusal models an attempted host hello, not missing client composition. */
+export function fakeHostScopeLinks(
+  initial: HostScopeLinkState = {
+    status: "refused",
+    closeCode: 4400,
+    error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "N-1 hello" },
+  },
+) {
+  const made: FakeHostScopeLink[] = [];
+  const factory = (options: HostScopeLinkOptions): HostScopeLink => {
+    let state = initial;
+    const listeners = new Set<(state: HostScopeLinkState) => void>();
+    const link: FakeHostScopeLink = {
+      hostId: options.hostId,
+      options,
+      listeners,
+      closed: false,
+      reconnects: 0,
+      wakes: [],
+      getState: () => state,
+      subscribeState(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      set(next) {
+        state = next;
+        for (const listener of listeners) listener(next);
+      },
+      query: () => Promise.reject(new Error("not in this test")),
+      mutate: () => Promise.reject(new Error("not in this test")),
+      subscribe: () => ({ unsubscribe() {} }),
+      wake(cause) {
+        link.wakes.push(cause);
+      },
+      reconnect() {
+        link.reconnects += 1;
+      },
+      close() {
+        link.closed = true;
+        link.set({ status: "closed" });
+      },
+    };
+    made.push(link);
+    return link;
+  };
+  return { factory, made };
+}
+
 export function fakeKeys() {
   const keys = new Map<string, string>();
   const calls: string[] = [];
@@ -388,6 +457,7 @@ export interface HarnessOptions {
   readonly enabled?: () => boolean;
   readonly supportedTargets?: string[];
   readonly linkFeatures?: string[];
+  readonly hostScopeState?: HostScopeLinkState;
   readonly tunnelMode?: TunnelMode;
   /** Instead of the fake tunnels: real ones, say. */
   readonly tunnel?: RemoteHostsPorts["tunnel"];
@@ -401,6 +471,7 @@ export function harness(options: HarnessOptions = {}) {
   const box = fakeBoxes(...(options.overrides ?? []));
   const tunnels = fakeTunnels(options.tunnelMode ?? "up");
   const links = fakeLinks();
+  const hostScopes = fakeHostScopeLinks(options.hostScopeState);
   const keys = fakeKeys();
   const store = fakeStore(options.registry ?? null);
   const log = recordingLogger();
@@ -438,6 +509,7 @@ export function harness(options: HarnessOptions = {}) {
     deviceName: "Alice's Mac",
     tunnel: options.tunnel ?? tunnels.factory,
     link: links.factory,
+    hostScopeLink: hostScopes.factory,
     ...(options.wake === true
       ? {
           wake: (listener: (cause: RemoteHostsWakeCause) => void) => {
@@ -456,7 +528,21 @@ export function harness(options: HarnessOptions = {}) {
   };
   const engine = createRemoteHosts(ports);
   const snapshots: RemoteHostsSnapshot[] = [];
-  return { engine, box, tunnels, links, keys, store, log, accepted, clock, snapshots, wake, ports };
+  return {
+    engine,
+    box,
+    tunnels,
+    links,
+    hostScopes,
+    keys,
+    store,
+    log,
+    accepted,
+    clock,
+    snapshots,
+    wake,
+    ports,
+  };
 }
 
 export type Harness = ReturnType<typeof harness>;

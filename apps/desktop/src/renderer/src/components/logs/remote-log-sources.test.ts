@@ -4,6 +4,9 @@
  * relay over real links is `main/remote-logs.real-link.test.ts`.
  */
 import { readHostError } from "@volli/host-protocol";
+import type { HostLinkSubscriptionHandlers } from "@volli/host-protocol/client-link";
+import { relayHostScope } from "../../lib/relay-host-scope";
+vi.mock("../../lib/relay-host-scope", () => ({ relayHostScope: vi.fn() }));
 import type { HostLinkRelayEvent } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -22,6 +25,7 @@ import {
   attachRemoteLogSourcesForPage,
   HOST_LOGS_FEATURE,
   relayLogLink,
+  relayHostLogLink,
   waitingStatus,
 } from "./remote-log-sources";
 
@@ -83,7 +87,7 @@ function store(initial: Pick<HostConnectionState, "hosts" | "projects">) {
 }
 
 /** Links that answer nothing: the test reads which ones a source chose. */
-function links() {
+function links(answer = false) {
   const made: string[] = [];
   const streams: { workspaceId: string; unsubscribed: boolean }[] = [];
   return {
@@ -92,7 +96,10 @@ function links() {
     link: (workspaceId: string): LogSourceLink => {
       made.push(workspaceId);
       return {
-        query: () => new Promise(() => {}),
+        query: () =>
+          answer
+            ? Promise.resolve({ entries: [], gap: false, cursor: "r:1" })
+            : new Promise(() => {}),
         subscribe: () => {
           const stream = { workspaceId, unsubscribed: false };
           streams.push(stream);
@@ -497,4 +504,170 @@ describe("a Workspace's relayed link as a log source reads it", () => {
     opened[5]!.onData({ kind: "complete" });
     expect(ends).toEqual(["resnapshot", "error"]);
   });
+});
+
+describe("dedicated HOST log sources", () => {
+  it("registers before any project, retains one source through loss/resume and stops on forget", async () => {
+    const scoped = (
+      status: "ready" | "connecting" | "unavailable",
+      link: HostLinkView = OPEN,
+    ): HostRecord => ({
+      ...host(BOX, "box", link),
+      hostScope: { status, granted: [HOST_LOGS_FEATURE] },
+    });
+    const hosts = store({ hosts: [scoped("ready")], projects: {} });
+    const dedicated = links(true);
+    const borrowed = links();
+    const sources: LogSource[] = [];
+    const unregister = vi.fn();
+    attach({
+      hosts,
+      link: borrowed.link,
+      hostLink: dedicated.link,
+      register: (source) => {
+        sources.push(source);
+        return unregister;
+      },
+    });
+    expect(sources).toHaveLength(1);
+    expect(dedicated.made).toEqual([BOX]);
+    expect(borrowed.made).toEqual([]);
+    const reading = start(sources[0]!);
+    await Promise.resolve();
+    expect(dedicated.streams).toHaveLength(1);
+    hosts.set({ hosts: [scoped("connecting", { status: "reconnecting" })] });
+    expect(sources).toHaveLength(1);
+    expect(unregister).not.toHaveBeenCalled();
+    expect(reading.statuses.at(-1)?.[0]).toBe("connecting");
+    expect(dedicated.streams[0]!.unsubscribed).toBe(true);
+    hosts.set({ hosts: [scoped("unavailable")] });
+    expect(reading.statuses.at(-1)).toEqual(["failed", "box can’t serve its log right now."]);
+    hosts.set({ hosts: [scoped("ready")] });
+    expect(sources).toHaveLength(1);
+    expect(dedicated.made).toEqual([BOX]);
+    expect(dedicated.streams).toHaveLength(2);
+    hosts.set({ hosts: [] });
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(dedicated.streams[1]!.unsubscribed).toBe(true);
+    reading.stop();
+  });
+
+  it("never borrows Workspace grants for modern disconnected or ungranted HOST connections", () => {
+    const hosts = store({
+      hosts: [{ ...host(BOX, "box"), hostScope: { status: "connecting", granted: [] } }],
+      projects: { ws: ready(BOX) },
+    });
+    const borrowed = links();
+    const dedicated = links(true);
+    const register = vi.fn(() => vi.fn());
+    attach({ hosts, link: borrowed.link, hostLink: dedicated.link, register });
+    for (const status of ["ready", "unavailable"] as const) {
+      hosts.set({ hosts: [{ ...host(BOX, "box"), hostScope: { status, granted: [] } }] });
+    }
+    expect(register).not.toHaveBeenCalled();
+    expect(borrowed.made).toEqual([]);
+    expect(dedicated.made).toEqual([]);
+    hosts.set({ hosts: [{ ...host(BOX, "box"), hostScope: { status: "older", granted: [] } }] });
+    expect(register).toHaveBeenCalledOnce();
+    expect(borrowed.made).toEqual(["ws"]);
+    expect(
+      waitingStatus({ ...host(BOX, "box"), hostScope: { status: "ready", granted: [] } }),
+    ).toEqual({ status: "failed", detail: "box did not grant log access." });
+  });
+
+  it("stops an already running HOST stream and unregisters when the grant disappears", async () => {
+    const hosts = store({
+      hosts: [{ ...host(BOX, "box"), hostScope: { status: "ready", granted: GRANTS } }],
+      projects: {},
+    });
+    const dedicated = links(true);
+    const sources: LogSource[] = [];
+    const unregister = vi.fn();
+    const detach = attach({
+      hosts,
+      hostLink: dedicated.link,
+      register: (source) => {
+        sources.push(source);
+        return unregister;
+      },
+    });
+    start(sources[0]!);
+    await Promise.resolve();
+    hosts.set({ hosts: [{ ...host(BOX, "box"), hostScope: { status: "ready", granted: [] } }] });
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(dedicated.streams[0]!.unsubscribed).toBe(true);
+    detach();
+    expect(hosts.listeners.size).toBe(0);
+  });
+});
+
+it("adapts HOST calls, budget notices and every stream callback without borrowing Workspace IPC", async () => {
+  const streams: HostLinkSubscriptionHandlers[] = [];
+  const notices: NonNullable<Parameters<typeof relayHostScope>[1]>[] = [];
+  const query = vi.fn(async () => ({ entries: [], gap: false, cursor: "r:1" }));
+  const unsubscribe = vi.fn();
+  vi.mocked(relayHostScope).mockImplementation((_id, options = {}) => {
+    notices.push(options);
+    return {
+      query,
+      mutate: vi.fn(),
+      subscribe: (_path, _input, handlers) => {
+        streams.push(handlers);
+        return { unsubscribe };
+      },
+    };
+  });
+  const link = relayHostLogLink(BOX);
+  expect(await link.query("logs.tail", { limit: 100 })).toMatchObject({ cursor: "r:1" });
+  expect(query).toHaveBeenCalledWith("logs.tail", { limit: 100 });
+  const seen: unknown[] = [];
+  const subscription = link.subscribe(
+    "logs.follow",
+    { after: "r:1" },
+    {
+      onData: (data) => void seen.push(data),
+      onResnapshot: () => void seen.push("resnapshot"),
+      onError: () => void seen.push("error"),
+      onStarted: () => void seen.push("started"),
+      onComplete: () => void seen.push("complete"),
+      onLimited: () => void seen.push("limited"),
+    },
+  );
+  const resnapshot = {
+    code: "CONFLICT" as const,
+    reason: "subscription-resnapshot-required" as const,
+    message: "again",
+  };
+  streams[0]!.onData({ entries: [] });
+  streams[0]!.onResnapshot(resnapshot);
+  streams[0]!.onError(new Error("down"));
+  streams[0]!.onStarted?.();
+  streams[0]!.onComplete?.();
+  notices[1]!.onStreamLimited?.({
+    path: "logs.follow",
+    error: { code: "TOO_MANY_REQUESTS", reason: "subscription-limit", message: "full" },
+  });
+  expect(seen).toEqual([{ entries: [] }, "resnapshot", "error", "started", "complete", "limited"]);
+  subscription.unsubscribe();
+  expect(unsubscribe).toHaveBeenCalledOnce();
+
+  link.subscribe(
+    "logs.follow",
+    {},
+    { onData: () => {}, onError: () => {}, onResnapshot: () => {} },
+  );
+  streams[1]!.onStarted?.();
+  streams[1]!.onComplete?.();
+  notices[2]!.onStreamLimited?.({
+    path: "logs.follow",
+    error: { code: "TOO_MANY_REQUESTS", message: "full" },
+  });
+  const hosts = store({
+    hosts: [{ ...host(BOX, "box"), hostScope: { status: "ready", granted: GRANTS } }],
+    projects: {},
+  });
+  const register = vi.fn(() => vi.fn());
+  attach({ hosts, register }); // Exercises the production HOST adapter default.
+  expect(register).toHaveBeenCalledOnce();
+  expect(relayHostScope).toHaveBeenCalledWith(BOX, {});
 });

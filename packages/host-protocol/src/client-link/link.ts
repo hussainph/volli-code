@@ -55,13 +55,15 @@ import {
   encodeHostHello,
   HOST_PROTOCOL_CLOSE_CODES,
   type HostFeature,
+  type HostConnectionHello,
+  type HostConnectionWelcome,
   type HostHello,
   type HostWelcome,
   type WorkspaceAuthority,
 } from "../handshake";
 import type { WorkspaceId } from "../identity";
 import { mintHostTrace, nextHostSpan, withHostTrace, type HostTrace } from "../trace";
-import { validateWelcome, type ValidateWelcomeOptions } from "../welcome";
+import { validateWelcome, type WelcomeValidation, type ValidateWelcomeOptions } from "../welcome";
 import {
   HOST_LINK_TIMING,
   hostLinkBackoffDelay,
@@ -290,8 +292,8 @@ type Outcome =
   | { readonly status: "fenced"; readonly error: HostError };
 
 /** One socket, one `wsClient`, one hello: everything a connection holds dies with it. */
-interface Connection {
-  readonly hello: HostHello;
+interface Connection<Hello = HostConnectionHello> {
+  readonly hello: Hello;
   /** The connect attempt's trace: its hello frame and its state changes carry it. */
   readonly trace: HostTrace;
   /** Each request id's trace, until its frame is sent. */
@@ -324,6 +326,53 @@ interface Entry {
 }
 
 export function createHostLink(options: HostLinkOptions): HostLink {
+  let lastSeen: WorkspaceAuthority | null = options.lastSeen ?? null;
+  const transport = createClientLink<HostHello, HostWelcome>(options, {
+    buildHello: (credential) =>
+      buildHostHello({
+        client: options.client,
+        workspaceId: options.workspaceId,
+        credential,
+        features: options.features,
+        lastSeen,
+      }),
+    welcomePath: "protocol.welcome",
+    validate: (welcome, hello) =>
+      validateWelcome(
+        welcome,
+        hello,
+        options.verifyProof === undefined ? {} : { verifyProof: options.verifyProof },
+      ),
+    accepted: (welcome) => {
+      lastSeen = { epoch: welcome.workspace.epoch, hostId: welcome.host.id };
+    },
+  });
+  return { ...transport, workspaceId: options.workspaceId };
+}
+
+/** Shared transport mechanics; only hello/welcome judgment differs by scope. */
+export type ClientLinkState<Welcome> =
+  | Exclude<HostLinkState, { status: "ready" }>
+  | { readonly status: "ready"; readonly welcome: Welcome };
+export type ClientLink<Welcome> = Omit<HostLink, "workspaceId" | "getState" | "subscribeState"> & {
+  getState(): ClientLinkState<Welcome>;
+  subscribeState(listener: (state: ClientLinkState<Welcome>) => void): () => void;
+};
+export interface ClientLinkHandshake<Hello, Welcome> {
+  readonly buildHello: (credential: string) => Hello;
+  readonly welcomePath: string;
+  readonly validate: (welcome: unknown, hello: Hello) => WelcomeValidation<Welcome>;
+  readonly accepted?: (welcome: Welcome) => void;
+  readonly isRefusal?: (error: HostError) => boolean;
+}
+
+export function createClientLink<
+  Hello extends HostConnectionHello,
+  Welcome extends HostConnectionWelcome,
+>(
+  options: Omit<HostLinkOptions, "workspaceId" | "lastSeen" | "verifyProof">,
+  handshake: ClientLinkHandshake<Hello, Welcome>,
+): ClientLink<Welcome> {
   const timing: HostLinkTiming = { ...HOST_LINK_TIMING, ...options.timing };
   validateHostLinkTiming(timing);
   const protocol = new URL(options.url).protocol;
@@ -341,11 +390,10 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   /** The trace of the attempt in flight, or of the last one: what a state change is filed under. */
   let attemptTrace: HostTrace = traceFor();
 
-  let state: HostLinkState = { status: "connecting", attempt: 0 };
-  const listeners = new Set<(state: HostLinkState) => void>();
+  let state: ClientLinkState<Welcome> = { status: "connecting", attempt: 0 };
+  const listeners = new Set<(state: ClientLinkState<Welcome>) => void>();
   const entries = new Set<Entry>();
-  let lastSeen: WorkspaceAuthority | null = options.lastSeen ?? null;
-  let connection: Connection | null = null;
+  let connection: Connection<Hello> | null = null;
   let failures = 0;
   /** Bumped by every attempt and every stop, so an attempt overtaken mid-await does nothing. */
   let attemptToken = 0;
@@ -359,7 +407,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
    * from that change instead, and the caller must not continue the
    * transition it started.
    */
-  function setState(next: HostLinkState): boolean {
+  function setState(next: ClientLinkState<Welcome>): boolean {
     if (log !== undefined) report(state, next);
     state = next;
     for (const listener of listeners) {
@@ -370,7 +418,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   }
 
   /** One state change, with the reason and timing the owner's log needs. */
-  function report(from: HostLinkState, to: HostLinkState): void {
+  function report(from: ClientLinkState<Welcome>, to: ClientLinkState<Welcome>): void {
     const base = {
       kind: "state" as const,
       from: from.status,
@@ -381,7 +429,11 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       case "connecting":
         return log!({ ...base, attempt: to.attempt });
       case "ready":
-        return log!({ ...base, hostId: to.welcome.host.id, epoch: to.welcome.workspace.epoch });
+        return log!({
+          ...base,
+          hostId: to.welcome.host.id,
+          ...("workspace" in to.welcome ? { epoch: to.welcome.workspace.epoch } : {}),
+        });
       case "unreachable":
         return log!({
           ...base,
@@ -430,18 +482,12 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       return;
     }
     if (token !== attemptToken) return;
-    const hello = buildHostHello({
-      client: options.client,
-      workspaceId: options.workspaceId,
-      credential,
-      features: options.features,
-      lastSeen,
-    });
+    const hello = handshake.buildHello(credential);
     open(hello);
   }
 
-  function open(hello: HostHello): void {
-    const current: Connection = {
+  function open(hello: Hello): void {
+    const current: Connection<Hello> = {
       hello,
       trace: attemptTrace,
       traces: new Map(),
@@ -486,7 +532,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     const welcome = request(
       current,
       "query",
-      "protocol.welcome",
+      handshake.welcomePath,
       undefined,
       nextHostSpan(current.trace),
     ).subscribe({
@@ -501,7 +547,12 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         // A transport failure here means the socket is going: its close
         // event (or the handshake timeout) is what classifies the attempt.
         if (refusal === null) return;
-        fail(current, refusalOutcome(refusal, null));
+        fail(
+          current,
+          handshake.isRefusal?.(refusal)
+            ? { status: "refused", error: refusal, closeCode: null }
+            : refusalOutcome(refusal, null),
+        );
       },
     });
     // Retiring stops waiting for it, so a dead host's socket closes now.
@@ -509,12 +560,10 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     current.inflight.add(stop);
   }
 
-  function welcomed(current: Connection, welcome: unknown): void {
-    const verdict = validateWelcome(
-      welcome,
-      current.hello,
-      options.verifyProof === undefined ? {} : { verifyProof: options.verifyProof },
-    );
+  function welcomed(current: Connection<Hello>, welcome: unknown): void {
+    /* v8 ignore next -- retiring unsubscribes and deletes the welcome request; this guards an already-dispatched late callback too. */
+    if (current.retired || connection !== current) return;
+    const verdict = handshake.validate(welcome, current.hello);
     if (!verdict.ok) {
       fail(current, refusalOutcome(verdict.error, null));
       return;
@@ -522,7 +571,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     clearTimeout(handshakeTimer);
     current.phase = "ready";
     failures = 0;
-    lastSeen = { epoch: verdict.welcome.workspace.epoch, hostId: verdict.welcome.host.id };
+    handshake.accepted?.(verdict.welcome);
     if (!setState({ status: "ready", welcome: verdict.welcome })) return;
     // Only now: no subscription reaches a host whose welcome this client has
     // not judged. One a listener already opened is left as it is.
@@ -533,7 +582,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   }
 
   /** Settles the link once for a connection that failed, and retires it. */
-  function fail(current: Connection | null, outcome: Outcome): void {
+  function fail(current: Connection<Hello> | null, outcome: Outcome): void {
     if (current !== null) {
       if (current.retired || connection !== current) return;
       retire(current);
@@ -565,7 +614,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   }
 
   /** No traffic after this: calls in flight fail, streams detach and wait for the next connection. */
-  function retire(current: Connection): void {
+  function retire(current: Connection<Hello>): void {
     current.retired = true;
     clearTimeout(current.silence);
     clearTimeout(current.deadline);
@@ -600,7 +649,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   /* ------------------------------------------------------------ the socket */
 
-  function watch(current: Connection, socket: WebSocket): void {
+  function watch(current: Connection<Hello>, socket: WebSocket): void {
     socket.addEventListener("open", () => heard(current));
     socket.addEventListener("message", (event) => {
       // tRPC would answer this with its own reconnect on this client, which
@@ -627,7 +676,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
    * logs): a request its call's, the hello its attempt's. The heartbeat and
    * tRPC's own control frames go as they are.
    */
-  function traceSends(current: Connection, socket: WebSocket): void {
+  function traceSends(current: Connection<Hello>, socket: WebSocket): void {
     const send = socket.send.bind(socket);
     socket.send = (data) =>
       send(
@@ -637,7 +686,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   }
 
   /** Any frame from the host proves the socket alive; silence from here arms the next ping. */
-  function heard(current: Connection): void {
+  function heard(current: Connection<Hello>): void {
     /* v8 ignore next -- a frame that was already in flight when the link retired the socket; nothing arms a timer for it. */
     if (current.retired) return;
     clearTimeout(current.deadline);
@@ -646,7 +695,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     current.silence = setTimeout(() => probe(current), timing.heartbeatIntervalMs);
   }
 
-  function probe(current: Connection): void {
+  function probe(current: Connection<Hello>): void {
     if (current.deadline !== undefined) return;
     // Only ever armed after the socket opened. tRPC's server answers PONG.
     current.socket!.send("PING");
@@ -661,7 +710,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   /* ------------------------------------------------------------ the traffic */
 
   function request(
-    current: Connection,
+    current: Connection<Hello>,
     type: "query" | "mutation" | "subscription",
     path: string,
     input: unknown,
@@ -726,7 +775,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
    */
   function openSubscription(
     entry: Entry,
-    current: Connection,
+    current: Connection<Hello>,
     why: "first" | "welcome" | "overflow",
   ): void {
     if (entry.ended || entry.detach !== null || current.retired || connection !== current) {
@@ -791,7 +840,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     });
   }
 
-  function failed(entry: Entry, current: Connection, error: unknown): void {
+  function failed(entry: Entry, current: Connection<Hello>, error: unknown): void {
     const failure = serverError(error);
     // A transport failure, or a revocation the 4401 close follows: the next
     // connection's welcome decides whether this stream resumes.
@@ -828,8 +877,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   /* ------------------------------------------------------------ the owner */
 
-  const link: HostLink = {
-    workspaceId: options.workspaceId,
+  const link: ClientLink<Welcome> = {
     getState: () => state,
     subscribeState(listener) {
       listeners.add(listener);

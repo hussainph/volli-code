@@ -14,11 +14,10 @@
  * handshake and handed straight to the link.
  *
  * **One host, one link.** Each host's `RemoteHostLink` is its Workspace
- * links' most informative state or, while none is open, a bounded SSH
- * hostd-status probe's (`remote-hosts-link.ts`). A TCP route alone is never
- * ready. The engine publishes this per-host truth for VC-576's view. At
- * most {@link REMOTE_HOST_LINK_CAP} Workspace links per host: a project past
- * it reads "Too many projects open", never offline or open.
+ * own validated device-auth host-scope connection, independent of Workspaces.
+ * Only an attempted host hello's explicit N-1 refusal enables the old
+ * Workspace/status fallback. TCP alone is never ready. Host, Workspace and
+ * add-flow links share {@link REMOTE_HOST_LINK_CAP} process-wide slots.
  *
  * **Flows are single-flight.** Every call on one flow (an answer, a sudo
  * password, a retry) waits for the one before it. Cancelling takes effect at
@@ -43,9 +42,17 @@
  * grace) for whatever is in flight to finish or find itself cancelled, then
  * stops every host; once it returns nothing here creates a resource again.
  */
-import { hostOffersSignIns, isUuidV4, type HostFeature } from "@volli/host-protocol";
+import {
+  HOST_SCOPE_FEATURES,
+  hostOffersSignIns,
+  isUuidV4,
+  type HostFeature,
+} from "@volli/host-protocol";
 import type {
   HostLink,
+  HostScopeLink,
+  HostScopeLinkOptions,
+  HostScopeLinkState,
   HostLinkLogEvent,
   HostLinkOptions,
   HostLinkState,
@@ -108,7 +115,12 @@ import {
   stoppedAt,
 } from "./remote-hosts-flow";
 import { generateDeviceKey, mintDeviceCredential } from "./remote-hosts-device-key";
-import { nextRemoteHostLink, remoteHostLinkState, versionFacts } from "./remote-hosts-link";
+import {
+  isOlderHostScope,
+  nextRemoteHostLink,
+  remoteHostLinkState,
+  versionFacts,
+} from "./remote-hosts-link";
 import { sshFailureLine, statusEvidence } from "./remote-hosts-health";
 import {
   cliError,
@@ -249,6 +261,8 @@ export interface RemoteHostsPorts {
   readonly tunnel: (options: RemoteHostsTunnelOptions) => SshTunnel;
   /** Production: `createHostLink`. */
   readonly link: (options: HostLinkOptions) => HostLink;
+  /** Production: createHostScopeLink. Missing composition is unavailable, never older. */
+  readonly hostScopeLink?: (options: HostScopeLinkOptions) => HostScopeLink;
   /** The features each Workspace link asks for; none by default. */
   readonly linkFeatures?: readonly HostFeature[];
   /**
@@ -268,8 +282,8 @@ export interface RemoteHostsPorts {
 export interface RemoteHosts {
   snapshot(): RemoteHostsSnapshot;
   /**
-   * The host's own health: its validated Workspace links aggregated, or
-   * hostd-status evidence while it serves none. Also published as each
+   * The host's own validated host-scope health; Workspace/status evidence
+   * is used only after an explicit N-1 classification. Published as each
    * host's reachability, including hosts with no open projects.
    */
   hostLink(hostId: string): RemoteHostLink;
@@ -284,11 +298,13 @@ export interface RemoteHosts {
   /** v1 refuses: {@link REMOTE_HOST_SIGN_IN_UNAVAILABLE}. */
   signIn(hostId: string, providerId: string): void;
   /**
-   * A Workspace link of the host that is `ready` and was granted `sign-ins`
-   * (VC-702), for desktop main's sign-in calls; null while it has none. The
+   * A ready host-scope link granted `sign-ins`, or a Workspace link only for
+   * an explicitly older host. Never borrow modern disconnected Workspaces. The
    * caller never closes it: the engine owns every link.
    */
-  signInLink(hostId: string): HostLink | null;
+  signInLink(hostId: string): HostLink | HostScopeLink | null;
+  /** The process-owned host link, only while its host welcome is validated. Never close it. */
+  hostScopeLink(hostId: string): HostScopeLink | null;
   /**
    * The link of a remote Workspace this Mac opened, while it is `ready`
    * (VC-711), for desktop main's Workspace link relay; null while it has none
@@ -399,6 +415,20 @@ export function devicesListScript(mode: InstallMode): string {
   return [...find, `exec "$b" devices list --${mode} </dev/null`].join("\n");
 }
 
+function statusScript(mode: InstallMode): string {
+  return devicesListScript(mode).replace(
+    `exec "$b" devices list --${mode} </dev/null`,
+    [
+      ...(mode === "system"
+        ? [
+            'if sudo -n true >/dev/null 2>&1; then exec sudo -n -u volli "$b" status --json --system </dev/null; fi',
+          ]
+        : []),
+      `exec "$b" status --json --${mode} </dev/null`,
+    ].join("\n"),
+  );
+}
+
 const isDeviceText = (value: unknown): value is string =>
   typeof value === "string" && value.length <= REMOTE_HOST_DEVICE_TEXT_MAX;
 
@@ -471,11 +501,21 @@ interface HeldLink {
   readonly unsubscribe: () => void;
 }
 
+interface HeldHostScopeLink {
+  /** False after tunnel loss; its slot stays reserved until the route returns or the host stops. */
+  active: boolean;
+  readonly link: HostScopeLink;
+  readonly url: string;
+  readonly unsubscribe: () => void;
+}
+
 interface HostRuntime {
   readonly id: string;
   readonly tunnel: SshTunnel;
   readonly remote: { listen: ListenAddress };
   readonly links: Map<string, HeldLink>;
+  scope: HeldHostScopeLink | null;
+  older: boolean;
   readonly unsubscribeTunnel: () => void;
   /** The tunnel's failures since it was last up. */
   attempt: number;
@@ -513,6 +553,9 @@ interface Flow {
   hostId: string | null;
   tunnel: SshTunnel | null;
   remote: { listen: ListenAddress } | null;
+  scope: HostScopeLink | null;
+  older: boolean;
+  stopScopeWait: (() => void) | null;
   /** A device key written under its host's name that the registry does not name yet. */
   promoted: string | null;
   /** How many questions it has asked: each one's id. */
@@ -536,7 +579,12 @@ function derive(runtime: HostRuntime, links: readonly HeldLink[], host = false) 
         : runtime.tunnel.state,
     attempt: runtime.attempt,
     retryAt: runtime.retryAt,
-    links: links.map((held): HostLinkState => held.link.getState()),
+    links:
+      host && !runtime.older
+        ? runtime.tunnel.state.status === "up" && runtime.scope !== null
+          ? [runtime.scope.link.getState()]
+          : []
+        : links.map((held): HostLinkState => held.link.getState()),
     ...(host ? { health: runtime.health } : {}),
   });
 }
@@ -593,9 +641,9 @@ export function answerFits(question: AddHostQuestion, reply: AddHostAnswer): boo
   }
 }
 
-/** The Workspaces that get a link: the first {@link REMOTE_HOST_LINK_CAP} remembered. */
+/** Remembered Workspaces share the process-wide link budget with host and add-flow links. */
 function linked(entry: RegistryHost): readonly string[] {
-  return entry.workspaceIds.slice(0, REMOTE_HOST_LINK_CAP);
+  return entry.workspaceIds;
 }
 
 /** Why the flow's current question is not `questionId`, or `null` when it is and `fit` holds. */
@@ -649,6 +697,13 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   const tunnelsMade = new Set<SshTunnel>();
   /** Management/status SSH connections while owned: quit SIGKILLs what is left. */
   const projectSsh = new Set<SshTransport>();
+  /** H host links + W Workspace links + add-flow links share one process-wide budget. */
+  const sockets = new Set<HostLink | HostScopeLink>();
+
+  function releaseLink(link: HostLink | HostScopeLink): void {
+    sockets.delete(link);
+    link.close();
+  }
   /** Epoch ms by which quit is done, once it has begun. */
   let quitDeadline: number | null = null;
   let unsubscribeWake: (() => void) | undefined;
@@ -702,6 +757,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
 
   function hostJson(entry: RegistryHost): RemoteHost {
     const runtime = runtimes.get(entry.id)!;
+    const scope = runtime.scope?.link.getState();
     return {
       ...boundedRemoteHostHealth({
         reachability: runtime.link,
@@ -709,6 +765,17 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         signInExpiry: null,
         lastSshFailure: runtime.lastSshFailure,
       }),
+      hostScope: {
+        status: runtime.older
+          ? "older"
+          : scope?.status === "ready"
+            ? "ready"
+            : scope?.status === "connecting" ||
+                (scope === undefined && runtime.health.status === "connecting")
+              ? "connecting"
+              : "unavailable",
+        granted: scope?.status === "ready" ? scope.welcome.features : [],
+      },
       id: entry.id,
       name: entry.name,
       target: entry.target,
@@ -796,6 +863,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     load();
     for (const entry of entries.values()) startHost(entry);
     startingHosts = false;
+    refillLinks();
     unsubscribeWake = ports.wake?.((cause) => wakeAll(cause));
     publish();
   }
@@ -824,12 +892,12 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       derive(runtime, [...runtime.links.values()], true),
       now,
     );
-    entry.workspaceIds.forEach((workspaceId, index) => {
+    entry.workspaceIds.forEach((workspaceId) => {
       const held = runtime.links.get(workspaceId);
       const state =
-        index < REMOTE_HOST_LINK_CAP
-          ? derive(runtime, held === undefined ? [] : [held])
-          : tooManyProjects(entry.name);
+        held === undefined && sockets.size >= REMOTE_HOST_LINK_CAP
+          ? tooManyProjects(entry.name)
+          : derive(runtime, held === undefined ? [] : [held]);
       runtime.projectLinks.set(
         workspaceId,
         nextRemoteHostLink(runtime.projectLinks.get(workspaceId) ?? null, state, now),
@@ -843,16 +911,24 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   }
 
   /** A fresh `vdc1` for one handshake, signed with the host's device key. */
-  async function credentialFor(hostId: string, workspaceId: string): Promise<string> {
+  async function credentialFor(runtime: HostRuntime, workspaceId?: string): Promise<string> {
+    const hostId = runtime.id;
     const entry = entries.get(hostId);
     if (entry === undefined) throw new Error("This host was forgotten.");
     const privateKeyPem = await ports.deviceKeys.get(deviceKeyName(hostId, entry.deviceId));
+    if (
+      runtime.closed ||
+      runtimes.get(hostId) !== runtime ||
+      entries.get(hostId)?.deviceId !== entry.deviceId
+    ) {
+      throw new Error("This host connection was replaced.");
+    }
     if (privateKeyPem === null) throw new Error(`This Mac has no device key for ${entry.name}.`);
     return mintDeviceCredential({
       privateKeyPem,
       hostId,
       deviceId: entry.deviceId,
-      workspaceId,
+      ...(workspaceId === undefined ? { scope: "host" as const } : { workspaceId }),
       now: ports.now(),
     });
   }
@@ -890,15 +966,16 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         return;
       }
       held.unsubscribe();
-      held.link.close();
+      releaseLink(held.link);
       runtime.links.delete(workspaceId);
     }
+    if (sockets.size >= REMOTE_HOST_LINK_CAP) return;
     const link = ports.link({
       url,
       workspaceId,
       client: { kind: "desktop", version: ports.appVersion },
       features: ports.linkFeatures ?? [],
-      credential: () => credentialFor(runtime.id, workspaceId),
+      credential: () => credentialFor(runtime, workspaceId),
       log: linkLogger(runtime.id, workspaceId),
       // The first welcome must match enrollment too, before a lastSeen fence exists.
       verifyProof: (welcome) =>
@@ -910,6 +987,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
               message: "The host identity changed. Add it again.",
             },
     });
+    sockets.add(link);
     const unsubscribe = link.subscribeState((state) => {
       if (
         runtime.closed ||
@@ -917,7 +995,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         runtime.links.get(workspaceId)?.link !== link
       )
         return;
-      if (state.status === "ready") {
+      if (state.status === "ready" && (runtime.older || runtime.scope === null)) {
         const welcome = state.welcome;
         noteVersion(runtime, welcome.host.version);
         runtime.lastWelcome = {
@@ -930,24 +1008,144 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       }
       // Closing the last project must not resurrect an earlier status-ready
       // after a Workspace link has since observed loss/refusal.
-      runtime.healthGeneration += 1;
-      runtime.health = derive(runtime, [...runtime.links.values()]);
+      if (runtime.older) {
+        runtime.healthGeneration += 1;
+        runtime.health = derive(runtime, [...runtime.links.values()]);
+      }
       recompute(runtime);
     });
     runtime.links.set(workspaceId, { link, url, unsubscribe });
   }
 
+  /** No-project health and capabilities come exclusively from this pinned host handshake. */
+  function holdHostScope(runtime: HostRuntime, link: HostScopeLink, url: string): void {
+    const observe = (state: HostScopeLinkState): void => {
+      if (
+        runtime.closed ||
+        runtimes.get(runtime.id) !== runtime ||
+        runtime.scope?.link !== link ||
+        !runtime.scope.active
+      )
+        return;
+      runtime.healthGeneration += 1;
+      runtime.probe?.cancel();
+      runtime.probe = null;
+      if (isOlderHostScope(state)) {
+        runtime.scope!.unsubscribe();
+        runtime.scope = null;
+        releaseLink(link);
+        runtime.older = true;
+        probeStatus(runtime);
+      } else {
+        runtime.older = false;
+        runtime.health = remoteHostLinkState({
+          tunnel: runtime.tunnel.state,
+          attempt: runtime.attempt,
+          retryAt: runtime.retryAt,
+          links: [state],
+        });
+        if (state.status === "ready") {
+          noteVersion(runtime, state.welcome.host.version);
+          runtime.lastWelcome = {
+            at: ports.now(),
+            hostId: state.welcome.host.id,
+            version: state.welcome.host.version,
+            protocol: state.welcome.protocolVersion,
+            features: [...state.welcome.features],
+          };
+        }
+      }
+      recompute(runtime);
+    };
+    const unsubscribe = link.subscribeState(observe);
+    runtime.scope = { link, url, unsubscribe, active: true };
+    observe(link.getState());
+  }
+
+  function openHostScope(runtime: HostRuntime, url: string): void {
+    const held = runtime.scope;
+    if (held !== null) {
+      if (held.url === url && held.active) {
+        held.link.wake("network-online");
+        return;
+      }
+      held.unsubscribe();
+      releaseLink(held.link);
+      runtime.scope = null;
+    }
+    if (runtime.older) return;
+    if (ports.hostScopeLink === undefined || sockets.size >= REMOTE_HOST_LINK_CAP) {
+      runtime.health = {
+        status: "refused",
+        closeCode: null,
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          reason: "host-scope-unavailable",
+          message: "The host connection is unavailable on this Mac.",
+        },
+      };
+      return;
+    }
+    const link = ports.hostScopeLink({
+      url,
+      hostId: runtime.id,
+      client: { kind: "desktop", version: ports.appVersion },
+      features: HOST_SCOPE_FEATURES,
+      credential: () => credentialFor(runtime),
+      verifyProof: (welcome) =>
+        welcome.actor.deviceId === entries.get(runtime.id)?.deviceId
+          ? null
+          : {
+              code: "PRECONDITION_FAILED",
+              reason: "welcome-invalid",
+              message: "The enrolled device identity changed. Add the host again.",
+            },
+      log: linkLogger(runtime.id, "host"),
+    });
+    sockets.add(link);
+    holdHostScope(runtime, link, url);
+  }
+
+  /** Hosts take free slots before remembered Workspaces. Never create a 25th client link. */
+  function refillLinks(): void {
+    if (closed) return;
+    for (const runtime of runtimes.values()) {
+      const tunnel = runtime.tunnel.state;
+      if (tunnel.status === "up" && runtime.scope === null && !runtime.older)
+        openHostScope(runtime, tunnel.url);
+    }
+    for (const runtime of runtimes.values()) {
+      const tunnel = runtime.tunnel.state;
+      if (tunnel.status === "up") {
+        for (const id of linked(entries.get(runtime.id)!)) {
+          if (!runtime.links.has(id)) openLink(runtime, id, tunnel.url);
+        }
+      }
+      follow(runtime, runtime.link);
+    }
+  }
+
   function onTunnel(runtime: HostRuntime, state: TunnelState): void {
     if (runtime.closed || runtimes.get(runtime.id) !== runtime) return;
     if (state.status === "up") {
-      probeStatus(runtime);
+      openHostScope(runtime, state.url);
+      if (runtime.older) probeStatus(runtime);
       runtime.attempt = 0;
       clearTimeout(runtime.timer);
       runtime.timer = undefined;
-      for (const workspaceId of linked(entries.get(runtime.id)!)) {
-        openLink(runtime, workspaceId, state.url);
+      if (!startingHosts) {
+        for (const workspaceId of linked(entries.get(runtime.id)!)) {
+          openLink(runtime, workspaceId, state.url);
+        }
       }
     } else {
+      if (runtime.scope !== null) {
+        runtime.scope.active = false;
+        runtime.scope.unsubscribe();
+        // Preserve the host's budget slot, but never lend a route-lost link as ready.
+        runtime.scope.link.close();
+      }
+      runtime.healthGeneration += 1;
       runtime.probe?.cancel();
       runtime.probe = null;
       runtime.health = { status: "connecting", attempt: runtime.attempt };
@@ -964,7 +1162,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
 
   /** One bounded status command per trigger, never a poll or a fabricated Workspace. */
   function probeStatus(runtime: HostRuntime): void {
-    if (runtime.closed || runtime.probe !== null) return;
+    if (runtime.closed || !runtime.older || runtime.probe !== null) return;
     const entry = entries.get(runtime.id)!;
     const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
     projectSsh.add(ssh);
@@ -996,17 +1194,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     // System data is private to volli (0700). As in the install probe, use
     // already-granted noninteractive sudo; never ask for or retain a password.
     // Without that permission status remains explicitly unavailable.
-    const script = devicesListScript(entry.mode).replace(
-      `exec "$b" devices list --${entry.mode} </dev/null`,
-      [
-        ...(entry.mode === "system"
-          ? [
-              'if sudo -n true >/dev/null 2>&1; then exec sudo -n -u volli "$b" status --json --system </dev/null; fi',
-            ]
-          : []),
-        `exec "$b" status --json --${entry.mode} </dev/null`,
-      ].join("\n"),
-    );
+    const script = statusScript(entry.mode);
     void track(
       (async () => {
         try {
@@ -1084,6 +1272,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         runtime.tunnel.wake();
       }
       if (runtime.tunnel.state.status === "up") probeStatus(runtime);
+      runtime.scope?.link.wake(cause);
       for (const held of runtime.links.values()) held.link.wake(cause);
     }
   }
@@ -1092,6 +1281,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     entry: RegistryHost,
     tunnel?: SshTunnel,
     remote?: { listen: ListenAddress },
+    scope: { readonly link: HostScopeLink; readonly url: string } | null = null,
+    older = false,
   ): void {
     const holder = remote ?? { listen: entry.listen };
     holder.listen = entry.listen;
@@ -1107,6 +1298,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       tunnel: hostTunnel,
       remote: holder,
       links: new Map(),
+      scope: null,
+      older,
       unsubscribeTunnel: hostTunnel.onState((state) => onTunnel(runtime, state)),
       attempt: 0,
       retryAt: ports.now(),
@@ -1122,6 +1315,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     };
     follow(runtime, null);
     runtimes.set(entry.id, runtime);
+    if (scope !== null) holdHostScope(runtime, scope.link, scope.url);
     const state = runtime.tunnel.state;
     if (state.status === "up") onTunnel(runtime, state);
     else openTunnel(runtime);
@@ -1135,9 +1329,14 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     runtime.probe = null;
     clearTimeout(runtime.timer);
     runtime.unsubscribeTunnel();
+    if (runtime.scope !== null) {
+      runtime.scope.unsubscribe();
+      releaseLink(runtime.scope.link);
+      runtime.scope = null;
+    }
     for (const held of runtime.links.values()) {
       held.unsubscribe();
-      held.link.close();
+      releaseLink(held.link);
     }
     runtime.tunnel.close();
     runtimes.delete(hostId);
@@ -1159,6 +1358,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       save([...entries.values()].filter((other) => other.id !== hostId));
       entries.delete(hostId);
       stopHost(hostId);
+      refillLinks();
       publish();
       await removeKey(deviceKeyName(hostId, entry.deviceId));
     });
@@ -1486,6 +1686,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     flow: Flow,
     listen: ListenAddress,
   ): Promise<{ readonly url: string } | { readonly error: string }> {
+    flow.stopScopeWait?.();
+    if (flow.scope !== null) releaseLink(flow.scope);
+    flow.scope = null;
+    flow.older = false;
     flow.tunnel?.close();
     flow.tunnel = null;
     const remote = { listen };
@@ -1498,13 +1702,110 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     flow.remote = remote;
     try {
       const url = await tunnel.start();
-      // A cancel closes the flow's tunnel itself; one that lands after quit is closed here.
-      if (!alive(flow)) tunnel.close();
+      check(flow);
+      await connectFlowHost(flow, url);
+      check(flow);
       return { url };
     } catch (error) {
+      if (flow.scope !== null) releaseLink(flow.scope);
+      flow.scope = null;
       tunnel.close();
       if (flow.tunnel === tunnel) flow.tunnel = null;
       return { error: messageOf(error) };
+    }
+  }
+
+  /** Add ends on validated authentication, never the TCP tunnel's listening line. */
+  async function connectFlowHost(flow: Flow, url: string): Promise<void> {
+    const enroll = flow.results.enroll!;
+    if (ports.hostScopeLink === undefined)
+      throw new Error("The host connection is unavailable on this Mac.");
+    if (sockets.size >= REMOTE_HOST_LINK_CAP)
+      throw new Error("Too many host connections open on this Mac.");
+    const link = ports.hostScopeLink({
+      url,
+      hostId: enroll.hostId,
+      client: { kind: "desktop", version: ports.appVersion },
+      features: HOST_SCOPE_FEATURES,
+      verifyProof: (welcome) =>
+        welcome.actor.deviceId === enroll.deviceId
+          ? null
+          : {
+              code: "PRECONDITION_FAILED",
+              reason: "welcome-invalid",
+              message: "The enrolled device identity changed. Add the host again.",
+            },
+      credential: async () => {
+        const privateKeyPem = await ports.deviceKeys.get(
+          flow.hostId === null
+            ? flowKeyName(flow.id)
+            : deviceKeyName(enroll.hostId, enroll.deviceId),
+        );
+        if (
+          !alive(flow) ||
+          (flow.hostId === null
+            ? flow.scope !== link
+            : runtimes.get(enroll.hostId)?.scope?.link !== link)
+        )
+          throw new Abandoned();
+        if (privateKeyPem === null) throw new KeyMissing();
+        return mintDeviceCredential({
+          privateKeyPem,
+          hostId: enroll.hostId,
+          deviceId: enroll.deviceId,
+          scope: "host",
+          now: ports.now(),
+        });
+      },
+      log: (event) =>
+        flow.logger[event.kind === "state" ? "info" : "debug"]("host link " + event.kind, {
+          ...event,
+        }),
+    });
+    sockets.add(link);
+    flow.scope = link;
+    const state = await new Promise<HostScopeLinkState>((resolve, reject) => {
+      let unsubscribe!: () => void;
+      const stop = (): void => {
+        unsubscribe();
+        flow.stopScopeWait = null;
+      };
+      flow.stopScopeWait = () => {
+        stop();
+        reject(new Abandoned());
+      };
+      const observe = (next: HostScopeLinkState): void => {
+        if (next.status === "connecting") return;
+        stop();
+        resolve(next);
+      };
+      unsubscribe = link.subscribeState(observe);
+      observe(link.getState());
+    });
+    check(flow);
+    if (state.status === "ready") return;
+    if (!isOlderHostScope(state)) {
+      throw new Error("error" in state ? state.error.message : "The host connection closed.");
+    }
+    releaseLink(link);
+    flow.scope = null;
+    flow.older = true;
+    // An N-1 peer cannot authenticate a host hello. Keep its fallback truthful:
+    // bounded, pinned hostd status rather than claiming TCP is authenticated.
+    const result = await flow.ssh.exec(
+      statusScript(modeOf({ ...flow.state, results: flow.results })!),
+      {
+        label: "host-status",
+        timeoutMs: 3_000,
+      },
+    );
+    check(flow);
+    const evidence = statusEvidence(result, enroll.hostId, flow.name, flow.remote!.listen);
+    if (evidence.state.status !== "ready") {
+      // statusEvidence produces only ready or unreachable; its public DTO type is broader.
+      throw new Error(
+        (evidence.state as Extract<RemoteHostLinkState, { status: "unreachable" }>).error.message,
+      );
     }
   }
 
@@ -1563,6 +1864,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         await removeKey(keyName);
         throw new Abandoned();
       }
+      if (!flow.older && flow.scope?.getState().status !== "ready") {
+        throw new Error("The authenticated host connection ended before the add was saved.");
+      }
       // From here to the handoff nothing awaits.
       const pinned = state.request.pinnedHostId;
       // The person agreed the host's identity changed: the old one goes.
@@ -1601,7 +1905,15 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       flow.tunnel = null;
       flow.promoted = null;
       flow.hostId = hostId;
-      startHost(entry, tunnel, remote);
+      const scope = flow.scope;
+      flow.scope = null;
+      startHost(
+        entry,
+        tunnel,
+        remote,
+        scope === null ? null : { link: scope, url: state.results.link!.url },
+        flow.older,
+      );
       publish();
       flow.status = "done";
       flow.secrets.sudoPassword = null;
@@ -1689,6 +2001,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
    */
   function cancel(flow: Flow): void {
     flow.status = "cancelled";
+    flow.stopScopeWait?.();
+    if (flow.scope !== null) releaseLink(flow.scope);
+    flow.scope = null;
     flow.secrets.sudoPassword = null;
     flow.tunnel?.close();
     flow.tunnel = null;
@@ -1800,6 +2115,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       hostId: null,
       tunnel: null,
       remote: null,
+      scope: null,
+      older: false,
+      stopScopeWait: null,
       promoted: null,
       questions: 0,
       trustedKeys: null,
@@ -1841,6 +2159,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       const runtime = runtimes.get(hostId)!;
       runtime.tunnel.wake();
       if (runtime.tunnel.state.status === "up") probeStatus(runtime);
+      runtime.scope?.link.reconnect();
       for (const held of runtime.links.values()) held.link.reconnect();
     },
     updateHost() {
@@ -1858,11 +2177,27 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     signInLink(hostId) {
       guard();
       hostOf(hostId);
-      for (const held of runtimes.get(hostId)!.links.values()) {
+      const runtime = runtimes.get(hostId)!;
+      const scope = runtime.scope?.link;
+      const hostState = scope?.getState();
+      if (
+        scope !== undefined &&
+        hostState?.status === "ready" &&
+        hostOffersSignIns(hostState.welcome)
+      )
+        return scope;
+      if (!runtime.older) return null;
+      for (const held of runtime.links.values()) {
         const state = held.link.getState();
         if (state.status === "ready" && hostOffersSignIns(state.welcome)) return held.link;
       }
       return null;
+    },
+    hostScopeLink(hostId) {
+      guard();
+      hostOf(hostId);
+      const scope = runtimes.get(hostId)!.scope?.link;
+      return scope?.getState().status === "ready" ? scope : null;
     },
     workspaceLink(workspaceId) {
       guard();
@@ -1913,18 +2248,24 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       entries.set(hostId, next);
       const runtime = runtimes.get(hostId)!;
       const tunnel = runtime.tunnel.state;
-      if (tunnel.status === "up" && next.workspaceIds.length <= REMOTE_HOST_LINK_CAP) {
+      if (tunnel.status === "up") {
         openLink(runtime, workspaceId, tunnel.url);
       }
       recompute(runtime);
     },
     async projects(hostId) {
       guard();
-      return track(listProjects(hostOf(hostId)));
+      const entry = hostOf(hostId);
+      if (!runtimes.get(hostId)!.older)
+        throw new RemoteHostsUnavailableError("Use this host’s host-scope projects connection.");
+      return track(listProjects(entry));
     },
     async createProject(input) {
       guard();
-      return track(addProject(hostOf(input.hostId), input));
+      const entry = hostOf(input.hostId);
+      if (!runtimes.get(input.hostId)!.older)
+        throw new RemoteHostsUnavailableError("Use this host’s host-scope projects connection.");
+      return track(addProject(entry, input));
     },
     closeWorkspace(hostId, workspaceId) {
       guard();
@@ -1941,7 +2282,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       const held = runtime.links.get(workspaceId);
       if (held !== undefined) {
         held.unsubscribe();
-        held.link.close();
+        releaseLink(held.link);
         runtime.links.delete(workspaceId);
       }
       runtime.projectLinks.delete(workspaceId);
@@ -1952,6 +2293,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
           if (!runtime.links.has(linkedId)) openLink(runtime, linkedId, tunnel.url);
         }
       }
+      refillLinks();
       recompute(runtime);
       componentLogger(logger, { hostId }).info("closed a workspace", { workspaceId });
     },
