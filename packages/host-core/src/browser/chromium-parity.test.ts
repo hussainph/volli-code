@@ -25,10 +25,9 @@ import { performance } from "node:perf_hooks";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { ChromiumBrowserBackend } from "./chromium-backend";
-import type { BrowserScreencastAttachment } from "./screencast";
 import { suitePorts } from "./test-support/backend-suite";
 import { testChromium } from "./test-support/chromium";
-import { jpegSize } from "./test-support/jpeg";
+import { consume, type Consumer } from "./test-support/parity-consumer";
 import { startBrowserFixture, type BrowserFixture } from "./test-support/fixture-server";
 
 const chromium = testChromium();
@@ -43,35 +42,6 @@ function percentile(values: number[], p: number): number {
 
 const round = (value: number): number => Math.round(value * 10) / 10;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-interface Consumer {
-  /** When each frame was taken, in `performance.now()` ms. */
-  arrivals: number[];
-  /** The pixel size of the frames, as decoded from the last one taken. */
-  size: { width: number; height: number } | null;
-  stop(): void;
-}
-
-/**
- * A consumer as the binary channel will be one: it takes the newest frame as
- * soon as it has sent the last, here with nothing to send it over.
- */
-function consume(attachment: BrowserScreencastAttachment): Consumer {
-  const consumer: Consumer = {
-    arrivals: [],
-    size: null,
-    stop: () => attachment.detach(),
-  };
-  void (async () => {
-    for (;;) {
-      const frame = await attachment.next();
-      if (frame === null) return;
-      consumer.arrivals.push(performance.now());
-      consumer.size = jpegSize(frame.bytes);
-    }
-  })();
-  return consumer;
-}
 
 describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
   let fixture: BrowserFixture;
@@ -121,8 +91,10 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
         createdBy: "user",
       });
       await backend.waitForLoad(tab.tabId, new AbortController().signal, "current");
-      const frames = consume(backend.attachScreencast(tab.tabId, { deviceScaleFactor: scale }));
-      await sleep(300);
+      // An empty frame history is not a quiet page: wait for actual cast readiness.
+      const frames = await consume(
+        backend.attachScreencast(tab.tabId, { deviceScaleFactor: scale }),
+      );
       if (rest) await quiet(frames);
       return { tabId: tab.tabId, frames };
     };
