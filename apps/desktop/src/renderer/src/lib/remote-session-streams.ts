@@ -82,6 +82,14 @@ interface Entry {
   ended: boolean;
 }
 
+/** Closes an entry's stream, if it has one; it waits, parked, to be opened again. */
+function park(entry: Entry): void {
+  const live = entry.live;
+  entry.token = null;
+  entry.live = null;
+  live?.unsubscribe();
+}
+
 export function createRemoteSessionStreams(options: {
   slots?: number;
   clock: { setTimeout(run: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
@@ -93,13 +101,6 @@ export function createRemoteSessionStreams(options: {
   let disposed = false;
 
   const liveCount = (): number => [...entries].filter((entry) => entry.token !== null).length;
-
-  const park = (entry: Entry): void => {
-    const live = entry.live;
-    entry.token = null;
-    entry.live = null;
-    live?.unsubscribe();
-  };
 
   const open = (entry: Entry): void => {
     // The identity is set before subscribing, so a source that answers
