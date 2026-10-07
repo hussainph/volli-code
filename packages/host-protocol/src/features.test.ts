@@ -87,6 +87,7 @@ describe("the v1 feature table", () => {
       ],
       "auth.callback": ["auth.callback.deliver"],
       "sessions.listing": ["session.listing", "session.listingForTicket"],
+      "host.workspaces": ["workspaces.list", "workspaces.create"],
     });
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
@@ -101,6 +102,7 @@ describe("the v1 feature table", () => {
       "sign-ins",
       "auth.callback",
       "sessions.listing",
+      "host.workspaces",
     ]);
     expect(HOST_V1_FEATURES.every(isHostFeature)).toBe(true);
   });

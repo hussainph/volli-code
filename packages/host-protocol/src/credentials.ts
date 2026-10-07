@@ -8,7 +8,7 @@
  * A door never logs, echoes or stores the credential; it hands it to the
  * verifier and keeps only the grant.
  */
-import type { HostActor } from "./actor";
+import type { HostActor, HostConnectionActor } from "./actor";
 import type { HostHello, HostNonce } from "./handshake";
 import type { WorkspaceId } from "./identity";
 
@@ -20,6 +20,18 @@ export interface HostCredentialPresentation {
   /** Self-description only; never a reason to grant more. */
   readonly client: HostHello["client"];
 }
+
+/** Host-wide credential presentation: no Workspace, even a null one. */
+export interface HostScopeCredentialPresentation {
+  readonly scope: "host";
+  readonly credential: string;
+  readonly nonce: HostNonce;
+  readonly client: HostHello["client"];
+}
+
+export type HostConnectionCredentialPresentation =
+  | HostCredentialPresentation
+  | HostScopeCredentialPresentation;
 
 /** One verified credential, for as long as it stays valid. */
 export interface HostCredentialGrant {
@@ -43,6 +55,10 @@ export interface HostCredentialGrant {
   watch?(revoked: () => void): () => void;
 }
 
+export type HostConnectionCredentialGrant = Omit<HostCredentialGrant, "actor"> & {
+  readonly actor: HostConnectionActor;
+};
+
 export interface HostCredentialVerifier {
   /**
    * The grant this credential carries, or `null` for any credential it does
@@ -50,8 +66,8 @@ export interface HostCredentialVerifier {
    * Workspace. A throw is treated as `null`.
    */
   verify(
-    presentation: HostCredentialPresentation,
-  ): HostCredentialGrant | null | Promise<HostCredentialGrant | null>;
+    presentation: HostConnectionCredentialPresentation,
+  ): HostConnectionCredentialGrant | null | Promise<HostConnectionCredentialGrant | null>;
 }
 
 /**

@@ -141,10 +141,13 @@ async function box(features: readonly string[], port = 0) {
     features,
     workspace: (id) => (id === ALPHA || id === BETA ? { id, epoch: 1 } : null),
     verifier: {
-      verify: ({ credential, workspaceId }) =>
-        credential === `device:${workspaceId}`
+      verify: (presentation) => {
+        if ("scope" in presentation) return null;
+        const { credential, workspaceId } = presentation;
+        return credential === `device:${workspaceId}`
           ? { actor: { kind: "device", deviceId: DEVICE, workspaceId }, current: () => true }
-          : null,
+          : null;
+      },
     },
     context: () => ({
       handlers: handlers as never,

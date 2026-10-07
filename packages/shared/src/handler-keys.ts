@@ -31,6 +31,7 @@ export const DOOR_LOCAL_CATALOG_KEYS = Object.freeze([
   "labDiagnostics.list",
   "labDiagnostics.subscribe",
   "protocol.welcome",
+  "protocol.hostWelcome",
 ] as const satisfies readonly CatalogKey[]);
 
 export type DoorLocalCatalogKey = (typeof DOOR_LOCAL_CATALOG_KEYS)[number];

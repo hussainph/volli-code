@@ -65,6 +65,7 @@ describe("validateWelcome", () => {
       { ...welcome, workspace: { id: WORKSPACE, epoch: -1 } },
       { ...welcome, actor: { kind: "device", deviceId: LOCAL_DEVICE_ID, workspaceId: WORKSPACE } },
       { ...welcome, features: "sessions" },
+      { ...welcome, features: ["host.workspaces"] },
       { ...welcome, features: ["Sessions"] },
       { ...welcome, features: Array.from({ length: 257 }, (_, index) => `f${index}`) },
       { ...welcome, proof: "signature" },

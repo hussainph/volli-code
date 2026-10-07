@@ -354,6 +354,13 @@ describe("a system install's root-owned store", () => {
 });
 
 describe("store updates", () => {
+  it("propagates a lock-open error other than contention", () => {
+    const missingParent = dataDirDeviceStore(join(dataDir, "missing"));
+    expect(() => withDeviceStoreLock(missingParent, () => undefined)).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+  });
+
   it("revokes a device, keeping its entry, and refuses one never enrolled", async () => {
     const { privateKey, spki } = keyPair();
     const { deviceId } = enrollDevice(

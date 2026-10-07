@@ -35,7 +35,11 @@ import {
 } from "@volli/host-core/board";
 import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
-import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
+import {
+  HOST_CONNECTION_ONLY_FEATURES,
+  type HostCredentialVerifier,
+  type HostV1Feature,
+} from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import { hostLogger, withTrace } from "@volli/host-core/log";
 import {
@@ -76,6 +80,7 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "board.write",
   "sign-ins",
   "auth.callback",
+  "host.workspaces",
   // The Session listing rows a remote rail paints (VC-713).
   "sessions.listing",
 ];
@@ -85,7 +90,7 @@ const MIB = 1024 * 1024;
 /**
  * hostd's listener bounds while the enrolled-device verifier is its only
  * one (VC-700): a few devices of one person, over SSH tunnels to loopback.
- * A client holds one connection per Workspace, and the desktop opens every
+ * A client holds one host connection plus one per Workspace, and the desktop opens every
  * project a host serves, so the cap is **32 connections per host** (across
  * every Mac), with a burst of 32 handshakes. Until VC-575's host-wide byte
  * budget, the per-connection bounds are the budget. Worst case, every
@@ -244,11 +249,15 @@ export function startHostdProtocolListener(
   // Every call's start and outcome, inside the trace its frame carried (VC-699).
   logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
+  const features = ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES;
   return startHostProtocolListener({
     router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
-    features: ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES,
+    features: features.filter(
+      (feature) => !(HOST_CONNECTION_ONLY_FEATURES as readonly string[]).includes(feature),
+    ),
+    hostFeatures: features,
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
     verifier: ports.verifier,
     limits: ports.limits ?? HOSTD_LISTENER_LIMITS,

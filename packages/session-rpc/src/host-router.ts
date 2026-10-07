@@ -33,12 +33,19 @@ import type { DesktopRouter } from "./desktop-router";
 import type { SESSION_RESOURCE } from "./session-catalog";
 import { createSessionRouter, type AppRouter, type SessionRouterContext } from "./index";
 
+import {
+  createWorkspacesRouter,
+  type WorkspacesRouter,
+  type WorkspaceHandlers,
+} from "./workspaces-router";
+
 type AssertNever<Type extends never> = Type;
 
 /** Every procedure path any router serves. */
 export type HostRouterPaths =
   | ProcedurePaths<AppRouter["_def"]["record"]>
-  | ProcedurePaths<BoardRouter["_def"]["record"]>;
+  | ProcedurePaths<BoardRouter["_def"]["record"]>
+  | ProcedurePaths<WorkspacesRouter["_def"]["record"]>;
 
 /**
  * Every catalog key is a procedure of some router, and every procedure a
@@ -78,7 +85,7 @@ export type HostRouterFeatureBinding = AssertNever<Exclude<HostOperation, HostRo
  * policy's view, `admittedHandlers(map, ROUTER_POLICY)`).
  */
 export interface HostRouterContext extends CatalogCallerContext {
-  handlers: SessionRouterContext["handlers"] & BoardRouterContext["handlers"];
+  handlers: SessionRouterContext["handlers"] & BoardRouterContext["handlers"] & WorkspaceHandlers;
 }
 
 const t = initTRPC.context<HostRouterContext>().create({
@@ -102,7 +109,16 @@ export function createHostRouter() {
       throw new Error(`Router namespace ${namespace} belongs to two families`);
     }
   }
-  return t.router({ ...session, ...board } as typeof session & typeof board);
+  // oxlint-disable-next-line no-underscore-dangle -- tRPC router composition.
+  const workspaces = createWorkspacesRouter()._def.record;
+  for (const namespace of Object.keys(workspaces)) {
+    if (Object.hasOwn(session, namespace) || Object.hasOwn(board, namespace)) {
+      throw new Error(`Router namespace ${namespace} belongs to two families`);
+    }
+  }
+  return t.router({ ...session, ...board, ...workspaces } as typeof session &
+    typeof board &
+    typeof workspaces);
 }
 
 export type HostRouter = ReturnType<typeof createHostRouter>;

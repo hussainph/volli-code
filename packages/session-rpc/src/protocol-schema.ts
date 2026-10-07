@@ -1,3 +1,4 @@
+import { workspacesProcedureSchemas } from "./workspaces-router";
 import { boardProcedureSchemas } from "./board-router";
 import { desktopProcedureSchemas } from "./desktop-router";
 /** Build-time projection of both catalog tiers. Add area/desktop providers here,
@@ -7,6 +8,7 @@ import { desktopProcedureSchemas } from "./desktop-router";
 import {
   HOST_PROTOCOL_VERSION,
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_TRACE_FIELD,
 } from "@volli/host-protocol";
@@ -42,6 +44,7 @@ export function generateProtocolSchema(
   providers: readonly ProtocolSchemaProvider[] = [
     { tier: "public", procedures: sessionProcedureSchemas },
     { tier: "public", procedures: boardProcedureSchemas },
+    { tier: "public", procedures: workspacesProcedureSchemas },
     { tier: "desktop", procedures: desktopProcedureSchemas },
   ],
   publicEntries: readonly { key: string }[] = CATALOG_ENTRIES,
@@ -90,6 +93,7 @@ export function generateProtocolSchema(
   return {
     protocolVersion: HOST_PROTOCOL_VERSION,
     baseOperations: HOST_BASE_OPERATIONS,
+    hostScopeBaseOperations: HOST_SCOPE_BASE_OPERATIONS,
     features: HOST_FEATURE_OPERATIONS,
     envelope: Object.fromEntries(
       Object.entries(ENVELOPE_FIELD_SCHEMAS).map(([field, schema]) => [

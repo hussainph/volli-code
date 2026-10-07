@@ -38,16 +38,17 @@ import {
 } from "@trpc/server";
 import {
   HOST_ERROR_REASON_CODES,
-  isHostActor,
+  isHostConnectionActor,
+  isHostScopeActor,
   isHostErrorCode,
   isLocalDeviceActor,
   LOCAL_DEVICE_ACTOR,
   type CallerActor,
-  type HostActor,
+  type HostConnectionActor,
   type HostActorKind,
   type HostError,
   type HostErrorReason,
-  type HostWelcome,
+  type HostConnectionWelcome,
   type LocalDeviceActor,
   type SessionId,
   type SubscriptionReplayBounds,
@@ -106,7 +107,7 @@ export interface LocalRouterCaller {
 
 /** A network actor, bound to one Workspace by the credential its door verified. */
 export interface NetworkRouterCaller {
-  readonly actor: HostActor;
+  readonly actor: HostConnectionActor;
   /**
    * Asked again at every dispatch, never only at connect, and required: a
    * network caller is admitted only while this answers `true`. `false`, or a
@@ -197,7 +198,7 @@ export interface CatalogCallerContext {
    */
   operations?: ReadonlySet<string>;
   /** The welcome the door's handshake negotiated; `protocol.welcome` answers it. */
-  welcome?: HostWelcome;
+  welcome?: HostConnectionWelcome;
   /**
    * The door refused this connection's handshake (VC-663): every call answers
    * this refusal before anything else about it is read, so each operation a
@@ -411,7 +412,7 @@ function carriesCommandKind(schema: z.ZodType): boolean {
  * and this holds for a door that cast its way past the type).
  */
 function callerAffirmed({ actor, current }: { actor: CallerActor; current?: unknown }): boolean {
-  if (!isLocalDeviceActor(actor) && !isHostActor(actor)) return false;
+  if (!isLocalDeviceActor(actor) && !isHostConnectionActor(actor)) return false;
   return typeof current === "function" ? current() === true : isLocalDeviceActor(actor);
 }
 
@@ -600,7 +601,10 @@ async function authorizeWorkspace(
   entry: CatalogEntry,
   named: WorkspaceResources,
 ): Promise<void> {
-  const { actor } = ctx.caller;
+  // This private middleware runs only after policed() refused host-scoped
+  // actors, before parsing. Keep that admission in one place; only Workspace
+  // or local actors can reach this resource-ownership check.
+  const actor = ctx.caller.actor as Exclude<CallerActor, { scope: "host" }>;
   // Every Workspace on this host is the desktop window's, so there is nothing
   // to authorize and nothing new to read: with the flag off, a call answers
   // exactly as it did before the catalog existed.
@@ -826,6 +830,21 @@ export function createCatalogBuilders<
         throw new HostProcedureError("credential-invalid", CREDENTIAL_INVALID_MESSAGE);
       }
       const { actor } = ctx.caller;
+      if (isHostScopeActor(actor) && entry.catalog.scope !== "host") {
+        throw new HostProcedureError(
+          "workspace-scope-required",
+          "This operation requires a Workspace connection.",
+        );
+      }
+      // Host-level state is often shared by both scopes (sign-ins, logs).
+      // Only project discovery/creation requires the host connection itself.
+      if (
+        !isHostScopeActor(actor) &&
+        !isLocalDeviceActor(actor) &&
+        entry.key.startsWith("workspaces.")
+      ) {
+        throw new HostProcedureError("verb-refused", "This operation requires a host connection.");
+      }
       const policyActor = HOST_ACTOR_POLICY[actor.kind];
       const admitted =
         policyActor !== null &&

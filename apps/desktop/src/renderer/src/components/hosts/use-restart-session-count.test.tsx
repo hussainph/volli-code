@@ -192,10 +192,14 @@ async function host(read: (projectId: string) => SessionListingPage | Promise<Se
     limits: { pingMs: 120_000 },
     workspace: (id) => ([PROJECT, OTHER_PROJECT].includes(id) ? { id, epoch: 1 } : null),
     verifier: {
-      verify: ({ workspaceId }) => ({
-        actor: { kind: "device", deviceId: DEVICE, workspaceId },
-        current: () => true,
-      }),
+      verify: (presentation) => {
+        // This warning fixture serves Workspace links only, never HOST scope.
+        if ("scope" in presentation) return null;
+        return {
+          actor: { kind: "device", deviceId: DEVICE, workspaceId: presentation.workspaceId },
+          current: () => true,
+        };
+      },
     },
     context: () => ({
       diagnostics: new RpcDiagnosticLog(),

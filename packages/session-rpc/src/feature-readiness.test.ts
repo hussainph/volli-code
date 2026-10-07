@@ -1,6 +1,7 @@
 import { initTRPC, type AnyRouter } from "@trpc/server";
 import {
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_V1_FEATURES,
   negotiateFeatures,
@@ -14,6 +15,7 @@ import { createHostRouter } from "./host-router";
 const t = initTRPC.create();
 const tableOperations: readonly string[] = [
   ...HOST_BASE_OPERATIONS,
+  ...HOST_SCOPE_BASE_OPERATIONS,
   ...Object.values(HOST_FEATURE_OPERATIONS).flat(),
 ];
 const featureOperations = Object.entries(HOST_FEATURE_OPERATIONS).flatMap(([feature, operations]) =>
@@ -44,6 +46,17 @@ describe("host feature readiness", () => {
     expect(() =>
       assertHostFeatureReadiness(selectPaths(actual, HOST_BASE_OPERATIONS), []),
     ).not.toThrow();
+  });
+
+  it("requires host bootstrap when offering host workspace management", () => {
+    const paths = tableOperations.filter((path) => path !== "protocol.hostWelcome");
+    expect(() =>
+      assertHostFeatureReadiness(selectPaths(actual, paths), ["host.workspaces"]),
+    ).toThrow("Host router is missing host-scope bootstrap operation: protocol.hostWelcome");
+    const entries = CATALOG_ENTRIES.filter((entry) => entry.key !== "protocol.hostWelcome");
+    expect(() => assertHostFeatureReadiness(actual, ["host.workspaces"], { entries })).toThrow(
+      "Host operation protocol.hostWelcome is not a public hostApi catalog entry",
+    );
   });
 
   it.each(["unknown.feature", "toString", "__proto__"])(
