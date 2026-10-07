@@ -2828,6 +2828,13 @@
               "additionalProperties": {
                 "additionalProperties": false,
                 "properties": {
+                  "granted": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "readOnly": true,
+                    "type": "array"
+                  },
                   "hostId": {
                     "type": "string"
                   },
@@ -3204,6 +3211,13 @@
               "additionalProperties": {
                 "additionalProperties": false,
                 "properties": {
+                  "granted": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "readOnly": true,
+                    "type": "array"
+                  },
                   "hostId": {
                     "type": "string"
                   },

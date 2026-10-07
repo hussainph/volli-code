@@ -45,6 +45,21 @@ describe("host-connection store", () => {
     expect(canWriteProject(store.getState(), "p1")).toBe(true);
   });
 
+  it("carries what a project's link granted, and a change to it alone is a change (VC-712)", () => {
+    const store = createHostConnectionStore();
+    const plain = hostSnapshot([HETZNER], { p2: HETZNER.id });
+    const remote = createFakeHostSource(plain);
+    store.getState().attach(remote);
+    const before = store.getState().projects;
+    const granted = ["host.logs"];
+    remote.set({ ...plain, projects: { p2: { ...plain.projects["p2"]!, granted } } });
+    expect(store.getState().projects).not.toBe(before);
+    expect(store.getState().projects["p2"]!.granted).toBe(granted);
+    const after = store.getState().projects;
+    remote.set({ ...plain, projects: { p2: { ...plain.projects["p2"]!, granted } } });
+    expect(store.getState().projects).toBe(after);
+  });
+
   it("merges N sources: This Mac first, then each source's hosts in order", () => {
     const store = createHostConnectionStore();
     const remote = createFakeHostSource(

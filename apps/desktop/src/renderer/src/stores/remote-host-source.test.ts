@@ -103,6 +103,37 @@ function timers(clock: { now: number }) {
 }
 
 describe("the remote host source", () => {
+  it("names what each ready project's link granted, keeping the same array while it is the same (VC-712)", () => {
+    const fake = fakeClient();
+    const source = createRemoteHostSource(fake.client, { now: () => 1_000 });
+    const granting = (granted: readonly string[] | undefined): RemoteHostsSnapshot => ({
+      ...snapshot([remote()]),
+      projects: {
+        p1: { hostId: HOST, link: { status: "ready" }, ...(granted === undefined ? {} : { granted }) },
+      },
+    });
+    fake.push(granting(["sign-ins", "host.logs"]));
+    const first = source.getSnapshot().projects["p1"]!;
+    expect(first).toEqual({
+      hostId: HOST,
+      link: { status: "open" },
+      granted: ["sign-ins", "host.logs"],
+    });
+    // The same grant in a fresh array: the same project, the same array.
+    fake.push(granting(["sign-ins", "host.logs"]));
+    expect(source.getSnapshot().projects["p1"]).toBe(first);
+    // A different grant, of the same length or not: a new one.
+    fake.push(granting(["sign-ins", "board.read"]));
+    expect(source.getSnapshot().projects["p1"]!.granted).toEqual(["sign-ins", "board.read"]);
+    fake.push(granting(["sign-ins"]));
+    expect(source.getSnapshot().projects["p1"]!.granted).toEqual(["sign-ins"]);
+    // No grant said: none named.
+    fake.push(granting(undefined));
+    expect(source.getSnapshot().projects["p1"]).toEqual({ hostId: HOST, link: { status: "open" } });
+    fake.push(granting(["host.logs"]));
+    expect(source.getSnapshot().projects["p1"]!.granted).toEqual(["host.logs"]);
+  });
+
   it("sends hosts with no link of their own, and each project with its own", () => {
     const fake = fakeClient();
     const source = createRemoteHostSource(fake.client, { now: () => 1_000 });

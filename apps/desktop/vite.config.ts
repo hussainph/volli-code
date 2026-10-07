@@ -578,6 +578,13 @@ export default defineConfig(({ mode }) => ({
         // when a relayed stream resumes, waits for a slot, or ends is a rule
         // no screenshot shows until a board silently stops following.
         "src/lib/relay-host-link.ts",
+        // Each remote host in the one log viewer (VC-712): when a host's source
+        // registers and goes, which link it reads over, when it moves, and when
+        // a full link turns it to polling. A wrong branch is a host missing
+        // from the viewer, or a source that silently stops, with nothing on
+        // screen to say so.
+        "src/components/logs/log-sources.ts",
+        "src/components/logs/remote-log-sources.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",

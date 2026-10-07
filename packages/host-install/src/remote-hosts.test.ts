@@ -796,9 +796,10 @@ describe("a host's lifecycle", () => {
 
     h.clock.now = NOW + 1_000;
     two.set(ready("1.2.0"));
+    // A ready project names what its own link's welcome granted (VC-712).
     expect(h.engine.snapshot().projects).toEqual({
       [WS1]: { hostId: HOST_ID, link: { status: "connecting", attempt: 1 } },
-      [WS2]: { hostId: HOST_ID, link: { status: "ready" } },
+      [WS2]: { hostId: HOST_ID, link: { status: "ready" }, granted: [] },
     });
     expect(host()).toMatchObject({ version: "1.2.0", availableUpdate: null, hostIsNewer: true });
     expect(h.engine.hostLink(HOST_ID)).toEqual({
@@ -819,8 +820,20 @@ describe("a host's lifecycle", () => {
       closeCode: 1006,
       retryAt: NOW + 9_000,
     };
+    const granting = ready("1.2.0");
+    one.set({
+      ...granting,
+      welcome: { ...granting.welcome, features: ["sign-ins", "host.logs"] },
+    } as HostLinkState);
+    expect(h.engine.snapshot().projects[WS1]).toEqual({
+      hostId: HOST_ID,
+      link: { status: "ready" },
+      granted: ["sign-ins", "host.logs"],
+    });
     one.set(unreachable);
     two.set(unreachable);
+    // A link that is not ready grants nothing.
+    expect(h.engine.snapshot().projects[WS1]!.granted).toBeUndefined();
     expect(h.engine.hostLink(host().id)).toEqual({
       state: {
         status: "unreachable",

@@ -186,8 +186,11 @@ export interface DesktopRemoteHostsOptions {
   readonly wake?: WakePlatform;
 }
 
-/** What every Workspace link to a remote host asks for. */
-export const REMOTE_HOST_LINK_FEATURES = ["sign-ins", "auth.callback"] as const;
+/**
+ * What every Workspace link to a remote host asks for: sign-ins (VC-702),
+ * and the host's log for the one log viewer (`host.logs`, VC-712).
+ */
+export const REMOTE_HOST_LINK_FEATURES = ["sign-ins", "auth.callback", "host.logs"] as const;
 
 /** The engine, composed with this app's ports. */
 export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): RemoteHosts {

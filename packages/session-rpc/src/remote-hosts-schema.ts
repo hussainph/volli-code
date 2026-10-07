@@ -153,7 +153,11 @@ const remoteHost = z.object({
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
 });
-const remoteProjectLink = z.object({ hostId: z.string(), link: linkState });
+const remoteProjectLink = z.object({
+  hostId: z.string(),
+  link: linkState,
+  granted: z.array(z.string()).readonly().optional(),
+});
 /** `RemoteHostsSnapshot`. Its arrays are read-only, as the registry hands them over. */
 export const remoteHostsSnapshotSchema = z.object({
   v: z.literal(1),
