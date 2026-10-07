@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 /** Capture at the checked-out release commit. No Electron process or provider access. */
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,7 +17,11 @@ export const CAPTURE_LANES = [
   },
   {
     cwd: "packages/session-rpc",
-    files: ["src/board-wire-compatibility.test.ts", "src/queue-websocket.test.ts"],
+    files: [
+      "src/board-wire-compatibility.test.ts",
+      "src/queue-websocket.test.ts",
+      "src/host-scope-wire-compatibility.test.ts",
+    ],
   },
 ];
 export const REQUIRED_RECORDINGS = [
@@ -38,6 +34,7 @@ export const REQUIRED_RECORDINGS = [
   "queue-ipc",
   "queue-websocket",
 ];
+export const HOST_SCOPE_RECORDING = "host-scope-websocket";
 const git = (args, root) =>
   execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 
@@ -62,13 +59,25 @@ export function releaseProvenance(tag, commit, root = ROOT) {
 
 export function assembleBundle(provenance, schema, captures) {
   if (!schema.tiers?.public) throw new Error("Committed public protocol schema is missing");
+  const hostScope = ["protocol.hostWelcome", "workspaces.list", "workspaces.create"];
+  const hasHostScope = hostScope.some((procedure) => schema.tiers.public[procedure]);
+  if (hasHostScope && !hostScope.every((procedure) => schema.tiers.public[procedure]))
+    throw new Error("Incomplete committed host-scope schema");
+  const required = [...REQUIRED_RECORDINGS, ...(hasHostScope ? [HOST_SCOPE_RECORDING] : [])];
   const recordings = {};
-  for (const name of REQUIRED_RECORDINGS) {
+  for (const name of required) {
     const capture = captures[name];
     if (!capture?.exchanges?.length) throw new Error(`Adapter did not capture ${name}`);
     for (const exchange of capture.exchanges)
       if (!schema.tiers.public[exchange.procedure])
         throw new Error(`Captured non-public procedure ${exchange.procedure}`);
+    if (
+      name === HOST_SCOPE_RECORDING &&
+      !hostScope.every((procedure) =>
+        capture.exchanges.some((exchange) => exchange.procedure === procedure),
+      )
+    )
+      throw new Error("Host-scope capture lacks required exchanges");
     recordings[name] = {
       ...capture,
       provenance: {
@@ -82,12 +91,8 @@ export function assembleBundle(provenance, schema, captures) {
     provenance,
     schema: { ...schema, tiers: { public: schema.tiers.public } },
     recordings,
-    followups: schema.tiers.public["protocol.hostWelcome"]
-      ? (() => {
-          throw new Error(
-            "VC-722 A is present: implement host-scope capture before recording this release",
-          );
-        })()
+    followups: hasHostScope
+      ? []
       : [
           "VC-722 PR A was not present: record protocol.hostWelcome, workspaces.list and workspaces.create after A merges.",
         ],
@@ -98,7 +103,6 @@ export function recordCanaryPeer({ tag, commit, out, root = ROOT }) {
   const provenance = releaseProvenance(tag, commit, root);
   if (!out) throw new Error("--out is required");
   const output = resolve(root, out);
-  if (existsSync(output)) throw new Error("Refusing to overwrite an immutable peer bundle");
   // Deliberately read the committed artifact, not a schema generated after the release.
   const schema = JSON.parse(git(["show", `${commit}:docs/protocol/protocol.schema.json`], root));
   const staging = mkdtempSync(join(root, ".canary-peer-capture-"));
@@ -130,7 +134,15 @@ export function recordCanaryPeer({ tag, commit, out, root = ROOT }) {
     );
     const bundle = assembleBundle(provenance, schema, captures);
     mkdirSync(dirname(output), { recursive: true });
-    writeFileSync(output, `${JSON.stringify(bundle, null, 2)}\n`, { flag: "wx" });
+    // Exclusive creation is the check: no exists-then-write race, and another
+    // recorder winning this path can never have its immutable bundle replaced.
+    try {
+      writeFileSync(output, `${JSON.stringify(bundle, null, 2)}\n`, { flag: "wx" });
+    } catch (error) {
+      if (error.code === "EEXIST")
+        throw new Error("Refusing to overwrite an immutable peer bundle", { cause: error });
+      throw error;
+    }
     console.log(
       `Recorded ${provenance.distributed ? "distributed" : "NONDISTRIBUTED dry-run"} canary peer: ${output}`,
     );

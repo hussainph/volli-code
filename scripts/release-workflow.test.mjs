@@ -309,6 +309,24 @@ test("dry-run provenance resolution never uses a distributable tag", (t) => {
   }
 });
 
+test("packaging exclusion also runs on the existing unsigned CI artifact before core smoke", () => {
+  const ci = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const steps = ci.jobs["smoke-boot"].steps;
+  const pack = steps.findIndex((step) => step.name === "Verify unsigned desktop packaging");
+  const gate = steps.findIndex((step) => step.name === "Gate: no e2e files in packaged app");
+  const smoke = steps.findIndex(
+    (step) => step.name === "Run core e2e and verify quiet native windows",
+  );
+  assert.ok(pack >= 0 && pack < gate && gate < smoke);
+  const releaseGate = workflow.jobs.release.steps.find(
+    (step) => step.name === "Gate: no e2e files in packaged app",
+  );
+  assert.equal(steps[gate].run, releaseGate.run);
+  assert.equal(steps[gate]["working-directory"], undefined);
+  assert.equal(steps[gate].if, undefined);
+  assert.notEqual(steps[gate]["continue-on-error"], true);
+});
+
 test("packaging exclusion is a failing release gate before publishing", () => {
   const steps = workflow.jobs.release.steps;
   const gate = steps.findIndex((step) => step.name === "Gate: no e2e files in packaged app");

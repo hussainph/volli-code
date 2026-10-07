@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -8,6 +8,7 @@ import {
   releaseProvenance,
   recordCanaryPeer,
   REQUIRED_RECORDINGS,
+  HOST_SCOPE_RECORDING,
   CAPTURE_LANES,
   ROOT,
 } from "./record-canary-peer.mjs";
@@ -123,6 +124,39 @@ test("bundle is self-contained public-only and every actual capture carries rele
   assert.throws(() => assembleBundle(provenance, schema, captures), /non-public/);
 });
 
+test("merged host scope requires an actual recording of all three exchanges", () => {
+  const provenance = { tag: "v0.3.0-canary.1", commit: "1".repeat(40), distributed: true };
+  const procedures = [
+    "session.projection",
+    "protocol.hostWelcome",
+    "workspaces.list",
+    "workspaces.create",
+  ];
+  const schema = { tiers: { public: Object.fromEntries(procedures.map((path) => [path, {}])) } };
+  const captures = Object.fromEntries(
+    REQUIRED_RECORDINGS.map((name) => [
+      name,
+      {
+        transport: name.endsWith("ipc") ? "ipc" : "websocket",
+        exchanges: [{ procedure: "session.projection", input: null, output: {} }],
+      },
+    ]),
+  );
+  assert.throws(() => assembleBundle(provenance, schema, captures), /did not capture host-scope/);
+  captures[HOST_SCOPE_RECORDING] = { transport: "websocket", exchanges: [] };
+  assert.throws(() => assembleBundle(provenance, schema, captures), /did not capture/);
+  captures[HOST_SCOPE_RECORDING].exchanges = [
+    { procedure: "protocol.hostWelcome", input: null, output: {} },
+  ];
+  assert.throws(() => assembleBundle(provenance, schema, captures), /lacks required/);
+  captures[HOST_SCOPE_RECORDING].exchanges = procedures
+    .slice(1)
+    .map((procedure) => ({ procedure, input: null, output: {} }));
+  assert.deepEqual(assembleBundle(provenance, schema, captures).followups, []);
+  delete schema.tiers.public["workspaces.create"];
+  assert.throws(() => assembleBundle(provenance, schema, captures), /Incomplete committed/);
+});
+
 test("dry-run recorder exercises real IPC/WS adapters and captures the real queue without overwriting fixtures", () => {
   const directory = mkdtempSync(join(ROOT, ".canary-peer-test-"));
   try {
@@ -134,7 +168,17 @@ test("dry-run recorder exercises real IPC/WS adapters and captures the real queu
     const bundle = recordCanaryPeer({ tag: `dry-run-${commit}`, commit, out });
     assert.equal(bundle.provenance.distributed, false);
     assert.deepEqual(Object.keys(bundle.schema.tiers), ["public"]);
-    assert.deepEqual(Object.keys(bundle.recordings).toSorted(), REQUIRED_RECORDINGS.toSorted());
+    assert.deepEqual(
+      Object.keys(bundle.recordings).toSorted(),
+      [...REQUIRED_RECORDINGS, HOST_SCOPE_RECORDING].toSorted(),
+    );
+    assert.deepEqual(bundle.followups, []);
+    for (const procedure of ["protocol.hostWelcome", "workspaces.list", "workspaces.create"])
+      assert.ok(
+        bundle.recordings[HOST_SCOPE_RECORDING].exchanges.some(
+          (exchange) => exchange.procedure === procedure,
+        ),
+      );
     const queue = bundle.recordings["queue-websocket"].exchanges.find(
       ({ procedure }) => procedure === "session.subscribeQueue",
     );
@@ -161,7 +205,9 @@ test("dry-run recorder exercises real IPC/WS adapters and captures the real queu
       assert.ifError(replay.error);
       assert.equal(replay.status, 0, `Recorded peer replay failed in ${lane.cwd}`);
     }
+    const immutable = readFileSync(out);
     assert.throws(() => recordCanaryPeer({ tag: `dry-run-${commit}`, commit, out }), /overwrite/);
+    assert.deepEqual(readFileSync(out), immutable);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
