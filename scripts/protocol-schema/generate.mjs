@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { createServer } from "vite-plus";
 
-import { unapprovedChanges } from "./compatibility.mjs";
+import { protocolChanges, unapprovedChanges } from "./compatibility.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const schemaPath = "docs/protocol/protocol.schema.json";
@@ -67,6 +67,12 @@ try {
       const allowlist = JSON.parse(
         await readFile(new URL(`../../${exceptionPath}`, import.meta.url), "utf8"),
       );
+      for (const { path, reason, severity } of protocolChanges(previous, generated)) {
+        if (severity === "warning")
+          console.warn(
+            `Warning (desktop tier: report-only for enum growth, pending O1): ${path}: ${reason}`,
+          );
+      }
       const changes = unapprovedChanges(previous, generated, allowlist);
       if (changes.length)
         throw new Error(
