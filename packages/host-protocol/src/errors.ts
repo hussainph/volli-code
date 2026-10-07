@@ -48,6 +48,8 @@ export const HOST_ERROR_REASON_CODES = {
   "welcome-invalid": "BAD_GATEWAY",
   "credential-invalid": "UNAUTHORIZED",
   "workspace-unknown": "NOT_FOUND",
+  /** A host-scoped connection cannot call a Workspace operation. */
+  "workspace-scope-required": "FORBIDDEN",
   "workspace-epoch-fenced": "PRECONDITION_FAILED",
   "workspace-split-brain": "CONFLICT",
   "lease-epoch-fenced": "PRECONDITION_FAILED",

@@ -39,7 +39,12 @@ export default defineConfig({
     ...SHARED_MACHINE_TEST_WORKERS,
   },
   fmt: {
-    ignorePatterns: toolingIgnorePatterns,
+    ignorePatterns: [
+      ...toolingIgnorePatterns,
+      // Actual old-peer recordings, kept byte-for-byte with their capture.
+      "packages/host-protocol/fixtures/pre-vc722-host-refusal.json",
+      "packages/host-protocol/fixtures/pre-vc722-workspace.json",
+    ],
     sortPackageJson: {},
   },
   lint: {

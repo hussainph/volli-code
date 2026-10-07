@@ -246,6 +246,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // coordination, the same answer VC-623 gave `project.add`; the bootstrap
   // `protocol.welcome` is any caller's, so it reads (VC-663).
   "protocol.welcome": "read",
+  "protocol.hostWelcome": "coordination",
+  "workspaces.list": "coordination",
+  "workspaces.create": "coordination",
   "sessions.create": "coordination",
   "sessions.attach": "coordination",
   "settings.experiments": "coordination",
@@ -1331,6 +1334,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.peek": ["workspace", "read"],
     "session.answer": ["workspace", "read"],
     "protocol.welcome": ["host", "read"],
+    "protocol.hostWelcome": ["host", "read"],
     "sessions.create": ["workspace", "command-id"],
     "sessions.attach": ["workspace", "command-id"],
     "settings.experiments": ["host", "read"],
@@ -1372,6 +1376,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "signIns.setGitCredential": ["host", "natural"],
     "signIns.clearGitCredential": ["host", "natural"],
     "auth.callback.deliver": ["host", "natural"],
+    "workspaces.list": ["host", "read"],
+    "workspaces.create": ["host", "command-id"],
   } as const satisfies Record<
     Exclude<CatalogKey, CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>>,
     readonly [string, string]

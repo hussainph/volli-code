@@ -1,7 +1,12 @@
 import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
 export type { ProcedureSchema } from "./procedure-schema";
 import { TRPCError, tracked } from "@trpc/server";
-import { isHostActor, type HostActor, type JsonUnsafeProcedures } from "@volli/host-protocol";
+import {
+  HOST_SCOPE_PROOF_LIMITS,
+  isHostActor,
+  type HostActor,
+  type JsonUnsafeProcedures,
+} from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { SessionReadInput } from "./session-reads";
 import {
@@ -945,6 +950,23 @@ const hostWelcomeSchema = z.object({
   proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
 });
 
+// A separate bootstrap preserves the frozen Workspace protocol.welcome output.
+// Scope and actor kind/scope are CLOSED output vocabularies: no tolerant reader
+// marker. Proof scheme is an OPEN reserved string, bounded in UTF-16 code units.
+const hostScopeWelcomeSchema = z.object({
+  scope: z.literal("host"),
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  actor: z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), scope: z.literal("host") }),
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z
+    .object({
+      scheme: z.string().max(HOST_SCOPE_PROOF_LIMITS.scheme),
+      value: z.string().max(HOST_SCOPE_PROOF_LIMITS.value),
+    })
+    .nullable(),
+});
+
 const sessionSubscriptionSchema = z.object({
   sessionId: nonEmptyString,
   afterSequence: nonNegativeSafeInteger.optional(),
@@ -1238,10 +1260,21 @@ export function createSessionRouter() {
       welcome: hostProcedure("protocol.welcome")
         .output(hostWelcomeSchema)
         .query(({ ctx }) => {
-          if (ctx.welcome === undefined) {
+          if (ctx.welcome === undefined || "scope" in ctx.welcome) {
             throw new HostProcedureError(
               "operation-unavailable",
               "This connection negotiated no welcome",
+            );
+          }
+          return ctx.welcome;
+        }),
+      hostWelcome: hostProcedure("protocol.hostWelcome")
+        .output(hostScopeWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined || !("scope" in ctx.welcome)) {
+            throw new HostProcedureError(
+              "operation-unavailable",
+              "This connection negotiated no host welcome",
             );
           }
           return ctx.welcome;

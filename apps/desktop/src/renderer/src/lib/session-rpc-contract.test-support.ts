@@ -134,7 +134,9 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
 }
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
-const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter(
+  (feature) => !feature.startsWith("board.") && feature !== "host.workspaces",
+);
 
 /** The one credential the WebSocket link presents; its verifier answers the case's caller. */
 const HARNESS_CREDENTIAL = "contract-harness-credential";
@@ -167,7 +169,8 @@ export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRoute
         bind: { host: "127.0.0.1", port: 0 },
         host: { id: HARNESS_HOST, version: "contract" },
         features: SESSION_ROUTER_FEATURES,
-        workspace: (id) => (id === actor.workspaceId ? { id, epoch: 1 } : null),
+        workspace: (id) =>
+          "workspaceId" in actor && id === actor.workspaceId ? { id, epoch: 1 } : null,
         verifier,
         // The map over the ports the case states, exactly as the IPC link hands it.
         context: () => ({

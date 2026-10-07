@@ -1,7 +1,12 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { encodeHostHello, readHostHello, type HostHello } from "../handshake";
+import {
+  encodeHostHello,
+  readHostHello,
+  type HostHello,
+  type HostConnectionHello,
+} from "../handshake";
 import {
   describeContract,
   expectHostError,
@@ -15,7 +20,7 @@ interface ToyHost {
   readonly greeting: string;
 }
 interface ToyContext extends ToyHost {
-  readonly hello: HostHello | null;
+  readonly hello: HostConnectionHello | null;
 }
 
 const t = initTRPC.context<ToyContext>().create();

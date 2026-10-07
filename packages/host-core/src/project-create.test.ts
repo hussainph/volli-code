@@ -34,6 +34,20 @@ function dir(name: string): string {
 }
 
 describe("createProject", () => {
+  it("announces only a committed new registration across both registration doors", async () => {
+    const path = dir("announced");
+    const onCreated = vi.fn((project) => {
+      expect(findProjectByPath(ctx.db, path)?.id).toBe(project.id);
+    });
+    const ports = { db: ctx.db, detectBaseBranch: async () => "main", onCreated };
+    await planProjectCreate(ports, { path, name: "Announced" }, { write: false });
+    expect(onCreated).not.toHaveBeenCalled();
+    await createProject(ports, { path, name: "Announced" });
+    expect(onCreated).toHaveBeenCalledOnce();
+    await createProject(ports, { path, name: "Announced" });
+    await planProjectCreate(ports, { path, name: "Announced" }, { write: true });
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
   it("creates a project with the detected base branch, colour and order", async () => {
     insertProject(ctx.db, testProject({ id: "p0", path: "/elsewhere", ticketPrefix: "EL" }));
     const path = dir("acme");

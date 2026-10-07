@@ -53,6 +53,7 @@ export async function projectAddVerb(
       detectBaseBranch: context.options.detectBaseBranch,
       now: context.now,
       newId: context.newId,
+      onCreated: (project) => context.options.onMutation?.({ projectId: project.id }),
     },
     { path, name },
     { write: !dryRun },
@@ -72,7 +73,6 @@ export async function projectAddVerb(
         : dryRunResponse(request, { ...target, id: null });
     return preview!;
   }
-  if (plan.kind === "new") context.options.onMutation?.({ projectId: plan.project.id });
   return {
     v: 1,
     ok: true,

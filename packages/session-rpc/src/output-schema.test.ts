@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   CATALOG_ENTRIES,
   BOARD_ENTRIES,
+  HOST_WORKSPACE_ENTRIES,
   scrubSessionEvent,
   SESSION_PROJECTION_EVENT_KINDS,
 } from "@volli/shared";
@@ -253,7 +254,10 @@ describe("publishable Session procedure schemas", () => {
   it("publishes every catalog entry, without unrepresentable fallback", () => {
     const schemas = sessionProcedureSchemas();
     expect(Object.keys(schemas).toSorted()).toEqual(
-      CATALOG_ENTRIES.filter(({ key }) => !BOARD_ENTRIES.some((entry) => entry.key === key))
+      CATALOG_ENTRIES.filter(
+        ({ key }) =>
+          ![...BOARD_ENTRIES, ...HOST_WORKSPACE_ENTRIES].some((entry) => entry.key === key),
+      )
         .map(({ key }) => key)
         .toSorted(),
     );

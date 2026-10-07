@@ -13,9 +13,11 @@ import {
   SUBSCRIPTION_REPLAY_BOUNDS,
   validateWelcome,
   type HostActor,
-  type HostCredentialGrant,
+  type HostConnectionActor,
+  type HostConnectionCredentialGrant,
   type HostCredentialVerifier,
   type HostHello,
+  type HostConnectionHello,
   type HostHelloInput,
 } from "@volli/host-protocol";
 import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
@@ -55,7 +57,9 @@ import {
 } from "./websocket-server";
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
-const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter(
+  (feature) => !feature.startsWith("board.") && feature !== "host.workspaces",
+);
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const OTHER_WORKSPACE = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
 const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
@@ -151,10 +155,10 @@ function ledger(options: { ignoresCancel?: boolean } = {}) {
 }
 
 /** One credential the test verifier knows, and the levers that withdraw it. */
-function credential(actor: HostActor, options: { watch?: boolean } = {}) {
+function credential(actor: HostConnectionActor, options: { watch?: boolean } = {}) {
   let valid = true;
   let push: (() => void) | null = null;
-  const grant: HostCredentialGrant = {
+  const grant: HostConnectionCredentialGrant = {
     actor,
     current: () => valid,
     ...(options.watch === false
@@ -189,7 +193,7 @@ const device: HostActor = { kind: "device", deviceId: DEVICE, workspaceId: WORKS
 
 async function serve(
   options: {
-    grants?: Record<string, HostCredentialGrant>;
+    grants?: Record<string, HostConnectionCredentialGrant>;
     verifier?: HostCredentialVerifier;
     limits?: Partial<HostProtocolListenerLimits>;
     /** What a test changes about the connection's context, given the ledger behind it. */
@@ -279,7 +283,7 @@ function connect(url: string, hello: Partial<HostHelloInput> | null = {}) {
 }
 
 /** A raw socket, to stall, skip hello, or observe a refusal without the client's reconnect race. */
-async function raw(url: string, hello: HostHello | null) {
+async function raw(url: string, hello: HostConnectionHello | null) {
   const socket = new WebSocket(`${url}?connectionParams=1`);
   cleanups.push(() => socket.terminate());
   // Listened for from the start, so a close that comes early is never missed.
@@ -305,6 +309,116 @@ async function until(condition: () => boolean, what: string): Promise<void> {
 }
 
 describe("the handshake, before any procedure", () => {
+  it.each([{ features: [] }, { features: ["host.logs", "sessions"] }])(
+    "bootstraps host scope and gates host operations for $features without a Workspace lookup",
+    async ({ features }) => {
+      const actor: HostConnectionActor = { kind: "device", deviceId: DEVICE, scope: "host" };
+      const workspace = vi.fn(() => {
+        throw new Error("Host scope must not look up a Workspace");
+      });
+      const page = { entries: [], gap: false, cursor: "ring:0" };
+      const readLogs = vi.fn(() => page);
+      const events: HostProtocolListenerEvent[] = [];
+      const listener = await startHostProtocolListener({
+        router: createSessionRouter(),
+        bind: { host: "127.0.0.1", port: 0 },
+        host: { id: HOST, version: "test" },
+        features: SESSION_ROUTER_FEATURES,
+        workspace,
+        verifier: { verify: () => credential(actor).grant },
+        context: () => ({
+          handlers: sessionHandlersFrom({ runtime: {}, readLogs }),
+          diagnostics: new RpcDiagnosticLog(),
+        }),
+        log: (event) => events.push(event),
+      });
+      cleanups.push(() => listener.close());
+      const hello = buildHostHello({
+        scope: "host",
+        client: HELLO.client,
+        credential: "host-token",
+        features,
+      });
+      const socket = createWSClient({
+        url: listener.url,
+        connectionParams: encodeHostHello(hello),
+      });
+      cleanups.push(() => socket.close());
+      const client = createTRPCClient<AppRouter>({ links: [wsLink({ client: socket })] });
+      const welcome = await client.protocol.hostWelcome.query();
+      expect(welcome).toStrictEqual({
+        scope: "host",
+        protocolVersion: 1,
+        host: { id: HOST, version: "test" },
+        actor,
+        features: features.includes("host.logs") ? ["host.logs"] : [],
+        proof: null,
+      });
+      expect(validateWelcome(welcome, hello)).toStrictEqual({ ok: true, welcome });
+      expect(await expectHostError(client.protocol.welcome.query())).toMatchObject({
+        reason: "verb-refused",
+      });
+      expect(
+        await expectHostError(client.session.projection.query({ sessionId: "" })),
+      ).toMatchObject({ code: "FORBIDDEN", reason: "workspace-scope-required" });
+      if (features.includes("host.logs")) {
+        expect(await client.logs.tail.query({ limit: 5 })).toStrictEqual(page);
+        expect(readLogs).toHaveBeenCalledTimes(1);
+        expect(readLogs).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
+      } else {
+        expect(await expectHostError(client.logs.tail.query({}))).toMatchObject({
+          code: "FORBIDDEN",
+          reason: "verb-refused",
+        });
+        expect(readLogs).not.toHaveBeenCalled();
+      }
+      expect(workspace).not.toHaveBeenCalled();
+      const connected = events.find((event) => event.kind === "connected");
+      expect(connected).toMatchObject({ kind: "connected", actor: "device" });
+      expect(connected).not.toHaveProperty("workspaceId");
+    },
+  );
+
+  it("refuses host scope on a router without the additive host bootstrap", async () => {
+    const events: HostProtocolListenerEvent[] = [];
+    // The Session family now has the bootstrap. A separate real listener below
+    // preserves only its old protocol.welcome procedure.
+    const { initTRPC } = await import("@trpc/server");
+    const t = initTRPC.create();
+    const original = createSessionRouter();
+    // oxlint-disable-next-line no-underscore-dangle -- select the unchanged old procedure.
+    const old = t.router({ "protocol.welcome": original._def.record.protocol.welcome });
+    const oldListener = await startHostProtocolListener({
+      router: old,
+      bind: { host: "127.0.0.1", port: 0 },
+      host: { id: HOST, version: "old-router" },
+      features: [],
+      workspace: () => {
+        throw new Error("Host scope must not look up a Workspace");
+      },
+      verifier: {
+        verify: () => ({
+          actor: { kind: "device", deviceId: DEVICE, scope: "host" },
+          current: () => true,
+        }),
+      },
+      context: () => ({}) as never,
+      limits: { refusedCloseMs: 20 },
+      log: (event) => events.push(event),
+    });
+    cleanups.push(() => oldListener.close());
+    const peer = await raw(
+      oldListener.url,
+      buildHostHello({ scope: "host", client: HELLO.client, credential: "host", features: [] }),
+    );
+    const [code, reason] = await peer.closed;
+    expect(code).toBe(HOST_PROTOCOL_CLOSE_CODES.handshakeRefused);
+    expect(reason.toString()).toBe("hello-invalid");
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: "handshake-refused", reason: "hello-invalid" }),
+    );
+  });
+
   it("enforces output validation on the network door", async () => {
     const { listener } = await serve({
       context: (source) => ({

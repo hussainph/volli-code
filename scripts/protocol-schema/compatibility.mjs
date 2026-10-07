@@ -455,14 +455,13 @@ export function protocolChanges(before, after) {
       });
   }
   // Public operation membership is frozen, even when widening it seems additive.
-  if (
-    before.baseOperations !== undefined &&
-    !isDeepStrictEqual(
-      list(before.baseOperations).toSorted(),
-      list(after.baseOperations).toSorted(),
-    )
-  ) {
-    changes.push({ path: "/baseOperations", reason: "frozen bootstrap membership changed" });
+  for (const field of ["baseOperations", "hostScopeBaseOperations"]) {
+    if (
+      before[field] !== undefined &&
+      !isDeepStrictEqual(list(before[field]).toSorted(), list(after[field]).toSorted())
+    ) {
+      changes.push({ path: `/${field}`, reason: "frozen bootstrap membership changed" });
+    }
   }
   // Envelope fields beside a frame's id (VC-699) are read by a host like an
   // input: one may be added, never removed or narrowed.
