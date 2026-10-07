@@ -5,7 +5,11 @@
  * store, no `window.api`, so desktop main's real-link test drives exactly
  * these. What binds them to the window's stores is `remote-sessions.ts`.
  */
-import { createTRPCClient, type TRPCClient } from "@trpc/client";
+import { createTRPCClient, TRPCClientError, type TRPCClient, type TRPCLink } from "@trpc/client";
+import type { AnyRouter } from "@trpc/server";
+import { observable } from "@trpc/server/observable";
+import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
+import { readHostError } from "@volli/host-protocol";
 import { hostLinkTrpcLink, type HostLinkCalls } from "@volli/host-protocol/client-link";
 import type { IpcClientRouter } from "@volli/host-protocol/ipc";
 import {
@@ -17,6 +21,7 @@ import type { AppRouter, RouterProcedurePaths } from "@volli/session-rpc";
 import { errorMessage, parseHarnessId } from "@volli/shared";
 
 import type { SessionsResult } from "../../../ipc/contract";
+import { hostNotConnected } from "./remote-owners";
 import type { RemoteSessionStreams } from "./remote-session-streams";
 
 /** One door to a project's Session listing rows. */
@@ -38,11 +43,121 @@ export type RemoteSessionRouter = IpcClientRouter<AppRouter, RouterProcedurePath
 /** The Session router's slice a remote Workspace uses: the typed client's own, nothing cast (AM4). */
 export type RemoteSessionClient = Pick<TRPCClient<RemoteSessionRouter>, "session" | "sessions">;
 
-/** A typed Session router client over one Workspace link. */
-export function remoteSessionClient(link: HostLinkCalls): RemoteSessionClient {
+/** What a host that grants this window no Session features says, in its name (VC-713, B3). */
+export function sessionsUnavailableOn(hostName: string): string {
+  return `Sessions aren’t available on ${hostName} — update it to use them here`;
+}
+
+/** Whether a host refused an operation its link was never granted (an older host). */
+export function isNotGranted(error: unknown): boolean {
+  return readHostError(error).reason === "verb-refused";
+}
+
+/** The same failure, its message in the host's name; its code and reason unchanged. */
+function renamed(error: TRPCClientError<AnyRouter>, message: string): TRPCClientError<AnyRouter> {
+  const hostError = readHostError(error);
+  return TRPCClientError.from<AnyRouter>(
+    {
+      error: {
+        code: TRPC_ERROR_CODES_BY_KEY[hostError.code],
+        message,
+        data: { code: hostError.code, hostError: { ...hostError, message } },
+      },
+    },
+    { cause: error },
+  );
+}
+
+/**
+ * Names the host in the two failures a person reads off a remote Session
+ * (VC-713, B3): an operation an older host never granted, and a link that is
+ * not connected. Every other failure passes through unchanged, so a
+ * resnapshot or a refusal keeps the reason the chat core branches on.
+ */
+export function hostNamingLink<Router extends AnyRouter>(hostName: string): TRPCLink<Router> {
+  return () =>
+    ({ op, next }) =>
+      observable((observer) => {
+        const subscription = next(op).subscribe({
+          next: (value) => observer.next(value),
+          error: (error) => {
+            const reason = readHostError(error).reason;
+            if (reason === "verb-refused") {
+              observer.error(renamed(error, sessionsUnavailableOn(hostName)));
+            } else if (reason === "host-unreachable") {
+              observer.error(renamed(error, hostNotConnected(hostName)));
+            } else observer.error(error);
+          },
+          complete: () => observer.complete(),
+        });
+        return () => subscription.unsubscribe();
+      });
+}
+
+/** A typed Session router client over one Workspace link, its failures in the host's name. */
+export function remoteSessionClient(link: HostLinkCalls, hostName: string): RemoteSessionClient {
   return createTRPCClient<RemoteSessionRouter>({
-    links: [hostLinkTrpcLink<RemoteSessionRouter>(link)],
+    links: [
+      hostNamingLink<RemoteSessionRouter>(hostName),
+      hostLinkTrpcLink<RemoteSessionRouter>(link),
+    ],
   });
+}
+
+/**
+ * The transport for a project known to be on a remote host whose Workspace
+ * is not bound here now (VC-713, B1): every read, command and stream fails at
+ * once in the host's name. Never This Mac's IPC.
+ */
+export function closedRemoteTransport(
+  hostName: string,
+  window: Parameters<typeof racingFlushScheduler>[0],
+): ChatSessionTransport {
+  const refuse = (): Promise<never> => Promise.reject(new Error(hostNotConnected(hostName)));
+  const call = { query: refuse, mutate: refuse };
+  const stream = {
+    subscribe: (_input: unknown, handlers: { onError(error: unknown): void }) => {
+      let open = true;
+      queueMicrotask(() => {
+        if (open) handlers.onError(new Error(hostNotConnected(hostName)));
+      });
+      return {
+        unsubscribe: () => {
+          open = false;
+        },
+      };
+    },
+  };
+  return {
+    rpc: {
+      session: {
+        snapshot: call,
+        history: call,
+        projection: call,
+        subscribe: stream,
+        subscribeQueue: stream,
+        command: call,
+        cancelQueued: call,
+        editQueued: call,
+        cancelInteraction: call,
+        reconcile: call,
+      },
+    },
+    streamRecovery: "host-link",
+    scheduler: racingFlushScheduler(window),
+    newCommandId: () => crypto.randomUUID(),
+    createSession: refuse,
+    attachSession: refuse,
+  };
+}
+
+/** The listing reader for a project known remote whose Workspace is not bound here now. */
+export function closedListingReader(hostName: string): SessionListingReader {
+  const refuse = async (): Promise<SessionsResult> => ({
+    ok: false,
+    error: hostNotConnected(hostName),
+  });
+  return { list: refuse, listForTicket: refuse };
 }
 
 /**
@@ -114,22 +229,38 @@ export function listingRowsFromWire(rows: WireRows): ListingRows {
   });
 }
 
-/** A failed read as the listing stores take one: said, never thrown. */
-async function listed(read: () => Promise<{ sessions: WireRows }>): Promise<SessionsResult> {
+/**
+ * A failed read as the listing stores take one: said, never thrown. An
+ * operation the host never granted is no failure to retry: the reader says
+ * so once (`notGranted`) and answers an empty listing, which the surfaces
+ * draw as the host's named unavailable state.
+ */
+async function listed(
+  read: () => Promise<{ sessions: WireRows }>,
+  notGranted: () => void,
+): Promise<SessionsResult> {
   try {
     return { ok: true, sessions: listingRowsFromWire((await read()).sessions) };
   } catch (error) {
+    if (isNotGranted(error)) {
+      notGranted();
+      return { ok: true, sessions: [] };
+    }
     return { ok: false, error: errorMessage(error) };
   }
 }
 
-/** The listing reader for one remote Workspace. */
+/**
+ * The listing reader for one remote Workspace. `notGranted` hears that the
+ * host refused the listing as an operation it never granted this link.
+ */
 export function remoteListingReader(
   client: Pick<RemoteSessionClient, "session">,
+  notGranted: () => void,
 ): SessionListingReader {
   return {
-    list: ({ projectId }) => listed(() => client.session.listing.query({ projectId })),
+    list: ({ projectId }) => listed(() => client.session.listing.query({ projectId }), notGranted),
     listForTicket: ({ ticketId }) =>
-      listed(() => client.session.listingForTicket.query({ ticketId })),
+      listed(() => client.session.listingForTicket.query({ ticketId }), notGranted),
   };
 }

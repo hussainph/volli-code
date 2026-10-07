@@ -12,14 +12,16 @@
  * relay binding, behind `cloud`); with nothing registered, which is the flag
  * off, every read is the local one.
  */
-import type { SessionListingReader } from "./remote-session-wire";
+import { useBoardStore } from "@renderer/stores/board";
+
+import { remoteOwnerOf } from "./remote-owners";
+import { closedListingReader, type SessionListingReader } from "./remote-session-wire";
 
 export type { SessionListingReader } from "./remote-session-wire";
 
-/** Which reader serves a project, or a ticket, when it is on a remote host; `null` for This Mac. */
+/** Which reader serves a project when it is on a remote host; `null` when not bound here now. */
 export interface RemoteSessionListing {
   forProject(projectId: string): SessionListingReader | null;
-  forTicket(ticketId: string): SessionListingReader | null;
 }
 
 let remote: RemoteSessionListing | null = null;
@@ -42,12 +44,29 @@ function localReader(): SessionListingReader {
   };
 }
 
-/** The reader a project's listing comes from. */
-export function sessionListingReaderForProject(projectId: string): SessionListingReader {
-  return remote?.forProject(projectId) ?? localReader();
+/** The project a ticket is on, from the board this window holds. */
+function projectOfTicket(ticketId: string): string | null {
+  for (const [projectId, tickets] of Object.entries(useBoardStore.getState().ticketsByProject)) {
+    if (tickets.some((ticket) => ticket.id === ticketId)) return projectId;
+  }
+  return null;
 }
 
-/** The reader a ticket's listing comes from. */
+/**
+ * The reader a project's listing comes from: its host's for a remote
+ * project, `volli:session-list` for This Mac's. A project known remote whose
+ * Workspace is not bound now reads nothing and says why (VC-713, B1).
+ */
+export function sessionListingReaderForProject(projectId: string): SessionListingReader {
+  const owner = remoteOwnerOf(projectId);
+  if (owner === null) return localReader();
+  return remote?.forProject(projectId) ?? closedListingReader(owner.hostName);
+}
+
+/** The reader a ticket's listing comes from, by the project the ticket is on. */
 export function sessionListingReaderForTicket(ticketId: string): SessionListingReader {
-  return remote?.forTicket(ticketId) ?? localReader();
+  const projectId = projectOfTicket(ticketId);
+  const owner = remoteOwnerOf(projectId);
+  if (owner === null) return localReader();
+  return remote?.forProject(projectId!) ?? closedListingReader(owner.hostName);
 }

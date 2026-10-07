@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ChatSessionRecord, SessionListingRow } from "@volli/shared";
 
-import { useExperimentsStore } from "@renderer/stores/experiments";
-import { useHostConnectionStore } from "@renderer/stores/host-connection";
-import { createFakeHostSource, hostSnapshot, remoteHost } from "@renderer/stores/host-sources";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "./remote-owners";
 import {
   forgetSessionProject,
   projectOfSession,
@@ -17,7 +15,10 @@ import {
 afterEach(() => {
   useProjectSessionsStore.setState({ byProject: {} });
   useTicketSessionRecordsStore.setState({ byTicket: {} });
-  useExperimentsStore.setState({ snapshot: null });
+  resetRemoteOwnersForTest();
+  for (const id of ["started", "from-rail", "from-ticket", "boxed", "local"]) {
+    forgetSessionProject(id);
+  }
 });
 
 describe("a Session's project (VC-713)", () => {
@@ -53,26 +54,29 @@ describe("a Session's project (VC-713)", () => {
     expect(projectOfSession("started")).toBeNull();
   });
 
-  it("names the remote host only with cloud on, and never for This Mac's", () => {
+  it("keeps a Session found in a listing after the roster moves on (B1)", () => {
+    useProjectSessionsStore.setState({
+      byProject: {
+        remote: {
+          terminal: [],
+          chat: [{ sessionId: "from-rail" } as ChatSessionRecord],
+          provenance: {},
+          read: {},
+        },
+      },
+    });
+    expect(projectOfSession("from-rail")).toBe("remote");
+    useProjectSessionsStore.setState({ byProject: {} });
+    expect(projectOfSession("from-rail")).toBe("remote");
+  });
+
+  it("names the host a Session's project was known on, whatever its link does now (B1)", () => {
     rememberSessionProject("boxed", "remote");
     rememberSessionProject("local", "local");
     expect(remoteHostOfSession("boxed")).toBeNull();
-    useExperimentsStore.setState({
-      snapshot: { cloud: { enabled: true, source: "storage" } } as never,
-    });
-    const detach = useHostConnectionStore
-      .getState()
-      .attach(
-        createFakeHostSource(hostSnapshot([remoteHost("box", "hetzner-1")], { remote: "box" })),
-      );
-    try {
-      expect(remoteHostOfSession("boxed")).toBe("hetzner-1");
-      expect(remoteHostOfSession("local")).toBeNull();
-      expect(remoteHostOfSession("unknown")).toBeNull();
-    } finally {
-      detach();
-      forgetSessionProject("boxed");
-      forgetSessionProject("local");
-    }
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    expect(remoteHostOfSession("boxed")).toBe("hetzner-1");
+    expect(remoteHostOfSession("local")).toBeNull();
+    expect(remoteHostOfSession("unknown")).toBeNull();
   });
 });

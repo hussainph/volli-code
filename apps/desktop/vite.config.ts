@@ -591,6 +591,9 @@ export default defineConfig(({ mode }) => ({
         // A Session's project, for the surfaces that hold only its id: a wrong
         // answer calls `window.api` with a remote Session's id.
         "src/lib/session-project.ts",
+        // Which projects this window has known on a remote host (VC-713, B1):
+        // a wrong answer sends a remote Session's id to This Mac's IPC.
+        "src/lib/remote-owners.ts",
         // A remote project's Workspace link as the window reaches it (VC-711):
         // when a relayed stream resumes, waits for a slot, or ends is a rule
         // no screenshot shows until a board silently stops following.

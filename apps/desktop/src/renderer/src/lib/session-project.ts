@@ -8,9 +8,10 @@
  * Session it starts or adopts; a Session it never did is found in the
  * listings it was opened from. One it cannot place is This Mac's.
  */
-import { remoteHostNameNow } from "@renderer/components/hosts/use-remote-project";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+
+import { remoteOwnerOf } from "./remote-owners";
 
 const recorded = new Map<string, string>();
 
@@ -24,10 +25,8 @@ export function forgetSessionProject(sessionId: string): void {
   recorded.delete(sessionId);
 }
 
-/** The Session's project, or `null` when nothing in this window names it. */
-export function projectOfSession(sessionId: string): string | null {
-  const known = recorded.get(sessionId);
-  if (known !== undefined) return known;
+/** The Session's project from the listings this window holds, or `null`. */
+function listedProjectOf(sessionId: string): string | null {
   for (const [projectId, rows] of Object.entries(useProjectSessionsStore.getState().byProject)) {
     if (rows.chat.some((row) => row.sessionId === sessionId)) return projectId;
   }
@@ -39,7 +38,24 @@ export function projectOfSession(sessionId: string): string | null {
   return null;
 }
 
-/** The remote host a Session runs on, or `null` for This Mac's (and always with `cloud` off). */
+/**
+ * The Session's project, or `null` when nothing in this window names it. One
+ * found in a listing is recorded (VC-713, B1), so a roster that is replaced
+ * or emptied later cannot erase where the Session lives.
+ */
+export function projectOfSession(sessionId: string): string | null {
+  const known = recorded.get(sessionId);
+  if (known !== undefined) return known;
+  const listed = listedProjectOf(sessionId);
+  if (listed !== null) recorded.set(sessionId, listed);
+  return listed;
+}
+
+/**
+ * The remote host a Session runs on, or `null` for This Mac's: by the owner
+ * this window has known its project on, whatever the link does now, so a
+ * forgotten Workspace's Session still refuses This Mac's IPC (B1).
+ */
 export function remoteHostOfSession(sessionId: string): string | null {
-  return remoteHostNameNow(projectOfSession(sessionId));
+  return remoteOwnerOf(projectOfSession(sessionId))?.hostName ?? null;
 }

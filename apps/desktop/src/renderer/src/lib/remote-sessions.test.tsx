@@ -10,7 +10,7 @@ import {
 import type { ChatSessionTransport } from "@volli/session-presentation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { chatTransportFor } from "@renderer/chat/transport";
+import { chatTransportFor, sessionCommandFor } from "@renderer/chat/transport";
 import { useBoardStore } from "@renderer/stores/board";
 import {
   createHostConnectionStore,
@@ -23,6 +23,9 @@ import {
   type FakeHostSource,
 } from "@renderer/stores/host-sources";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { createRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
+import { resetRemoteOwnersForTest } from "./remote-owners";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
@@ -151,7 +154,7 @@ const terminal = (harnessId: string, activeHarnessId: string | null) => ({
 describe("the remote listing reader (VC-713)", () => {
   it("reads a project's and a ticket's rows, and says a failure instead of throwing", async () => {
     const { client, query } = fakeClient();
-    const reader = remoteListingReader(client);
+    const reader = remoteListingReader(client, () => {});
     query.mockResolvedValueOnce({ sessions: [chatRow("a")], omitted: 0 });
     expect(await reader.list({ projectId: "remote" })).toEqual({
       ok: true,
@@ -190,6 +193,9 @@ describe("binding remote Sessions (VC-713)", () => {
   let hosts: ReturnType<typeof createHostConnectionStore>;
   let source: FakeHostSource;
   let workspaces: Map<string, RemoteWorkspace & { dispose: ReturnType<typeof vi.fn> }>;
+  let notGranted: Map<string, () => void>;
+  let rebinds: string[][];
+  let availability: ReturnType<typeof createRemoteSessionAvailabilityStore>;
   let refreshed: string[];
   let shown: string[];
   let documentState: DocumentVisibilityState;
@@ -202,6 +208,15 @@ describe("binding remote Sessions (VC-713)", () => {
     );
     hosts.getState().attach(source);
     workspaces = new Map();
+    notGranted = new Map();
+    rebinds = [];
+    availability = createRemoteSessionAvailabilityStore();
+    useBoardStore.setState({
+      ticketsByProject: {
+        remote: [{ id: "remote-ticket" } as Ticket],
+        local: [{ id: "local-ticket" } as Ticket],
+      },
+    });
     refreshed = [];
     shown = [];
     documentState = "visible";
@@ -209,6 +224,8 @@ describe("binding remote Sessions (VC-713)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetRemoteOwnersForTest();
+    useBoardStore.setState({ ticketsByProject: {} });
   });
 
   function deps(overrides: Partial<RemoteSessionsDeps> = {}): RemoteSessionsDeps {
@@ -217,12 +234,20 @@ describe("binding remote Sessions (VC-713)", () => {
     return {
       hosts,
       visibleProjects: () => ["remote"],
-      projectOfTicket: (ticketId) =>
-        ticketId === "remote-ticket" ? "remote" : ticketId === "local-ticket" ? "local" : null,
       refreshListings: async (projectId) => void refreshed.push(projectId),
-      workspace: (projectId) => {
+      workspace: ({ projectId, notGranted: refused }) => {
+        notGranted.set(projectId, refused);
         const workspace = {
           projectId,
+          client: {
+            session: {
+              command: {
+                mutate: async () => {
+                  throw new Error(`commanded on ${projectId}`);
+                },
+              },
+            },
+          } as unknown as RemoteWorkspace["client"],
           transport: { streamRecovery: "host-link" } as ChatSessionTransport,
           listing: { list: vi.fn(), listForTicket: vi.fn() },
           streams: {
@@ -238,6 +263,8 @@ describe("binding remote Sessions (VC-713)", () => {
         workspaces.set(projectId, workspace);
         return workspace;
       },
+      rebindSessions: (projectIds) => void rebinds.push([...projectIds]),
+      availability: availability.getState(),
       window: {
         addEventListener: events.addEventListener.bind(events),
         removeEventListener: events.removeEventListener.bind(events),
@@ -377,6 +404,142 @@ describe("binding remote Sessions (VC-713)", () => {
     expect(refreshed.toSorted()).toEqual(["other", "remote"]);
   });
 
+  it("keeps a project known remote after its claim goes: closed in the host's name, never IPC (B1)", async () => {
+    const bound = bindRemoteSessions(deps());
+    // Bound, its Island Stop goes to the Workspace's own client.
+    await expect(
+      sessionCommandFor("remote")({
+        commandId: "c",
+        sessionId: "s",
+        command: { kind: "session.stop" },
+      }),
+    ).rejects.toThrow();
+    source.set(hostSnapshot([remoteHost(HOST, "box")], { other: HOST }));
+    await expect(
+      sessionCommandFor("remote")({
+        commandId: "c",
+        sessionId: "s",
+        command: { kind: "session.stop" },
+      }),
+    ).rejects.toThrow("box isn’t connected");
+    const closed = chatTransportFor("remote");
+    await expect(closed.rpc.session.snapshot.query({ sessionId: "s" })).rejects.toThrow(
+      "box isn’t connected",
+    );
+    expect(await sessionListingReaderForProject("remote").list({ projectId: "remote" })).toEqual({
+      ok: false,
+      error: "box isn’t connected",
+    });
+    bound.stop();
+    // After the binding too: still the host's, still closed.
+    await expect(
+      chatTransportFor("other").rpc.session.projection.query({ sessionId: "s" }),
+    ).rejects.toThrow("box isn’t connected");
+  });
+
+  it("re-homes resident chats as claims come and go and as bindings start and stop (B4)", () => {
+    const first = bindRemoteSessions(deps());
+    expect(rebinds).toEqual([["remote", "other"]]);
+    source.set(hostSnapshot([remoteHost(HOST, "box")], { other: HOST }));
+    expect(rebinds.at(-1)).toEqual(["remote"]);
+    source.set(hostSnapshot([remoteHost(HOST, "box")], { remote: HOST, other: HOST }));
+    expect(rebinds.at(-1)).toEqual(["remote"]);
+    // A change that moves no claim re-homes nothing.
+    const count = rebinds.length;
+    source.setProjectLink("other", { status: "reconnecting" });
+    expect(rebinds).toHaveLength(count);
+    first.stop();
+    expect(rebinds.at(-1)?.toSorted()).toEqual(["other", "remote"]);
+    // Nothing claimed: a binding re-homes nothing at start.
+    source.set(hostSnapshot([remoteHost(HOST, "box")], {}));
+    const before = rebinds.length;
+    bindRemoteSessions(deps()).stop();
+    expect(rebinds).toHaveLength(before);
+  });
+
+  it("says an older host's Sessions are not available, once, and asks it nothing until its link changes (B3)", async () => {
+    const options = deps();
+    const bound = bindRemoteSessions(options);
+    chatTransportFor("remote");
+    const listing = workspaces.get("remote")!.listing;
+    expect(sessionListingReaderForProject("remote")).toBe(listing);
+    notGranted.get("remote")!();
+    expect(availability.getState().unavailable).toEqual({
+      remote: "Sessions aren’t available on box — update it to use them here",
+    });
+    // Its reads now answer at once, empty, without asking the host.
+    expect(await sessionListingReaderForProject("remote").list({ projectId: "remote" })).toEqual({
+      ok: true,
+      sessions: [],
+    });
+    expect(
+      await sessionListingReaderForTicket("remote-ticket").listForTicket({
+        ticketId: "remote-ticket",
+      }),
+    ).toEqual({ ok: true, sessions: [] });
+    expect(listing.list).not.toHaveBeenCalled();
+    // Another project's link moving changes nothing for this one.
+    source.setProjectLink("other", { status: "open" });
+    expect(Object.keys(availability.getState().unavailable)).toEqual(["remote"]);
+    // And no re-read is scheduled for it: focus and the poll read only the other.
+    (options.window as unknown as EventTarget).dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_POLL_MS);
+    expect(refreshed).toEqual(["other"]);
+    // A new welcome (the link changed) may grant it: asked again, the state cleared.
+    source.setProjectLink("remote", { status: "reconnecting" });
+    expect(availability.getState().unavailable).toEqual({});
+    source.setProjectLink("remote", { status: "open" });
+    expect(refreshed).toContain("remote");
+    expect(sessionListingReaderForProject("remote")).toBe(listing);
+    // Refused again and then forgotten: the named state goes with the claim.
+    notGranted.get("remote")!();
+    source.set(hostSnapshot([remoteHost(HOST, "box")], { other: HOST }));
+    expect(availability.getState().unavailable).toEqual({});
+    // A late refusal for a project no longer claimed names nothing.
+    notGranted.get("remote")!();
+    expect(availability.getState().unavailable).toEqual({});
+    // Refused and the binding stops: the state goes too.
+    chatTransportFor("other");
+    notGranted.get("other")!();
+    bound.stop();
+    expect(availability.getState().unavailable).toEqual({});
+  });
+
+  it("asks the current binding for a mounted chat's slot after cloud goes off and on (B4, N6)", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const experiments = {
+      on: true,
+      listeners: new Set<() => void>(),
+      getState() {
+        return { snapshot: { cloud: { enabled: this.on, source: "storage" as const } } };
+      },
+      subscribe(listener: () => void) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+      },
+    };
+    const flip = (on: boolean) => {
+      experiments.on = on;
+      for (const listener of experiments.listeners) listener();
+    };
+    const stop = bindRemoteSessionsWhileCloud(experiments as never, () => deps());
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<View projectId="remote" />));
+    const firstWorkspace = workspaces.get("remote")!;
+    await act(async () => flip(false));
+    expect(firstWorkspace.dispose).toHaveBeenCalled();
+    await act(async () => flip(true));
+    const secondWorkspace = workspaces.get("remote")!;
+    expect(secondWorkspace).not.toBe(firstWorkspace);
+    // The same mounted view, the same props: its slot asked of the new owner.
+    expect(shown).toEqual(["s1", "-s1", "s1"]);
+    await act(async () => root.unmount());
+    expect(shown).toEqual(["s1", "-s1", "s1", "-s1"]);
+    stop();
+    vi.unstubAllGlobals();
+  });
+
   it("binds while cloud is on, and unbinds when it turns off", () => {
     const experiments = {
       on: true,
@@ -440,8 +603,10 @@ describe("the window's own wiring (VC-713)", () => {
     useBoardStore.setState({
       ticketsByProject: { remote: [{ id: "t1" } as Ticket], local: [{ id: "t2" } as Ticket] },
     });
-    expect(deps.projectOfTicket("t1")).toBe("remote");
-    expect(deps.projectOfTicket("missing")).toBeNull();
+    const rebind = vi.spyOn(useChatSessionsStore.getState(), "rebindChatSessions");
+    deps.rebindSessions(["remote"]);
+    expect(rebind).toHaveBeenCalledWith(["remote"]);
+    rebind.mockRestore();
     useTicketSessionRecordsStore.setState({ byTicket: { t1: [], t2: [] } });
     const projectRefresh = vi.spyOn(useProjectSessionsStore.getState(), "refresh");
     const ticketRefresh = vi.spyOn(useTicketSessionRecordsStore.getState(), "refresh");
@@ -463,7 +628,11 @@ describe("the window's own wiring (VC-713)", () => {
 
   it("builds a Workspace over main's relay, whose streams end with it", () => {
     vi.useFakeTimers();
-    const workspace = relayedWorkspace("remote");
+    const workspace = relayedWorkspace({
+      projectId: "remote",
+      hostName: "hetzner-1",
+      notGranted: () => {},
+    });
     expect(workspace.projectId).toBe("remote");
     expect(workspace.transport.streamRecovery).toBe("host-link");
     const handlers = { onStarted: vi.fn(), onData: vi.fn(), onError: vi.fn(), onComplete: vi.fn() };

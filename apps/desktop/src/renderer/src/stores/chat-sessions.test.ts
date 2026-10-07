@@ -1478,6 +1478,36 @@ describe("promoteChatSession", () => {
   });
 });
 
+describe("rebindChatSessions (VC-713, B4)", () => {
+  it("replaces a moved project's resident clients on the transport it resolves to now", async () => {
+    const before = fakeTransport();
+    const after = fakeTransport();
+    let current = before.transport;
+    const store = createChatSessionsStore(() => current);
+    opened.push(store);
+    store.getState().adoptChatSession("remote-chat", "remote");
+    store.getState().adoptChatSession("local-chat", "local");
+    await Promise.resolve();
+    await Promise.resolve();
+    const oldClient = getChatClient("remote-chat");
+    const localClient = getChatClient("local-chat");
+    current = after.transport;
+    store.getState().rebindChatSessions(["remote"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    // A new client for the moved project, re-reading over the new transport.
+    expect(getChatClient("remote-chat")).not.toBe(oldClient);
+    expect(after.subscriptions).toEqual([{ sessionId: "remote-chat", afterSequence: 0 }]);
+    // Another project's, and a Session whose project nobody names, are left be.
+    expect(getChatClient("local-chat")).toBe(localClient);
+    store.setState((state) => ({
+      sessions: { ...state.sessions, orphan: state.sessions["local-chat"]! },
+    }));
+    store.getState().rebindChatSessions(["remote", "local"]);
+    expect(store.getState().sessions["remote-chat"]).toBeDefined();
+  });
+});
+
 describe("adoptChatSession", () => {
   it("does not make a resident client when a split or sidebar opens a provisional Draft", () => {
     const { store, subscriptions } = fixture();

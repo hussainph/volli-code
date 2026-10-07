@@ -16,9 +16,7 @@ import type { SessionOrderMember } from "@volli/shared";
 import { getChatClient, type InteractionSubmission } from "@volli/session-presentation";
 
 import { forgetSessionProject, rememberSessionProject } from "@renderer/lib/session-project";
-import { useExperimentsStore } from "@renderer/stores/experiments";
-import { useHostConnectionStore } from "@renderer/stores/host-connection";
-import { createFakeHostSource, hostSnapshot, remoteHost } from "@renderer/stores/host-sources";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useHeldSessionOrder, useSessionOrderStore } from "@renderer/stores/session-order";
 
@@ -113,23 +111,15 @@ describe("createSidebarPeekPorts · readContent", () => {
 
   it("refuses a remote Session's peek with the host's words, reading nothing here (VC-713)", async () => {
     rememberSessionProject("remote-session", "remote");
-    useExperimentsStore.setState({
-      snapshot: { cloud: { enabled: true, source: "storage" } } as never,
-    });
-    const detach = useHostConnectionStore
-      .getState()
-      .attach(
-        createFakeHostSource(hostSnapshot([remoteHost("box", "hetzner-1")], { remote: "box" })),
-      );
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
     try {
       await expect(createSidebarPeekPorts(surface()).readContent("remote-session")).rejects.toThrow(
         "Not available on hetzner-1 yet",
       );
       expect(peekContent).not.toHaveBeenCalled();
     } finally {
-      detach();
       forgetSessionProject("remote-session");
-      useExperimentsStore.setState({ snapshot: null });
+      resetRemoteOwnersForTest();
     }
   });
 

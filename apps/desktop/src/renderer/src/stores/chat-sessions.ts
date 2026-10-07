@@ -56,11 +56,7 @@ import {
   useChatDraftsStore,
   type ChatDraft,
 } from "@renderer/stores/chat-drafts";
-import {
-  forgetSessionProject,
-  projectOfSession,
-  rememberSessionProject,
-} from "@renderer/lib/session-project";
+import { projectOfSession, rememberSessionProject } from "@renderer/lib/session-project";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -107,6 +103,14 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * Drafts and listings, and a Session none of them names is This Mac's.
    */
   adoptChatSession(sessionId: string, projectId?: string): void;
+  /**
+   * Re-homes the resident Sessions of these projects (VC-713, B4): each one's
+   * client is replaced by one on the transport its project resolves to now —
+   * a remote project's new Workspace, or the closed transport in its host's
+   * name — and re-reads its snapshot. Called when a binding starts or stops,
+   * or a project's Workspace is let go of or claimed again.
+   */
+  rebindChatSessions(projectIds: readonly string[]): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
   enqueue(sessionId: string, message: QueuedMessage): Promise<MessageDelivery>;
@@ -553,9 +557,25 @@ export function createChatSessionsStore(
         void client.connect();
       },
 
+      rebindChatSessions(projectIds) {
+        const moved = new Set(projectIds);
+        for (const sessionId of Object.keys(get().sessions)) {
+          const projectId = projectOfSession(sessionId);
+          if (projectId === null || !moved.has(projectId)) continue;
+          // The old client holds the old owner's transport and stream
+          // allocator; a new one takes the project's transport as it resolves
+          // NOW and re-reads its snapshot, keeping the slice (and the Draft
+          // store's held messages) as they are.
+          disposeChatClient(sessionId);
+          void attach(sessionId).connect();
+        }
+      },
+
       closeChatSession(sessionId) {
+        // The Session's project stays recorded (`lib/session-project`): a
+        // later reopen from a roster that has moved on must still know a
+        // remote Session is remote (VC-713, B1).
         disposeChatClient(sessionId);
-        forgetSessionProject(sessionId);
         set((state) => {
           if (state.sessions[sessionId] === undefined) return state;
           const sessions = { ...state.sessions };

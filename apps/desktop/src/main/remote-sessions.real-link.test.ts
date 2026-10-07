@@ -282,7 +282,7 @@ async function remoteProject() {
     state: storeState(link),
     resumeDelaysMs: [10, 20],
   });
-  const client = remote.remoteSessionClient(relayed);
+  const client = remote.remoteSessionClient(relayed, "real-box");
   const streams = createRemoteSessionStreams({
     clock: {
       setTimeout: (run, ms) => setTimeout(run, ms),
@@ -315,7 +315,7 @@ async function remoteProject() {
     main,
     streams,
     transport: counting,
-    listing: remote.remoteListingReader(client),
+    listing: remote.remoteListingReader(client, () => {}),
     snapshots: () => snapshots,
   };
 }
