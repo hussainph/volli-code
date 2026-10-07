@@ -138,6 +138,8 @@ export function HostSwitcher({
   const hosts = useHostConnectionStore((state) => state.hosts);
   const claims = useHostConnectionStore((state) => state.projects);
   const addHostOffered = useAddHostOffered();
+  // VC-720: this entry re-attaches to the add that outlived its sheet.
+  const addActivity = useRemoteHostsStore((state) => state.addHostActivity);
   const counts = projectCounts({ hosts, projects: claims });
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
@@ -198,7 +200,15 @@ export function HostSwitcher({
       {addHostOffered ? (
         <MenuAction
           icon={PlusIcon}
-          label="Add a host…"
+          label={
+            addActivity === null
+              ? "Add a host…"
+              : addActivity.status === "running"
+                ? `Adding ${addActivity.name}…`
+                : addActivity.status === "done"
+                  ? `${addActivity.name} added — view…`
+                  : `Adding ${addActivity.name} — needs attention…`
+          }
           onAct={() => {
             onDone();
             openAddHost();

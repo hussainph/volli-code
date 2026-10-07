@@ -185,6 +185,8 @@ describe("Add a host", () => {
     await click(sheet(), "Details");
     // Cancel leaves the flow (main discards it) and closes the sheet.
     await click(sheet(), "Cancel");
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    await click(sheet(), "Cancel add");
     expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
   });
@@ -491,12 +493,222 @@ describe("Add a host", () => {
     await act(async () => useRemoteHostsStore.getState().closeProjectSheet());
   });
 
-  it("cancels an unfinished flow when the sheet is closed", async () => {
+  it("detaches an unfinished flow when the sheet is closed", async () => {
     await startFlow();
     await emit({ kind: "view", view: flowView({ at: "connect" }) });
     await click(sheet(), "Close");
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    expect(api.following("flow-1")).toBe(true);
+  });
+});
+
+describe("Add a host: detach and re-attach", () => {
+  it.each(["escape", "outside"])(
+    "%s during install keeps the flow running and re-attachable",
+    async (dismiss) => {
+      await startFlow();
+      await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+      await act(async () => {
+        if (dismiss === "escape")
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        else {
+          document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+          document.body.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+        }
+      });
+      expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+      expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+      expect(api.following("flow-1")).toBe(true);
+      expect(useRemoteHostsStore.getState().addHostActivity).toMatchObject({ status: "running" });
+      await emit({ kind: "view", view: flowView({ done: 4, at: "start" }) });
+      await act(async () => useRemoteHostsStore.getState().openAddHost());
+      expect(rows()[3]).toContain("Starting…");
+      expect(api.calls.filter(([method]) => method === "startAdd")).toHaveLength(1);
+    },
+  );
+
+  it("lets Cancel before upload cancel directly", async () => {
+    await startFlow();
+    await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
+    await click(sheet(), "Cancel");
     expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+  });
+
+  it("lets Keep going reject cancellation, and confirms Back after upload too", async () => {
+    await startFlow();
+    await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+    await click(sheet(), "Cancel");
+    expect(sheet().textContent).toContain("Files already uploaded or installed stay on the host.");
+    await click(sheet(), "Keep going");
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "failed",
+        done: 3,
+        at: "install",
+        failure: {
+          code: "hostd-refused",
+          step: "install",
+          line: "Install failed",
+          detail: null,
+          recovery: { action: "retry", label: "Try again", from: "install" },
+        },
+      }),
+    });
+    await click(sheet(), "Back");
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    await click(sheet(), "Cancel add");
+    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+    expect(input("SSH destination").value).toBe("deploy@box");
+  });
+
+  it("re-observes a lost stream on reopen without starting or cancelling an install", async () => {
+    await startFlow();
+    await act(async () => api.fail("flow-1"));
+    expect(api.following("flow-1")).toBe(false);
+    expect(useRemoteHostsStore.getState().addHostActivity?.status).toBe("failed");
+    await click(sheet(), "Close");
+    await act(async () => useRemoteHostsStore.getState().openAddHost());
+    expect(api.following("flow-1")).toBe(true);
+    await emit({ kind: "replay", view: flowView({ done: 3, at: "install" }), log: [], omitted: 0 });
+    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(api.calls).toEqual([["startAdd", "deploy@box"]]);
+  });
+
+  it("surfaces a refused Cancel instead of closing or discarding the flow", async () => {
+    await startFlow();
+    api.cancelAdd = () => Promise.reject(new Error("Could not cancel"));
+    await click(sheet(), "Cancel");
+    expect(toast.error).toHaveBeenCalled();
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(true);
+    expect(button("Cancel")?.disabled).toBe(false);
+  });
+
+  it.each(["unavailable", "refused"])(
+    "does not claim a command was copied when clipboard is %s",
+    async (state) => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value:
+          state === "unavailable"
+            ? undefined
+            : { writeText: () => Promise.reject(new Error("denied")) },
+      });
+      await startFlow();
+      await emit({
+        kind: "view",
+        view: flowView({
+          status: "failed",
+          failure: {
+            code: "host-key-changed",
+            step: "connect",
+            line: "box’s identity changed",
+            detail: null,
+            recovery: { action: "retry", label: "Try again", from: "connect" },
+          },
+        }),
+      });
+      await click(sheet(), "Copy command");
+      expect(toast.error).toHaveBeenCalled();
+      expect(button("Copied")).toBeUndefined();
+      expect(sheet().textContent).toContain("ssh-keygen -R box");
+    },
+  );
+
+  it("can explicitly cancel even when observation keeps failing, without a silent exit loop", async () => {
+    await startFlow();
+    await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+    await act(async () => api.fail("flow-1"));
+    await click(sheet(), "Close");
+    await act(async () => useRemoteHostsStore.getState().openAddHost());
+    await act(async () => api.fail("flow-1"));
+    await click(sheet(), "Cancel");
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    await click(sheet(), "Cancel add");
+    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+  });
+
+  it("blocks sudo submission behind a cancellation confirmation, and resets it for a new question", async () => {
+    await startFlow();
+    const sudo = {
+      id: "q1",
+      kind: "sudo-password",
+      step: "start",
+      reason: "linger",
+      command: "sudo loginctl enable-linger deploy",
+      retry: false,
+    } as const;
+    await emit({
+      kind: "view",
+      view: flowView({ status: "question", done: 4, at: "start", question: sudo }),
+    });
+    await type(input("sudo password"), "synthetic-password");
+    await click(sheet(), "Back");
+    expect(input("sudo password").disabled).toBe(true);
+    await act(async () =>
+      sheet()
+        .querySelector("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    expect(api.calls.some(([method]) => method === "sudoPassword")).toBe(false);
+    await emit({
+      kind: "view",
+      view: flowView({ status: "question", done: 4, at: "start", question: { ...sudo, id: "q2" } }),
+    });
+    expect(button("Cancel add")).toBeUndefined();
+    expect(input("sudo password").disabled).toBe(false);
+  });
+
+  it("uses SSH's resolved known_hosts key rather than a configured alias or friendly name", async () => {
+    await startFlow("my-alias");
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "failed",
+        target: "my-alias",
+        name: "Friendly box",
+        failure: {
+          code: "host-key-changed",
+          step: "connect",
+          line: "The host's identity changed",
+          detail:
+            "Host key for [actual.example]:2222 has changed and you have requested strict checking. Host key verification failed.",
+          recovery: { action: "retry", label: "Try again", from: "connect" },
+        },
+      }),
+    });
+    expect(sheet().textContent).toContain("ssh-keygen -R '[actual.example]:2222'");
+    expect(sheet().textContent).not.toContain("ssh-keygen -R my-alias");
+  });
+
+  it("renders a changed key's exact port command with Copy and Try again", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    await startFlow("deploy@box:2222");
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "failed",
+        target: "deploy@box:2222",
+        name: "Friendly box",
+        failure: {
+          code: "host-key-changed",
+          step: "connect",
+          line: "box’s identity changed since you last connected. If you rebuilt it, remove the old key, then try again.",
+          recovery: { action: "retry", label: "Try again", from: "connect" },
+          detail: null,
+        },
+      }),
+    });
+    expect(sheet().textContent).toContain("ssh-keygen -R '[box]:2222'");
+    await click(sheet(), "Copy command");
+    expect(writeText).toHaveBeenCalledWith("ssh-keygen -R '[box]:2222'");
+    await click(sheet(), "Try again");
+    expect(api.calls.at(-1)).toEqual(["retryAdd", "flow-1", "connect"]);
   });
 });
 
@@ -583,7 +795,7 @@ describe("Add a host: the review's probes", () => {
     await act(async () => resolve(null));
   });
 
-  it("cancels a flow whose start answers after Close", async () => {
+  it("keeps a flow whose start answers after Close, and re-attaches on reopen", async () => {
     let resolve!: (answer: { flowId: string }) => void;
     const start = api.startAdd;
     api.startAdd = (request) => {
@@ -596,8 +808,11 @@ describe("Add a host: the review's probes", () => {
     await click(sheet(), "Connect");
     await click(sheet(), "Close");
     await act(async () => resolve({ flowId: "flow-1" }));
-    expect(api.calls).toContainEqual(["cancelAdd", "flow-1"]);
-    expect(api.following("flow-1")).toBe(false);
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
+    expect(api.following("flow-1")).toBe(true);
+    await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+    await act(async () => useRemoteHostsStore.getState().openAddHost());
+    expect(rows()[2]).toContain("Installing Volli host…");
   });
 
   it("says nothing of a start refused after Close", async () => {
@@ -613,11 +828,11 @@ describe("Add a host: the review's probes", () => {
     expect(api.calls.filter(([method]) => method === "cancelAdd")).toEqual([]);
   });
 
-  it("cancels an unfinished flow when cloud turns off and the sheet unmounts", async () => {
+  it("releases observation, not the install, when cloud turns off", async () => {
     await startFlow();
     await act(async () => useExperimentsStore.setState({ snapshot: null }));
     expect(api.following("flow-1")).toBe(false);
-    expect(api.calls).toContainEqual(["cancelAdd", "flow-1"]);
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
   });
 
   it("offers no Add through the switcher, the opener or ⌘K's builder on a read-only hosts file", async () => {
@@ -688,12 +903,12 @@ describe("Add a host: the visual review", () => {
     api.addFacts = () => Promise.reject(new Error("unknown-flow"));
     await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
     expect(rows()[0]).toMatch(/Connected as deploy$/u);
-    // A read answered after the sheet let the flow go is dropped.
+    // A read answered after the owner unmounts is dropped.
     api.addFacts = () => new Promise((resolve) => reads.push(resolve));
     await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
-    await act(async () => useRemoteHostsStore.getState().closeAddHost());
+    await act(async () => useExperimentsStore.setState({ snapshot: null }));
     await act(async () => reads.at(-1)!({ ...found, user: "late" }));
-    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+    expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
   });
 
   it("waits to Run it until the sudo field has text", async () => {

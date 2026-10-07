@@ -6,9 +6,9 @@
  * this only holds the latest view, what the flow has found (read with
  * `hostAdd.facts` on each view) and the log lines, and turns the person's
  * clicks into the tier's calls. A sudo password goes from the field to
- * `hostAdd.sudoPassword` and is never kept here. Leaving a flow that has not
- * finished (Back, Close) cancels it in main, which discards whatever step was
- * in flight.
+ * `hostAdd.sudoPassword` and is never kept here. Closing the sheet only
+ * detaches its UI. The hook lives in the sheet owner, not its visible body;
+ * only explicit Cancel or Back cancels in main.
  */
 import * as React from "react";
 import type {
@@ -66,8 +66,12 @@ export interface AddHostFlow {
   retry(from?: AddHostStepId): void;
   /** Leaves the flow (cancelling it) for the address field, keeping what was typed. */
   back(): void;
-  /** Cancels an unfinished flow; the caller closes the sheet. */
-  leave(): void;
+  /** Explicitly cancels; false means main refused, so keep the sheet open. */
+  leave(): Promise<boolean>;
+  /** Clears only a terminal flow when the sheet closes. */
+  resetFinished(): void;
+  /** Re-opening a lost observation asks main for its replay, not a new install. */
+  reattach(): void;
 }
 
 const messageOf = (error: unknown): string =>
@@ -91,6 +95,7 @@ export function useAddHostFlow(
     error: null,
     starting: false,
   });
+  const [subscriptionGeneration, resubscribe] = React.useState(0);
   const flowId = phase.kind === "flow" ? phase.flowId : null;
   // The latest phase, for the callbacks below without re-binding them.
   const current = React.useRef(phase);
@@ -116,6 +121,7 @@ export function useAddHostFlow(
     };
     const unsubscribe = api.subscribeAdd(flowId, {
       onEvent(event) {
+        if (!following) return;
         // A view (or a replay) may follow a step that found something.
         if (event.kind !== "log") readFacts();
         setPhase((before) => {
@@ -142,6 +148,7 @@ export function useAddHostFlow(
         });
       },
       onError() {
+        if (!following) return;
         setPhase((before) =>
           before.kind === "flow" && before.flowId === flowId ? { ...before, lost: true } : before,
         );
@@ -151,7 +158,16 @@ export function useAddHostFlow(
       following = false;
       unsubscribe();
     };
-  }, [api, flowId]);
+  }, [api, flowId, subscriptionGeneration]);
+
+  // Unmount releases local observation, never the install owned by main.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   /** Runs one call on the flow; its buttons wait for it, and a refusal is said. */
   const call = React.useCallback(
@@ -159,60 +175,60 @@ export function useAddHostFlow(
       const now = current.current;
       if (now.kind !== "flow" || now.busy) return;
       const id = now.flowId;
-      const settle = () =>
+      const settle = () => {
+        if (!mounted.current) return;
         setPhase((before) =>
           before.kind === "flow" && before.flowId === id ? { ...before, busy: false } : before,
         );
+      };
       setPhase({ ...now, busy: true });
       run(id).then(settle, (error: unknown) => {
         settle();
-        onError(messageOf(error));
+        if (mounted.current) onError(messageOf(error));
       });
     },
     [onError],
   );
 
-  /**
-   * The start in flight, if any: left (Close, unmount) before main answered,
-   * its flow is cancelled the moment the answer lands, never followed.
-   */
-  const starting = React.useRef<{ abandoned: boolean } | null>(null);
-
-  const cancel = React.useCallback(() => {
-    if (starting.current !== null) starting.current.abandoned = true;
+  const cancel = async (): Promise<boolean> => {
     const now = current.current;
-    if (now.kind !== "flow" || finished(now.view)) return;
-    // Fire and forget: the flow is left either way, and main discards it.
-    api.cancelAdd(now.flowId).catch(() => {});
-  }, [api]);
-
-  // Leaving by any road, the sheet's body unmounting included (Close, or
-  // `cloud` turning off), cancels an unfinished flow and a start in flight.
-  React.useEffect(() => cancel, [cancel]);
+    if (now.kind !== "flow" || finished(now.view)) return true;
+    if (now.busy) return false;
+    setPhase({ ...now, busy: true });
+    try {
+      await api.cancelAdd(now.flowId);
+      if (mounted.current)
+        setPhase({ kind: "entry", target: now.target, error: null, starting: false });
+      return true;
+    } catch (error) {
+      if (mounted.current)
+        setPhase((before) =>
+          before.kind === "flow" && before.flowId === now.flowId
+            ? { ...before, busy: false }
+            : before,
+        );
+      if (mounted.current) onError(messageOf(error));
+      return false;
+    }
+  };
 
   return {
     phase,
-    setTarget(target) {
-      setPhase((before) => (before.kind === "entry" ? { ...before, target, error: null } : before));
-    },
+    setTarget: React.useCallback((target: string) => {
+      setPhase((before) =>
+        before.kind === "entry" && before.target !== target
+          ? { ...before, target, error: null }
+          : before,
+      );
+    }, []),
     connect() {
       const now = current.current;
       if (now.kind !== "entry" || now.starting) return;
       const target = now.target.trim();
       setPhase({ ...now, starting: true, error: null });
-      const attempt = { abandoned: false };
-      starting.current = attempt;
-      const settled = (): boolean => {
-        if (starting.current === attempt) starting.current = null;
-        return attempt.abandoned;
-      };
       api.startAdd({ target }).then(
         ({ flowId: id }) => {
-          if (settled()) {
-            // Left while main was starting it: it never reaches the screen.
-            api.cancelAdd(id).catch(() => {});
-            return;
-          }
+          if (!mounted.current) return;
           setPhase({
             kind: "flow",
             flowId: id,
@@ -226,7 +242,7 @@ export function useAddHostFlow(
           });
         },
         (error: unknown) => {
-          if (settled()) return;
+          if (!mounted.current) return;
           setPhase({ kind: "entry", target: now.target, error: messageOf(error), starting: false });
         },
       );
@@ -239,9 +255,17 @@ export function useAddHostFlow(
     back() {
       const now = current.current;
       if (now.kind !== "flow") return;
-      cancel();
-      setPhase({ kind: "entry", target: now.target, error: null, starting: false });
+      void cancel();
     },
     leave: cancel,
+    reattach: React.useCallback(() => {
+      const now = current.current;
+      if (now.kind === "flow" && now.lost) resubscribe((generation) => generation + 1);
+    }, []),
+    resetFinished: React.useCallback(() => {
+      const now = current.current;
+      if (now.kind === "flow" && finished(now.view))
+        setPhase({ kind: "entry", target: "", error: null, starting: false });
+    }, []),
   };
 }

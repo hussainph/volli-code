@@ -185,7 +185,7 @@ export function describeFailure(
       return { line: `No host named ${host}`, recovery: back };
     case "host-key-changed":
       return {
-        line: `${host}’s host key changed since you last connected. If you reinstalled it, remove the old key from known_hosts.`,
+        line: `${host}’s identity changed since you last connected. If you rebuilt it, remove the old key, then try again.`,
         recovery: retry("Try again", step),
       };
     case "host-key-rejected":
@@ -249,6 +249,23 @@ export function describeFailure(
         recovery: back,
       };
     case "artifact-unavailable":
+      // A dev build carries no release assets (artifact.ts): its hostd tarball
+      // comes from this Mac, and no retry can fetch one. The details that mark
+      // the dev answers are artifact.ts's own words, pinned in failures.test.ts
+      // against the real resolveArtifact. Say how to provide a tarball instead
+      // of looping on a release that will not publish.
+      if (failure.detail.includes("no hostd release assets")) {
+        return {
+          line: `Adding ${host} needs a matching hostd tarball and its .sha256 from CI. Restart this dev build with VOLLI_HOSTD_DEV_TARBALLS set to the tarball’s full path.`,
+          recovery: { action: "back", label: "Back" },
+        };
+      }
+      if (/\.sha256 is missing\.| is missing\.$/u.test(failure.detail)) {
+        return {
+          line: "The Volli host tarball VOLLI_HOSTD_DEV_TARBALLS names is missing or unverified. Restore it, then check again.",
+          recovery: retry("Check again", step),
+        };
+      }
       return {
         line: "This version’s host download isn’t published yet",
         recovery: retry("Try again", step),
@@ -265,7 +282,12 @@ export function describeFailure(
     case "unpack-failed":
       return { line: `Couldn’t copy Volli host to ${host}`, recovery: retry("Try again", step) };
     case "hostd-refused":
-      return { line: failure.message, recovery: retry("Try again", step) };
+      // A refusal hostd itself said is retried where it happened. No answer at
+      // all invalidates the probe too: the binary or sudo rights may have
+      // changed. Re-probe so stale adopt/paired decisions cannot skip repair.
+      return failure.hostd === "no-answer"
+        ? { line: failure.message, recovery: retry("Try again", "probe") }
+        : { line: failure.message, recovery: retry("Try again", step) };
     case "linger-needs-admin":
       return {
         line: `${host} stops Volli host when ${failure.user} logs out. Ask an administrator to run: ${failure.command}`,

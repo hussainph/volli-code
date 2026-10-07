@@ -134,6 +134,27 @@ function lost(step: StepId, result: SshExecResult): ProvisionStop | null {
     : failed({ code: "connection-lost", step, detail: failure.detail });
 }
 
+/**
+ * The line for a management command that printed no JSON answer: the likely
+ * cause, read off its exit and its own words, and the next move. What it did
+ * say stays in the failure's detail, under Details. A silence can mean the
+ * box's copy of Volli host is gone (127), that it cannot run (126), or that
+ * sudo wants a password after all (the probe believed it would not); anything
+ * else, the command ran and said nothing this Mac could read.
+ */
+function noAnswerMessage(
+  step: "install" | "start" | "enroll",
+  host: string,
+  result: SshExecResult,
+): string {
+  if (result.code === 127) return `Volli host is missing on ${host}. Try again to put it back.`;
+  if (result.code === 126)
+    return `Volli host on ${host} can’t run; its permissions or runtime may be wrong. Fix the error in Details, then try again.`;
+  if (/a password is required/u.test(result.stderr))
+    return `sudo on ${host} wants a password after all. Check the box’s sudo, then try again.`;
+  return `Volli host on ${host} may have crashed or returned an incompatible ${step} answer. Fix the error in Details, then try again.`;
+}
+
 /** The mode the install has or will have; `null` until sudo has been settled. */
 export function modeOf(state: SshProvisionState): InstallMode | null {
   // `null` too: a hand-edited or damaged state is not trusted to be whole.
@@ -222,7 +243,7 @@ async function hostdCommand<T>(
       code: "hostd-refused",
       step,
       hostd: "no-answer",
-      message: `volli-hostd ${step} gave no answer`,
+      message: noAnswerMessage(step, ctx.state.request.host, result),
       detail: withoutHeldSecret(result.stderr, ctx.secrets.sudoPassword)
         .trim()
         .split("\n")

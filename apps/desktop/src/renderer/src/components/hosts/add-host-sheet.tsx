@@ -37,6 +37,8 @@ import { cn } from "@renderer/lib/utils";
 import { remoteHostOf, remoteHosts, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import {
+  cancelNeedsConfirmation,
+  changedHostKeyCommand,
   flowBadge,
   questionPrompt,
   readyFacts,
@@ -53,18 +55,34 @@ import { useAddHostFlow, type AddHostFlow, type NumberedLogLine } from "./use-ad
 export function AddHostSheet() {
   const open = useRemoteHostsStore((state) => state.addHost.open);
   const target = useRemoteHostsStore((state) => state.addHost.target);
-  // A fresh body per opening: nothing of the last flow survives a close.
-  const [opening, setOpening] = React.useState(0);
+  // Visibility does not own the flow. Keep following while the body is detached.
+  const flow = useAddHostFlow(remoteHosts(), target, toastError);
+  const { phase, setTarget, resetFinished, reattach } = flow;
   React.useEffect(() => {
-    if (open) setOpening((value) => value + 1);
-  }, [open]);
-  const leave = React.useRef<() => void>(() => {});
+    if (open) {
+      setTarget(target);
+      reattach();
+    } else resetFinished();
+  }, [open, target, setTarget, resetFinished, reattach]);
+  React.useEffect(() => {
+    useRemoteHostsStore.setState({
+      addHostActivity:
+        phase.kind === "flow" && phase.view?.status !== "cancelled"
+          ? {
+              name: phase.view?.name ?? phase.target,
+              status: phase.lost ? "failed" : (phase.view?.status ?? "running"),
+            }
+          : phase.kind === "entry" && phase.starting
+            ? { name: phase.target, status: "running" }
+            : null,
+    });
+  }, [phase]);
+  React.useEffect(() => () => useRemoteHostsStore.setState({ addHostActivity: null }), []);
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
         if (next) return;
-        leave.current();
         useRemoteHostsStore.getState().closeAddHost();
       }}
     >
@@ -81,22 +99,14 @@ export function AddHostSheet() {
         )}
       >
         <MotionConfig reducedMotion="user">
-          {open ? <AddHostBody key={opening} initialTarget={target} leaveRef={leave} /> : null}
+          {open ? <AddHostBody flow={flow} /> : null}
         </MotionConfig>
       </DialogContent>
     </Dialog>
   );
 }
 
-function AddHostBody({
-  initialTarget,
-  leaveRef,
-}: {
-  initialTarget: string;
-  leaveRef: React.RefObject<() => void>;
-}) {
-  const flow = useAddHostFlow(remoteHosts(), initialTarget, toastError);
-  leaveRef.current = flow.leave;
+function AddHostBody({ flow }: { flow: AddHostFlow }) {
   const { phase } = flow;
   return (
     // The address and the checklist cross over: one lets go, the other settles.
@@ -230,6 +240,8 @@ function FlowScreen({
   const timed = useMotionTiming();
   const hosts = useRemoteHostsStore((state) => state.hosts);
   const [details, setDetails] = React.useState(false);
+  const [confirm, setConfirm] = React.useState<"back" | "cancel" | null>(null);
+  React.useEffect(() => setConfirm(null), [view?.question?.id, view?.status, view?.failure?.code]);
   // Whether the sudo field has text: "Run it" waits for some. Never the text itself.
   const [hasPassword, setHasPassword] = React.useState(false);
   const questionId = view?.question?.id ?? null;
@@ -285,7 +297,7 @@ function FlowScreen({
               view={view}
               name={name}
               lost={lost}
-              busy={busy}
+              busy={busy || confirm !== null}
               onPasswordText={setHasPassword}
             />
             <AnimatePresence initial={false}>
@@ -327,6 +339,8 @@ function FlowScreen({
               lost={lost}
               busy={busy}
               hasPassword={hasPassword}
+              confirm={confirm}
+              setConfirm={setConfirm}
             />
           </div>
         </>
@@ -354,9 +368,18 @@ function Stopped({
   const timed = useMotionTiming();
   let body: React.ReactNode = null;
   if (lost) {
-    body = <Line tone="error">Lost track of this add. Close and start again.</Line>;
+    body = <Line tone="error">Lost track of this add. Close and re-open to reconnect.</Line>;
   } else if (view?.status === "failed" && view.failure !== null) {
-    body = <Line tone="error">{view.failure.line}</Line>;
+    const command =
+      view.failure.code === "host-key-changed"
+        ? changedHostKeyCommand(view.target, view.failure.detail)
+        : null;
+    body = (
+      <>
+        <Line tone="error">{view.failure.line}</Line>
+        {command === null ? null : <CommandLine command={command} />}
+      </>
+    );
   } else if (view?.status === "question" && view.question !== null) {
     body = (
       <QuestionBody
@@ -486,6 +509,7 @@ function SudoBody({
           placeholder={prompt.placeholder}
           className="h-9 text-sm"
           defaultValue=""
+          disabled={busy}
           onInput={(event) => onPasswordText(event.currentTarget.value.length > 0)}
         />
       </form>
@@ -507,6 +531,8 @@ function Actions({
   lost,
   busy,
   hasPassword,
+  confirm,
+  setConfirm,
 }: {
   flow: AddHostFlow;
   view: AddHostFlowView | null;
@@ -515,21 +541,59 @@ function Actions({
   busy: boolean;
   /** The sudo field has text: "Run it" waits for some. */
   hasPassword: boolean;
+  confirm: "back" | "cancel" | null;
+  setConfirm: (intent: "back" | "cancel" | null) => void;
 }) {
-  const close = () => {
-    flow.leave();
-    useRemoteHostsStore.getState().closeAddHost();
+  const close = useRemoteHostsStore.getState().closeAddHost;
+  const cancel = async () => {
+    if (await flow.leave()) close();
   };
+  const request = (intent: "back" | "cancel") => {
+    if (lost || cancelNeedsConfirmation(view)) setConfirm(intent);
+    else if (intent === "back") flow.back();
+    else void cancel();
+  };
+  if (confirm !== null)
+    return (
+      <div
+        role="group"
+        aria-label={`Cancel adding ${name}?`}
+        className="flex flex-wrap items-center justify-end gap-2"
+      >
+        <p className="w-full text-ui text-attention">
+          Cancel adding {name}? Files already uploaded or installed stay on the host.
+        </p>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirm(null)}>
+          Keep going
+        </Button>
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            setConfirm(null);
+            if (confirm === "back") flow.back();
+            else void cancel();
+          }}
+        >
+          Cancel add
+        </Button>
+      </div>
+    );
   const back = (
-    <Button size="sm" variant="ghost" disabled={busy} onClick={flow.back}>
+    <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("back")}>
       Back
     </Button>
   );
   if (lost) {
     return (
-      <Button size="sm" onClick={close}>
-        Close
-      </Button>
+      <>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("cancel")}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={close}>
+          Close
+        </Button>
+      </>
     );
   }
   if (view?.status === "failed" && view.failure !== null) {
@@ -542,7 +606,7 @@ function Actions({
         </Button>
       </>
     ) : (
-      <Button size="sm" onClick={flow.back}>
+      <Button size="sm" onClick={() => request("back")}>
         {recovery.label}
       </Button>
     );
@@ -626,7 +690,7 @@ function Actions({
     }
   }
   return (
-    <Button size="sm" variant="ghost" onClick={close}>
+    <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("cancel")}>
       Cancel
     </Button>
   );
@@ -692,13 +756,19 @@ export function CommandLine({ command }: { command: string }) {
       <span aria-hidden className="text-muted-foreground select-none">
         $
       </span>
-      <span className="min-w-0 flex-1 truncate">{command}</span>
+      <span className="min-w-0 flex-1 break-all select-text">{command}</span>
       <button
         type="button"
         aria-label={copied ? "Copied" : "Copy command"}
         onClick={() => {
-          void navigator.clipboard?.writeText(command).catch(() => {});
-          setCopied(true);
+          if (!navigator.clipboard) {
+            toastError("Couldn’t copy the command. Select it and copy manually.");
+            return;
+          }
+          void navigator.clipboard.writeText(command).then(
+            () => setCopied(true),
+            () => toastError("Couldn’t copy the command. Select it and copy manually."),
+          );
         }}
         className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >

@@ -298,6 +298,44 @@ describe("quit owns everything in flight (B2)", () => {
 });
 
 describe("one finalization per host (B3)", () => {
+  it("detaching during install leaves it running and startAdd re-attaches to the same flow", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    const h = harness({
+      overrides: [
+        async (script) => {
+          if (!script.includes(" install --")) return undefined;
+          entered = true;
+          await held;
+          return undefined;
+        },
+      ],
+    });
+    const { flowId } = await h.engine.startAdd({ target: "deploy@box" });
+    const first = watch(h.engine, flowId);
+    await until(() => entered);
+    expect(
+      first
+        .views()
+        .at(-1)
+        ?.steps.find((step) => step.id === "install")?.status,
+    ).toBe("running");
+    first.stop();
+    const again = await h.engine.startAdd({ target: "deploy@box" });
+    expect(again.flowId).toBe(flowId);
+    const attached = watch(h.engine, again.flowId);
+    expect(attached.events[0]?.kind).toBe("replay");
+    expect(attached.views().at(-1)?.status).toBe("running");
+    release();
+    expect((await attached.until()).status).toBe("done");
+    expect(h.engine.snapshot().hosts).toHaveLength(1);
+    attached.stop();
+    await h.engine.close();
+  });
+
   it("a target with a flow under way answers that flow: a retried start is the same add", async () => {
     const h = harness();
     h.box.trusted = false;
