@@ -5,7 +5,7 @@ import {
   DESKTOP_ENTRIES,
   desktopCatalogEntry,
   type DesktopEntryPlacement,
-} from "./desktop-entries";
+} from "./index";
 import { catalogActorOf, catalogEntriesFrom, verbTier } from "./verb-registry";
 
 describe("the desktop-only tier", () => {
@@ -78,6 +78,7 @@ describe("the desktop-only tier", () => {
       "hosts.createProject",
       "hosts.openWorkspace",
       "hosts.closeWorkspace",
+      "hostAdd.active",
     ]);
     for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
     expect(
@@ -89,6 +90,7 @@ describe("the desktop-only tier", () => {
       "hosts.devices",
       "hostAdd.facts",
       "hosts.projects",
+      "hostAdd.active",
     ]);
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });

@@ -1290,6 +1290,7 @@ describe("refusals", () => {
       () => h.engine.workspaceLink(WS1),
       () => h.engine.rename(HOST_ID, "Renamed"),
       () => h.engine.subscribeAdd("flow-1", () => {}),
+      () => h.engine.activeAdds(),
     ];
     for (const call of calls) expect(call).toThrow(RemoteHostsUnavailableError);
     for (const call of [

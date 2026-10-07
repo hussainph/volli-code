@@ -3,6 +3,8 @@ import type { AddHostStepStatus, RemoteHost } from "@volli/shared";
 
 import {
   agentsShareAccountLine,
+  cancelNeedsConfirmation,
+  changedHostKeyCommand,
   flowBadge,
   questionPrompt,
   readyFacts,
@@ -400,5 +402,61 @@ describe("the address", () => {
     expect(validTarget("a b")).toBe(false);
     expect(validTarget("-oProxyCommand=x")).toBe(false);
     expect(validTarget(":22")).toBe(false);
+  });
+});
+
+describe("detaching and explicit cancellation", () => {
+  it("confirms after upload begins, including failures and questions, not before or after completion", () => {
+    expect(cancelNeedsConfirmation(null)).toBe(false);
+    expect(cancelNeedsConfirmation(view())).toBe(false);
+    for (const status of ["running", "done", "failed"] as const) {
+      expect(cancelNeedsConfirmation(view({ steps: [{ id: "deliver", status }] }))).toBe(true);
+    }
+    expect(
+      cancelNeedsConfirmation(
+        view({ status: "question", steps: [{ id: "install", status: "running" }] }),
+      ),
+    ).toBe(true);
+    expect(cancelNeedsConfirmation(view({ steps: [{ id: "deliver", status: "skipped" }] }))).toBe(
+      false,
+    );
+    expect(
+      cancelNeedsConfirmation(view({ status: "done", steps: [{ id: "install", status: "done" }] })),
+    ).toBe(false);
+    expect(cancelNeedsConfirmation(view({ status: "cancelled" }))).toBe(false);
+  });
+});
+
+describe("changed SSH host key repair", () => {
+  it.each([
+    [
+      "Host key for real.example has changed and you have requested strict checking.",
+      "ssh-keygen -R real.example",
+    ],
+    ["Host key for [real.example]:2200 has changed", "ssh-keygen -R '[real.example]:2200'"],
+    ["Host key for host-key-alias has changed", "ssh-keygen -R host-key-alias"],
+    ["Host key for 2001:db8::1 has changed", "ssh-keygen -R '2001:db8::1'"],
+    ["Host key for [2001:db8::1]:2200 has changed", "ssh-keygen -R '[2001:db8::1]:2200'"],
+    ["Host key for -bad has changed", "ssh-keygen -R my-alias"],
+    ["Host key for box;echo has changed", "ssh-keygen -R my-alias"],
+    ["Host key for [box]:0 has changed", "ssh-keygen -R my-alias"],
+    ["Host key for [box]:65536 has changed", "ssh-keygen -R my-alias"],
+  ])("prefers the actual known_hosts identifier reported by SSH: %s", (detail, command) => {
+    expect(changedHostKeyCommand("my-alias", detail)).toBe(command);
+  });
+
+  it.each([
+    ["deploy@box", "ssh-keygen -R box"],
+    [" my-alias ", "ssh-keygen -R my-alias"],
+    ["deploy@box:22", "ssh-keygen -R box"],
+    ["deploy@box:2222", "ssh-keygen -R '[box]:2222'"],
+    ["deploy@[2001:db8::1]:2222", "ssh-keygen -R '[2001:db8::1]:2222'"],
+    ["[::1]", "ssh-keygen -R '::1'"],
+    ["box:0", null],
+    ["box:65536", null],
+    ["-oProxyCommand=x", null],
+    ["box;rm", null],
+  ])("uses SSH's host for %s, never the display name or login", (target, command) => {
+    expect(changedHostKeyCommand(target)).toBe(command);
   });
 });

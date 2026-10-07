@@ -32,6 +32,7 @@ const bridge = vi.hoisted(() => {
         closeWorkspace: { mutate: record("hosts.closeWorkspace") },
       },
       hostAdd: {
+        active: { query: record("hostAdd.active", []) },
         start: { mutate: record("hostAdd.start", { flowId: "flow-1" }) },
         subscribe: {
           subscribe(
@@ -79,6 +80,7 @@ describe("the remote hosts API over the tier", () => {
   it("sends each call to its procedure with exactly its input, made once", async () => {
     const api = remoteHosts();
     expect(remoteHosts()).toBe(api);
+    expect(await api.activeAdds()).toEqual([]);
     expect(await api.startAdd({ target: "deploy@box" })).toEqual({ flowId: "flow-1" });
     await api.answerAdd("flow-1", "q1", { kind: "accept-host-key" });
     await api.sudoPassword("flow-1", "q2", "pw");
@@ -94,6 +96,7 @@ describe("the remote hosts API over the tier", () => {
     await api.openWorkspace("h", "w");
     await api.closeWorkspace("h", "w");
     expect(bridge.calls).toEqual([
+      ["hostAdd.active", undefined],
       ["hostAdd.start", { target: "deploy@box" }],
       [
         "hostAdd.answer",

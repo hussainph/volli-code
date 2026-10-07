@@ -43,6 +43,7 @@ import {
   isOperationUnavailable,
   OperationUnavailableError,
   roleImpliedByTicket,
+  type ActiveAddHost,
   type AddHostAnswer,
   type AddHostEvent,
   type AddHostFacts,
@@ -295,6 +296,8 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
+  /** The add flows main still owns (VC-720): bounded, secret-free, newest first. */
+  readonly "hostAdd.active": HostHandler<void, readonly ActiveAddHost[]>;
   /** Sign-ins on a remote host, from this desktop (VC-702 PR 2): its port, or unavailable. */
   readonly "hostSignIns.status": HostHandler<{ hostId: string }, HostSignInStatus>;
   readonly "hostSignIns.macKeys": HostHandler<void, readonly string[]>;
@@ -774,6 +777,8 @@ function hostHandlerEntries(
     },
     "hostAdd.retry": ({ flowId, from }) => done(() => remoteHosts().retryAdd(flowId, from)),
     "hostAdd.cancel": ({ flowId }) => done(() => remoteHosts().cancelAdd(flowId)),
+    // The add flows main still owns (VC-720): a reopened window's discovery read.
+    "hostAdd.active": () => remoteHosts().activeAdds(),
     // Sign-ins on a remote host (VC-702 PR 2): desktop main's, through its port.
     // A value going in is never echoed by a failure (`withoutSecret`).
     "hostSignIns.status": ({ hostId }) => remoteSignIns().status(hostId),
