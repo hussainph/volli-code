@@ -697,6 +697,17 @@ export default defineConfig(({ mode }) => ({
         // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/experiments.ts",
+        // Sign-ins on a remote host (VC-702): the relay that binds this Mac's
+        // loopback for one request, "Send from this Mac" (a key leaving this
+        // Mac), and the rows' state.
+        "**/src/main/host-sign-ins/relay-client.ts",
+        "**/src/main/host-sign-ins/send-from-this-mac.ts",
+        "**/src/main/host-sign-ins/sign-in-runner.ts",
+        "**/src/main/host-sign-ins/service.ts",
+        "**/src/main/host-sign-ins/port.ts",
+        "src/components/hosts/sign-ins/host-sign-in-model.ts",
+        "src/components/hosts/sign-ins/host-sign-in-controller.ts",
+        "src/components/hosts/sign-ins/remote-host-sign-in-source.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

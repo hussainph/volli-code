@@ -199,6 +199,8 @@ import {
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
+import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
+import { createHostSignInService, type MacCredentialStore } from "./host-sign-ins/service";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
@@ -842,6 +844,20 @@ const appStartup = app.whenReady().then(async () => {
     // Lid open, screen unlocked, network back: every tunnel and link tries now.
     wake: { powerMonitor, net },
   });
+  // Sign-ins on a remote host (VC-702 PR 2): the host's `sign-ins` operations
+  // over the engine's links, and this Mac's own Pi credentials, read only for
+  // "Send from this Mac" at the person's request. Until the runtime's model
+  // access is up there are no keys of this Mac's to offer.
+  let macCredentials: MacCredentialStore | null = null;
+  const hostSignIns = createHostSignInService({
+    links: engineSignInLinks(remoteHosts),
+    mac: {
+      list: async () => (await macCredentials?.list()) ?? [],
+      read: async (providerId) => macCredentials?.read(providerId),
+    },
+    // The same http(s)-only gate as the window's own links: a host names the page.
+    openExternal: (url) => openExternal(url),
+  });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -1009,6 +1025,7 @@ const appStartup = app.whenReady().then(async () => {
   // it would also mean a credential written by the login flow sat behind a
   // catalog the runtime had no reason to re-read.
   const piModelAccess = liveHost?.runtimeServices.modelAccess ?? null;
+  macCredentials = piModelAccess?.credentials ?? null;
   // Decision models (VC-478): the host decision service every feature that
   // asks a classifier goes through, the `classify` tool's per-Session port,
   // and the Settings owner. Built over the same Pi collection as chat, so a
@@ -1481,7 +1498,10 @@ const appStartup = app.whenReady().then(async () => {
           : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
       // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
       piSessionsDirectory,
-      remoteHosts: remoteHostsPort(remoteHosts),
+      remoteHosts: remoteHostsPort(remoteHosts, (hostId) => signInPreflight(hostSignIns, hostId)),
+      // Sign-ins on a remote host (VC-702): its operations over the engine's
+      // link, this Mac's own key for "Send from this Mac", and the relay.
+      remoteSignIns: remoteSignInsPort(hostSignIns),
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */

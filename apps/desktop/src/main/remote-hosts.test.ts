@@ -14,6 +14,7 @@ import {
   fileRegistryStore,
   inventoryDeviceKeys,
   readHostdPin,
+  REMOTE_HOST_LINK_FEATURES,
   remoteHostsPort,
   type DeviceKeyInventory,
 } from "./remote-hosts";
@@ -239,6 +240,22 @@ describe("waking the engine", () => {
     expect(fake.listeners.get("resume")?.size).toBe(1);
     await hosts.close();
     expect(fake.listeners.get("resume")?.size).toBe(0);
+  });
+});
+
+describe("the remote hosts port's sign-in (VC-702)", () => {
+  it("answers hosts.signIn with the sign-in preflight, else the engine's own refusal", async () => {
+    const engine = {
+      signIn: vi.fn(() => {
+        throw new RemoteHostsUnavailableError("not yet");
+      }),
+    } as unknown as Parameters<typeof remoteHostsPort>[0];
+    expect(() => remoteHostsPort(engine).signIn("h", "claude")).toThrow("not yet");
+    const preflight = vi.fn(async () => {});
+    await remoteHostsPort(engine, preflight).signIn("h", "claude");
+    expect(preflight).toHaveBeenCalledWith("h", "claude");
+    // Every Workspace link asks for the host's sign-ins and the relay.
+    expect(REMOTE_HOST_LINK_FEATURES).toEqual(["sign-ins", "auth.callback"]);
   });
 });
 

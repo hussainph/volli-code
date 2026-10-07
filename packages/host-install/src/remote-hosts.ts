@@ -42,7 +42,7 @@
  * grace) for whatever is in flight to finish or find itself cancelled, then
  * stops every host; once it returns nothing here creates a resource again.
  */
-import { isUuidV4, type HostFeature } from "@volli/host-protocol";
+import { hostOffersSignIns, isUuidV4, type HostFeature } from "@volli/host-protocol";
 import type {
   HostLink,
   HostLinkLogEvent,
@@ -255,6 +255,12 @@ export interface RemoteHosts {
   cancelScheduledUpdate(hostId: string): void;
   /** v1 refuses: {@link REMOTE_HOST_SIGN_IN_UNAVAILABLE}. */
   signIn(hostId: string, providerId: string): void;
+  /**
+   * A Workspace link of the host that is `ready` and was granted `sign-ins`
+   * (VC-702), for desktop main's sign-in calls; null while it has none. The
+   * caller never closes it: the engine owns every link.
+   */
+  signInLink(hostId: string): HostLink | null;
   /**
    * Closes its tunnel and links, drops it and its device key. The box is
    * untouched. When the registry would not save, refuses and keeps it all.
@@ -1391,6 +1397,15 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     signIn() {
       guard();
       throw new RemoteHostsUnavailableError(REMOTE_HOST_SIGN_IN_UNAVAILABLE);
+    },
+    signInLink(hostId) {
+      guard();
+      hostOf(hostId);
+      for (const held of runtimes.get(hostId)!.links.values()) {
+        const state = held.link.getState();
+        if (state.status === "ready" && hostOffersSignIns(state.welcome)) return held.link;
+      }
+      return null;
     },
     async forget(hostId) {
       guard();

@@ -8,6 +8,7 @@ import {
   hostWorld,
   type HostWorld,
 } from "@renderer/components/hosts/hosts.test-support";
+import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
@@ -174,6 +175,19 @@ describe("Settings → Hosts", () => {
     expect(forget?.disabled).toBe(true);
     expect(root.textContent).toContain(line);
     expect(api.calls.filter(([method]) => method === "rename" || method === "forget")).toEqual([]);
+  });
+
+  it("opens the host's sign-ins from its page (VC-702)", async () => {
+    const root = await renderPane();
+    await openHost(root, "studio");
+    expect(root.textContent).toContain("Models and git");
+    await click(root, "Sign-ins…");
+    expect(useHostSignInSheet.getState().target).toEqual({
+      hostId: IDLE.id,
+      hostName: "studio",
+      providerId: null,
+    });
+    act(() => useHostSignInSheet.getState().close());
   });
 
   it("lists a host's projects", async () => {

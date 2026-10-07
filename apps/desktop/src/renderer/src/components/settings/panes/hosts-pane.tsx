@@ -21,6 +21,7 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { DevicesIcon } from "@phosphor-icons/react/dist/csr/Devices";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
 import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
@@ -33,6 +34,7 @@ import type { RemoteHost, RemoteHostDevice } from "@volli/shared";
 import { toast } from "sonner";
 
 import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
+import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { EASE_OUT, HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
 import { hostBadge } from "@renderer/components/hosts/host-surface-model";
 import {
@@ -435,6 +437,25 @@ function HostPage({
             )}
           </PrefRow>
         ))}
+      </PrefSection>
+
+      <PrefSection title="Sign-ins" icon={KeyIcon}>
+        <PrefRow
+          label="Models and git"
+          hint={`What agents on ${remote.name} sign in with: provider keys, subscriptions and push tokens.`}
+        >
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              useHostSignInSheet
+                .getState()
+                .open({ hostId: remote.id, hostName: remote.name, providerId: null })
+            }
+          >
+            Sign-ins…
+          </Button>
+        </PrefRow>
       </PrefSection>
 
       <ProjectsSection hostId={remote.id} />

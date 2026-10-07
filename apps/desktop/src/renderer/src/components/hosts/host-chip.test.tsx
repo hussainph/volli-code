@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -113,7 +114,7 @@ describe("host chip", () => {
     expect(rows[1]).toContain("hetzner-1");
     expect(rows[2]).toContain("mac-mini");
     expect(rows[2]).toContain("Offline · since");
-    expect(rows.slice(3)).toEqual(["Add a host…", "Manage hosts…"]);
+    expect(rows.slice(3)).toEqual(["Sign-ins on hetzner-1…", "Add a host…", "Manage hosts…"]);
     expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("hetzner-1");
   });
 
@@ -251,6 +252,22 @@ describe("host chip", () => {
     expect(world.remote.calls).toEqual([
       { kind: "signIn", hostId: HETZNER_ID, providerId: "anthropic" },
     ]);
+  });
+
+  it("opens a remote host's sign-ins from the switcher, and This Mac has none there (VC-702)", async () => {
+    world = hostWorld();
+    await world.render(<HostChip />);
+    await click(await openSwitcher(), "Sign-ins on hetzner-1…");
+    expect(useHostSignInSheet.getState().target).toEqual({
+      hostId: HETZNER_ID,
+      hostName: "hetzner-1",
+      providerId: null,
+    });
+    act(() => useHostSignInSheet.getState().close());
+    await world.cleanup();
+    world = hostWorld({ selected: "local" });
+    await world.render(<HostChip />);
+    expect((await openSwitcher()).textContent).not.toContain("Sign-ins on");
   });
 
   it("offers each incompatibility's one recovery", async () => {

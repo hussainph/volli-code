@@ -47,6 +47,10 @@ import {
 } from "./remote-hosts-schema";
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+const SIGN_IN_STATUS = {
+  providers: [{ providerId: "xai", label: "xAI", state: "missing", kind: null, methods: [] }],
+  git: [],
+} as const;
 const TRIM: WorktreeTrimSettings = { keepPatterns: [".env"], trimOnFinish: true };
 const HOST = "0b9e6c1a-2d3f-4a5b-8c7d-6e5f4a3b2c1d";
 const FLOW = "flow-1";
@@ -234,6 +238,17 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostAdd.sudoPassword": record("hostAdd.sudoPassword", null),
     "hostAdd.retry": record("hostAdd.retry", null),
     "hostAdd.cancel": record("hostAdd.cancel", null),
+    "hostSignIns.status": record("hostSignIns.status", SIGN_IN_STATUS),
+    "hostSignIns.macKeys": record("hostSignIns.macKeys", ["openrouter"]),
+    "hostSignIns.sendFromThisMac": record("hostSignIns.sendFromThisMac", {
+      ok: true,
+      status: SIGN_IN_STATUS,
+    }),
+    "hostSignIns.setApiKey": record("hostSignIns.setApiKey", SIGN_IN_STATUS),
+    "hostSignIns.setGitCredential": record("hostSignIns.setGitCredential", SIGN_IN_STATUS),
+    "hostSignIns.run": stream("hostSignIns.run", { kind: "progress", message: "Starting" }),
+    "hostSignIns.answer": record("hostSignIns.answer", null),
+    "hostSignIns.cancel": record("hostSignIns.cancel", null),
     "hosts.rename": record("hosts.rename", null),
     "hosts.devices": record("hosts.devices", DEVICES),
     "hostAdd.facts": record("hostAdd.facts", FACTS),
@@ -371,6 +386,93 @@ describeContract<Host, DesktopRouter>(
         ),
       ).toMatchObject({ code: "BAD_REQUEST" });
       expect(fixture.calls).toEqual([]);
+    });
+
+    // Sign-ins on a remote host (VC-702 PR 2): the window's alone, values in only.
+    it("serves the window every remote sign-in command, and ends a sign-in at its end", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.hostSignIns.status.query({ hostId: HOST })).toEqual(SIGN_IN_STATUS);
+      expect(await client.hostSignIns.macKeys.query()).toEqual(["openrouter"]);
+      expect(
+        await client.hostSignIns.sendFromThisMac.mutate({
+          hostId: HOST,
+          providerId: "openrouter",
+          confirmed: true,
+        }),
+      ).toEqual({ ok: true, status: SIGN_IN_STATUS });
+      expect(
+        await client.hostSignIns.setApiKey.mutate({
+          hostId: HOST,
+          providerId: "openrouter",
+          key: "sk-pasted",
+        }),
+      ).toEqual(SIGN_IN_STATUS);
+      expect(
+        await client.hostSignIns.setGitCredential.mutate({
+          hostId: HOST,
+          host: "github.com",
+          username: "x-access-token",
+          password: "ghp_pasted",
+        }),
+      ).toEqual(SIGN_IN_STATUS);
+      // A blank answer is a real answer (GitHub Copilot's "blank for github.com").
+      expect(
+        await client.hostSignIns.answer.mutate({
+          hostId: HOST,
+          providerId: "github-copilot",
+          promptId: "p1",
+          value: "",
+        }),
+      ).toBeNull();
+      expect(
+        await client.hostSignIns.cancel.mutate({ hostId: HOST, providerId: "xai" }),
+      ).toBeNull();
+      // Nothing is sent without the confirm.
+      expect(
+        await expectHostError(
+          client.hostSignIns.sendFromThisMac.mutate({
+            hostId: HOST,
+            providerId: "openrouter",
+            confirmed: false as unknown as true,
+          }),
+        ),
+      ).toMatchObject({ code: "BAD_REQUEST" });
+      // The sign-in's stream: its events, then complete after its end.
+      const completed = Promise.withResolvers<void>();
+      const events: unknown[] = [];
+      const subscription = client.hostSignIns.run.subscribe(
+        { hostId: HOST, providerId: "xai" },
+        {
+          onData: (event) => void events.push(event),
+          onError: (error) => completed.reject(error),
+          onComplete: () => completed.resolve(),
+        },
+      );
+      for (let tries = 0; tries < 200 && !fixture.sinks.has("hostSignIns.run"); tries++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const sink = fixture.sinks.get("hostSignIns.run")!;
+      await sink.emit({ kind: "relay", state: "listening" });
+      await sink.emit({ kind: "done" });
+      await sink.emit({ kind: "progress", message: "after the end" });
+      await completed.promise;
+      subscription.unsubscribe();
+      expect(events).toEqual([
+        { kind: "progress", message: "Starting" },
+        { kind: "relay", state: "listening" },
+        { kind: "done" },
+      ]);
+      expect(fixture.calls.map(({ key }) => key)).toEqual([
+        "hostSignIns.status",
+        "hostSignIns.macKeys",
+        "hostSignIns.sendFromThisMac",
+        "hostSignIns.setApiKey",
+        "hostSignIns.setGitCredential",
+        "hostSignIns.answer",
+        "hostSignIns.cancel",
+        "hostSignIns.run",
+      ]);
     });
 
     // Remote hosts (VC-700 PR 2): desktop main's registry, the window's alone.
@@ -812,6 +914,14 @@ describe("the desktop router's grammar", () => {
         "hostAdd.sudoPassword",
         "hostAdd.retry",
         "hostAdd.cancel",
+        "hostSignIns.status",
+        "hostSignIns.macKeys",
+        "hostSignIns.sendFromThisMac",
+        "hostSignIns.setApiKey",
+        "hostSignIns.setGitCredential",
+        "hostSignIns.run",
+        "hostSignIns.answer",
+        "hostSignIns.cancel",
         "hosts.rename",
         "hosts.devices",
         "hostAdd.facts",
@@ -834,7 +944,7 @@ describe("the desktop router's grammar", () => {
     expect(schemas["hosts.devices"]!.output).toBe(remoteHostDevicesSchema);
     expect(schemas["hostAdd.facts"]).toMatchObject({ type: "query" });
     expect(schemas["hostAdd.facts"]!.output).toBe(addHostFactsSchema);
-    for (const key of ["hosts.subscribe", "hostAdd.subscribe"]) {
+    for (const key of ["hosts.subscribe", "hostAdd.subscribe", "hostSignIns.run"]) {
       expect(schemas[key], key).toMatchObject({
         type: "subscription",
         outputValidation: "documented-yield",
