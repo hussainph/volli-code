@@ -319,6 +319,8 @@ export const REMOTE_HOST_SIGN_IN_UNAVAILABLE =
  */
 export const REMOTE_HOST_PROJECTS_MAX = 500;
 export const REMOTE_HOST_PROJECT_TEXT_MAX = 4096;
+/** The longest line or command a project's failure carries (a path and a URL fit, with words). */
+export const REMOTE_PROJECT_FAILURE_TEXT_MAX = 8192;
 
 /**
  * One project a host has, as its `volli project list` row says it. `id` is

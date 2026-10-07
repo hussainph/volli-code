@@ -2627,6 +2627,7 @@
                     "command": {
                       "anyOf": [
                         {
+                          "maxLength": 8192,
                           "type": "string"
                         },
                         {
@@ -2635,6 +2636,7 @@
                       ]
                     },
                     "message": {
+                      "maxLength": 8192,
                       "type": "string"
                     }
                   },
@@ -2847,6 +2849,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "command": {
+                      "maxLength": 8192,
                       "type": "string"
                     },
                     "kind": {
@@ -2876,6 +2879,7 @@
               ]
             },
             "hostId": {
+              "maxLength": 128,
               "type": "string"
             },
             "projects": {

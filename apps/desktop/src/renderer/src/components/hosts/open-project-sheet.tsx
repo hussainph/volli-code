@@ -59,12 +59,9 @@ export function OpenProjectSheet() {
   const open = useRemoteHostsStore((state) => state.openProject.open);
   const hostId = useRemoteHostsStore((state) => state.openProject.hostId);
   const start = useRemoteHostsStore((state) => state.openProject.start);
+  const opening = useRemoteHostsStore((state) => state.openProject.opening);
   const hosts = useRemoteHostsStore((state) => state.hosts);
   const host = remoteHostOf(hosts, hostId);
-  const [opening, setOpening] = React.useState(0);
-  React.useEffect(() => {
-    if (open) setOpening((value) => value + 1);
-  }, [open]);
   // A host forgotten while its sheet is open: the sheet goes with it.
   const shown = open && host !== undefined;
   return (
@@ -83,14 +80,29 @@ export function OpenProjectSheet() {
         )}
       >
         <MotionConfig reducedMotion="user">
-          {shown ? <OpenProjectBody key={opening} host={host} start={start} /> : null}
+          {shown ? (
+            // A fresh body per opening, and per host: nothing of another survives.
+            <OpenProjectBody
+              key={`${opening}:${host.id}`}
+              host={host}
+              start={start}
+              opening={opening}
+            />
+          ) : null}
         </MotionConfig>
       </DialogContent>
     </Dialog>
   );
 }
 
-const close = (): void => useRemoteHostsStore.getState().closeProjectSheet();
+/**
+ * Closes the sheet only while it is still `opening`'s: a late answer from an
+ * earlier opening never dismisses a newer one.
+ */
+function closeOpening(opening: number): void {
+  const store = useRemoteHostsStore.getState();
+  if (store.openProject.opening === opening) store.closeProjectSheet();
+}
 
 /** Whether this body is still the one on screen: answers that land after it are dropped. */
 function useAlive(): () => boolean {
@@ -104,8 +116,19 @@ function useAlive(): () => boolean {
   return React.useCallback(() => alive.current, []);
 }
 
-function OpenProjectBody({ host, start }: { host: RemoteHost; start: "list" | "new" }) {
+function OpenProjectBody({
+  host,
+  start,
+  opening,
+}: {
+  host: RemoteHost;
+  start: "list" | "new";
+  opening: number;
+}) {
+  // Every late answer is checked against this: the body is this opening's, and
+  // unmounts when the sheet closes, the host goes, cloud turns off, or another opens.
   const alive = useAlive();
+  const close = React.useCallback(() => closeOpening(opening), [opening]);
   const [screen, setScreen] = React.useState<"list" | "new">(start);
   const [state, setState] = React.useState<ProjectListState>({ kind: "loading" });
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -139,14 +162,16 @@ function OpenProjectBody({ host, start }: { host: RemoteHost; start: "list" | "n
       try {
         await remoteHosts().openWorkspace(host.id, id);
       } catch (error) {
-        toastError(failedLine("open", name, error));
+        if (alive()) toastError(failedLine("open", name, error));
         return false;
       }
+      // Opened; what this view says about it is only this view's to say.
+      if (!alive()) return true;
       toast(`Opened ${name} on ${host.name}`);
-      if (alive()) close();
+      close();
       return true;
     },
-    [alive, host.id, host.name],
+    [alive, close, host.id, host.name],
   );
 
   return (
@@ -161,6 +186,7 @@ function OpenProjectBody({ host, start }: { host: RemoteHost; start: "list" | "n
         {screen === "list" ? (
           <ListScreen
             host={host}
+            onDone={close}
             state={state}
             busy={busy}
             onRetry={read}
@@ -176,8 +202,12 @@ function OpenProjectBody({ host, start }: { host: RemoteHost; start: "list" | "n
               remoteHosts()
                 .closeWorkspace(host.id, id)
                 .then(
-                  () => toast(`Closed ${name} on this Mac`),
-                  (error: unknown) => toastError(failedLine("close", name, error)),
+                  () => {
+                    if (alive()) toast(`Closed ${name} on this Mac`);
+                  },
+                  (error: unknown) => {
+                    if (alive()) toastError(failedLine("close", name, error));
+                  },
                 )
                 .finally(() => {
                   if (alive()) setBusy(null);
@@ -188,6 +218,7 @@ function OpenProjectBody({ host, start }: { host: RemoteHost; start: "list" | "n
           <NewProjectScreen
             host={host}
             alive={alive}
+            onDismiss={close}
             onBack={() => setScreen("list")}
             onOpen={open}
           />
@@ -229,6 +260,7 @@ function Header({ host, title }: { host: RemoteHost; title: string }) {
 
 function ListScreen({
   host,
+  onDone,
   state,
   busy,
   onRetry,
@@ -237,6 +269,7 @@ function ListScreen({
   onClose,
 }: {
   host: RemoteHost;
+  onDone: () => void;
   state: ProjectListState;
   busy: string | null;
   onRetry: () => void;
@@ -316,7 +349,7 @@ function ListScreen({
           </Button>
         ) : null}
         <span className="flex-1" />
-        <Button size="sm" variant="secondary" onClick={close}>
+        <Button size="sm" variant="secondary" onClick={onDone}>
           Done
         </Button>
       </div>
@@ -361,11 +394,13 @@ function Notice({
 function NewProjectScreen({
   host,
   alive,
+  onDismiss,
   onBack,
   onOpen,
 }: {
   host: RemoteHost;
   alive: () => boolean;
+  onDismiss: () => void;
   onBack: () => void;
   onOpen: (id: string, name: string) => Promise<boolean>;
 }) {
@@ -407,8 +442,11 @@ function NewProjectScreen({
       })
       .then(
         async (result) => {
+          // A view gone (closed, another host's, cloud off) starts nothing more:
+          // the project the host made stays there, to open from its list.
+          if (!alive()) return;
           if (!result.ok) {
-            if (alive()) setFailure(result.failure);
+            setFailure(result.failure);
             return;
           }
           await onOpen(result.project.id, result.project.name);
@@ -494,7 +532,7 @@ function NewProjectScreen({
                   variant="secondary"
                   type="button"
                   onClick={() => {
-                    close();
+                    onDismiss();
                     useHostSignInSheet
                       .getState()
                       .open({ hostId: host.id, hostName: host.name, providerId: null });

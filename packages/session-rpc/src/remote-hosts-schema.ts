@@ -14,6 +14,7 @@ import {
   REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
+  REMOTE_PROJECT_FAILURE_TEXT_MAX,
   type AddHostEvent,
   type AddHostFacts,
   type AddHostFailure,
@@ -276,12 +277,16 @@ const remoteHostProject = z.strictObject({
   tickets: z.number().int().nonnegative(),
 });
 /** `RemoteHostProjects`: what `hosts.projects` answers, read from the host when asked. */
+/** A host's id as an output names it (a UUID): bounded, never trusted to be one. */
+export const MAX_OUTPUT_HOST_ID_LENGTH = 128;
+/** A failure's line, or a command to run on the host: bounded, as every output here. */
+const failureText = z.string().max(REMOTE_PROJECT_FAILURE_TEXT_MAX);
 export const remoteHostProjectsSchema = z.strictObject({
-  hostId: z.string(),
+  hostId: z.string().max(MAX_OUTPUT_HOST_ID_LENGTH),
   projects: z.array(remoteHostProject).max(REMOTE_HOST_PROJECTS_MAX).readonly(),
   adds: z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("ready") }),
-    z.strictObject({ kind: z.literal("needs-operator"), command: z.string() }),
+    z.strictObject({ kind: z.literal("needs-operator"), command: failureText }),
     z.strictObject({ kind: z.literal("user-install") }),
   ]),
 });
@@ -301,8 +306,8 @@ const remoteProjectFailure = z.strictObject({
     "clone-failed",
     "unavailable",
   ]),
-  message: z.string(),
-  command: z.string().nullable(),
+  message: failureText,
+  command: failureText.nullable(),
 });
 /** `CreateRemoteProjectResult`: the project, or the one line (and command) that says why not. */
 export const createProjectResultSchema = z.discriminatedUnion("ok", [

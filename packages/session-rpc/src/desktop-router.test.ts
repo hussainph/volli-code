@@ -19,6 +19,7 @@ import {
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  REMOTE_PROJECT_FAILURE_TEXT_MAX,
   type CreateRemoteProjectResult,
   type RemoteHostProjects,
   type AddHostEvent,
@@ -1341,6 +1342,23 @@ describeContract<Host, DesktopRouter>(
       ] as const) {
         expect(() => remoteHostProjectsSchema.parse(value), what).toThrow();
       }
+      // Every output is bounded (review N2): no million-character line or command.
+      const long = "x".repeat(REMOTE_PROJECT_FAILURE_TEXT_MAX + 1);
+      for (const failure of [
+        { code: "refused", message: long, command: null },
+        { code: "needs-sudo", message: "x", command: long },
+      ]) {
+        expect(() => createProjectResultSchema.parse({ ok: false, failure })).toThrow();
+      }
+      expect(() =>
+        remoteHostProjectsSchema.parse({
+          ...PROJECTS,
+          adds: { kind: "needs-operator", command: long },
+        }),
+      ).toThrow();
+      expect(() =>
+        remoteHostProjectsSchema.parse({ ...PROJECTS, hostId: "h".repeat(129) }),
+      ).toThrow();
       expect(createProjectResultSchema.parse(CREATED)).toEqual(CREATED);
       for (const code of ["needs-password", "wrong-password", "needs-credential"] as const) {
         const refused = { ok: false, failure: { code, message: "x", command: null } } as const;

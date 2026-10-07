@@ -19,6 +19,7 @@
  * CLI presents the login's operator token or nothing.
  */
 import {
+  redactLogText,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
   type RemoteHostProject,
@@ -184,7 +185,8 @@ export function createProjectScript(input: CreateProjectScript): string {
       `case "$r" in *volli-cloned=*) ;; *volli-fail=*) exit 0 ;; *) fail sudo-failed ;; esac`,
     );
   }
-  const name = input.name === null ? "" : ` --name ${shellQuote(input.name)}`;
+  // Inline (`--name=…`): a name that starts with a dash is never read as an option.
+  const name = input.name === null ? "" : ` --name=${shellQuote(input.name)}`;
   lines.push(`exec "$v" project add "$d"${name} --json </dev/null`);
   return lines.join("\n");
 }
@@ -198,6 +200,8 @@ export function gitUrlProblem(url: string): string | null {
   if (url.length === 0 || url.length > GIT_URL_MAX) return "length";
   // Whitespace, a control character, or anything a shell or git reads as an option.
   if (/[\s\p{Cc}]/u.test(url) || url.startsWith("-")) return "characters";
+  // A query or fragment (or either encoded) is where a token rides: never cloned.
+  if (/[?#%]/u.test(url)) return "query";
   if (SCP_LIKE.test(url)) return null;
   let parsed: URL;
   try {
@@ -284,9 +288,22 @@ export function cliError(stderr: string): { code: string; reason: string } | nul
   return { code, reason: oneLine(text) };
 }
 
-/** A host's words, made one bounded line. */
+/** A URL's credentials, query and fragment: what a host's words must never carry back. */
+const URL_SECRETS = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/@'"]*@)?([^\s?#'"]*)[?#][^\s'"]*/giu;
+const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]*@/giu;
+
+/**
+ * A host's words, made one bounded line a person may read: a URL's
+ * credentials, query and fragment cut, credential-shaped text redacted
+ * (`redactLogText`), control characters gone. A sudo password a host might
+ * echo is the engine's to scrub by value before this.
+ */
 export function oneLine(text: string, max = 240): string {
-  const line = text
+  const scrubbed = redactLogText(
+    text.replace(URL_SECRETS, "$1$2?[redacted]").replace(URL_USERINFO, "$1[redacted]@"),
+    Number.MAX_SAFE_INTEGER,
+  );
+  const line = scrubbed
     .replace(/[\p{Cc}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();

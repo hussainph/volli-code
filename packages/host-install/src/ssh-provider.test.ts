@@ -1,4 +1,4 @@
-import { execFileSync, spawn as nodeSpawn } from "node:child_process";
+import { execFileSync, spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -319,9 +319,33 @@ describe("adding a fresh box with passwordless sudo", () => {
 
 describe("the operator token (VC-710)", () => {
   const TOKEN_SCRIPT = [
-    `[ -s '/home/deploy/.config/volli/operator-token' ] || '${CURRENT}' operator-token --for 'deploy' >/dev/null`,
-    "[ -e /srv/volli ] || install -d -o volli -g volli -m 750 /srv/volli",
+    "t=0",
+    `[ -s '/home/deploy/.config/volli/operator-token' ] || '${CURRENT}' operator-token --for 'deploy' >/dev/null || t=$?`,
+    '[ -e /srv/volli ] || install -d -o volli -g volli -m 750 /srv/volli || echo "could not make /srv/volli" >&2',
+    'exit "$t"',
   ].join("\n");
+
+  it("answers with the token's own outcome: a folder made after it never masks a failed issuance", () => {
+    const home = mkdtempSync(join(tmpdir(), "vc710-operator-"));
+    try {
+      const run = (binary: string) =>
+        spawnSync(
+          "/bin/sh",
+          [
+            "-c",
+            TOKEN_SCRIPT.replaceAll(`'${CURRENT}'`, binary).replaceAll(
+              "/srv/volli",
+              join(home, "srv"),
+            ),
+          ],
+          { encoding: "utf8" },
+        );
+      expect(run("false").status).toBe(1);
+      expect(run("true").status).toBe(0);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 
   it("makes the login an operator while the install holds root, unless it already is one", async () => {
     const box = fakeBox();
@@ -387,6 +411,32 @@ describe("the operator token (VC-710)", () => {
     expect(p.log.lines.map((line) => line.msg)).toContain(
       "no sudo to issue an operator token; the app shows the command instead",
     );
+  });
+
+  it("never fails the add when the operator step's transport throws, and never says the password", async () => {
+    const secrets: ProvisionSecrets = { sudoPassword: "pw-in-a-throw" };
+    const box = fakeBox(
+      (script) => (script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined),
+      (script) => {
+        if (script.includes("operator-token")) throw new Error("ssh died holding pw-in-a-throw");
+        return undefined;
+      },
+    );
+    const p = ports(box);
+    const asked = await advanceWith(start(), p, secrets);
+    secrets.sudoPassword = "pw-in-a-throw";
+    const done = await advanceWith(
+      answer(asked, { kind: "sudo-password", password: "pw-in-a-throw" }),
+      p,
+      secrets,
+    );
+    expect(done.status).toBe("done");
+    expect(p.log.lines).toContainEqual(
+      expect.objectContaining({
+        fields: expect.objectContaining({ error: "Error: ssh died holding [redacted]" }),
+      }),
+    );
+    expect(JSON.stringify(p.log.lines)).not.toContain("pw-in-a-throw");
   });
 
   it("is never asked of a user install: its login is hostd's own account", async () => {

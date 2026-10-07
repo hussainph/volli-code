@@ -9,6 +9,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { CreateRemoteProjectResult } from "@volli/shared";
 
+import { useExperimentsStore } from "@renderer/stores/experiments";
 import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import {
   createFakeRemoteHostsApi,
@@ -32,6 +33,7 @@ const ACME = {
   tickets: 2,
 };
 const COMMAND = "sudo volli-hostd operator-token --for 'deploy'";
+const OTHER = registryHost({ id: "host-mini", name: "mac-mini", target: "me@mac-mini" });
 
 let world: HostWorld | null = null;
 let api: FakeRemoteHostsApi;
@@ -49,7 +51,7 @@ afterEach(async () => {
   useRemoteHostsStore.setState({
     hosts: [],
     readOnly: null,
-    openProject: { open: false, hostId: null, start: "list" },
+    openProject: { open: false, hostId: null, start: "list", opening: 0 },
   });
   toast.mockClear();
   toast.error.mockClear();
@@ -256,6 +258,18 @@ describe("Open a project on <host>…", () => {
     open.mockRestore();
   });
 
+  it("never sends a URL carrying a token: it says so, and nothing leaves the window", async () => {
+    await openSheet("new");
+    await type(
+      "Git URL or folder on hetzner-1",
+      "https://github.com/me/acme.git?access_token=SENTINEL",
+    );
+    expect(sheet().textContent).toContain("Use the repository's plain URL");
+    expect(button("Create and open")?.disabled).toBe(true);
+    await act(async () => sheet().querySelector("form")!.requestSubmit());
+    expect(api.calls.some(([method]) => method === "createProject")).toBe(false);
+  });
+
   it("says when a create threw, and goes Back to the list", async () => {
     api.nextCreate = new Error("lost");
     await openSheet("new");
@@ -268,7 +282,7 @@ describe("Open a project on <host>…", () => {
     expect(sheet().textContent).toContain("Open a project on hetzner-1");
   });
 
-  it("names the one command a login with no operator token runs, beside the list", async () => {
+  it("names the one command a login with no operator token runs, and offers only that", async () => {
     api.projectsOf.set(HOST.id, {
       projects: [],
       adds: { kind: "needs-operator", command: COMMAND },
@@ -276,7 +290,7 @@ describe("Open a project on <host>…", () => {
     await openSheet();
     expect(sheet().textContent).toContain("Run this once on hetzner-1");
     expect(sheet().textContent).toContain(COMMAND);
-    expect(button("New project…")).toBeDefined();
+    expect(button("New project…")).toBeUndefined();
   });
 
   it("offers no New project… on a host where agents share the login", async () => {
@@ -298,6 +312,69 @@ describe("Open a project on <host>…", () => {
     await act(async () => useRemoteHostsStore.getState().closeProjectSheet());
     await act(async () => answer.resolve());
     expect(isOpen()).toBe(false);
+  });
+
+  // Review B3: a late answer belongs to its own opening; a newer one is never touched.
+  it.each([
+    ["dismissed", async () => useRemoteHostsStore.getState().closeProjectSheet()],
+    [
+      "switched to another host",
+      async () => useRemoteHostsStore.getState().openProjectSheet(OTHER.id),
+    ],
+    [
+      "reopened",
+      async () => {
+        useRemoteHostsStore.getState().closeProjectSheet();
+        useRemoteHostsStore.getState().openProjectSheet(HOST.id);
+      },
+    ],
+    ["its host forgotten", async () => useRemoteHostsStore.getState().setHosts([OTHER])],
+    [
+      "unmounted by cloud turning off",
+      async () =>
+        useExperimentsStore.setState({
+          snapshot: { cloud: { enabled: false, source: "storage" } },
+        }),
+    ],
+  ])("starts nothing from a create that lands after the view was %s", async (_, change) => {
+    const created = Promise.withResolvers<CreateRemoteProjectResult>();
+    api.nextCreate = null;
+    const real = api.createProject;
+    api.createProject = async (input) => {
+      await real(input);
+      return created.promise;
+    };
+    await openSheet("new");
+    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await type("Git URL or folder on hetzner-1", "/srv/volli/acme");
+    await click(sheet(), "Create and open");
+    await act(change);
+    await settle();
+    const before = useRemoteHostsStore.getState().openProject;
+    await act(async () => created.resolve({ ok: true, created: true, project: ACME }));
+    await settle();
+    expect(api.calls.some(([method]) => method === "openWorkspace")).toBe(false);
+    expect(toast).not.toHaveBeenCalled();
+    expect(useRemoteHostsStore.getState().openProject).toEqual(before);
+  });
+
+  it("starts no toast or dismissal from an open that lands after another host's opening", async () => {
+    api.projectsOf.set(HOST.id, { projects: [ACME], adds: { kind: "ready" } });
+    const opened = Promise.withResolvers<null>();
+    api.openWorkspace = async () => opened.promise;
+    await openSheet();
+    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await click(sheet(), "Open Acme");
+    await act(async () => useRemoteHostsStore.getState().openProjectSheet(OTHER.id));
+    await settle();
+    expect(sheet().textContent).toContain("Open a project on mac-mini");
+    await act(async () => opened.resolve(null));
+    await settle();
+    expect(toast).not.toHaveBeenCalled();
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
+      open: true,
+      hostId: OTHER.id,
+    });
   });
 
   it("closes with Done, and with the host forgotten", async () => {

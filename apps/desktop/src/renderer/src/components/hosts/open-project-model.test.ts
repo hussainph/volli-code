@@ -64,11 +64,12 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     expect(listNotice(ready({ adds: { kind: "user-install" } }), "box")).toBeNull();
   });
 
-  it("offers New project… wherever the login can add one", () => {
-    expect(canCreate({ kind: "loading" })).toBe(true);
-    expect(canCreate({ kind: "error", message: "x" })).toBe(true);
+  it("offers New project… beside a list only where the login can add one: one recovery a state", () => {
+    expect(canCreate({ kind: "loading" })).toBe(false);
+    expect(canCreate({ kind: "error", message: "x" })).toBe(false);
     expect(canCreate(ready())).toBe(true);
     expect(canCreate(ready({ adds: { kind: "user-install" } }))).toBe(false);
+    expect(canCreate(ready({ adds: { kind: "needs-operator", command: "c" } }))).toBe(false);
   });
 
   it("reads the one field as a git URL to clone or a folder on the host", () => {
@@ -93,6 +94,17 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     expect(sourceProblem({ kind: "path", path: "/srv/acme" }, "box")).toBeNull();
     expect(sourceProblem({ kind: "path", path: "~/acme" }, "box")).toBeNull();
     expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBeNull();
+    const plain =
+      "Use the repository's plain URL: a token goes in Sign-ins on box, not in the URL.";
+    for (const gitUrl of [
+      "https://x.io/r.git?access_token=t",
+      "https://x.io/r.git#t",
+      "https://x.io/r.git%3Ft",
+      "https://u:t0k@x.io/r.git",
+    ]) {
+      expect(sourceProblem({ kind: "git", gitUrl }, "box"), gitUrl).toBe(plain);
+    }
+    expect(sourceProblem({ kind: "git", gitUrl: "https://u@x.io/r.git" }, "box")).toBeNull();
   });
 
   it("hints where a clone goes, and says what runs while it does", () => {

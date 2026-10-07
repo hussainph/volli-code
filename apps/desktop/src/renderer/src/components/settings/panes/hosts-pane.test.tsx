@@ -201,7 +201,7 @@ describe("Settings → Hosts", () => {
     const root = await renderPane();
     await openHost(root, "hetzner-1");
     await click(root, "Open…");
-    expect(useRemoteHostsStore.getState().openProject).toEqual({
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
       open: true,
       hostId: HETZNER_ID,
       start: "list",

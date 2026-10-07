@@ -163,7 +163,7 @@ describe("host chip", () => {
     const select = vi.spyOn(useProjectsStore.getState(), "select").mockImplementation(() => {});
     await act(async () => mini!.click());
     expect(select).not.toHaveBeenCalled();
-    expect(useRemoteHostsStore.getState().openProject).toEqual({
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
       open: true,
       hostId: MINI_ID,
       start: "list",

@@ -5,7 +5,15 @@
  * over the fake SSH runner.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +34,8 @@ import {
   repositoryName,
   scriptFacts,
 } from "./remote-hosts-projects";
-import type { SshExecResult } from "./ssh";
+import type { RemoteHostsPorts } from "./remote-hosts";
+import { systemSsh, type SshExecResult } from "./ssh";
 import {
   harness,
   HOST_ID,
@@ -125,9 +134,15 @@ describe("the project scripts, in a real shell", () => {
       home,
     );
     expect(lastJsonObject(result.stdout)?.["args"]).toBe(
-      `project add ${home}/code/it's --name Acme 'x' --json`,
+      `project add ${home}/code/it's --name=Acme 'x' --json`,
     );
     expect(scriptFacts(result.stdout).fail).toBeNull();
+    // A name that starts with a dash stays the name's value, never an option.
+    const dashed = run(
+      createProjectScript({ mode: "user", path: "/srv/a", name: "-h", gitUrl: null }),
+      home,
+    );
+    expect(lastJsonObject(dashed.stdout)?.["args"]).toBe("project add /srv/a --name=-h --json");
     const plain = run(
       createProjectScript({ mode: "user", path: "/srv/a", name: null, gitUrl: null }),
       home,
@@ -212,7 +227,7 @@ describe("the project scripts, in a real shell", () => {
     expect(create).not.toContain("sudo -S");
     expect(create).toContain(`c="!'$b' git-credential --data-dir '/var/lib/volli-hostd'"`);
     expect(create).toContain("GIT_ALLOW_PROTOCOL=https:ssh");
-    expect(create).toContain(`exec "$v" project add "$d" --name 'Acme' --json </dev/null`);
+    expect(create).toContain(`exec "$v" project add "$d" --name='Acme' --json </dev/null`);
     expect(spawnSync("/bin/sh", ["-n", "-c", create]).status).toBe(0);
     const withPassword = createProjectScript({
       mode: "system",
@@ -379,6 +394,9 @@ describe("reading what the host said", () => {
     ["https://me@x.io/acme", "credentials"],
     ["ssh://me:pw@x.io/acme", "credentials"],
     ["https://x.io/", "not-a-repository"],
+    ["https://x.io/acme.git?access_token=t0k", "query"],
+    ["https://x.io/acme.git#t0k", "query"],
+    ["https://x.io/acme.git%3Faccess_token%3Dt0k", "query"],
   ])("judges the git URL %j: %s", (url, problem) => {
     expect(gitUrlProblem(url)).toBe(problem);
   });
@@ -421,8 +439,15 @@ describe("reading what the host said", () => {
     expect(cliError("")).toBeNull();
   });
 
-  it("makes a host's words one bounded line", () => {
+  it("makes a host's words one bounded line, a URL's secrets and credential-shaped text cut", () => {
     expect(oneLine(" a\n\tb\u0007c ")).toBe("a b c");
+    expect(oneLine("at https://u:p4ss@x.io/r.git?t=1#f done")).toBe(
+      "at https://x.io/r.git?[redacted] done",
+    );
+    expect(oneLine("at ssh://git@x.io/r.git")).toBe("at ssh://[redacted]@x.io/r.git");
+    expect(oneLine("token ghp_abcdefghijklmnopqrstuvwxyz0123456789 refused")).not.toContain(
+      "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    );
     expect(oneLine("x".repeat(10), 5)).toBe("xxxx…");
   });
 
@@ -806,7 +831,7 @@ describe("creating a project on a host", () => {
       message: "That isn't a git URL this Mac can clone: use https or ssh.",
       command: null,
     });
-    expect(await refused({ gitUrl: "https://x.io/%20" })).toMatchObject({
+    expect(await refused({ gitUrl: "https://x.io/a/!!" })).toMatchObject({
       code: "bad-url",
       message: "Name the folder to clone it into: the URL names none.",
     });
@@ -824,6 +849,68 @@ describe("creating a project on a host", () => {
     });
     expect(await refused({ path: "/a", name: "a\nb" })).toMatchObject({ code: "refused" });
     expect(h.box.scripts.filter((entry) => entry.script.includes("project add"))).toEqual([]);
+  });
+
+  // Review B2: a token rides in a query, or in a host's own words; neither may come back.
+  it("never answers a token: a query URL is refused, and a host's words are scrubbed", async () => {
+    const token = "VC710_QUERY_TOKEN_SENTINEL";
+    const h = harness({
+      registry: registry(hostEntry()),
+      overrides: [
+        projectScripts(() => ({
+          stdout: "volli-credential=no\nvolli-fail=clone-failed\n",
+          stderr: `fatal: unable to access 'https://x-access-token:${token}@example.invalid/repo.git/?access_token=${token}': refused\n`,
+        })),
+      ],
+    });
+    for (const gitUrl of [
+      `https://example.invalid/repo.git?access_token=${token}`,
+      `https://example.invalid/repo.git#${token}`,
+      `https://example.invalid/repo.git%3Faccess_token%3D${token}`,
+      `https://example.invalid/repo.git%23${token}`,
+    ]) {
+      const result = await h.engine.createProject({ hostId: HOST_ID, gitUrl });
+      expect(result).toEqual({
+        ok: false,
+        failure: {
+          code: "bad-url",
+          message:
+            "Use the repository's plain URL: a token goes in Sign-ins on box, not in the URL.",
+          command: null,
+        },
+      });
+    }
+    expect(h.box.scripts).toEqual([]);
+    const scrubbed = await h.engine.createProject({
+      hostId: HOST_ID,
+      gitUrl: "https://example.invalid/repo.git",
+    });
+    expect(scrubbed).toMatchObject({ ok: false, failure: { code: "clone-failed" } });
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    expect(JSON.stringify(h.log.lines)).not.toContain(token);
+  });
+
+  it("scrubs a sudo password a host echoes, by value, from the answer and the log", async () => {
+    const secret = "Mm4-echoed-by-host";
+    const h = harness({
+      registry: registry(hostEntry()),
+      overrides: [
+        projectScripts(() => ({
+          stdout: "volli-fail=clone-failed\n",
+          stderr: `fatal: something ${secret}\n`,
+        })),
+      ],
+    });
+    const result = await h.engine.createProject({
+      hostId: HOST_ID,
+      gitUrl: "https://example.invalid/repo.git",
+      sudoPassword: secret,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { message: "git couldn’t clone it on box: fatal: something [redacted]" },
+    });
+    expect(JSON.stringify([result, h.log.lines])).not.toContain(secret);
   });
 
   it("refuses a user install at once: its login is never an operator", async () => {
@@ -944,6 +1031,51 @@ describe("a project script at quit", () => {
     held.resolve({ code: 255, stderr: "Connection closed by remote host\n" });
     expect(await creating).toMatchObject({ ok: false, failure: { code: "host-unreachable" } });
     await expect(h.engine.projects(HOST_ID)).rejects.toThrow("not available");
+  });
+});
+
+describe("a project script's ssh at quit, as a real process", () => {
+  // Review B4: the transport stays quit's while close runs, so a ControlMaster
+  // `-O exit` that ignores SIGTERM is still killed before quit returns.
+  it("is dead when close() resolves, though its -O exit would not end", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vc710-ssh-"));
+    dirs.push(dir);
+    const pidFile = join(dir, "exit.pid");
+    const fake = join(dir, "ssh");
+    writeFileSync(
+      fake,
+      [
+        "#!/bin/sh",
+        'for a; do [ "$a" = exit ] && { trap "" TERM; echo $$ > ' +
+          `'${pidFile}'` +
+          "; while :; do sleep 1; done; }; done",
+        `printf 'volli-login=deploy\\nvolli-token=yes\\n{"projects":[]}\\n'`,
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+    const h = harness({ registry: registry(hostEntry()), quitGraceMs: 50 });
+    (h.ports as { ssh: RemoteHostsPorts["ssh"] }).ssh = (target) =>
+      systemSsh({ target, logger: h.log.logger, sshPath: fake, killAfterMs: 20 });
+    const listing = h.engine.projects(HOST_ID);
+    for (let tries = 0; tries < 400 && !existsSync(pidFile); tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    await h.engine.close();
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      expect(alive()).toBe(false);
+    } finally {
+      if (alive()) process.kill(pid, "SIGKILL");
+    }
+    await listing.catch(() => {});
   });
 });
 

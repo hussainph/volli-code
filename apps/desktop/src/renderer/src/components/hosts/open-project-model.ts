@@ -90,9 +90,13 @@ export function listNotice(state: ProjectListState, hostName: string): ProjectNo
   }
 }
 
-/** Whether "New project…" is offered: never where the login cannot add one. */
+/**
+ * Whether the list offers "New project…" beside it: only on a host that
+ * listed and can take one. Every other state has its own one recovery
+ * (Try again, the command to Copy, or New project… as the empty state's).
+ */
 export function canCreate(state: ProjectListState): boolean {
-  return state.kind !== "ready" || state.listing.adds.kind !== "user-install";
+  return state.kind === "ready" && state.listing.adds.kind === "ready";
 }
 
 /** What the person typed in "New project…": a git URL to clone, or a folder on the host. */
@@ -117,6 +121,13 @@ export function projectSource(text: string): ProjectSource | null {
  */
 export function sourceProblem(source: ProjectSource | null, hostName: string): string | null {
   if (source === null) return null;
+  // A token rides in a query, a fragment or a URL's password: it never leaves this window.
+  if (
+    source.kind === "git" &&
+    (/[?#%]/u.test(source.gitUrl) || /:\/\/[^/@]*:[^/@]*@/u.test(source.gitUrl))
+  ) {
+    return `Use the repository's plain URL: a token goes in Sign-ins on ${hostName}, not in the URL.`;
+  }
   if (source.kind === "path" && !source.path.startsWith("/") && !source.path.startsWith("~/")) {
     return `A folder on ${hostName} is a full path, like /srv/volli/app.`;
   }

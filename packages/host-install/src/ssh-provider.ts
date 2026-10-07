@@ -174,6 +174,18 @@ function asRoot(
 
 const WRONG_PASSWORD = /incorrect password|Sorry, try again|no password was provided/u;
 
+/** What stands in for a secret a host echoed back. */
+export const SECRET_REDACTED = "[redacted]";
+
+/**
+ * `text` with every occurrence of `secret` (a held sudo password) replaced.
+ * A host's own words may echo it, in any shape, with no label a pattern could
+ * find: only the exact value is reliable.
+ */
+export function withoutHeldSecret(text: string, secret: string | null): string {
+  return secret === null || secret === "" ? text : text.split(secret).join(SECRET_REDACTED);
+}
+
 /**
  * Runs a hostd management command (as root, or as the login) and reads its
  * one JSON answer. Asks for a sudo password when one is needed. Its stdin is
@@ -211,7 +223,11 @@ async function hostdCommand<T>(
       step,
       hostd: "no-answer",
       message: `volli-hostd ${step} gave no answer`,
-      detail: result.stderr.trim().split("\n").filter(Boolean).slice(-10),
+      detail: withoutHeldSecret(result.stderr, ctx.secrets.sudoPassword)
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .slice(-10),
     });
   }
   return json as T | HostdFailure;
@@ -553,27 +569,42 @@ async function makeOperator(
   home: string,
 ): Promise<void> {
   const tokenFile = `${home}/.config/volli/operator-token`;
+  // The token's own outcome is the script's: making the folder never masks it.
   const script = [
-    `[ -s ${shellQuote(tokenFile)} ] || ${shellQuote(binary)} operator-token --for ${shellQuote(login)} >/dev/null`,
-    `[ -e ${SYSTEM_CHECKOUTS} ] || install -d -o volli -g volli -m 750 ${SYSTEM_CHECKOUTS}`,
+    "t=0",
+    `[ -s ${shellQuote(tokenFile)} ] || ${shellQuote(binary)} operator-token --for ${shellQuote(login)} >/dev/null || t=$?`,
+    `[ -e ${SYSTEM_CHECKOUTS} ] || install -d -o volli -g volli -m 750 ${SYSTEM_CHECKOUTS} || echo "could not make ${SYSTEM_CHECKOUTS}" >&2`,
+    'exit "$t"',
   ].join("\n");
   const run = asRoot(ctx, `sh -c ${shellQuote(script)}`);
   if (run === null) {
     ctx.logger.warn("no sudo to issue an operator token; the app shows the command instead");
     return;
   }
-  const result = await ctx.ports.ssh.exec(run.script, {
-    label: "install: operator",
-    timeoutMs: 60_000,
-    ...(run.stdin === undefined ? {} : { stdin: run.stdin }),
-  });
+  // The password is only ever on stdin; the host's words are scrubbed of it
+  // before they reach the log or the add flow's transcript, whatever they say.
+  const secret = ctx.secrets.sudoPassword;
+  let result: SshExecResult;
+  try {
+    result = await ctx.ports.ssh.exec(run.script, {
+      label: "install: operator",
+      timeoutMs: 60_000,
+      ...(run.stdin === undefined ? {} : { stdin: run.stdin }),
+    });
+  } catch (error) {
+    ctx.logger.warn("could not make the login an operator; the app shows the command instead", {
+      login,
+      error: withoutHeldSecret(String(error), secret),
+    });
+    return;
+  }
   if (result.code === 0) {
     ctx.logger.info("made the login an operator", { login });
   } else {
     ctx.logger.warn("could not make the login an operator; the app shows the command instead", {
       login,
       code: result.code,
-      stderr: result.stderr.trim().split("\n").slice(-3).join(" "),
+      stderr: withoutHeldSecret(result.stderr, secret).trim().split("\n").slice(-3).join(" "),
     });
   }
 }

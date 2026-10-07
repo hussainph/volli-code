@@ -483,7 +483,7 @@ describe("Add a host", () => {
     });
     await click(sheet(), "Open a project on studio…");
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
-    expect(useRemoteHostsStore.getState().openProject).toEqual({
+    expect(useRemoteHostsStore.getState().openProject).toMatchObject({
       open: true,
       hostId: host.id,
       start: "list",

@@ -338,6 +338,11 @@ describe("parseCliArgs", () => {
       code: "USAGE",
       message: "project add requires <path>",
     });
+    // An inline name that starts with a dash is the name, never help (VC-710's desktop sends these).
+    expect(parseCliArgs(["project", "add", "/srv/acme", "--name=-h", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "project.add", args: { id: "/srv/acme", name: "-h" }, json: true },
+    });
   });
 
   it("requires the harness session id positional for session link", () => {

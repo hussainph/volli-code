@@ -164,13 +164,30 @@ describe("the remote hosts store", () => {
     store.getState().openAddHost();
     expect(store.getState().addHost).toEqual({ open: true, target: "" });
     // "Open a project on <host>…" (VC-710): it keeps its host while it fades out.
-    expect(store.getState().openProject).toEqual({ open: false, hostId: null, start: "list" });
+    expect(store.getState().openProject).toEqual({
+      open: false,
+      hostId: null,
+      start: "list",
+      opening: 0,
+    });
     store.getState().openProjectSheet("h");
-    expect(store.getState().openProject).toEqual({ open: true, hostId: "h", start: "list" });
+    expect(store.getState().openProject).toEqual({
+      open: true,
+      hostId: "h",
+      start: "list",
+      opening: 1,
+    });
     store.getState().closeProjectSheet();
-    expect(store.getState().openProject).toEqual({ open: false, hostId: "h", start: "list" });
+    expect(store.getState().openProject).toMatchObject({ open: false, hostId: "h", opening: 1 });
+    // Each opening is a new one, the same host's again or another's while open.
     store.getState().openProjectSheet("h", "new");
-    expect(store.getState().openProject).toEqual({ open: true, hostId: "h", start: "new" });
+    store.getState().openProjectSheet("g");
+    expect(store.getState().openProject).toEqual({
+      open: true,
+      hostId: "g",
+      start: "list",
+      opening: 3,
+    });
   });
 
   it("finds one host's record, or none for This Mac", () => {

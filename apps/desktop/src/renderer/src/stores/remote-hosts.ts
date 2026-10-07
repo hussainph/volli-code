@@ -144,6 +144,12 @@ export interface RemoteHostsState {
     readonly hostId: string | null;
     /** Where it opens: the host's list, or straight on "New project…". */
     readonly start: "list" | "new";
+    /**
+     * Which opening this is: every `openProjectSheet` makes a new one, so a
+     * late answer from an earlier opening (another host's, or this host's
+     * before a close) never touches the sheet on screen now.
+     */
+    readonly opening: number;
   };
   setHosts(hosts: readonly RemoteHost[], readOnly?: string | null): void;
   openAddHost(target?: string): void;
@@ -160,13 +166,15 @@ export function createRemoteHostsStore() {
     hosts: NO_HOSTS,
     readOnly: null,
     addHost: { open: false, target: "" },
-    openProject: { open: false, hostId: null, start: "list" },
+    openProject: { open: false, hostId: null, start: "list", opening: 0 },
     setHosts: (hosts, readOnly = null) =>
       set({ hosts: hosts.length === 0 ? NO_HOSTS : hosts, readOnly }),
     openAddHost: (target = "") => set({ addHost: { open: true, target } }),
     closeAddHost: () => set((state) => ({ addHost: { ...state.addHost, open: false } })),
     openProjectSheet: (hostId, start = "list") =>
-      set({ openProject: { open: true, hostId, start } }),
+      set((state) => ({
+        openProject: { open: true, hostId, start, opening: state.openProject.opening + 1 },
+      })),
     closeProjectSheet: () =>
       set((state) => ({ openProject: { ...state.openProject, open: false } })),
   }));

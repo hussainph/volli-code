@@ -129,6 +129,7 @@ import {
 import {
   modeOf,
   sshProvider,
+  withoutHeldSecret,
   type SshProviderPorts,
   type SshProvisionState,
   type SshStepResults,
@@ -528,6 +529,20 @@ function tooManyProjects(name: string): RemoteHostLinkState {
     },
     closeCode: null,
   };
+}
+
+/** `value` (plain JSON) with a held secret scrubbed from every string, however deep. */
+function scrubDeep<T>(value: T, secret: string | null): T {
+  if (secret === null || secret === "") return value;
+  const scrub = (inner: unknown): unknown =>
+    typeof inner === "string"
+      ? withoutHeldSecret(inner, secret)
+      : Array.isArray(inner)
+        ? inner.map(scrub)
+        : typeof inner === "object" && inner !== null
+          ? Object.fromEntries(Object.entries(inner).map(([key, item]) => [key, scrub(item)]))
+          : inner;
+  return scrub(value) as T;
 }
 
 /** `job` after every call on the flow before it: one at a time, whatever each one did. */
@@ -1026,24 +1041,30 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   ): Promise<SshExecResult | null> {
     const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
     const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
+    const said = (error: unknown): string => withoutHeldSecret(messageOf(error), sudoPassword);
+    // Quit's until it has closed: its final sweep kills whatever close is still running.
     projectSsh.add(ssh);
     let result: SshExecResult;
     try {
-      result = await ssh.exec(script, {
-        label,
-        timeoutMs,
-        ...(sudoPassword === null ? {} : { stdin: `${sudoPassword}\n` }),
-      });
-    } catch (error) {
-      log.warn(`${label}: ssh failed`, { error: messageOf(error) });
-      return null;
+      try {
+        result = await ssh.exec(script, {
+          label,
+          timeoutMs,
+          ...(sudoPassword === null ? {} : { stdin: `${sudoPassword}\n` }),
+        });
+      } catch (error) {
+        log.warn(`${label}: ssh failed`, { error: said(error) });
+        return null;
+      } finally {
+        try {
+          // At quit, closing gets only what is left of quit's grace.
+          await ssh.close(quitDeadline === null ? undefined : { deadline: quitDeadline });
+        } catch (error) {
+          log.warn(`${label}: ssh did not close cleanly`, { error: said(error) });
+        }
+      }
     } finally {
       projectSsh.delete(ssh);
-      try {
-        await ssh.close();
-      } catch (error) {
-        log.warn(`${label}: ssh did not close cleanly`, { error: messageOf(error) });
-      }
     }
     const failure = classifySshFailure(result);
     if (failure !== null) {
@@ -1116,7 +1137,14 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       );
     }
     const gitUrl = input.gitUrl?.trim() || null;
-    if (gitUrl !== null && gitUrlProblem(gitUrl) !== null) {
+    const urlProblem = gitUrl === null ? null : gitUrlProblem(gitUrl);
+    if (urlProblem === "credentials" || urlProblem === "query") {
+      return refusedHere(
+        "bad-url",
+        `Use the repository's plain URL: a token goes in Sign-ins on ${entry.name}, not in the URL.`,
+      );
+    }
+    if (urlProblem !== null) {
       return refusedHere("bad-url", "That isn't a git URL this Mac can clone: use https or ssh.");
     }
     const named = input.path?.trim() || null;
@@ -1165,6 +1193,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     }
     const facts = scriptFacts(result.stdout);
     const said = lastJsonObject(result.stdout);
+    // The host's words, scrubbed of the sudo password by value before anything reads them.
+    const stderr = withoutHeldSecret(result.stderr, sudoPassword);
     const project =
       facts.fail === null && typeof said?.["project"] === "object"
         ? readProject({ tickets: 0, ...(said["project"] as Record<string, unknown>) })
@@ -1176,7 +1206,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       });
       return { ok: true, created, project };
     }
-    const failure = createFailure(entry.name, facts, cliError(result.stderr), result.stderr, {
+    const failure = createFailure(entry.name, facts, cliError(stderr), stderr, {
       path,
       gitUrl,
     });
@@ -1247,8 +1277,13 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function flowLogger(flow: () => Flow): InstallLogger {
     const at =
       (level: AddHostLogLine["level"]) =>
-      (message: string, fields: LogFields = {}): void => {
+      (said: string, given: LogFields = {}): void => {
         const self = flow();
+        // The held sudo password, scrubbed by value from every line before it
+        // reaches the app's log or the transcript: a host may echo it anywhere.
+        const secret = self.secrets.sudoPassword;
+        const message = withoutHeldSecret(said, secret);
+        const fields = scrubDeep(given, secret);
         logger[level](message, { ...fields, flowId: self.id });
         if (self.status === "done") return;
         const line = logLine(iso(), level, message, fields);
@@ -1303,7 +1338,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         flow.active = step;
         flow.results = context.state.results;
         emitView(flow);
-        const outcome = await inner.run(step, context);
+        // Whatever a step brings back (a failure's detail, a result) is the
+        // host's words: scrubbed of the held sudo password by value.
+        const outcome = scrubDeep(await inner.run(step, context), flow.secrets.sudoPassword);
         if (!alive(flow)) {
           // Discarded, and nothing after it runs.
           return {
