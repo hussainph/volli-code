@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostLogsBatch, LogLevel, LogRecord } from "@volli/shared";
 
+import { createLogger } from "./logger";
 import { createLogRing, LOG_PAGE_LIMIT, LOG_RING_BOUNDS } from "./ring";
 
 function line(msg: string, level: LogLevel = "info"): [LogRecord, string] {
@@ -282,4 +286,56 @@ describe("the host's recent log, in bytes (VC-712)", () => {
     expect(bytesOf(batches[0])).toBeLessThanOrEqual(3_500);
     expect(msgs(batches[0]!).at(-1)).toBe(sized(9, 1_000));
   });
+});
+
+/* ------------------------------------- what a follower retains (VC-712, B1) */
+
+/** The engine's own collector, reached without a flag on the command line. */
+function collector(): () => void {
+  setFlagsFromString("--expose-gc");
+  return runInNewContext("gc") as () => void;
+}
+
+describe("what a follower retains (VC-712)", () => {
+  for (const budget of [64 * 1024, FRAME_BUDGET]) {
+    it(`keeps no line it dropped past its ${budget}-byte budget reachable`, async () => {
+      // The burst under test happens before the follower's one flush: hold the flush back.
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      const ring = createLogRing();
+      const refs: WeakRef<LogRecord>[] = [];
+      const log = createLogger({
+        component: "probe",
+        level: "debug",
+        sink: {
+          write(record, text) {
+            if (record.level === "error") refs.push(new WeakRef(record));
+            ring.write(record, text);
+          },
+        },
+      });
+      const stop = ring.follow({ maxBytes: budget, minLevel: "error" }, () => {});
+      for (let index = 0; index < 1_000; index += 1) {
+        const tag = String(index).padStart(5, "0");
+        log.error(
+          `n${index}`,
+          Object.fromEntries(
+            Array.from({ length: 8 }, (_, field) => [`p${field}`, tag + "x".repeat(1_895)]),
+          ),
+        );
+      }
+      // Every large line leaves the ring too; these never reach the error-only follower.
+      for (let index = 0; index < 12_000; index += 1) log.info(`clear${index}`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const gc = collector();
+      gc();
+      gc();
+      const retained = refs
+        .map((ref) => ref.deref())
+        .filter((record): record is LogRecord => record !== undefined)
+        .reduce((sum, record) => sum + Buffer.byteLength(JSON.stringify(record)), 0);
+      expect(retained).toBeLessThanOrEqual(budget);
+      stop();
+      vi.useRealTimers();
+    });
+  }
 });

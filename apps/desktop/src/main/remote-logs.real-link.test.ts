@@ -51,7 +51,7 @@ import {
   type LogSourceStatus,
 } from "../renderer/src/components/logs/log-sources";
 import {
-  attachRemoteLogSources,
+  attachRemoteLogSourcesForPage,
   relayLogLink,
 } from "../renderer/src/components/logs/remote-log-sources";
 import type {
@@ -106,7 +106,7 @@ afterEach(async () => {
 // ---- the box -------------------------------------------------------------------
 
 /** A hostd-shaped box: its log is host-core's ring, written through its logger. */
-async function box(features: readonly string[]) {
+async function box(features: readonly string[], port = 0) {
   const ring = createLogRing();
   const log: Logger = createLogger({ level: "debug", sink: ring, component: "hostd" });
   const map = createHostHandlers(
@@ -136,7 +136,7 @@ async function box(features: readonly string[]) {
   };
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
-    bind: { host: "127.0.0.1", port: 0 },
+    bind: { host: "127.0.0.1", port },
     host: { id: HOST, version: "remote-logs-real-link" },
     features,
     workspace: (id) => (id === ALPHA || id === BETA ? { id, epoch: 1 } : null),
@@ -154,7 +154,7 @@ async function box(features: readonly string[]) {
     limits: HOSTD_LIMITS,
   });
   cleanups.push(() => listener.close());
-  return { ring, log, url: listener.url, sessionStreams };
+  return { ring, log, url: listener.url, sessionStreams, listener };
 }
 
 /** A loopback TCP route in front of the box that this test can cut (the tunnel). */
@@ -443,7 +443,9 @@ async function remoteHost(options: {
   const main = await desktopMain(links);
   const client = windowClient(main);
   const hosts = hostConnection(links);
-  const detach = attachRemoteLogSources({
+  const page = new EventTarget();
+  const detach = attachRemoteLogSourcesForPage({
+    page,
     hosts,
     link: (workspaceId) =>
       relayLogLink(workspaceId, {
@@ -454,7 +456,7 @@ async function remoteHost(options: {
     ...(options.timing === undefined ? {} : { timing: options.timing }),
   });
   cleanups.push(detach);
-  return { host, routes, links, main, client, hosts, detach };
+  return { host, routes, links, main, client, hosts, detach, page };
 }
 
 describe("a remote host's log in the one viewer, over the relay and real links (VC-712)", () => {
@@ -605,5 +607,68 @@ describe("a remote host's log in the one viewer, over the relay and real links (
     await vi.waitFor(() => expect(viewer.msgs().at(-1)).toBe("streamed"));
     expect(new Set(viewer.msgs()).size).toBe(viewer.msgs().length);
     for (const subscription of chats.slice(1)) subscription.unsubscribe();
+  });
+});
+
+describe("the source's lifetime over real links (VC-712 review)", () => {
+  it("pagehide ends an active remote follow, and nothing late lands", async () => {
+    const { host, main, page } = await remoteHost({});
+    const viewer = read(remoteLogSources()[0]!);
+    await vi.waitFor(() => expect(main.relay.open()).toBe(1));
+    page.dispatchEvent(new Event("pagehide"));
+    expect(remoteLogSources()).toEqual([]);
+    await vi.waitFor(() => expect(main.relay.open()).toBe(0), { timeout: 1_000 });
+    const count = viewer.lines.length;
+    host.log.info("after pagehide");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(viewer.lines).toHaveLength(count);
+  });
+
+  it("forgets a host mid-follow without leaving a stream", async () => {
+    const { host, hosts, main } = await remoteHost({});
+    const viewer = read(remoteLogSources()[0]!);
+    await vi.waitFor(() => expect(main.relay.open()).toBe(1));
+    hosts.forget();
+    expect(remoteLogSources()).toEqual([]);
+    // Unregistering stops the reading itself, without the viewer's help.
+    await vi.waitFor(() => expect(main.relay.open()).toBe(0));
+    const count = viewer.lines.length;
+    host.log.info("after forget");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(viewer.lines).toHaveLength(count);
+  });
+
+  it("unregisters when a reconnected host no longer offers host.logs, and registers again when it does", async () => {
+    const { host, main, routes, links } = await remoteHost({});
+    read(remoteLogSources()[0]!);
+    await vi.waitFor(() => expect(main.relay.open()).toBe(1));
+    const port = Number(new URL(host.url).port);
+    const reconnectAs = async (
+      features: readonly string[],
+      listener: { close(): Promise<void> },
+      registered: number,
+    ) => {
+      routes.get(ALPHA)!.cut();
+      await untilState(links.get(ALPHA)!, "unreachable");
+      // While it is away, what it grants is unknown: nothing changes.
+      expect(remoteLogSources()).toHaveLength(registered);
+      await listener.close();
+      const next = await box(features, port);
+      routes.get(ALPHA)!.unblock();
+      await untilState(links.get(ALPHA)!, "ready");
+      return next;
+    };
+    // Back with no log to offer: no link can carry it, so the source goes.
+    const older = await reconnectAs(["sessions.subscribe"], host.listener, 1);
+    const state = links.get(ALPHA)!.getState();
+    expect(state.status === "ready" && state.welcome.features.includes("host.logs")).toBe(false);
+    expect(remoteLogSources()).toEqual([]);
+    expect(main.relay.open()).toBe(0);
+    // Back with its log: registered again, and it reads.
+    const newer = await reconnectAs(["host.logs", "sessions.subscribe"], older.listener, 0);
+    expect(remoteLogSources()).toHaveLength(1);
+    const viewer = read(remoteLogSources()[0]!);
+    newer.log.info("logs are back");
+    await vi.waitFor(() => expect(viewer.msgs()).toContain("logs are back"));
   });
 });

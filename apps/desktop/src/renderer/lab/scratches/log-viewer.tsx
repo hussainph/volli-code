@@ -5,7 +5,7 @@ import type { LogSource } from "@renderer/components/logs/log-sources";
 import { LogStream, LogViewer } from "@renderer/components/logs/log-viewer";
 import { attachRemoteLogSources, relayLogLink } from "@renderer/components/logs/remote-log-sources";
 import { Button } from "@renderer/components/ui/button";
-import type { RelayHostLinkRpc } from "@renderer/lib/relay-host-link";
+import { fakeRelayRpc } from "@renderer/lib/relay-rpc.test-support";
 import type { HostLinkView } from "@renderer/stores/host-connection";
 
 export const title = "Log viewer (VC-699, VC-712)";
@@ -236,6 +236,11 @@ const FULL = {
  * the log's stream (`subscription-limit`, AM1), so the source polls; "Drop
  * the link" takes the project's link down, so the dot says so.
  */
+/** The query input a log read sends: after a cursor, at most so many. */
+function readOf(input: unknown): { after?: string; limit?: number } {
+  return typeof input === "object" && input !== null ? input : {};
+}
+
 /** The line a lab box cursor names: `box:<seq>`. */
 function seqOf(cursor: unknown): number {
   return typeof cursor === "string" && cursor.startsWith("box:") ? Number(cursor.slice(4)) : 0;
@@ -281,56 +286,42 @@ function labBox() {
     listeners.add(listener);
     return () => void listeners.delete(listener);
   };
-  const rpc = {
-    hostLink: {
-      query: {
-        query: async ({ input }: { input?: { after?: string; limit?: number } }) => {
-          if (link.status !== "open")
-            throw new Error("The project’s host can’t be reached right now.");
-          const unread = input?.after === undefined ? lines : after(input.after);
-          return batch(unread.slice(-(input?.limit ?? 500)));
-        },
-      },
-      mutate: { mutate: async () => undefined },
-      subscribe: {
-        subscribe: (
-          { input, lastEventId }: { input?: { after?: string }; lastEventId?: string },
-          handlers: { onData(event: HostLinkRelayEvent): void },
-        ) => {
-          if (full) {
-            queueMicrotask(() => handlers.onData({ kind: "error", error: FULL }));
-            return { unsubscribe: () => undefined };
-          }
-          const follower = (line: HostLogEntry) =>
-            handlers.onData({ kind: "data", data: batch([line]), id: line.cursor });
-          const end = (event: HostLinkRelayEvent) => {
-            followers.delete(follower);
-            streams.delete(stop);
-            handlers.onData(event);
-          };
-          const stop = () => end(link.status === "open" ? { kind: "error", error: FULL } : LOST);
-          queueMicrotask(() => {
-            handlers.onData({ kind: "started" });
-            const backlog = after(lastEventId ?? input?.after);
-            if (backlog.length > 0) {
-              handlers.onData({ kind: "data", data: batch(backlog), id: backlog.at(-1)!.cursor });
-            }
-            followers.add(follower);
-            streams.add(stop);
-          });
-          return {
-            unsubscribe: () => {
-              followers.delete(follower);
-              streams.delete(stop);
-            },
-          };
-        },
-      },
+  const rpc = fakeRelayRpc({
+    query: async ({ input }) => {
+      if (link.status !== "open") throw new Error("The project’s host can’t be reached right now.");
+      const read = readOf(input);
+      const unread = read.after === undefined ? lines : after(read.after);
+      return batch(unread.slice(-(read.limit ?? 500)));
     },
-  };
+    subscribe: ({ input, lastEventId }, emit) => {
+      if (full) {
+        queueMicrotask(() => emit({ kind: "error", error: FULL }));
+        return () => undefined;
+      }
+      const follower = (line: HostLogEntry) =>
+        emit({ kind: "data", data: batch([line]), id: line.cursor });
+      const stop = () => {
+        followers.delete(follower);
+        streams.delete(stop);
+        emit(link.status === "open" ? { kind: "error", error: FULL } : LOST);
+      };
+      queueMicrotask(() => {
+        const backlog = after(lastEventId ?? readOf(input).after);
+        if (backlog.length > 0) {
+          emit({ kind: "data", data: batch(backlog), id: backlog.at(-1)!.cursor });
+        }
+        followers.add(follower);
+        streams.add(stop);
+      });
+      return () => {
+        followers.delete(follower);
+        streams.delete(stop);
+      };
+    },
+  });
   return {
     // The lab's stand-in for the window's client: only the relay's slice is served.
-    rpc: rpc as unknown as RelayHostLinkRpc,
+    rpc,
     hosts: {
       getState: () => ({
         hosts: [

@@ -97,7 +97,11 @@ function budgetOf(maxBytes: number | undefined): number {
 export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
   const limits: LogRingBounds = { ...LOG_RING_BOUNDS, ...bounds };
   const instance = randomBytes(6).toString("hex");
-  const lines: Held[] = [];
+  /**
+   * The kept lines from `head` on. An evicted slot is cleared at once, so
+   * what the ring holds is what it counts; the array is compacted now and then.
+   */
+  const lines: (Held | undefined)[] = [];
   let head = 0;
   let bytes = 0;
   let nextSeq = 1;
@@ -131,6 +135,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       (bytes > limits.maxBytes && lines.length - head > 1)
     ) {
       bytes -= lines[head]!.bytes + 1;
+      lines[head] = undefined;
       head += 1;
     }
     // Compact now and then, so the array does not grow without bound.
@@ -195,7 +200,9 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       const room = budget - BATCH_BYTES - MAX_CURSOR_LENGTH;
       const maxPendingBytes = Math.min(room, limits.maxBytes);
       const backlog = query.after === undefined ? null : read({ ...query, limit: LOG_PAGE_LIMIT });
-      let pending: Held[] = [];
+      // Lines held unsent from `pendingHead` on; a dropped slot is cleared at
+      // once, so nothing past the byte bound stays reachable from here.
+      let pending: (Held | undefined)[] = [];
       let pendingHead = 0;
       let pendingBytes = 0;
       // Lines this follower dropped unsent since its last batch: its next batch says so.
@@ -205,7 +212,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       const flush = (): void => {
         scheduled = false;
         if (!open || pendingHead === pending.length) return;
-        const held = pending.slice(pendingHead);
+        const held = pending.slice(pendingHead) as Held[];
         pending = [];
         pendingHead = 0;
         pendingBytes = 0;
@@ -231,6 +238,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
         // Past the bound (or the ring's count), the oldest unsent go: the newest win.
         while (pendingBytes > maxPendingBytes || pending.length - pendingHead > limits.maxLines) {
           pendingBytes -= entryBytes(pending[pendingHead]!);
+          pending[pendingHead] = undefined;
           pendingHead += 1;
           dropped = true;
         }
@@ -248,6 +256,10 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       return () => {
         open = false;
         followers.delete(follower);
+        // Nothing it held outlives it.
+        pending = [];
+        pendingHead = 0;
+        pendingBytes = 0;
       };
     },
     size: () => ({ lines: lines.length - head, bytes }),

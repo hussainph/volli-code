@@ -32,6 +32,7 @@ import {
   type HostConnectionState,
   type HostLinkView,
   type HostRecord,
+  type ProjectLink,
 } from "../../stores/host-connection";
 
 import {
@@ -120,9 +121,36 @@ export function waitingStatus(host: HostRecord | undefined): {
   }
 }
 
+/** Whether a project's link serves its host's log now: ready, and its welcome granted `host.logs`. */
+function servesLogs(claim: ProjectLink): boolean {
+  return isLinkReady(claim.link) && claim.granted?.includes(HOST_LOGS_FEATURE) === true;
+}
+
+/**
+ * The source, with each reading of it kept in `readings` until it stops, so
+ * whoever registered it can stop them all (unregistering alone does not stop
+ * a reading already running). Stopping one twice is stopping it once.
+ */
+function owned(source: LogSource, readings: Set<() => void>): LogSource {
+  return {
+    id: source.id,
+    label: source.label,
+    start(handlers) {
+      const stopReading = source.start(handlers);
+      const stop = (): void => {
+        if (!readings.delete(stop)) return;
+        stopReading();
+      };
+      readings.add(stop);
+      return stop;
+    },
+  };
+}
+
 /**
  * Keeps every connected remote host's log source registered while it is
- * attached; the returned function unregisters them all and stops watching.
+ * attached; the returned function unregisters them all, stops every reading
+ * of them still running, and stops watching.
  */
 export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): () => void {
   const hosts = options.hosts ?? useHostConnectionStore;
@@ -132,6 +160,7 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
 
   interface Registered {
     readonly label: string;
+    /** Takes it out of the viewer and stops every reading of it still running. */
     readonly unregister: () => void;
   }
   const registered = new Map<string, Registered>();
@@ -146,12 +175,7 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
   function readyOf(hostId: string): readonly LogSourceLinkChoice[] {
     const current = shown();
     return Object.entries(hosts.getState().projects)
-      .filter(
-        ([, claim]) =>
-          claim.hostId === hostId &&
-          isLinkReady(claim.link) &&
-          claim.granted?.includes(HOST_LOGS_FEATURE) === true,
-      )
+      .filter(([, claim]) => claim.hostId === hostId && servesLogs(claim))
       .map(([workspaceId]) => workspaceId)
       .toSorted((a, b) => Number(a === current) - Number(b === current) || (a < b ? -1 : 1))
       .map((workspaceId) => {
@@ -184,9 +208,14 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
       if (host.local) continue;
       const claims = Object.values(state.projects).filter((claim) => claim.hostId === host.id);
       const held = registered.get(host.id);
-      // No project left, or none whose link can still serve (`every` of none is true).
-      const lost = claims.every((claim) => isGone(claim.link));
-      if (held !== undefined && lost) {
+      // No link of the host can carry its log now or once it is back: no
+      // project left, each one's link gone, or ready without `host.logs` (a
+      // host that reconnected as one with no log to offer). A link still on
+      // its way back keeps the source (`every` of none is true).
+      const noLog = claims.every(
+        (claim) => isGone(claim.link) || (isLinkReady(claim.link) && !servesLogs(claim)),
+      );
+      if (held !== undefined && noLog) {
         registered.delete(host.id);
         held.unregister();
         continue;
@@ -197,11 +226,22 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
         held.unregister();
       }
       if (registered.has(host.id) || readyOf(host.id).length === 0) continue;
-      const source = hostLinkLogSource(
-        { id: host.id, label: host.name, links: linksOf(host.id) },
-        options.timing,
+      const readings = new Set<() => void>();
+      const source = owned(
+        hostLinkLogSource(
+          { id: host.id, label: host.name, links: linksOf(host.id) },
+          options.timing,
+        ),
+        readings,
       );
-      registered.set(host.id, { label: host.name, unregister: register(source) });
+      const unregister = register(source);
+      registered.set(host.id, {
+        label: host.name,
+        unregister: () => {
+          unregister();
+          for (const stop of Array.from(readings)) stop();
+        },
+      });
     }
     // Forgotten hosts.
     for (const [hostId, held] of registered) {
@@ -216,9 +256,44 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
   sync();
   return () => {
     unsubscribe();
-    for (const held of registered.values()) held.unregister();
+    for (const held of Array.from(registered.values())) held.unregister();
     registered.clear();
     links.clear();
     listeners.clear();
+  };
+}
+
+/** The page's lifetime as a binding reads it: the window's `pagehide` and `pageshow`. */
+export interface PageLifetime {
+  addEventListener(type: "pagehide" | "pageshow", listener: (event: Event) => void): void;
+  removeEventListener(type: "pagehide" | "pageshow", listener: (event: Event) => void): void;
+}
+
+/**
+ * {@link attachRemoteLogSources} for as long as the page lives (VC-712): its
+ * disposer is this owner's. On `pagehide` every source is unregistered and
+ * every reading of one stops (streams, polls, retries), and nothing late lands
+ * after; a page restored from the back-forward cache (`pageshow`, persisted)
+ * attaches again. The returned function ends it for good.
+ */
+export function attachRemoteLogSourcesForPage(
+  options: RemoteLogSourcesOptions & { readonly page?: PageLifetime } = {},
+): () => void {
+  const { page = window, ...attach } = options;
+  let detach: (() => void) | null = attachRemoteLogSources(attach);
+  const hide = (): void => {
+    detach?.();
+    detach = null;
+  };
+  const show = (event: Event): void => {
+    const restored = "persisted" in event && event.persisted === true;
+    if (restored && detach === null) detach = attachRemoteLogSources(attach);
+  };
+  page.addEventListener("pagehide", hide);
+  page.addEventListener("pageshow", show);
+  return () => {
+    page.removeEventListener("pagehide", hide);
+    page.removeEventListener("pageshow", show);
+    hide();
   };
 }

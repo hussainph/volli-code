@@ -7,7 +7,7 @@ import { readHostError } from "@volli/host-protocol";
 import type { HostLinkRelayEvent } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { RelayHostLinkRpc } from "../../lib/relay-host-link";
+import { fakeRelayRpc } from "../../lib/relay-rpc.test-support";
 import {
   useHostConnectionStore,
   type HostConnectionSource,
@@ -19,6 +19,7 @@ import {
 import { remoteLogSources, type LogSource, type LogSourceLink } from "./log-sources";
 import {
   attachRemoteLogSources,
+  attachRemoteLogSourcesForPage,
   HOST_LOGS_FEATURE,
   relayLogLink,
   waitingStatus,
@@ -256,6 +257,133 @@ describe("remote hosts in the one log viewer (VC-712)", () => {
     expect(remoteLogSources()).toEqual([]);
   });
 
+  it("unregisters a host that reconnected without host.logs, and stops its readings (B3)", () => {
+    const made = links();
+    const hosts = store({
+      hosts: [host(BOX, "box")],
+      projects: { "ws-1": ready(BOX), "ws-2": ready(BOX) },
+    });
+    attach({ hosts, link: made.link });
+    const viewer = start(remoteLogSources()[0]!);
+    // On their way back: what they grant is not known yet, so the source stays.
+    const back: HostLinkView = { status: "reconnecting" };
+    hosts.set({
+      projects: { "ws-1": { hostId: BOX, link: back }, "ws-2": { hostId: BOX, link: back } },
+    });
+    expect(remoteLogSources()).toHaveLength(1);
+    // One is back with no log on offer, the other still on its way: still unknown.
+    hosts.set({
+      projects: { "ws-1": ready(BOX, ["sign-ins"]), "ws-2": { hostId: BOX, link: back } },
+    });
+    expect(remoteLogSources()).toHaveLength(1);
+    // Both back, neither offers the log: no link can carry it. The source goes,
+    // and the reading it had going stops with it.
+    hosts.set({ projects: { "ws-1": ready(BOX, ["sign-ins"]), "ws-2": ready(BOX, []) } });
+    expect(remoteLogSources()).toEqual([]);
+    viewer.stop();
+    // The grant comes back: registered again.
+    hosts.set({ projects: { "ws-1": ready(BOX), "ws-2": ready(BOX, []) } });
+    expect(remoteLogSources()).toHaveLength(1);
+  });
+
+  it("stops every reading of a source when it is unregistered, once", () => {
+    const made = links();
+    const hosts = store({ hosts: [host(BOX, "box")], projects: { "ws-1": ready(BOX) } });
+    const detach = attach({ hosts, link: made.link });
+    const [source] = remoteLogSources();
+    const first = start(source!);
+    const second = start(source!);
+    const streams = (): number => made.streams.filter((stream) => !stream.unsubscribed).length;
+    first.stop();
+    first.stop();
+    detach();
+    expect(remoteLogSources()).toEqual([]);
+    second.stop();
+    expect(streams()).toBe(0);
+  });
+
+  it("belongs to the page: pagehide unregisters and stops every reading, a restored page attaches again (B2)", async () => {
+    const page = new EventTarget();
+    const queries: unknown[] = [];
+    const timers = new Set<unknown>();
+    const hosts = store({ hosts: [host(BOX, "box")], projects: { "ws-1": ready(BOX) } });
+    let stream: { stopped: boolean } | null = null;
+    const end = attachRemoteLogSourcesForPage({
+      page,
+      hosts,
+      link: () => ({
+        query: async (_path, input) => {
+          queries.push(input);
+          return { entries: [], gap: false, cursor: "r:1" };
+        },
+        subscribe: (_path, _input, handlers) => {
+          const held = { stopped: false };
+          stream = held;
+          // Every link of the host is full: the source polls.
+          queueMicrotask(() =>
+            handlers.onError(
+              Object.assign(new Error("full"), {
+                code: "TOO_MANY_REQUESTS",
+                reason: "subscription-limit",
+              }),
+            ),
+          );
+          return { unsubscribe: () => void (held.stopped = true) };
+        },
+      }),
+      timing: {
+        pollMs: 10,
+        setTimer: (run) => {
+          const timer = { run };
+          timers.add(timer);
+          return timer;
+        },
+        clearTimer: (timer) => void timers.delete(timer),
+      },
+    });
+    start(remoteLogSources()[0]!);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stream).toEqual({ stopped: true });
+    // Polling: a tail after the cursor is out, and its next one armed.
+    expect(queries).toEqual([{ limit: 500 }, { after: "r:1", limit: 500 }]);
+    expect(timers.size).toBe(1);
+
+    page.dispatchEvent(new Event("pagehide"));
+    expect(remoteLogSources()).toEqual([]);
+    expect(timers.size).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queries).toHaveLength(2);
+    expect(hosts.listeners.size).toBe(0);
+
+    // A page that comes back fresh is a new page; one restored from the cache attaches again.
+    page.dispatchEvent(new Event("pageshow"));
+    expect(remoteLogSources()).toEqual([]);
+    page.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(remoteLogSources()).toHaveLength(1);
+    page.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(remoteLogSources()).toHaveLength(1);
+    end();
+    expect(remoteLogSources()).toEqual([]);
+    page.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    expect(remoteLogSources()).toEqual([]);
+  });
+
+  it("belongs to the window's page by default", () => {
+    const page = new EventTarget();
+    vi.stubGlobal("window", page);
+    try {
+      const hosts = store({ hosts: [host(BOX, "box")], projects: { "ws-1": ready(BOX) } });
+      const end = attachRemoteLogSourcesForPage({ hosts, link: links().link });
+      expect(remoteLogSources()).toHaveLength(1);
+      page.dispatchEvent(new Event("pagehide"));
+      expect(remoteLogSources()).toEqual([]);
+      end();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("words the host's link for the dot while none of its links is ready", () => {
     expect(waitingStatus(host(BOX, "box", { status: "connecting" }))).toEqual({
       status: "connecting",
@@ -281,38 +409,21 @@ describe("remote hosts in the one log viewer (VC-712)", () => {
 
 /** The window's client as the relay reaches it, the test's to answer. */
 function fakeRpc() {
-  const opened: {
-    input: Record<string, unknown>;
-    onData(event: HostLinkRelayEvent): void;
-    onError(error: unknown): void;
-    unsubscribe: ReturnType<typeof vi.fn>;
-  }[] = [];
+  const opened: { input: unknown; onData(event: HostLinkRelayEvent): void; stopped: boolean }[] =
+    [];
   const queries: unknown[] = [];
-  const rpc = {
-    hostLink: {
-      query: {
-        query: async (input: unknown) => {
-          queries.push(input);
-          return { entries: [], gap: false, cursor: "r:1" };
-        },
-      },
-      mutate: { mutate: async () => undefined },
-      subscribe: {
-        subscribe: (input: Record<string, unknown>, options: Record<string, unknown>) => {
-          const unsubscribe = vi.fn();
-          opened.push({
-            input,
-            onData: options["onData"] as (event: HostLinkRelayEvent) => void,
-            onError: options["onError"] as (error: unknown) => void,
-            unsubscribe,
-          });
-          return { unsubscribe };
-        },
-      },
+  const rpc = fakeRelayRpc({
+    query: async (call) => {
+      queries.push(call);
+      return { entries: [], gap: false, cursor: "r:1" };
     },
-  };
-  // The test's fake of the window's client: only the relay's slice.
-  return { rpc: rpc as unknown as RelayHostLinkRpc, opened, queries };
+    subscribe: (call, emit) => {
+      const stream = { input: call, onData: emit, stopped: false };
+      opened.push(stream);
+      return () => void (stream.stopped = true);
+    },
+  });
+  return { rpc, opened, queries };
 }
 
 describe("a Workspace's relayed link as a log source reads it", () => {
@@ -369,7 +480,7 @@ describe("a Workspace's relayed link as a log source reads it", () => {
     });
     link.subscribe("logs.follow", {}, handlers);
     opened[2]!.onData({ kind: "complete" });
-    opened[2]!.onError(new Error("ignored after its end"));
+    expect(opened[2]!.stopped).toBe(true);
     link.subscribe("logs.follow", {}, handlers);
     opened[3]!.onData({
       kind: "error",
