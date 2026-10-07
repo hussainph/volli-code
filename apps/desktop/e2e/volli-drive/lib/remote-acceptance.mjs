@@ -43,6 +43,28 @@ export function hasActionableControl(tree, role, name) {
   const hits = visibleControls(tree, role, name);
   return hits.length === 1 && hits[0].includes("[ref=") && !hits[0].includes("[disabled]");
 }
+/** A durable answer quotes this exact question and selected label in one row.
+ * The trailer span has a title, so its snapshot uses an accessible name rather
+ * than a text suffix. Pending radios and receipts for other questions cannot
+ * supply the proof.
+ */
+export function visibleAnswerReceipt(tree, question, answer) {
+  const lines = tree.split("\n");
+  return lines.some((line, index) => {
+    const subject = lines[index + 1] ?? "";
+    const trailer = lines[index + 2] ?? "";
+    const indent = line.search(/\S/u);
+    return (
+      line.endsWith(": You answered") &&
+      /^\s*- code(?: \[ref=[^\]]+\])?: /u.test(subject) &&
+      subject.endsWith(`: ${question}`) &&
+      visibleControls(trailer, "generic", answer).length === 1 &&
+      subject.search(/\S/u) === indent &&
+      trailer.search(/\S/u) === indent
+    );
+  });
+}
+
 /** The visible subtree of one named surface, not matching background controls. */
 export function snapshotSubtree(tree, role, name) {
   const hits = visibleControls(tree, role, name);

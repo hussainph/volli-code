@@ -21,6 +21,7 @@ import {
   hasActionableControl,
   stableWaitingLabel,
   visibleServingRow,
+  visibleAnswerReceipt,
   snapshotSubtree,
   projectCreationOutcome,
   acceptanceHostAddState,
@@ -209,6 +210,49 @@ test("host selection is scoped to the switcher, excluding background rename cont
   assert.equal(controlLabel(hits[0]), "volli-acceptance 0 projects");
   assert.throws(() => snapshotSubtree(tree, "dialog", "Missing"), /found 0/u);
 });
+test("durable answer proof uses the real titled trailer and the same question's receipt row", () => {
+  // Exact gen0265 shape from ed7bf9e79, not an invented text-suffix snapshot.
+  const receipt = `                    - generic [ref=f2e2075]:
+                      - generic [ref=f2e2078]: You answered
+                      - code [ref=f2e2079]: Continue the remote acceptance run?
+                      - generic "Proceed"`;
+  assert.equal(visibleAnswerReceipt(receipt, ANSWER_QUESTION, "Proceed"), true);
+  assert.equal(visibleAnswerReceipt(receipt, REOPEN_QUESTION, "Proceed"), false);
+  assert.equal(visibleAnswerReceipt(receipt, ANSWER_QUESTION, "Stop"), false);
+  assert.equal(
+    visibleAnswerReceipt(
+      receipt.replace("You answered", "Request pending"),
+      ANSWER_QUESTION,
+      "Proceed",
+    ),
+    false,
+  );
+  assert.equal(
+    visibleAnswerReceipt(
+      receipt.replace('generic "Proceed"', 'radio "Proceed" [checked]'),
+      ANSWER_QUESTION,
+      "Proceed",
+    ),
+    false,
+  );
+  assert.equal(
+    visibleAnswerReceipt(
+      receipt.replace('- generic "Proceed"', '  - generic "Proceed"'),
+      ANSWER_QUESTION,
+      "Proceed",
+    ),
+    false,
+  );
+  assert.equal(
+    visibleAnswerReceipt(
+      `${receipt.replace('generic "Proceed"', 'generic "Stop"')}\n- generic "Proceed"`,
+      ANSWER_QUESTION,
+      "Proceed",
+    ),
+    false,
+  );
+});
+
 test("log proof requires a real row, not search/filter or other-host names", () => {
   const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;
   const row = `- listitem:\n  - generic: volli-acceptance\n  - button "hostd" [ref=e1]\n  - 'button "serving database: /fixture/db" [ref=e2]'`;
@@ -398,9 +442,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "the declared-stop card submits through its own real form control",
   );
   for (const receiptAssertion of [
-    'line.endsWith(": You answered")',
-    "lines[index + 1]?.endsWith(`: ${question}`)",
-    'lines[index + 2]?.endsWith(": Proceed")',
+    'visibleAnswerReceipt((await snap()).text, question, "Proceed")',
     "await submitProceed(ANSWER_QUESTION)",
     "await submitProceed(REOPEN_QUESTION)",
   ])

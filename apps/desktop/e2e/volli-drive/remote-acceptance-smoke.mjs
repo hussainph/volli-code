@@ -22,6 +22,7 @@ import {
   hasActionableControl,
   stableWaitingLabel,
   visibleServingRow,
+  visibleAnswerReceipt,
   REMOTE_HOST,
   REMOTE_PROJECT,
   STREAM_REPLY,
@@ -73,15 +74,7 @@ async function submitProceed(question) {
   // durable transcript row, not the ask-user card's transient Sent line.
   await waitUntil(
     `durable Proceed receipt for ${question}`,
-    async () => {
-      const lines = (await snap()).text.split("\n");
-      return lines.some(
-        (line, index) =>
-          line.endsWith(": You answered") &&
-          lines[index + 1]?.endsWith(`: ${question}`) &&
-          lines[index + 2]?.endsWith(": Proceed"),
-      );
-    },
+    async () => visibleAnswerReceipt((await snap()).text, question, "Proceed"),
     { timeout: 10_000, interval: 100 },
   );
 }
