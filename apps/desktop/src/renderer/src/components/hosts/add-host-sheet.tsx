@@ -46,7 +46,7 @@ import {
   type AddHostFlowView,
   type QuestionPrompt,
 } from "./add-host-model";
-import { EASE_OUT, HostGlyph, StepMark, SwapText } from "./host-parts";
+import { EASE_OUT, HostGlyph, StepMark, SwapText, useMotionTiming } from "./host-parts";
 import { useAddHostFlow, type AddHostFlow, type NumberedLogLine } from "./use-add-host-flow";
 
 /** The sheet, open while the remote-hosts store says so. */
@@ -131,14 +131,15 @@ function AddHostBody({
  * the old one out of flow while it fades.
  */
 function Screen({ children, ref }: { children: React.ReactNode; ref?: React.Ref<HTMLDivElement> }) {
+  const timed = useMotionTiming();
   return (
     <motion.div
       ref={ref}
       className="flex min-h-0 flex-1 flex-col"
       initial={{ opacity: 0, y: 6, filter: "blur(2px)" }}
       animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-      exit={{ opacity: 0, transition: { duration: 0.1 } }}
-      transition={{ duration: 0.24, ease: EASE_OUT, delay: 0.04 }}
+      exit={{ opacity: 0, transition: timed({ duration: 0.1 }) }}
+      transition={timed({ duration: 0.24, ease: EASE_OUT, delay: 0.04 })}
     >
       {children}
     </motion.div>
@@ -226,6 +227,7 @@ function FlowScreen({
   lost: boolean;
   busy: boolean;
 }) {
+  const timed = useMotionTiming();
   const hosts = useRemoteHostsStore((state) => state.hosts);
   const [details, setDetails] = React.useState(false);
   // Whether the sudo field has text: "Run it" waits for some. Never the text itself.
@@ -293,7 +295,7 @@ function FlowScreen({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16 }}
+                  transition={timed({ duration: 0.16 })}
                   className="px-6 pb-4"
                 >
                   <LogView lines={log} omitted={omitted} detail={view?.failure?.detail ?? null} />
@@ -312,7 +314,7 @@ function FlowScreen({
               Details
               <CaretDownIcon
                 className={cn(
-                  "size-3 transition-transform duration-200 ease-out",
+                  "size-3 transition-transform duration-200 ease-out motion-reduce:transition-none",
                   details && "rotate-180",
                 )}
               />
@@ -349,6 +351,7 @@ function Stopped({
   busy: boolean;
   onPasswordText: (has: boolean) => void;
 }) {
+  const timed = useMotionTiming();
   let body: React.ReactNode = null;
   if (lost) {
     body = <Line tone="error">Lost track of this add. Close and start again.</Line>;
@@ -373,7 +376,7 @@ function Stopped({
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.22, ease: EASE_OUT, delay: 0.06 }}
+          transition={timed({ duration: 0.22, ease: EASE_OUT, delay: 0.06 })}
         >
           {body}
         </motion.div>
@@ -632,13 +635,14 @@ function Actions({
 /* ── Ready ─────────────────────────────────────────────────────────────── */
 
 function ReadyBody({ view, host }: { view: AddHostFlowView; host: RemoteHost | undefined }) {
+  const timed = useMotionTiming();
   const facts = readyFacts(view, host);
   return (
     <motion.div
       className="flex min-h-0 flex-col"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, ease: EASE_OUT, delay: 0.12 }}
+      transition={timed({ duration: 0.28, ease: EASE_OUT, delay: 0.12 })}
     >
       {facts.length === 0 ? null : (
         <ul aria-label="About this host" className="flex flex-col gap-1 px-6 pb-4">
